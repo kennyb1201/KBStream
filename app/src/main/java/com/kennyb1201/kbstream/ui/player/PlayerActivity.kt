@@ -3,16 +3,28 @@ package com.kennyb1201.kbstream.ui.player
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
-import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
+import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -22,7 +34,11 @@ class PlayerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val url = intent.getStringExtra("stream_url") ?: return finish()
+        val url = intent.getStringExtra("stream_url")
+        if (url.isNullOrBlank()) {
+            finish()
+            return
+        }
         val itemId = intent.getStringExtra("item_id") ?: ""
         val itemType = intent.getStringExtra("item_type") ?: ""
         val itemName = intent.getStringExtra("item_name") ?: ""
@@ -51,37 +67,53 @@ fun PlayerScreen(
     itemPoster: String?,
     startPositionMs: Long
 ) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val dao = remember2 { WatchHistoryDatabase.getInstance(context).watchHistoryDao() }
+    val context = LocalContext.current
+    var errorMessage by remember { mutableStateOf<String?>(null) }
 
-    val exoPlayer = remember2 {
+    val exoPlayer = remember {
         ExoPlayer.Builder(context).build().apply {
             setMediaItem(MediaItem.fromUri(url))
             if (startPositionMs > 0) seekTo(startPositionMs)
             playWhenReady = true
+            addListener(object : Player.Listener {
+                override fun onPlayerError(error: PlaybackException) {
+                    errorMessage = "Playback error: ${error.errorCodeName} — ${error.message}"
+                }
+            })
             prepare()
         }
     }
 
     DisposableEffect(Unit) {
-        val scope = CoroutineScope(Dispatchers.IO)
+        // A crash in this coroutine must never take down the whole app --
+        // an earlier version had no handler, and a Room failure here
+        // silently killed the process, dumping the user back to Home.
+        val handler = CoroutineExceptionHandler { _, throwable ->
+            errorMessage = "History save failed: ${throwable.message}"
+        }
+        val scope = CoroutineScope(Dispatchers.IO + handler)
         val job = scope.launch {
+            val dao = WatchHistoryDatabase.getInstance(context).watchHistoryDao()
             while (true) {
                 delay(5000)
-                val position = exoPlayer.currentPosition
-                val duration = exoPlayer.duration.coerceAtLeast(1L)
-                if (position > 0) {
-                    dao.upsert(
-                        WatchHistoryEntity(
-                            id = itemId,
-                            type = itemType,
-                            name = itemName,
-                            poster = itemPoster,
-                            positionMs = position,
-                            durationMs = duration,
-                            updatedAt = System.currentTimeMillis()
+                try {
+                    val position = exoPlayer.currentPosition
+                    val duration = exoPlayer.duration.coerceAtLeast(1L)
+                    if (position > 0) {
+                        dao.upsert(
+                            WatchHistoryEntity(
+                                id = itemId,
+                                type = itemType,
+                                name = itemName,
+                                poster = itemPoster,
+                                positionMs = position,
+                                durationMs = duration,
+                                updatedAt = System.currentTimeMillis()
+                            )
                         )
-                    )
+                    }
+                } catch (e: Exception) {
+                    // don't let a single failed save kill the loop or the process
                 }
             }
         }
@@ -91,17 +123,18 @@ fun PlayerScreen(
         }
     }
 
-    AndroidView(
-        factory = { ctx ->
-            PlayerView(ctx).apply {
-                player = exoPlayer
-                useController = true
-            }
-        },
-        modifier = Modifier.fillMaxSize()
-    )
+    Box(modifier = Modifier.fillMaxSize()) {
+        AndroidView(
+            factory = { ctx ->
+                PlayerView(ctx).apply {
+                    player = exoPlayer
+                    useController = true
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+        errorMessage?.let {
+            Text(it, modifier = Modifier.padding(24.dp))
+        }
+    }
 }
-
-@Composable
-private fun <T> remember2(calculation: () -> T): T =
-    androidx.compose.runtime.remember { calculation() }

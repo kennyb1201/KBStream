@@ -136,7 +136,7 @@ fun DetailScreen(
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                         ) {
                             Text(
-                                stream.title ?: stream.name ?: "Unnamed stream",
+                                stream.title?.takeIf { it.isNotBlank() } ?: stream.name?.takeIf { it.isNotBlank() } ?: "Unnamed stream",
                                 modifier = Modifier.padding(12.dp)
                             )
                         }
