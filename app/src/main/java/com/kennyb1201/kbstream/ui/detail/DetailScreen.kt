@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.detail
 
 import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -26,6 +27,9 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.addon.VideoEntry
+import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.layout.width
 import com.kennyb1201.kbstream.ui.player.PlayerActivity
 
 @Composable
@@ -45,6 +49,7 @@ fun DetailScreen(
     val streams by viewModel.streams.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val streamsLoading by viewModel.streamsLoading.collectAsState()
+    val tmdbDetail by viewModel.tmdbDetail.collectAsState()
     val error by viewModel.error.collectAsState()
 
     fun playStream(stream: Stream) {

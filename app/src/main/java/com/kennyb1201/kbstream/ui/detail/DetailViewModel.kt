@@ -7,6 +7,8 @@ import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
+import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -15,9 +17,13 @@ import kotlinx.coroutines.launch
 class DetailViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = AddonRepository()
     private val addonManager = AddonManager(application)
+    private val tmdbRepository = TmdbRepository()
 
     private val _meta = MutableStateFlow<Meta?>(null)
     val meta: StateFlow<Meta?> = _meta.asStateFlow()
+
+    private val _tmdbDetail = MutableStateFlow<TmdbDetail?>(null)
+    val tmdbDetail: StateFlow<TmdbDetail?> = _tmdbDetail.asStateFlow()
 
     private val _streams = MutableStateFlow<List<Stream>>(emptyList())
     val streams: StateFlow<List<Stream>> = _streams.asStateFlow()
@@ -45,7 +51,13 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
                     val baseUrl = it.manifestUrl.removeSuffix("/manifest.json")
                     _meta.value = repository.getMeta(baseUrl, type, id)
                 }
-                // movies: load streams for the title itself right away
+
+                try {
+                    _tmdbDetail.value = tmdbRepository.fetchEnrichedMeta(id, type)
+                } catch (e: Exception) {
+                    // TMDB enrichment is optional -- never fail the screen over it
+                }
+
                 if (type == "movie") {
                     loadStreamsFor(id)
                 }
