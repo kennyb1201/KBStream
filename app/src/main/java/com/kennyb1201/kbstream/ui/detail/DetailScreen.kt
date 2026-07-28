@@ -3,11 +3,14 @@ package com.kennyb1201.kbstream.ui.detail
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -27,9 +30,9 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.addon.VideoEntry
+import com.kennyb1201.kbstream.data.tmdb.TmdbCastMember
+import com.kennyb1201.kbstream.data.tmdb.TmdbRecommendationItem
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.layout.width
 import com.kennyb1201.kbstream.ui.player.PlayerActivity
 
 @Composable
@@ -46,10 +49,10 @@ fun DetailScreen(
     }
 
     val meta by viewModel.meta.collectAsState()
+    val tmdbDetail by viewModel.tmdbDetail.collectAsState()
     val streams by viewModel.streams.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val streamsLoading by viewModel.streamsLoading.collectAsState()
-    val tmdbDetail by viewModel.tmdbDetail.collectAsState()
     val error by viewModel.error.collectAsState()
 
     fun playStream(stream: Stream) {
@@ -70,16 +73,26 @@ fun DetailScreen(
             ?: stream.name?.takeIf { it.isNotBlank() }
             ?: "Unnamed stream"
 
+    fun playTrailer() {
+        val trailer = tmdbDetail?.videos?.results?.firstOrNull {
+            it.site == "YouTube" && it.type == "Trailer"
+        } ?: return
+        val intent = Intent(android.content.Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=${trailer.key}"))
+        context.startActivity(intent)
+    }
+
     Box(modifier = Modifier.fillMaxSize().padding(24.dp)) {
         when {
             isLoading -> Text("Loading...")
             error != null -> Text("Error: $error")
             meta != null -> {
                 val m = meta!!
+                val backdropUrl = tmdbDetail?.backdropPath?.let { "${TmdbRepository.BACKDROP_BASE}$it" } ?: m.background ?: m.poster
+
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
                     item {
                         AsyncImage(
-                            model = m.background ?: m.poster,
+                            model = backdropUrl,
                             contentDescription = m.name,
                             modifier = Modifier.fillMaxWidth().height(200.dp)
                         )
@@ -99,17 +112,67 @@ fun DetailScreen(
                         m.description?.let {
                             Text(it, modifier = Modifier.padding(top = 12.dp))
                         }
-                        m.director?.takeIf { it.isNotEmpty() }?.let {
-                            Text("Director: ${it.joinToString(", ")}", modifier = Modifier.padding(top = 12.dp))
-                        }
-                        m.cast?.takeIf { it.isNotEmpty() }?.let {
-                            Text("Cast: ${it.joinToString(", ")}", modifier = Modifier.padding(top = 4.dp))
-                        }
                         m.country?.let { Text("Country: $it", modifier = Modifier.padding(top = 4.dp)) }
                         m.language?.let { Text("Language: $it", modifier = Modifier.padding(top = 4.dp)) }
                         m.awards?.let { Text("Awards: $it", modifier = Modifier.padding(top = 4.dp)) }
+
+                        if (tmdbDetail?.videos?.results?.any { it.site == "YouTube" && it.type == "Trailer" } == true) {
+                            Card(
+                                onClick = { playTrailer() },
+                                colors = CardDefaults.colors(containerColor = Color(0xFF4FC3F7), contentColor = Color.Black),
+                                modifier = Modifier.padding(top = 12.dp)
+                            ) {
+                                Text("Play Trailer", modifier = Modifier.padding(12.dp))
+                            }
+                        }
                     }
 
+                    // Cast row -- photos + names from TMDB, falls back to Cinemeta's plain name list
+                    val tmdbCast = tmdbDetail?.credits?.cast
+                    if (!tmdbCast.isNullOrEmpty()) {
+                        item { Text("Cast", modifier = Modifier.padding(top = 20.dp, bottom = 8.dp)) }
+                        item {
+                            LazyRow {
+                                items(tmdbCast.take(15)) { member: TmdbCastMember ->
+                                    Column(modifier = Modifier.width(90.dp).padding(end = 10.dp)) {
+                                        AsyncImage(
+                                            model = member.profilePath?.let { "${TmdbRepository.PROFILE_BASE}$it" },
+                                            contentDescription = member.name,
+                                            modifier = Modifier.fillMaxWidth().height(120.dp)
+                                        )
+                                        Text(member.name, modifier = Modifier.padding(top = 4.dp))
+                                        member.character?.let { Text(it) }
+                                    }
+                                }
+                            }
+                        }
+                    } else if (!m.cast.isNullOrEmpty()) {
+                        item {
+                            Text("Cast: ${m.cast!!.joinToString(", ")}", modifier = Modifier.padding(top = 12.dp))
+                        }
+                    }
+
+                    m.director?.takeIf { it.isNotEmpty() }?.let {
+                        item { Text("Director: ${it.joinToString(", ")}", modifier = Modifier.padding(top = 8.dp)) }
+                    }
+
+                    // Production companies / networks
+                    val companies = tmdbDetail?.productionCompanies.orEmpty()
+                    val networks = tmdbDetail?.networks.orEmpty()
+                    if (companies.isNotEmpty() || networks.isNotEmpty()) {
+                        item {
+                            Text(
+                                if (type == "series") "Networks" else "Production",
+                                modifier = Modifier.padding(top = 20.dp, bottom = 8.dp)
+                            )
+                        }
+                        item {
+                            val names = (networks.map { it.name } + companies.map { it.name }).joinToString(", ")
+                            Text(names)
+                        }
+                    }
+
+                    // Series episodes
                     if (type == "series" && !m.videos.isNullOrEmpty()) {
                         item { Text("Episodes", modifier = Modifier.padding(top = 20.dp, bottom = 8.dp)) }
                         items(m.videos!!) { video: VideoEntry ->
@@ -151,6 +214,28 @@ fun DetailScreen(
                                 fontFamily = FontFamily.Monospace,
                                 modifier = Modifier.padding(12.dp)
                             )
+                        }
+                    }
+
+                    // More Like This -- TMDB recommendations
+                    val recs = tmdbDetail?.recommendations?.results.orEmpty()
+                    if (recs.isNotEmpty()) {
+                        item { Text("More Like This", modifier = Modifier.padding(top = 20.dp, bottom = 8.dp)) }
+                        item {
+                            LazyRow {
+                                items(recs.take(15)) { rec: TmdbRecommendationItem ->
+                                    Card(
+                                        onClick = { /* TODO: needs IMDB id to navigate -- TMDB gives its own id */ },
+                                        modifier = Modifier.width(110.dp).height(160.dp).padding(end = 10.dp)
+                                    ) {
+                                        AsyncImage(
+                                            model = rec.posterPath?.let { "${TmdbRepository.PROFILE_BASE}$it" },
+                                            contentDescription = rec.title ?: rec.name,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }

@@ -18,6 +18,7 @@ data class TmdbFindResponse(
 
 @JsonClass(generateAdapter = true)
 data class TmdbCastMember(
+    val id: Int,
     val name: String,
     val character: String? = null,
     @Json(name = "profile_path") val profilePath: String? = null
@@ -42,12 +43,42 @@ data class TmdbVideos(
 )
 
 @JsonClass(generateAdapter = true)
+data class TmdbProductionCompany(
+    val id: Int,
+    val name: String,
+    @Json(name = "logo_path") val logoPath: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class TmdbNetwork(
+    val id: Int,
+    val name: String,
+    @Json(name = "logo_path") val logoPath: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class TmdbRecommendationItem(
+    val id: Int,
+    val title: String? = null,
+    val name: String? = null,
+    @Json(name = "poster_path") val posterPath: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class TmdbRecommendations(
+    val results: List<TmdbRecommendationItem> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
 data class TmdbDetail(
     val id: Int,
     val title: String? = null,
     val name: String? = null,
     @Json(name = "poster_path") val posterPath: String? = null,
     @Json(name = "backdrop_path") val backdropPath: String? = null,
+    @Json(name = "production_companies") val productionCompanies: List<TmdbProductionCompany> = emptyList(),
+    val networks: List<TmdbNetwork> = emptyList(),
     val credits: TmdbCredits? = null,
-    val videos: TmdbVideos? = null
+    val videos: TmdbVideos? = null,
+    val recommendations: TmdbRecommendations? = null
 )
