@@ -22,6 +22,7 @@ data class CatalogResponse(
 data class VideoEntry(
     val id: String,
     val title: String? = null,
+    val description: String? = null,
     val season: Int? = null,
     val episode: Int? = null,
     val released: String? = null
@@ -58,6 +59,7 @@ data class MetaResponse(
 data class Stream(
     val name: String? = null,
     val title: String? = null,
+    val description: String? = null,
     val url: String? = null,
     @Json(name = "infoHash") val infoHash: String? = null,
     val fileIdx: Int? = null

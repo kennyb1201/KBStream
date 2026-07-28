@@ -18,6 +18,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
@@ -47,7 +48,7 @@ fun DetailScreen(
     val error by viewModel.error.collectAsState()
 
     fun playStream(stream: Stream) {
-        val url = stream.url ?: return // magnet/torrent-only streams aren't playable yet
+        val url = stream.url ?: return
         val intent = Intent(context, PlayerActivity::class.java).apply {
             putExtra("stream_url", url)
             putExtra("item_id", selectedVideoId ?: id)
@@ -57,6 +58,12 @@ fun DetailScreen(
         }
         context.startActivity(intent)
     }
+
+    fun streamLabel(stream: Stream): String =
+        stream.title?.takeIf { it.isNotBlank() }
+            ?: stream.description?.takeIf { it.isNotBlank() }
+            ?: stream.name?.takeIf { it.isNotBlank() }
+            ?: "Unnamed stream"
 
     Box(modifier = Modifier.fillMaxSize().padding(24.dp)) {
         when {
@@ -98,7 +105,6 @@ fun DetailScreen(
                         m.awards?.let { Text("Awards: $it", modifier = Modifier.padding(top = 4.dp)) }
                     }
 
-                    // Series: show episode list; picking one loads its streams
                     if (type == "series" && !m.videos.isNullOrEmpty()) {
                         item { Text("Episodes", modifier = Modifier.padding(top = 20.dp, bottom = 8.dp)) }
                         items(m.videos!!) { video: VideoEntry ->
@@ -136,7 +142,8 @@ fun DetailScreen(
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                         ) {
                             Text(
-                                stream.title?.takeIf { it.isNotBlank() } ?: stream.name?.takeIf { it.isNotBlank() } ?: "Unnamed stream",
+                                streamLabel(stream),
+                                fontFamily = FontFamily.Monospace,
                                 modifier = Modifier.padding(12.dp)
                             )
                         }
