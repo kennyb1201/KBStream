@@ -1,7 +1,6 @@
 package com.kennyb1201.kbstream.ui.detail
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -13,10 +12,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Card
+import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
+import com.kennyb1201.kbstream.data.addon.Stream
 
 @Composable
 fun DetailScreen(
@@ -86,9 +88,13 @@ fun DetailScreen(
                             modifier = Modifier.padding(top = 20.dp, bottom = 8.dp)
                         )
                     }
-                    items(streams) { stream ->
+                    items(streams) { stream: Stream ->
                         Card(
                             onClick = { /* TODO: play stream */ },
+                            colors = CardDefaults.colors(
+                                containerColor = Color(0xFF1B3A57),
+                                contentColor = Color.White
+                            ),
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                         ) {
                             Text(
