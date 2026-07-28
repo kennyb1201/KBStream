@@ -26,6 +26,7 @@ import com.kennyb1201.kbstream.data.addon.MetaPreview
 fun HomeScreen(
     onItemClick: (MetaPreview) -> Unit,
     onManageAddons: () -> Unit,
+    onSearch: () -> Unit = {},
     viewModel: HomeViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
     val rails by viewModel.rails.collectAsState()

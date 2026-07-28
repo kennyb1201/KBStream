@@ -12,7 +12,7 @@ class AddonRepository {
         .build()
 
     private val api: StremioApiService = Retrofit.Builder()
-        .baseUrl("https://example.com/") // unused -- every call supplies a full @Url
+        .baseUrl("https://example.com/")
         .client(OkHttpClient.Builder().build())
         .addConverterFactory(MoshiConverterFactory.create(moshi))
         .build()
@@ -23,6 +23,9 @@ class AddonRepository {
 
     suspend fun getCatalog(baseUrl: String, type: String, catalogId: String): List<MetaPreview> =
         api.getCatalog("$baseUrl/catalog/$type/$catalogId.json").metas
+
+    suspend fun searchCatalog(baseUrl: String, type: String, catalogId: String, query: String): List<MetaPreview> =
+        api.getCatalog("$baseUrl/catalog/$type/$catalogId/search=${java.net.URLEncoder.encode(query, "UTF-8")}.json").metas
 
     suspend fun getMeta(baseUrl: String, type: String, id: String): Meta? =
         api.getMeta("$baseUrl/meta/$type/$id.json").meta

@@ -25,37 +25,53 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
+    private val _streamsLoading = MutableStateFlow(false)
+    val streamsLoading: StateFlow<Boolean> = _streamsLoading.asStateFlow()
+
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
+    private var contentType: String = ""
+
     fun load(type: String, id: String) {
+        contentType = type
         viewModelScope.launch {
             _isLoading.value = true
             _error.value = null
             try {
                 val addons = addonManager.getInstalledAddons()
-
                 val metaAddon = addons.firstOrNull { it.resources.contains("meta") }
                 metaAddon?.let {
                     val baseUrl = it.manifestUrl.removeSuffix("/manifest.json")
                     _meta.value = repository.getMeta(baseUrl, type, id)
                 }
-
-                val allStreams = mutableListOf<Stream>()
-                for (addon in addons.filter { it.resources.contains("stream") }) {
-                    try {
-                        val baseUrl = addon.manifestUrl.removeSuffix("/manifest.json")
-                        allStreams += repository.getStreams(baseUrl, type, id)
-                    } catch (e: Exception) {
-                        // one broken stream addon shouldn't block the others
-                    }
+                // movies: load streams for the title itself right away
+                if (type == "movie") {
+                    loadStreamsFor(id)
                 }
-                _streams.value = allStreams
             } catch (e: Exception) {
                 _error.value = "Failed to load: ${e.message}"
             } finally {
                 _isLoading.value = false
             }
+        }
+    }
+
+    fun loadStreamsFor(videoId: String) {
+        viewModelScope.launch {
+            _streamsLoading.value = true
+            val allStreams = mutableListOf<Stream>()
+            val addons = addonManager.getInstalledAddons()
+            for (addon in addons.filter { it.resources.contains("stream") }) {
+                try {
+                    val baseUrl = addon.manifestUrl.removeSuffix("/manifest.json")
+                    allStreams += repository.getStreams(baseUrl, contentType, videoId)
+                } catch (e: Exception) {
+                    // one broken stream addon shouldn't block the others
+                }
+            }
+            _streams.value = allStreams
+            _streamsLoading.value = false
         }
     }
 }

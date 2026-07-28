@@ -16,11 +16,13 @@ import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.ui.addons.AddonsScreen
 import com.kennyb1201.kbstream.ui.detail.DetailScreen
 import com.kennyb1201.kbstream.ui.home.HomeScreen
+import com.kennyb1201.kbstream.ui.search.SearchScreen
 import com.kennyb1201.kbstream.ui.theme.KBStreamTheme
 
 sealed class Screen {
     object Home : Screen()
     object Addons : Screen()
+    object Search : Screen()
     data class Detail(val type: String, val id: String) : Screen()
 }
 
@@ -51,6 +53,9 @@ fun AppRoot() {
             onManageAddons = { screen = Screen.Addons }
         )
         is Screen.Addons -> AddonsScreen(onBack = { screen = Screen.Home })
+        is Screen.Search -> SearchScreen(
+            onItemClick = { meta: MetaPreview -> screen = Screen.Detail(meta.type, meta.id) }
+        )
         is Screen.Detail -> DetailScreen(type = current.type, id = current.id)
     }
 }

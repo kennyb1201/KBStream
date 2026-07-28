@@ -19,6 +19,15 @@ data class CatalogResponse(
 )
 
 @JsonClass(generateAdapter = true)
+data class VideoEntry(
+    val id: String,
+    val title: String? = null,
+    val season: Int? = null,
+    val episode: Int? = null,
+    val released: String? = null
+)
+
+@JsonClass(generateAdapter = true)
 data class Meta(
     val id: String,
     val type: String,
@@ -36,7 +45,8 @@ data class Meta(
     val website: String? = null,
     val genres: List<String>? = null,
     val cast: List<String>? = null,
-    val director: List<String>? = null
+    val director: List<String>? = null,
+    val videos: List<VideoEntry>? = null
 )
 
 @JsonClass(generateAdapter = true)
