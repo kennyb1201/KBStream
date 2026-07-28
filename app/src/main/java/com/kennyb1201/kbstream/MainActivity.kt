@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -37,6 +38,10 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun AppRoot() {
     var screen by remember { mutableStateOf<Screen>(Screen.Home) }
+
+    BackHandler(enabled = screen != Screen.Home) {
+        screen = Screen.Home
+    }
 
     when (val current = screen) {
         is Screen.Home -> HomeScreen(
