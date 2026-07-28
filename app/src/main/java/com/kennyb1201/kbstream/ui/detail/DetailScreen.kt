@@ -37,18 +37,55 @@ fun DetailScreen(
         when {
             isLoading -> Text("Loading...")
             error != null -> Text("Error: $error")
-            meta != null -> Column {
-                AsyncImage(
-                    model = meta!!.background ?: meta!!.poster,
-                    contentDescription = meta!!.name,
-                    modifier = Modifier.fillMaxWidth().height(200.dp)
-                )
-                Text(meta!!.name, modifier = Modifier.padding(top = 12.dp))
-                meta!!.description?.let {
-                    Text(it, modifier = Modifier.padding(top = 8.dp))
-                }
-                Text("Streams", modifier = Modifier.padding(top = 20.dp, bottom = 8.dp))
-                LazyColumn {
+            meta != null -> {
+                val m = meta!!
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    item {
+                        AsyncImage(
+                            model = m.background ?: m.poster,
+                            contentDescription = m.name,
+                            modifier = Modifier.fillMaxWidth().height(200.dp)
+                        )
+                        Text(m.name, modifier = Modifier.padding(top = 12.dp))
+
+                        val metaLine = listOfNotNull(
+                            m.releaseInfo,
+                            m.runtime,
+                            m.imdbRating?.let { "IMDb $it" }
+                        ).joinToString("  •  ")
+                        if (metaLine.isNotBlank()) {
+                            Text(metaLine, modifier = Modifier.padding(top = 4.dp))
+                        }
+
+                        m.genres?.takeIf { it.isNotEmpty() }?.let {
+                            Text(it.joinToString(", "), modifier = Modifier.padding(top = 4.dp))
+                        }
+
+                        m.description?.let {
+                            Text(it, modifier = Modifier.padding(top = 12.dp))
+                        }
+
+                        m.director?.takeIf { it.isNotEmpty() }?.let {
+                            Text("Director: ${it.joinToString(", ")}", modifier = Modifier.padding(top = 12.dp))
+                        }
+                        m.cast?.takeIf { it.isNotEmpty() }?.let {
+                            Text("Cast: ${it.joinToString(", ")}", modifier = Modifier.padding(top = 4.dp))
+                        }
+                        m.country?.let {
+                            Text("Country: $it", modifier = Modifier.padding(top = 4.dp))
+                        }
+                        m.language?.let {
+                            Text("Language: $it", modifier = Modifier.padding(top = 4.dp))
+                        }
+                        m.awards?.let {
+                            Text("Awards: $it", modifier = Modifier.padding(top = 4.dp))
+                        }
+
+                        Text(
+                            if (streams.isEmpty()) "No stream source configured yet" else "Streams",
+                            modifier = Modifier.padding(top = 20.dp, bottom = 8.dp)
+                        )
+                    }
                     items(streams) { stream ->
                         Card(
                             onClick = { /* TODO: play stream */ },

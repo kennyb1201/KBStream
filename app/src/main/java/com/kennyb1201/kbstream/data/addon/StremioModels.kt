@@ -25,9 +25,18 @@ data class Meta(
     val name: String,
     val poster: String? = null,
     val background: String? = null,
+    val logo: String? = null,
     val description: String? = null,
     val releaseInfo: String? = null,
-    val imdbRating: String? = null
+    val imdbRating: String? = null,
+    val runtime: String? = null,
+    val language: String? = null,
+    val country: String? = null,
+    val awards: String? = null,
+    val website: String? = null,
+    val genres: List<String>? = null,
+    val cast: List<String>? = null,
+    val director: List<String>? = null
 )
 
 @JsonClass(generateAdapter = true)
