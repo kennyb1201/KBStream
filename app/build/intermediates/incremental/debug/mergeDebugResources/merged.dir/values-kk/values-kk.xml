@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:ns1="urn:oasis:names:tc:xliff:document:1.2">
+    <string-array name="exo_controls_playback_speeds">
+    <item>0,25x</item>
+    <item>0,5x</item>
+    <item>0,75x</item>
+    <item>Қалыпты</item>
+    <item>1,25x</item>
+    <item>1,5x</item>
+    <item>2x</item>
+  </string-array>
+    <plurals name="exo_controls_fastforward_by_amount_description">
+    <item quantity="one">%d секунд алға айналдыру</item>
+    <item quantity="other">%d секунд алға айналдыру</item>
+  </plurals>
+    <plurals name="exo_controls_rewind_by_amount_description">
+    <item quantity="one">%d секунд артқа айналдыру</item>
+    <item quantity="other">%d секунд артқа айналдыру</item>
+  </plurals>
+    <string msgid="8719607706653693137" name="androidx_compose_foundation_autofill">"Автотолтыру"</string>
+    <string msgid="1150566100598813236" name="androidx_compose_ui_autofill">"Автотолтыру"</string>
+    <string msgid="881409763997275156" name="call_notification_answer_action">"Жауап беру"</string>
+    <string msgid="8793775615905189152" name="call_notification_answer_video_action">"Бейне"</string>
+    <string msgid="3229508546291798546" name="call_notification_decline_action">"Қабылдамау"</string>
+    <string msgid="2659457946726154263" name="call_notification_hang_up_action">"Тұтқаны қою"</string>
+    <string msgid="6107532579223922871" name="call_notification_incoming_text">"Кіріс қоңырау"</string>
+    <string msgid="8623827134497363134" name="call_notification_ongoing_text">"Қоңырау"</string>
+    <string msgid="59049573811482460" name="call_notification_screening_text">"Келген қоңырауды сүзу"</string>
+    <string msgid="406453423630273620" name="close_drawer">"Навигация мәзірін жабу"</string>
+    <string msgid="7573152094250666567" name="close_sheet">"Парақты жабу"</string>
+    <string msgid="8038256446254964252" name="default_error_message">"Енгізілген мән жарамсыз."</string>
+    <string msgid="6312721426453364202" name="default_popup_window_title">"Қалқымалы терезе"</string>
+    <string msgid="1890207353314751437" name="dropdown_menu">"Ашылмалы мәзір"</string>
+    <string name="exo_controls_cc_disabled_description">Субтитрді қосу</string>
+    <string name="exo_controls_cc_enabled_description">Субтитрді өшіру</string>
+    <string name="exo_controls_fastforward_description">Жылдам алға айналдыру</string>
+    <string name="exo_controls_fullscreen_enter_description">Толық экранды режимге кіру</string>
+    <string name="exo_controls_fullscreen_exit_description">Толық экранды режимнен шығу</string>
+    <string name="exo_controls_hide">Ойнатқышты басқару элементтерін жасыру</string>
+    <string name="exo_controls_next_description">Келесі</string>
+    <string name="exo_controls_overflow_hide_description">Қосымша параметрлерді жасыру</string>
+    <string name="exo_controls_overflow_show_description">Қосымша параметрлерді көрсету</string>
+    <string name="exo_controls_pause_description">Кідірту</string>
+    <string name="exo_controls_play_description">Ойнату</string>
+    <string name="exo_controls_playback_speed">Жылдамдық</string>
+    <string name="exo_controls_previous_description">Алдыңғы</string>
+    <string name="exo_controls_repeat_all_description">Қазіргі режим: барлық контент қайталанады Қайталау режимін ауыстыру.</string>
+    <string name="exo_controls_repeat_off_description">Қазіргі режим: еш контент қайталанбайды. Қайталау режимін ауыстыру.</string>
+    <string name="exo_controls_repeat_one_description">Қазіргі режим: бір контент қайталанады. Қайталау режимін ауыстыру.</string>
+    <string name="exo_controls_rewind_description">Артқа айналдыру</string>
+    <string name="exo_controls_seek_bar_description">Ойнату барысы</string>
+    <string name="exo_controls_settings_description">Параметрлер</string>
+    <string name="exo_controls_show">Ойнатқышты басқару элементтерін көрсету</string>
+    <string name="exo_controls_shuffle_off_description">Араластыру режимін қосу</string>
+    <string name="exo_controls_shuffle_on_description">Араластыру режимін өшіру</string>
+    <string name="exo_controls_stop_description">Тоқтату</string>
+    <string name="exo_controls_vr_description">VR режимі</string>
+    <string name="exo_download_completed">Жүктеп алынды</string>
+    <string name="exo_download_description">Жүктеп алу</string>
+    <string name="exo_download_downloading">Жүктеп алынуда</string>
+    <string name="exo_download_failed">Жүктеп алынбады</string>
+    <string name="exo_download_notification_channel_name">Жүктеп алынғандар</string>
+    <string name="exo_download_paused">Жүктеп алу процестері уақытша тоқтады.</string>
+    <string name="exo_download_paused_for_network">Жүктеп алу үшін желіге қосылу керек.</string>
+    <string name="exo_download_paused_for_wifi">Жүктеп алу үшін Wi-Fi-ға қосылу керек.</string>
+    <string name="exo_download_removing">Жүктеп алынғандар өшірілуде</string>
+    <string name="exo_item_list">%1$s, %2$s</string>
+    <string name="exo_track_bitrate">%1$.2f МБ/сек</string>
+    <string name="exo_track_mono">Моно</string>
+    <string name="exo_track_resolution">%1$d × %2$d</string>
+    <string name="exo_track_role_alternate">Балама</string>
+    <string name="exo_track_role_closed_captions">Субтитр</string>
+    <string name="exo_track_role_commentary">Түсіндірме</string>
+    <string name="exo_track_role_supplementary">Қосымша</string>
+    <string name="exo_track_selection_auto">Автоматты</string>
+    <string name="exo_track_selection_none">Жоқ</string>
+    <string name="exo_track_selection_title_audio">Aудиомазмұн</string>
+    <string name="exo_track_stereo">Стерео</string>
+    <string name="exo_track_surround">Көлемді дыбыс</string>
+    <string name="exo_track_surround_5_point_1">5.1 көлемді дыбыс жүйесі</string>
+    <string name="exo_track_surround_7_point_1">7.1 көлемді дыбыс жүйесі</string>
+    <string name="exo_track_unknown">Белгісіз</string>
+    <string name="exo_track_unknown_name">Белгісіз (%1$s)</string>
+    <string msgid="6827826412747255547" name="in_progress">"Орындалуда"</string>
+    <string msgid="7933458017204019916" name="indeterminate">"Жартылай белгіленді."</string>
+    <string msgid="542007171693138492" name="navigation_menu">"Навигация мәзірі"</string>
+    <string msgid="6610465462668679431" name="not_selected">"Таңдалмады"</string>
+    <string msgid="5941395253238309765" name="range_end">"Аралықтың соңы"</string>
+    <string msgid="7097486360902471446" name="range_start">"Аралықтың басы"</string>
+    <string msgid="6043586758067023" name="selected">"Таңдалды"</string>
+    <string msgid="2792228137354697160" name="snackbar_pane_title">"Ескерту"</string>
+    <string msgid="4139871816613051306" name="state_empty">"Бос"</string>
+    <string msgid="5834637030682409883" name="state_off">"Өшірулі"</string>
+    <string msgid="1490883874751719580" name="state_on">"Қосулы"</string>
+    <string msgid="6277540029070332960" name="status_bar_notification_info_overflow">"999+"</string>
+    <string msgid="2561197295334830845" name="switch_role">"Ауысу"</string>
+    <string msgid="1672349317127674378" name="tab">"Қойынды"</string>
+    <string msgid="5946805113151406391" name="template_percent">"<ns1:g id="PERCENTAGE">%1$d</ns1:g> пайыз."</string>
+    <string msgid="3765533235322692011" name="tooltip_description">"қалқыма көмек"</string>
+    <string msgid="3124740595719787496" name="tooltip_label">"қалқыма көмекті көрсету"</string>
+</resources>

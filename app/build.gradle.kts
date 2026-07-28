@@ -10,7 +10,7 @@ android {
 
     defaultConfig {
         applicationId = "com.kennyb1201.kbstream"
-        minSdk = 21       // Android TV back to Lollipop
+        minSdk = 23       // Android TV back to Lollipop
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"

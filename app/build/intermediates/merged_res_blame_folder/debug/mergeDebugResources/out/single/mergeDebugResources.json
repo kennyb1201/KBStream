@@ -1,0 +1,10 @@
+[
+    {
+        "merged": "com.kennyb1201.kbstream.app-debug-52:/drawable_ic_launcher_foreground.xml.flat",
+        "source": "com.kennyb1201.kbstream.app-main-54:/drawable/ic_launcher_foreground.xml"
+    },
+    {
+        "merged": "com.kennyb1201.kbstream.app-debug-52:/mipmap-anydpi-v26_ic_launcher.xml.flat",
+        "source": "com.kennyb1201.kbstream.app-main-54:/mipmap-anydpi-v26/ic_launcher.xml"
+    }
+]

@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:ns1="urn:oasis:names:tc:xliff:document:1.2">
+    <string-array name="exo_controls_playback_speeds">
+    <item>0.25x</item>
+    <item>0.5x</item>
+    <item>0.75x</item>
+    <item>Normal</item>
+    <item>1.25x</item>
+    <item>1.5x</item>
+    <item>2x</item>
+  </string-array>
+    <plurals name="exo_controls_fastforward_by_amount_description">
+    <item quantity="one">%d saniyə irəli çəkin</item>
+    <item quantity="other">%d saniyə irəli çəkin</item>
+  </plurals>
+    <plurals name="exo_controls_rewind_by_amount_description">
+    <item quantity="one">%d saniyə geri çəkin</item>
+    <item quantity="other">%d saniyə geri çəkin</item>
+  </plurals>
+    <string msgid="8719607706653693137" name="androidx_compose_foundation_autofill">"Avto-doldurma"</string>
+    <string msgid="1150566100598813236" name="androidx_compose_ui_autofill">"Avto-doldurma"</string>
+    <string msgid="881409763997275156" name="call_notification_answer_action">"Cavab verin"</string>
+    <string msgid="8793775615905189152" name="call_notification_answer_video_action">"Video"</string>
+    <string msgid="3229508546291798546" name="call_notification_decline_action">"İmtina edin"</string>
+    <string msgid="2659457946726154263" name="call_notification_hang_up_action">"Dəstəyi asın"</string>
+    <string msgid="6107532579223922871" name="call_notification_incoming_text">"Gələn zəng"</string>
+    <string msgid="8623827134497363134" name="call_notification_ongoing_text">"Davam edən zəng"</string>
+    <string msgid="59049573811482460" name="call_notification_screening_text">"Gələn zəng göstərilir"</string>
+    <string msgid="406453423630273620" name="close_drawer">"Naviqasiya menyusunu bağlayın"</string>
+    <string msgid="7573152094250666567" name="close_sheet">"Səhifəni bağlayın"</string>
+    <string msgid="8038256446254964252" name="default_error_message">"Yanlış daxiletmə"</string>
+    <string msgid="6312721426453364202" name="default_popup_window_title">"Popap Pəncərəsi"</string>
+    <string msgid="1890207353314751437" name="dropdown_menu">"Aşağı açılan menyu"</string>
+    <string name="exo_controls_cc_disabled_description">Subtitrləri aktiv edin</string>
+    <string name="exo_controls_cc_enabled_description">Subtitrləri deaktiv edin</string>
+    <string name="exo_controls_fastforward_description">İrəli çəkin</string>
+    <string name="exo_controls_fullscreen_enter_description">Tam ekrana daxil olun</string>
+    <string name="exo_controls_fullscreen_exit_description">Tam ekrandan çıxın</string>
+    <string name="exo_controls_hide">Oyunçu nəzarətlərini gizlədin</string>
+    <string name="exo_controls_next_description">Sonra</string>
+    <string name="exo_controls_overflow_hide_description">Əlavə ayarları gizlədin</string>
+    <string name="exo_controls_overflow_show_description">Əlavə ayarları göstərin</string>
+    <string name="exo_controls_pause_description">Pauza</string>
+    <string name="exo_controls_play_description">Oxudun</string>
+    <string name="exo_controls_playback_speed">Sürət</string>
+    <string name="exo_controls_previous_description">Əvvəl</string>
+    <string name="exo_controls_repeat_all_description">Cari rejim: Hamısını təkrarlayın. Təkrarlanma rejimini keçirin.</string>
+    <string name="exo_controls_repeat_off_description">Cari rejim: Heç birini təkrarlamayın. Təkrarlanma rejimini keçirin.</string>
+    <string name="exo_controls_repeat_one_description">Cari rejim: Birini təkrarlayın. Təkrarlanma rejimini keçirin.</string>
+    <string name="exo_controls_rewind_description">Geri çəkin</string>
+    <string name="exo_controls_seek_bar_description">Oxutmanın gedişatı</string>
+    <string name="exo_controls_settings_description">Ayarlar</string>
+    <string name="exo_controls_show">Oyunçu nəzarətlərini göstərin</string>
+    <string name="exo_controls_shuffle_off_description">Qarışdırma rejimini aktiv edin</string>
+    <string name="exo_controls_shuffle_on_description">Qarışdırma rejimini deaktiv edin</string>
+    <string name="exo_controls_stop_description">Dayandırın</string>
+    <string name="exo_controls_vr_description">VR rejimi</string>
+    <string name="exo_download_completed">Endirmə tamamlandı</string>
+    <string name="exo_download_description">Endirin</string>
+    <string name="exo_download_downloading">Endirilir</string>
+    <string name="exo_download_failed">Endirmə alınmadı</string>
+    <string name="exo_download_notification_channel_name">Endirmələr</string>
+    <string name="exo_download_paused">Endirmə durdurulub</string>
+    <string name="exo_download_paused_for_network">Endirmələr şəbəkəni gözləyir</string>
+    <string name="exo_download_paused_for_wifi">Endirmələr WiFi şəbəkəsini gözləyir</string>
+    <string name="exo_download_removing">Endirilənlər silinir</string>
+    <string name="exo_item_list">%1$s, %2$s</string>
+    <string name="exo_track_bitrate">%1$.2f Mbps</string>
+    <string name="exo_track_mono">Mono</string>
+    <string name="exo_track_resolution">%1$d × %2$d</string>
+    <string name="exo_track_role_alternate">Alternativ</string>
+    <string name="exo_track_role_closed_captions">Nüsxəni alan</string>
+    <string name="exo_track_role_commentary">Şərh</string>
+    <string name="exo_track_role_supplementary">Əlavə</string>
+    <string name="exo_track_selection_auto">Avtomatik</string>
+    <string name="exo_track_selection_none">Yoxdur</string>
+    <string name="exo_track_selection_title_audio">Audio</string>
+    <string name="exo_track_stereo">Stereo</string>
+    <string name="exo_track_surround">Yüksək səs</string>
+    <string name="exo_track_surround_5_point_1">5.1 yüksək səs</string>
+    <string name="exo_track_surround_7_point_1">7.1 yüksək səs</string>
+    <string name="exo_track_unknown">Naməlum</string>
+    <string name="exo_track_unknown_name">Naməlum (%1$s)</string>
+    <string msgid="6827826412747255547" name="in_progress">"Davam edir"</string>
+    <string msgid="7933458017204019916" name="indeterminate">"Qismən yoxlanıb"</string>
+    <string msgid="542007171693138492" name="navigation_menu">"Naviqasiya menyusu"</string>
+    <string msgid="6610465462668679431" name="not_selected">"Seçilməyib"</string>
+    <string msgid="5941395253238309765" name="range_end">"Sıranın sonu"</string>
+    <string msgid="7097486360902471446" name="range_start">"Sıranın başlanğıcı"</string>
+    <string msgid="6043586758067023" name="selected">"Seçilib"</string>
+    <string msgid="2792228137354697160" name="snackbar_pane_title">"Xəbərdarlıq"</string>
+    <string msgid="4139871816613051306" name="state_empty">"Boş"</string>
+    <string msgid="5834637030682409883" name="state_off">"Deaktiv"</string>
+    <string msgid="1490883874751719580" name="state_on">"Aktiv"</string>
+    <string msgid="6277540029070332960" name="status_bar_notification_info_overflow">"999+"</string>
+    <string msgid="2561197295334830845" name="switch_role">"Dəyişdirin"</string>
+    <string msgid="1672349317127674378" name="tab">"Tab"</string>
+    <string msgid="5946805113151406391" name="template_percent">"<ns1:g id="PERCENTAGE">%1$d</ns1:g> faiz."</string>
+    <string msgid="3765533235322692011" name="tooltip_description">"alət izahı"</string>
+    <string msgid="3124740595719787496" name="tooltip_label">"alət izahını göstərin"</string>
+</resources>
