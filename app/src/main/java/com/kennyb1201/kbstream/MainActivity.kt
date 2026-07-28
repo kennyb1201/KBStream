@@ -14,7 +14,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.tv.material3.MaterialTheme
+import com.kennyb1201.kbstream.ui.theme.KBStreamTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.ui.home.HomeViewModel
@@ -23,7 +23,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
+            KBStreamTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     HomeScreen()
                 }
