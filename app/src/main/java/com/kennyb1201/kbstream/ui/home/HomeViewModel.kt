@@ -19,6 +19,9 @@ class HomeViewModel(
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error.asStateFlow()
+
     init {
         loadCatalog()
     }
@@ -26,8 +29,14 @@ class HomeViewModel(
     private fun loadCatalog() {
         viewModelScope.launch {
             _isLoading.value = true
-            _catalog.value = repository.getCatalog(type = "movie", catalogId = "top")
-            _isLoading.value = false
+            _error.value = null
+            try {
+                _catalog.value = repository.getCatalog(type = "movie", catalogId = "top")
+            } catch (e: Exception) {
+                _error.value = "Failed to load: ${e.message}"
+            } finally {
+                _isLoading.value = false
+            }
         }
     }
 }
