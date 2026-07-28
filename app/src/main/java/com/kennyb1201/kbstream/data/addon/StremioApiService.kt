@@ -12,4 +12,7 @@ interface StremioApiService {
 
     @GET
     suspend fun getStreams(@Url url: String): StreamResponse
+
+    @GET
+    suspend fun getManifest(@Url url: String): AddonManifest
 }

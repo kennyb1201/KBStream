@@ -6,12 +6,7 @@ import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 
-class AddonRepository(
-    // Cinemeta: catalog + meta only, no key needed
-    private val metaAddonUrl: String = "https://v3-cinemeta.strem.io",
-    // AIOStreams: your Oracle-hosted aggregator, user-scoped path with embedded auth token
-    private val streamAddonUrl: String = "http://132.145.137.148:8080/stremio/67f82e67-ed57-4cef-bf0b-32b7386fae01/eyJpIjoiamlEcExKUGljdnpZUkRHUEcxWTRuUT09IiwiZSI6Ik9FeEFFY0QxYlpXMktzVkV3UGo4YUY4MUdtY2w4ZEVwT2hEWlo3enNBQ3M9IiwidCI6ImEifQ"
-) {
+class AddonRepository {
     private val moshi = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
         .build()
@@ -23,18 +18,15 @@ class AddonRepository(
         .build()
         .create(StremioApiService::class.java)
 
-    suspend fun getCatalog(type: String, catalogId: String): List<MetaPreview> {
-        val url = "$metaAddonUrl/catalog/$type/$catalogId.json"
-        return api.getCatalog(url).metas
-    }
+    suspend fun fetchManifest(manifestUrl: String): AddonManifest =
+        api.getManifest(manifestUrl)
 
-    suspend fun getMeta(type: String, id: String): Meta? {
-        val url = "$metaAddonUrl/meta/$type/$id.json"
-        return api.getMeta(url).meta
-    }
+    suspend fun getCatalog(baseUrl: String, type: String, catalogId: String): List<MetaPreview> =
+        api.getCatalog("$baseUrl/catalog/$type/$catalogId.json").metas
 
-    suspend fun getStreams(type: String, id: String): List<Stream> {
-        val url = "$streamAddonUrl/stream/$type/$id.json"
-        return api.getStreams(url).streams
-    }
+    suspend fun getMeta(baseUrl: String, type: String, id: String): Meta? =
+        api.getMeta("$baseUrl/meta/$type/$id.json").meta
+
+    suspend fun getStreams(baseUrl: String, type: String, id: String): List<Stream> =
+        api.getStreams("$baseUrl/stream/$type/$id.json").streams
 }

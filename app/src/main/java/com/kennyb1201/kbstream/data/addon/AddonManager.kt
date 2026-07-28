@@ -36,6 +36,13 @@ class AddonManager(context: Context) {
                 ManifestCatalog(type = "movie", id = "top", name = "Top Movies"),
                 ManifestCatalog(type = "series", id = "top", name = "Top Series")
             )
+        ),
+        InstalledAddon(
+            manifestUrl = "http://132.145.137.148:8080/stremio/67f82e67-ed57-4cef-bf0b-32b7386fae01/eyJpIjoiamlEcExKUGljdnpZUkRHUEcxWTRuUT09IiwiZSI6Ik9FeEFFY0QxYlpXMktzVkV3UGo4YUY4MUdtY2w4ZEVwT2hEWlo3enNBQ3M9IiwidCI6ImEifQ/manifest.json",
+            id = "aiostreams",
+            name = "AIOStreams",
+            resources = listOf("stream"),
+            catalogs = emptyList()
         )
     )
 

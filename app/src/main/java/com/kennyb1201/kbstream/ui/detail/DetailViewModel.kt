@@ -1,7 +1,9 @@
 package com.kennyb1201.kbstream.ui.detail
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.Stream
@@ -10,9 +12,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-class DetailViewModel(
-    private val repository: AddonRepository = AddonRepository()
-) : ViewModel() {
+class DetailViewModel(application: Application) : AndroidViewModel(application) {
+    private val repository = AddonRepository()
+    private val addonManager = AddonManager(application)
 
     private val _meta = MutableStateFlow<Meta?>(null)
     val meta: StateFlow<Meta?> = _meta.asStateFlow()
@@ -31,8 +33,24 @@ class DetailViewModel(
             _isLoading.value = true
             _error.value = null
             try {
-                _meta.value = repository.getMeta(type, id)
-                _streams.value = repository.getStreams(type, id)
+                val addons = addonManager.getInstalledAddons()
+
+                val metaAddon = addons.firstOrNull { it.resources.contains("meta") }
+                metaAddon?.let {
+                    val baseUrl = it.manifestUrl.removeSuffix("/manifest.json")
+                    _meta.value = repository.getMeta(baseUrl, type, id)
+                }
+
+                val allStreams = mutableListOf<Stream>()
+                for (addon in addons.filter { it.resources.contains("stream") }) {
+                    try {
+                        val baseUrl = addon.manifestUrl.removeSuffix("/manifest.json")
+                        allStreams += repository.getStreams(baseUrl, type, id)
+                    } catch (e: Exception) {
+                        // one broken stream addon shouldn't block the others
+                    }
+                }
+                _streams.value = allStreams
             } catch (e: Exception) {
                 _error.value = "Failed to load: ${e.message}"
             } finally {

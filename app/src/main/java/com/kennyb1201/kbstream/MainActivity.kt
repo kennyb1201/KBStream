@@ -13,12 +13,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.tv.material3.Surface
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.ui.addons.AddonsScreen
 import com.kennyb1201.kbstream.ui.detail.DetailScreen
 import com.kennyb1201.kbstream.ui.home.HomeScreen
 import com.kennyb1201.kbstream.ui.theme.KBStreamTheme
 
 sealed class Screen {
     object Home : Screen()
+    object Addons : Screen()
     data class Detail(val type: String, val id: String) : Screen()
 }
 
@@ -45,13 +47,10 @@ fun AppRoot() {
 
     when (val current = screen) {
         is Screen.Home -> HomeScreen(
-            onItemClick = { meta: MetaPreview ->
-                screen = Screen.Detail(meta.type, meta.id)
-            }
+            onItemClick = { meta: MetaPreview -> screen = Screen.Detail(meta.type, meta.id) },
+            onManageAddons = { screen = Screen.Addons }
         )
-        is Screen.Detail -> DetailScreen(
-            type = current.type,
-            id = current.id
-        )
+        is Screen.Addons -> AddonsScreen(onBack = { screen = Screen.Home })
+        is Screen.Detail -> DetailScreen(type = current.type, id = current.id)
     }
 }

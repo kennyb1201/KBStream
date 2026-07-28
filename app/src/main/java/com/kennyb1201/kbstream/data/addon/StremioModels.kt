@@ -57,3 +57,30 @@ data class Stream(
 data class StreamResponse(
     val streams: List<Stream> = emptyList()
 )
+
+@JsonClass(generateAdapter = true)
+data class ManifestCatalog(
+    val type: String,
+    val id: String,
+    val name: String
+)
+
+@JsonClass(generateAdapter = true)
+data class AddonManifest(
+    val id: String,
+    val name: String,
+    val version: String? = null,
+    val description: String? = null,
+    val resources: List<String> = emptyList(),
+    val types: List<String> = emptyList(),
+    val catalogs: List<ManifestCatalog> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class InstalledAddon(
+    val manifestUrl: String,
+    val id: String,
+    val name: String,
+    val resources: List<String>,
+    val catalogs: List<ManifestCatalog>
+)

@@ -1,7 +1,9 @@
 package com.kennyb1201.kbstream.ui.home
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -9,12 +11,19 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-class HomeViewModel(
-    private val repository: AddonRepository = AddonRepository()
-) : ViewModel() {
+data class Rail(
+    val addonName: String,
+    val catalogName: String,
+    val type: String,
+    val items: List<MetaPreview>
+)
 
-    private val _catalog = MutableStateFlow<List<MetaPreview>>(emptyList())
-    val catalog: StateFlow<List<MetaPreview>> = _catalog.asStateFlow()
+class HomeViewModel(application: Application) : AndroidViewModel(application) {
+    private val repository = AddonRepository()
+    private val addonManager = AddonManager(application)
+
+    private val _rails = MutableStateFlow<List<Rail>>(emptyList())
+    val rails: StateFlow<List<Rail>> = _rails.asStateFlow()
 
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -23,15 +32,31 @@ class HomeViewModel(
     val error: StateFlow<String?> = _error.asStateFlow()
 
     init {
-        loadCatalog()
+        loadRails()
     }
 
-    private fun loadCatalog() {
+    fun loadRails() {
         viewModelScope.launch {
             _isLoading.value = true
             _error.value = null
+            val result = mutableListOf<Rail>()
             try {
-                _catalog.value = repository.getCatalog(type = "movie", catalogId = "top")
+                val addons = addonManager.getInstalledAddons()
+                for (addon in addons) {
+                    if (!addon.resources.contains("catalog")) continue
+                    val baseUrl = addon.manifestUrl.removeSuffix("/manifest.json")
+                    for (catalog in addon.catalogs) {
+                        try {
+                            val metas = repository.getCatalog(baseUrl, catalog.type, catalog.id)
+                            if (metas.isNotEmpty()) {
+                                result.add(Rail(addon.name, catalog.name, catalog.type, metas))
+                            }
+                        } catch (e: Exception) {
+                            // one broken catalog shouldn't take down the whole home screen
+                        }
+                    }
+                }
+                _rails.value = result
             } catch (e: Exception) {
                 _error.value = "Failed to load: ${e.message}"
             } finally {
