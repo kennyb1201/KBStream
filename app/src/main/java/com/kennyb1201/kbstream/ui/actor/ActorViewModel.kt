@@ -19,11 +19,24 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error.asStateFlow()
+
     fun load(personId: Int) {
         viewModelScope.launch {
             _isLoading.value = true
-            _person.value = tmdbRepository.getPerson(personId)
-            _isLoading.value = false
+            _error.value = null
+            try {
+                val result = tmdbRepository.getPerson(personId)
+                _person.value = result
+                if (result != null && result.combinedCredits?.cast.isNullOrEmpty()) {
+                    _error.value = "TMDB returned this person but with zero filmography credits"
+                }
+            } catch (e: Exception) {
+                _error.value = "TMDB request failed: ${e.message}"
+            } finally {
+                _isLoading.value = false
+            }
         }
     }
 

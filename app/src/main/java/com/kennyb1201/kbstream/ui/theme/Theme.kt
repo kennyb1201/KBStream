@@ -1,9 +1,12 @@
 package com.kennyb1201.kbstream.ui.theme
 
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.darkColorScheme
+
+val CardShape = RoundedCornerShape(8)
 
 private val KBStreamColorScheme = darkColorScheme(
     primary = Color(0xFF4FC3F7),

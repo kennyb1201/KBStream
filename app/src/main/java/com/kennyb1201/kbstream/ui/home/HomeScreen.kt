@@ -16,6 +16,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Card
@@ -25,6 +26,7 @@ import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.ui.player.PlayerActivity
+import com.kennyb1201.kbstream.ui.theme.CardShape
 
 @Composable
 fun HomeScreen(
@@ -58,6 +60,7 @@ fun HomeScreen(
                 Card(
                     onClick = onSearch,
                     colors = CardDefaults.colors(containerColor = Color(0xFF4FC3F7), contentColor = Color.Black),
+                    shape = CardDefaults.shape(shape = CardShape),
                     modifier = Modifier.padding(end = 12.dp, bottom = 16.dp)
                 ) {
                     Text("Search", modifier = Modifier.padding(12.dp))
@@ -65,6 +68,7 @@ fun HomeScreen(
                 Card(
                     onClick = onManageAddons,
                     colors = CardDefaults.colors(containerColor = Color(0xFF1B3A57), contentColor = Color.White),
+                    shape = CardDefaults.shape(shape = CardShape),
                     modifier = Modifier.padding(bottom = 16.dp)
                 ) {
                     Text("Manage Add-ons", modifier = Modifier.padding(12.dp))
@@ -80,11 +84,13 @@ fun HomeScreen(
                                 items(continueWatching) { entry ->
                                     Card(
                                         onClick = { resume(entry) },
+                                        shape = CardDefaults.shape(shape = CardShape),
                                         modifier = Modifier.width(140.dp).height(220.dp).padding(end = 12.dp)
                                     ) {
                                         AsyncImage(
                                             model = entry.poster,
                                             contentDescription = entry.name,
+                                            contentScale = ContentScale.Crop,
                                             modifier = Modifier.fillMaxSize()
                                         )
                                     }
@@ -105,11 +111,13 @@ fun HomeScreen(
                                 items(rail.items) { meta ->
                                     Card(
                                         onClick = { onItemClick(meta) },
+                                        shape = CardDefaults.shape(shape = CardShape),
                                         modifier = Modifier.width(140.dp).height(220.dp).padding(end = 12.dp)
                                     ) {
                                         AsyncImage(
                                             model = meta.poster,
                                             contentDescription = meta.name,
+                                            contentScale = ContentScale.Crop,
                                             modifier = Modifier.fillMaxSize()
                                         )
                                     }

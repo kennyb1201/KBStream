@@ -22,6 +22,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -32,9 +33,12 @@ import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.addon.VideoEntry
 import com.kennyb1201.kbstream.data.tmdb.TmdbCastMember
+import com.kennyb1201.kbstream.data.tmdb.TmdbNetwork
+import com.kennyb1201.kbstream.data.tmdb.TmdbProductionCompany
 import com.kennyb1201.kbstream.data.tmdb.TmdbRecommendationItem
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.player.PlayerActivity
+import com.kennyb1201.kbstream.ui.theme.CardShape
 import kotlinx.coroutines.launch
 
 @Composable
@@ -98,6 +102,7 @@ fun DetailScreen(
                         AsyncImage(
                             model = backdropUrl,
                             contentDescription = m.name,
+                            contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxWidth().height(200.dp)
                         )
                         Text(m.name, modifier = Modifier.padding(top = 12.dp))
@@ -124,6 +129,7 @@ fun DetailScreen(
                             Card(
                                 onClick = { playTrailer() },
                                 colors = CardDefaults.colors(containerColor = Color(0xFF4FC3F7), contentColor = Color.Black),
+                                shape = CardDefaults.shape(shape = CardShape),
                                 modifier = Modifier.padding(top = 12.dp)
                             ) {
                                 Text("Play Trailer", modifier = Modifier.padding(12.dp))
@@ -139,12 +145,14 @@ fun DetailScreen(
                                 items(tmdbCast.take(15)) { member: TmdbCastMember ->
                                     Card(
                                         onClick = { onNavigateActor(member.id) },
+                                        shape = CardDefaults.shape(shape = CardShape),
                                         modifier = Modifier.width(90.dp).padding(end = 10.dp)
                                     ) {
                                         Column {
                                             AsyncImage(
                                                 model = member.profilePath?.let { "${TmdbRepository.PROFILE_BASE}$it" },
                                                 contentDescription = member.name,
+                                                contentScale = ContentScale.Crop,
                                                 modifier = Modifier.fillMaxWidth().height(120.dp)
                                             )
                                             Text(member.name, modifier = Modifier.padding(top = 4.dp))
@@ -174,7 +182,48 @@ fun DetailScreen(
                             )
                         }
                         item {
-                            Text((networks.map { it.name } + companies.map { it.name }).joinToString(", "))
+                            LazyRow {
+                                items(networks) { network: TmdbNetwork ->
+                                    Card(
+                                        onClick = { /* no company/network browse screen yet */ },
+                                        colors = CardDefaults.colors(containerColor = Color(0xFF1B3A57), contentColor = Color.White),
+                                        shape = CardDefaults.shape(shape = CardShape),
+                                        modifier = Modifier.width(120.dp).height(70.dp).padding(end = 10.dp)
+                                    ) {
+                                        Column(modifier = Modifier.padding(8.dp)) {
+                                            network.logoPath?.let {
+                                                AsyncImage(
+                                                    model = "${TmdbRepository.PROFILE_BASE}$it",
+                                                    contentDescription = network.name,
+                                                    contentScale = ContentScale.Fit,
+                                                    modifier = Modifier.height(30.dp)
+                                                )
+                                            }
+                                            Text(network.name)
+                                        }
+                                    }
+                                }
+                                items(companies) { company: TmdbProductionCompany ->
+                                    Card(
+                                        onClick = { /* no company/network browse screen yet */ },
+                                        colors = CardDefaults.colors(containerColor = Color(0xFF1B3A57), contentColor = Color.White),
+                                        shape = CardDefaults.shape(shape = CardShape),
+                                        modifier = Modifier.width(120.dp).height(70.dp).padding(end = 10.dp)
+                                    ) {
+                                        Column(modifier = Modifier.padding(8.dp)) {
+                                            company.logoPath?.let {
+                                                AsyncImage(
+                                                    model = "${TmdbRepository.PROFILE_BASE}$it",
+                                                    contentDescription = company.name,
+                                                    contentScale = ContentScale.Fit,
+                                                    modifier = Modifier.height(30.dp)
+                                                )
+                                            }
+                                            Text(company.name)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -187,6 +236,7 @@ fun DetailScreen(
                                     viewModel.loadStreamsFor(video.id)
                                 },
                                 colors = CardDefaults.colors(containerColor = Color(0xFF1B3A57), contentColor = Color.White),
+                                shape = CardDefaults.shape(shape = CardShape),
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
                             ) {
                                 val label = listOfNotNull(
@@ -216,6 +266,7 @@ fun DetailScreen(
                                 containerColor = if (playable) Color(0xFF1B3A57) else Color(0xFF2A2A2A),
                                 contentColor = if (playable) Color.White else Color.Gray
                             ),
+                            shape = CardDefaults.shape(shape = CardShape),
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                         ) {
                             Column(modifier = Modifier.padding(12.dp)) {
@@ -240,11 +291,13 @@ fun DetailScreen(
                                                 if (imdbId != null) onNavigateDetail(type, imdbId)
                                             }
                                         },
+                                        shape = CardDefaults.shape(shape = CardShape),
                                         modifier = Modifier.width(110.dp).height(160.dp).padding(end = 10.dp)
                                     ) {
                                         AsyncImage(
                                             model = rec.posterPath?.let { "${TmdbRepository.PROFILE_BASE}$it" },
                                             contentDescription = rec.title ?: rec.name,
+                                            contentScale = ContentScale.Crop,
                                             modifier = Modifier.fillMaxSize()
                                         )
                                     }
