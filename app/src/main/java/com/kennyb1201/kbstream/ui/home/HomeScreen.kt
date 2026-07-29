@@ -2,8 +2,8 @@ package com.kennyb1201.kbstream.ui.home
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -35,12 +35,21 @@ fun HomeScreen(
 
     Box(modifier = Modifier.fillMaxSize().padding(24.dp)) {
         Column {
-            Card(
-                onClick = onManageAddons,
-                colors = CardDefaults.colors(containerColor = Color(0xFF1B3A57), contentColor = Color.White),
-                modifier = Modifier.padding(bottom = 16.dp)
-            ) {
-                Text("Manage Add-ons", modifier = Modifier.padding(12.dp))
+            Row {
+                Card(
+                    onClick = onSearch,
+                    colors = CardDefaults.colors(containerColor = Color(0xFF4FC3F7), contentColor = Color.Black),
+                    modifier = Modifier.padding(end = 12.dp, bottom = 16.dp)
+                ) {
+                    Text("Search", modifier = Modifier.padding(12.dp))
+                }
+                Card(
+                    onClick = onManageAddons,
+                    colors = CardDefaults.colors(containerColor = Color(0xFF1B3A57), contentColor = Color.White),
+                    modifier = Modifier.padding(bottom = 16.dp)
+                ) {
+                    Text("Manage Add-ons", modifier = Modifier.padding(12.dp))
+                }
             }
 
             when {

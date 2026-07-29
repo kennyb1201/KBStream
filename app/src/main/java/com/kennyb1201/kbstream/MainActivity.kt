@@ -50,7 +50,8 @@ fun AppRoot() {
     when (val current = screen) {
         is Screen.Home -> HomeScreen(
             onItemClick = { meta: MetaPreview -> screen = Screen.Detail(meta.type, meta.id) },
-            onManageAddons = { screen = Screen.Addons }
+            onManageAddons = { screen = Screen.Addons },
+            onSearch = { screen = Screen.Search }
         )
         is Screen.Addons -> AddonsScreen(onBack = { screen = Screen.Home })
         is Screen.Search -> SearchScreen(
