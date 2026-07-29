@@ -25,4 +25,23 @@ interface TmdbApiService {
         @Query("api_key") apiKey: String,
         @Query("append_to_response") append: String = "credits,videos,recommendations"
     ): TmdbDetail
+
+    @GET("movie/{id}/external_ids")
+    suspend fun getMovieExternalIds(
+        @Path("id") id: Int,
+        @Query("api_key") apiKey: String
+    ): TmdbExternalIds
+
+    @GET("tv/{id}/external_ids")
+    suspend fun getTvExternalIds(
+        @Path("id") id: Int,
+        @Query("api_key") apiKey: String
+    ): TmdbExternalIds
+
+    @GET("person/{id}")
+    suspend fun getPerson(
+        @Path("id") id: Int,
+        @Query("api_key") apiKey: String,
+        @Query("append_to_response") append: String = "combined_credits"
+    ): TmdbPersonDetail
 }

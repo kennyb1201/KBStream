@@ -9,6 +9,7 @@ import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -82,8 +83,11 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
                     // one broken stream addon shouldn't block the others
                 }
             }
-            _streams.value = allStreams
+            _streams.value = StreamRanker.rank(allStreams)
             _streamsLoading.value = false
         }
     }
+
+    suspend fun resolveImdbId(tmdbId: Int, type: String): String? =
+        tmdbRepository.resolveImdbId(tmdbId, type)
 }

@@ -5,7 +5,7 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [WatchHistoryEntity::class], version = 1)
+@Database(entities = [WatchHistoryEntity::class], version = 2)
 abstract class WatchHistoryDatabase : RoomDatabase() {
     abstract fun watchHistoryDao(): WatchHistoryDao
 
@@ -18,7 +18,11 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                     context.applicationContext,
                     WatchHistoryDatabase::class.java,
                     "kbstream_watch_history"
-                ).build().also { instance = it }
+                )
+                    // app has no released version yet, so a destructive migration
+                    // (wipe + recreate) is fine rather than writing a real migration
+                    .fallbackToDestructiveMigration()
+                    .build().also { instance = it }
             }
     }
 }

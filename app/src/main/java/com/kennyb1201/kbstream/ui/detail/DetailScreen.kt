@@ -18,6 +18,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -34,14 +35,18 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbCastMember
 import com.kennyb1201.kbstream.data.tmdb.TmdbRecommendationItem
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.player.PlayerActivity
+import kotlinx.coroutines.launch
 
 @Composable
 fun DetailScreen(
     type: String,
     id: String,
+    onNavigateDetail: (String, String) -> Unit = { _, _ -> },
+    onNavigateActor: (Int) -> Unit = {},
     viewModel: DetailViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var selectedVideoId by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(id) {
@@ -77,8 +82,7 @@ fun DetailScreen(
         val trailer = tmdbDetail?.videos?.results?.firstOrNull {
             it.site == "YouTube" && it.type == "Trailer"
         } ?: return
-        val intent = Intent(android.content.Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=${trailer.key}"))
-        context.startActivity(intent)
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=${trailer.key}")))
     }
 
     Box(modifier = Modifier.fillMaxSize().padding(24.dp)) {
@@ -127,21 +131,25 @@ fun DetailScreen(
                         }
                     }
 
-                    // Cast row -- photos + names from TMDB, falls back to Cinemeta's plain name list
                     val tmdbCast = tmdbDetail?.credits?.cast
                     if (!tmdbCast.isNullOrEmpty()) {
                         item { Text("Cast", modifier = Modifier.padding(top = 20.dp, bottom = 8.dp)) }
                         item {
                             LazyRow {
                                 items(tmdbCast.take(15)) { member: TmdbCastMember ->
-                                    Column(modifier = Modifier.width(90.dp).padding(end = 10.dp)) {
-                                        AsyncImage(
-                                            model = member.profilePath?.let { "${TmdbRepository.PROFILE_BASE}$it" },
-                                            contentDescription = member.name,
-                                            modifier = Modifier.fillMaxWidth().height(120.dp)
-                                        )
-                                        Text(member.name, modifier = Modifier.padding(top = 4.dp))
-                                        member.character?.let { Text(it) }
+                                    Card(
+                                        onClick = { onNavigateActor(member.id) },
+                                        modifier = Modifier.width(90.dp).padding(end = 10.dp)
+                                    ) {
+                                        Column {
+                                            AsyncImage(
+                                                model = member.profilePath?.let { "${TmdbRepository.PROFILE_BASE}$it" },
+                                                contentDescription = member.name,
+                                                modifier = Modifier.fillMaxWidth().height(120.dp)
+                                            )
+                                            Text(member.name, modifier = Modifier.padding(top = 4.dp))
+                                            member.character?.let { Text(it) }
+                                        }
                                     }
                                 }
                             }
@@ -156,7 +164,6 @@ fun DetailScreen(
                         item { Text("Director: ${it.joinToString(", ")}", modifier = Modifier.padding(top = 8.dp)) }
                     }
 
-                    // Production companies / networks
                     val companies = tmdbDetail?.productionCompanies.orEmpty()
                     val networks = tmdbDetail?.networks.orEmpty()
                     if (companies.isNotEmpty() || networks.isNotEmpty()) {
@@ -167,12 +174,10 @@ fun DetailScreen(
                             )
                         }
                         item {
-                            val names = (networks.map { it.name } + companies.map { it.name }).joinToString(", ")
-                            Text(names)
+                            Text((networks.map { it.name } + companies.map { it.name }).joinToString(", "))
                         }
                     }
 
-                    // Series episodes
                     if (type == "series" && !m.videos.isNullOrEmpty()) {
                         item { Text("Episodes", modifier = Modifier.padding(top = 20.dp, bottom = 8.dp)) }
                         items(m.videos!!) { video: VideoEntry ->
@@ -204,20 +209,24 @@ fun DetailScreen(
                         )
                     }
                     items(streams) { stream: Stream ->
+                        val playable = stream.url != null
                         Card(
-                            onClick = { playStream(stream) },
-                            colors = CardDefaults.colors(containerColor = Color(0xFF1B3A57), contentColor = Color.White),
+                            onClick = { if (playable) playStream(stream) },
+                            colors = CardDefaults.colors(
+                                containerColor = if (playable) Color(0xFF1B3A57) else Color(0xFF2A2A2A),
+                                contentColor = if (playable) Color.White else Color.Gray
+                            ),
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                         ) {
-                            Text(
-                                streamLabel(stream),
-                                fontFamily = FontFamily.Monospace,
-                                modifier = Modifier.padding(12.dp)
-                            )
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(streamLabel(stream), fontFamily = FontFamily.Monospace)
+                                if (!playable) {
+                                    Text("Torrent link — direct playback not supported yet")
+                                }
+                            }
                         }
                     }
 
-                    // More Like This -- TMDB recommendations
                     val recs = tmdbDetail?.recommendations?.results.orEmpty()
                     if (recs.isNotEmpty()) {
                         item { Text("More Like This", modifier = Modifier.padding(top = 20.dp, bottom = 8.dp)) }
@@ -225,7 +234,12 @@ fun DetailScreen(
                             LazyRow {
                                 items(recs.take(15)) { rec: TmdbRecommendationItem ->
                                     Card(
-                                        onClick = { /* TODO: needs IMDB id to navigate -- TMDB gives its own id */ },
+                                        onClick = {
+                                            scope.launch {
+                                                val imdbId = viewModel.resolveImdbId(rec.id, type)
+                                                if (imdbId != null) onNavigateDetail(type, imdbId)
+                                            }
+                                        },
                                         modifier = Modifier.width(110.dp).height(160.dp).padding(end = 10.dp)
                                     ) {
                                         AsyncImage(

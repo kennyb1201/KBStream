@@ -106,6 +106,7 @@ fun PlayerScreen(
                                 type = itemType,
                                 name = itemName,
                                 poster = itemPoster,
+                                streamUrl = url,
                                 positionMs = position,
                                 durationMs = duration,
                                 updatedAt = System.currentTimeMillis()

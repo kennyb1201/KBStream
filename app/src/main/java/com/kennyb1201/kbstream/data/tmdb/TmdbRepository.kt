@@ -31,6 +31,17 @@ class TmdbRepository {
         }
     }
 
+    suspend fun resolveImdbId(tmdbId: Int, type: String): String? {
+        if (apiKey.isBlank()) return null
+        val ext = if (type == "series") api.getTvExternalIds(tmdbId, apiKey) else api.getMovieExternalIds(tmdbId, apiKey)
+        return ext.imdbId
+    }
+
+    suspend fun getPerson(personId: Int): TmdbPersonDetail? {
+        if (apiKey.isBlank()) return null
+        return api.getPerson(personId, apiKey)
+    }
+
     companion object {
         const val PROFILE_BASE = "https://image.tmdb.org/t/p/w185"
         const val BACKDROP_BASE = "https://image.tmdb.org/t/p/original"

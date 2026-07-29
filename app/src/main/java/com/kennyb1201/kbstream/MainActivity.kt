@@ -13,6 +13,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.tv.material3.Surface
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.ui.actor.ActorScreen
 import com.kennyb1201.kbstream.ui.addons.AddonsScreen
 import com.kennyb1201.kbstream.ui.detail.DetailScreen
 import com.kennyb1201.kbstream.ui.home.HomeScreen
@@ -24,6 +25,7 @@ sealed class Screen {
     object Addons : Screen()
     object Search : Screen()
     data class Detail(val type: String, val id: String) : Screen()
+    data class Actor(val personId: Int) : Screen()
 }
 
 class MainActivity : ComponentActivity() {
@@ -57,6 +59,16 @@ fun AppRoot() {
         is Screen.Search -> SearchScreen(
             onItemClick = { meta: MetaPreview -> screen = Screen.Detail(meta.type, meta.id) }
         )
-        is Screen.Detail -> DetailScreen(type = current.type, id = current.id)
+        is Screen.Detail -> DetailScreen(
+            type = current.type,
+            id = current.id,
+            onNavigateDetail = { type, id -> screen = Screen.Detail(type, id) },
+            onNavigateActor = { personId -> screen = Screen.Actor(personId) }
+        )
+        is Screen.Actor -> ActorScreen(
+            personId = current.personId,
+            onBack = { screen = Screen.Home },
+            onNavigateDetail = { type, id -> screen = Screen.Detail(type, id) }
+        )
     }
 }

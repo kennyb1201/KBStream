@@ -6,6 +6,8 @@ import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,9 +23,13 @@ data class Rail(
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = AddonRepository()
     private val addonManager = AddonManager(application)
+    private val historyDao = WatchHistoryDatabase.getInstance(application).watchHistoryDao()
 
     private val _rails = MutableStateFlow<List<Rail>>(emptyList())
     val rails: StateFlow<List<Rail>> = _rails.asStateFlow()
+
+    private val _continueWatching = MutableStateFlow<List<WatchHistoryEntity>>(emptyList())
+    val continueWatching: StateFlow<List<WatchHistoryEntity>> = _continueWatching.asStateFlow()
 
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -33,6 +39,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         loadRails()
+        loadContinueWatching()
+    }
+
+    fun loadContinueWatching() {
+        viewModelScope.launch {
+            _continueWatching.value = historyDao.getRecent()
+        }
     }
 
     fun loadRails() {

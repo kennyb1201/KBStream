@@ -82,3 +82,32 @@ data class TmdbDetail(
     val videos: TmdbVideos? = null,
     val recommendations: TmdbRecommendations? = null
 )
+
+@JsonClass(generateAdapter = true)
+data class TmdbExternalIds(
+    @Json(name = "imdb_id") val imdbId: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class TmdbPersonCredit(
+    val id: Int,
+    val title: String? = null,
+    val name: String? = null,
+    @Json(name = "poster_path") val posterPath: String? = null,
+    @Json(name = "media_type") val mediaType: String? = null,
+    val character: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class TmdbCombinedCredits(
+    val cast: List<TmdbPersonCredit> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class TmdbPersonDetail(
+    val id: Int,
+    val name: String,
+    val biography: String? = null,
+    @Json(name = "profile_path") val profilePath: String? = null,
+    @Json(name = "combined_credits") val combinedCredits: TmdbCombinedCredits? = null
+)
