@@ -2,8 +2,10 @@ package com.kennyb1201.kbstream.ui.detail
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -21,13 +23,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import androidx.tv.material3.Card
-import androidx.tv.material3.CardDefaults
+import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.addon.Stream
@@ -37,8 +39,14 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbNetwork
 import com.kennyb1201.kbstream.data.tmdb.TmdbProductionCompany
 import com.kennyb1201.kbstream.data.tmdb.TmdbRecommendationItem
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.player.PlayerActivity
-import com.kennyb1201.kbstream.ui.theme.CardShape
+import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBSurface
+import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
+import com.kennyb1201.kbstream.ui.theme.KBTextHi
+import com.kennyb1201.kbstream.ui.theme.KBTextLo
+import com.kennyb1201.kbstream.ui.theme.KBVoid
 import kotlinx.coroutines.launch
 
 @Composable
@@ -52,6 +60,7 @@ fun DetailScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var selectedVideoId by remember { mutableStateOf<String?>(null) }
+    var selectedSeason by remember { mutableStateOf<Int?>(null) }
 
     LaunchedEffect(id) {
         viewModel.load(type, id)
@@ -89,218 +98,220 @@ fun DetailScreen(
         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=${trailer.key}")))
     }
 
-    Box(modifier = Modifier.fillMaxSize().padding(24.dp)) {
-        when {
-            isLoading -> Text("Loading...")
-            error != null -> Text("Error: $error")
-            meta != null -> {
-                val m = meta!!
-                val backdropUrl = tmdbDetail?.backdropPath?.let { "${TmdbRepository.BACKDROP_BASE}$it" } ?: m.background ?: m.poster
+    when {
+        isLoading -> Box(Modifier.fillMaxSize().padding(24.dp)) { Text("Loading...") }
+        error != null -> Box(Modifier.fillMaxSize().padding(24.dp)) { Text("Error: $error") }
+        meta != null -> {
+            val m = meta!!
+            val backdropUrl = tmdbDetail?.backdropPath?.let { "${TmdbRepository.BACKDROP_BASE}$it" } ?: m.background ?: m.poster
 
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    item {
+            // group episodes by season, once
+            val seasons = m.videos.orEmpty()
+                .mapNotNull { it.season }
+                .distinct()
+                .sorted()
+            if (selectedSeason == null && seasons.isNotEmpty()) {
+                selectedSeason = seasons.first { it > 0 }.takeIf { true } ?: seasons.first()
+            }
+            val episodesForSeason = m.videos.orEmpty()
+                .filter { it.season == selectedSeason }
+                .sortedBy { it.episode ?: 0 }
+
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                item {
+                    Box(modifier = Modifier.fillMaxWidth().height(320.dp)) {
                         AsyncImage(
                             model = backdropUrl,
                             contentDescription = m.name,
                             contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxWidth().height(200.dp)
+                            modifier = Modifier.fillMaxSize()
                         )
-                        Text(m.name, modifier = Modifier.padding(top = 12.dp))
-
+                        Box(
+                            modifier = Modifier.fillMaxSize().background(
+                                Brush.verticalGradient(listOf(Color.Transparent, KBVoid))
+                            )
+                        )
+                        Column(modifier = Modifier.padding(24.dp)) {
+                            Text(m.name, style = MaterialTheme.typography.displayLarge, modifier = Modifier.padding(top = 200.dp))
+                        }
+                    }
+                    Column(modifier = Modifier.padding(24.dp)) {
                         val metaLine = listOfNotNull(
                             m.releaseInfo,
                             m.runtime,
                             m.imdbRating?.let { "IMDb $it" }
                         ).joinToString("  •  ")
                         if (metaLine.isNotBlank()) {
-                            Text(metaLine, modifier = Modifier.padding(top = 4.dp))
+                            Text(metaLine, color = KBTextLo, modifier = Modifier.padding(top = 4.dp))
                         }
                         m.genres?.takeIf { it.isNotEmpty() }?.let {
-                            Text(it.joinToString(", "), modifier = Modifier.padding(top = 4.dp))
+                            Text(it.joinToString(" · "), color = KBTextLo, modifier = Modifier.padding(top = 4.dp))
                         }
                         m.description?.let {
                             Text(it, modifier = Modifier.padding(top = 12.dp))
                         }
-                        m.country?.let { Text("Country: $it", modifier = Modifier.padding(top = 4.dp)) }
-                        m.language?.let { Text("Language: $it", modifier = Modifier.padding(top = 4.dp)) }
-                        m.awards?.let { Text("Awards: $it", modifier = Modifier.padding(top = 4.dp)) }
+                        m.country?.let { Text("Country: $it", color = KBTextLo, modifier = Modifier.padding(top = 4.dp)) }
+                        m.language?.let { Text("Language: $it", color = KBTextLo, modifier = Modifier.padding(top = 4.dp)) }
+                        m.awards?.let { Text("Awards: $it", color = KBTextLo, modifier = Modifier.padding(top = 4.dp)) }
 
                         if (tmdbDetail?.videos?.results?.any { it.site == "YouTube" && it.type == "Trailer" } == true) {
-                            Card(
-                                onClick = { playTrailer() },
-                                colors = CardDefaults.colors(containerColor = Color(0xFF4FC3F7), contentColor = Color.Black),
-                                shape = CardDefaults.shape(shape = CardShape),
-                                modifier = Modifier.padding(top = 12.dp)
-                            ) {
-                                Text("Play Trailer", modifier = Modifier.padding(12.dp))
+                            KBCard(onClick = { playTrailer() }, modifier = Modifier.padding(top = 12.dp)) {
+                                Text("▶ PLAY TRAILER", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(10.dp))
                             }
                         }
                     }
+                }
 
-                    val tmdbCast = tmdbDetail?.credits?.cast
-                    if (!tmdbCast.isNullOrEmpty()) {
-                        item { Text("Cast", modifier = Modifier.padding(top = 20.dp, bottom = 8.dp)) }
-                        item {
-                            LazyRow {
-                                items(tmdbCast.take(15)) { member: TmdbCastMember ->
-                                    Card(
-                                        onClick = { onNavigateActor(member.id) },
-                                        shape = CardDefaults.shape(shape = CardShape),
-                                        modifier = Modifier.width(90.dp).padding(end = 10.dp)
-                                    ) {
-                                        Column {
-                                            AsyncImage(
-                                                model = member.profilePath?.let { "${TmdbRepository.PROFILE_BASE}$it" },
-                                                contentDescription = member.name,
-                                                contentScale = ContentScale.Crop,
-                                                modifier = Modifier.fillMaxWidth().height(120.dp)
-                                            )
-                                            Text(member.name, modifier = Modifier.padding(top = 4.dp))
-                                            member.character?.let { Text(it) }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else if (!m.cast.isNullOrEmpty()) {
-                        item {
-                            Text("Cast: ${m.cast!!.joinToString(", ")}", modifier = Modifier.padding(top = 12.dp))
-                        }
-                    }
-
-                    m.director?.takeIf { it.isNotEmpty() }?.let {
-                        item { Text("Director: ${it.joinToString(", ")}", modifier = Modifier.padding(top = 8.dp)) }
-                    }
-
-                    val companies = tmdbDetail?.productionCompanies.orEmpty()
-                    val networks = tmdbDetail?.networks.orEmpty()
-                    if (companies.isNotEmpty() || networks.isNotEmpty()) {
-                        item {
-                            Text(
-                                if (type == "series") "Networks" else "Production",
-                                modifier = Modifier.padding(top = 20.dp, bottom = 8.dp)
-                            )
-                        }
-                        item {
-                            LazyRow {
-                                items(networks) { network: TmdbNetwork ->
-                                    Card(
-                                        onClick = { /* no company/network browse screen yet */ },
-                                        colors = CardDefaults.colors(containerColor = Color(0xFF1B3A57), contentColor = Color.White),
-                                        shape = CardDefaults.shape(shape = CardShape),
-                                        modifier = Modifier.width(120.dp).height(70.dp).padding(end = 10.dp)
-                                    ) {
-                                        Column(modifier = Modifier.padding(8.dp)) {
-                                            network.logoPath?.let {
-                                                AsyncImage(
-                                                    model = "${TmdbRepository.PROFILE_BASE}$it",
-                                                    contentDescription = network.name,
-                                                    contentScale = ContentScale.Fit,
-                                                    modifier = Modifier.height(30.dp)
-                                                )
-                                            }
-                                            Text(network.name)
-                                        }
-                                    }
-                                }
-                                items(companies) { company: TmdbProductionCompany ->
-                                    Card(
-                                        onClick = { /* no company/network browse screen yet */ },
-                                        colors = CardDefaults.colors(containerColor = Color(0xFF1B3A57), contentColor = Color.White),
-                                        shape = CardDefaults.shape(shape = CardShape),
-                                        modifier = Modifier.width(120.dp).height(70.dp).padding(end = 10.dp)
-                                    ) {
-                                        Column(modifier = Modifier.padding(8.dp)) {
-                                            company.logoPath?.let {
-                                                AsyncImage(
-                                                    model = "${TmdbRepository.PROFILE_BASE}$it",
-                                                    contentDescription = company.name,
-                                                    contentScale = ContentScale.Fit,
-                                                    modifier = Modifier.height(30.dp)
-                                                )
-                                            }
-                                            Text(company.name)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    if (type == "series" && !m.videos.isNullOrEmpty()) {
-                        item { Text("Episodes", modifier = Modifier.padding(top = 20.dp, bottom = 8.dp)) }
-                        items(m.videos!!) { video: VideoEntry ->
-                            Card(
-                                onClick = {
-                                    selectedVideoId = video.id
-                                    viewModel.loadStreamsFor(video.id)
-                                },
-                                colors = CardDefaults.colors(containerColor = Color(0xFF1B3A57), contentColor = Color.White),
-                                shape = CardDefaults.shape(shape = CardShape),
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
-                            ) {
-                                val label = listOfNotNull(
-                                    video.season?.let { s -> video.episode?.let { e -> "S${s}E$e" } },
-                                    video.title
-                                ).joinToString(" - ")
-                                Text(label.ifBlank { video.id }, modifier = Modifier.padding(12.dp))
-                            }
-                        }
-                    }
-
+                val tmdbCast = tmdbDetail?.credits?.cast
+                if (!tmdbCast.isNullOrEmpty()) {
+                    item { Text("CAST", style = MaterialTheme.typography.titleMedium, color = KBTextLo, modifier = Modifier.padding(start = 24.dp, top = 12.dp, bottom = 8.dp)) }
                     item {
-                        Text(
-                            when {
-                                streamsLoading -> "Loading streams..."
-                                streams.isEmpty() -> "No streams yet"
-                                else -> "Streams"
-                            },
-                            modifier = Modifier.padding(top = 20.dp, bottom = 8.dp)
-                        )
-                    }
-                    items(streams) { stream: Stream ->
-                        val playable = stream.url != null
-                        Card(
-                            onClick = { if (playable) playStream(stream) },
-                            colors = CardDefaults.colors(
-                                containerColor = if (playable) Color(0xFF1B3A57) else Color(0xFF2A2A2A),
-                                contentColor = if (playable) Color.White else Color.Gray
-                            ),
-                            shape = CardDefaults.shape(shape = CardShape),
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text(streamLabel(stream), fontFamily = FontFamily.Monospace)
-                                if (!playable) {
-                                    Text("Torrent link — direct playback not supported yet")
+                        LazyRow(modifier = Modifier.padding(start = 24.dp)) {
+                            items(tmdbCast.take(15)) { member: TmdbCastMember ->
+                                KBCard(onClick = { onNavigateActor(member.id) }, modifier = Modifier.width(90.dp).padding(end = 10.dp)) {
+                                    Column {
+                                        AsyncImage(
+                                            model = member.profilePath?.let { "${TmdbRepository.PROFILE_BASE}$it" },
+                                            contentDescription = member.name,
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier.fillMaxWidth().height(120.dp)
+                                        )
+                                        Text(member.name, modifier = Modifier.padding(4.dp))
+                                        member.character?.let { Text(it, color = KBTextLo, modifier = Modifier.padding(horizontal = 4.dp)) }
+                                    }
                                 }
                             }
                         }
                     }
+                } else if (!m.cast.isNullOrEmpty()) {
+                    item { Text("Cast: ${m.cast!!.joinToString(", ")}", modifier = Modifier.padding(start = 24.dp, top = 12.dp)) }
+                }
 
-                    val recs = tmdbDetail?.recommendations?.results.orEmpty()
-                    if (recs.isNotEmpty()) {
-                        item { Text("More Like This", modifier = Modifier.padding(top = 20.dp, bottom = 8.dp)) }
-                        item {
-                            LazyRow {
-                                items(recs.take(15)) { rec: TmdbRecommendationItem ->
-                                    Card(
-                                        onClick = {
-                                            scope.launch {
-                                                val imdbId = viewModel.resolveImdbId(rec.id, type)
-                                                if (imdbId != null) onNavigateDetail(type, imdbId)
-                                            }
-                                        },
-                                        shape = CardDefaults.shape(shape = CardShape),
-                                        modifier = Modifier.width(110.dp).height(160.dp).padding(end = 10.dp)
-                                    ) {
-                                        AsyncImage(
-                                            model = rec.posterPath?.let { "${TmdbRepository.PROFILE_BASE}$it" },
-                                            contentDescription = rec.title ?: rec.name,
-                                            contentScale = ContentScale.Crop,
-                                            modifier = Modifier.fillMaxSize()
-                                        )
+                m.director?.takeIf { it.isNotEmpty() }?.let {
+                    item { Text("Director: ${it.joinToString(", ")}", color = KBTextLo, modifier = Modifier.padding(start = 24.dp, top = 8.dp)) }
+                }
+
+                val companies = tmdbDetail?.productionCompanies.orEmpty()
+                val networks = tmdbDetail?.networks.orEmpty()
+                if (companies.isNotEmpty() || networks.isNotEmpty()) {
+                    item { Text(if (type == "series") "NETWORKS" else "PRODUCTION", style = MaterialTheme.typography.titleMedium, color = KBTextLo, modifier = Modifier.padding(start = 24.dp, top = 16.dp, bottom = 8.dp)) }
+                    item {
+                        LazyRow(modifier = Modifier.padding(start = 24.dp)) {
+                            items(networks) { n: TmdbNetwork ->
+                                KBCard(onClick = {}, modifier = Modifier.width(120.dp).height(60.dp).padding(end = 10.dp)) {
+                                    Column(modifier = Modifier.padding(8.dp)) {
+                                        n.logoPath?.let { AsyncImage(model = "${TmdbRepository.PROFILE_BASE}$it", contentDescription = n.name, contentScale = ContentScale.Fit, modifier = Modifier.height(24.dp)) }
+                                        Text(n.name)
                                     }
+                                }
+                            }
+                            items(companies) { c: TmdbProductionCompany ->
+                                KBCard(onClick = {}, modifier = Modifier.width(120.dp).height(60.dp).padding(end = 10.dp)) {
+                                    Column(modifier = Modifier.padding(8.dp)) {
+                                        c.logoPath?.let { AsyncImage(model = "${TmdbRepository.PROFILE_BASE}$it", contentDescription = c.name, contentScale = ContentScale.Fit, modifier = Modifier.height(24.dp)) }
+                                        Text(c.name)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Season / episode picker -- Nuvio/Stremio/Harbor-style layout
+                if (type == "series" && seasons.isNotEmpty()) {
+                    item { Text("EPISODES", style = MaterialTheme.typography.titleMedium, color = KBTextLo, modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)) }
+                    item {
+                        LazyRow(modifier = Modifier.padding(start = 24.dp, bottom = 12.dp)) {
+                            items(seasons) { season ->
+                                val selected = season == selectedSeason
+                                KBCard(
+                                    onClick = { selectedSeason = season },
+                                    modifier = Modifier.padding(end = 8.dp)
+                                ) {
+                                    Text(
+                                        if (season == 0) "SPECIALS" else "SEASON $season",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = if (selected) KBAccent else KBTextHi,
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    items(episodesForSeason) { video: VideoEntry ->
+                        KBCard(
+                            onClick = {
+                                selectedVideoId = video.id
+                                viewModel.loadStreamsFor(video.id)
+                            },
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp)
+                        ) {
+                            Row(modifier = Modifier.padding(10.dp)) {
+                                AsyncImage(
+                                    model = video.thumbnail,
+                                    contentDescription = video.title,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.width(160.dp).height(90.dp)
+                                )
+                                Column(modifier = Modifier.padding(start = 12.dp)) {
+                                    Text("E${video.episode ?: 0}  ${video.title ?: ""}", style = MaterialTheme.typography.titleMedium)
+                                    video.overview?.takeIf { it.isNotBlank() }?.let {
+                                        Text(it, color = KBTextLo, modifier = Modifier.padding(top = 4.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    Text(
+                        when {
+                            streamsLoading -> "LOADING STREAMS..."
+                            streams.isEmpty() -> "NO STREAMS YET"
+                            else -> "STREAMS"
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                        color = KBTextLo,
+                        modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)
+                    )
+                }
+                items(streams) { stream: Stream ->
+                    val playable = stream.url != null
+                    KBCard(
+                        onClick = { if (playable) playStream(stream) },
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(streamLabel(stream), fontFamily = FontFamily.Monospace, color = if (playable) KBTextHi else KBTextLo)
+                            if (!playable) {
+                                Text("Torrent link — direct playback not supported yet", color = KBTextLo)
+                            }
+                        }
+                    }
+                }
+
+                val recs = tmdbDetail?.recommendations?.results.orEmpty()
+                if (recs.isNotEmpty()) {
+                    item { Text("MORE LIKE THIS", style = MaterialTheme.typography.titleMedium, color = KBTextLo, modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)) }
+                    item {
+                        LazyRow(modifier = Modifier.padding(start = 24.dp, bottom = 24.dp)) {
+                            items(recs.take(15)) { rec: TmdbRecommendationItem ->
+                                KBCard(
+                                    onClick = {
+                                        scope.launch {
+                                            val imdbId = viewModel.resolveImdbId(rec.id, type)
+                                            if (imdbId != null) onNavigateDetail(type, imdbId)
+                                        }
+                                    },
+                                    modifier = Modifier.width(120.dp).height(170.dp).padding(end = 10.dp)
+                                ) {
+                                    AsyncImage(
+                                        model = rec.posterPath?.let { "${TmdbRepository.PROFILE_BASE}$it" },
+                                        contentDescription = rec.title ?: rec.name,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
                                 }
                             }
                         }

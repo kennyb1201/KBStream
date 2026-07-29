@@ -25,7 +25,9 @@ data class VideoEntry(
     val description: String? = null,
     val season: Int? = null,
     val episode: Int? = null,
-    val released: String? = null
+    val released: String? = null,
+    val thumbnail: String? = null,
+    val overview: String? = null
 )
 
 @JsonClass(generateAdapter = true)
