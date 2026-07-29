@@ -3,7 +3,7 @@ package com.kennyb1201.kbstream.ui.studio
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.kennyb1201.kbstream.data.tmdb.TmdbDiscoverItem
+import com.kennyb1201.kbstream.data.tmdb.StudioItem
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -13,8 +13,8 @@ import kotlinx.coroutines.launch
 class StudioViewModel(application: Application) : AndroidViewModel(application) {
     private val tmdbRepository = TmdbRepository()
 
-    private val _items = MutableStateFlow<List<TmdbDiscoverItem>>(emptyList())
-    val items: StateFlow<List<TmdbDiscoverItem>> = _items.asStateFlow()
+    private val _items = MutableStateFlow<List<StudioItem>>(emptyList())
+    val items: StateFlow<List<StudioItem>> = _items.asStateFlow()
 
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()

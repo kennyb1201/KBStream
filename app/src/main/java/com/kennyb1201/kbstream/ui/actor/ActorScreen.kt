@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -30,6 +29,7 @@ import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.tmdb.TmdbPersonCredit
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.theme.CardShape
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -49,12 +49,10 @@ fun ActorScreen(
         viewModel.load(personId)
     }
 
-    // once credits load, explicitly hand focus to the first one --
-    // TV Compose has nothing focused by default, so D-pad down does
-    // nothing until something requests initial focus
     LaunchedEffect(person) {
         if (!person?.combinedCredits?.cast.isNullOrEmpty()) {
-            firstCreditFocusRequester.requestFocus()
+            delay(100) // give the row's first item time to attach before requesting focus
+            runCatching { firstCreditFocusRequester.requestFocus() }
         }
     }
 
@@ -71,7 +69,7 @@ fun ActorScreen(
                             model = p.profilePath?.let { "${TmdbRepository.PROFILE_BASE}$it" },
                             contentDescription = p.name,
                             contentScale = ContentScale.Crop,
-                            modifier = Modifier.height(220.dp)
+                            modifier = Modifier.width(180.dp).height(240.dp)
                         )
                         Text(p.name, modifier = Modifier.padding(top = 12.dp))
                         p.biography?.takeIf { it.isNotBlank() }?.let {

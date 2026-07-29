@@ -23,10 +23,11 @@ import androidx.compose.ui.unit.dp
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
-import com.kennyb1201.kbstream.data.tmdb.TmdbDiscoverItem
+import com.kennyb1201.kbstream.data.tmdb.StudioItem
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -40,7 +41,6 @@ fun StudioScreen(
     val scope = rememberCoroutineScope()
     val items by viewModel.items.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
-    val mediaType = if (isNetwork) "series" else "movie"
     val firstItemFocusRequester = remember { FocusRequester() }
 
     LaunchedEffect(id) {
@@ -49,7 +49,8 @@ fun StudioScreen(
 
     LaunchedEffect(items) {
         if (items.isNotEmpty()) {
-            firstItemFocusRequester.requestFocus()
+            delay(100) // give the grid's first item time to actually attach before requesting focus
+            runCatching { firstItemFocusRequester.requestFocus() }
         }
     }
 
@@ -57,7 +58,7 @@ fun StudioScreen(
         Column {
             Text(name, style = MaterialTheme.typography.displayLarge)
             Text(
-                if (isNetwork) "SERIES" else "MOVIES",
+                if (isNetwork) "SERIES" else "MOVIES & SERIES",
                 style = MaterialTheme.typography.titleMedium,
                 color = KBTextLo,
                 modifier = Modifier.padding(top = 8.dp, bottom = 16.dp)
@@ -70,12 +71,12 @@ fun StudioScreen(
                     columns = GridCells.Adaptive(minSize = 140.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    itemsIndexed(items) { index, item: TmdbDiscoverItem ->
+                    itemsIndexed(items) { index, studioItem: StudioItem ->
                         KBCard(
                             onClick = {
                                 scope.launch {
-                                    val imdbId = viewModel.resolveImdbId(item.id, mediaType)
-                                    if (imdbId != null) onNavigateDetail(mediaType, imdbId)
+                                    val imdbId = viewModel.resolveImdbId(studioItem.item.id, studioItem.mediaType)
+                                    if (imdbId != null) onNavigateDetail(studioItem.mediaType, imdbId)
                                 }
                             },
                             modifier = Modifier
@@ -85,8 +86,8 @@ fun StudioScreen(
                                 .let { if (index == 0) it.focusRequester(firstItemFocusRequester) else it }
                         ) {
                             AsyncImage(
-                                model = item.posterPath?.let { "${TmdbRepository.PROFILE_BASE}$it" },
-                                contentDescription = item.title ?: item.name,
+                                model = studioItem.item.posterPath?.let { "${TmdbRepository.PROFILE_BASE}$it" },
+                                contentDescription = studioItem.item.title ?: studioItem.item.name,
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxSize()
                             )

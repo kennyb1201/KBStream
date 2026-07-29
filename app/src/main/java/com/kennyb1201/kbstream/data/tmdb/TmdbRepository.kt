@@ -7,6 +7,8 @@ import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 
+data class StudioItem(val item: TmdbDiscoverItem, val mediaType: String)
+
 class TmdbRepository {
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
 
@@ -42,14 +44,20 @@ class TmdbRepository {
         return api.getPerson(personId, apiKey)
     }
 
-    suspend fun getByCompany(companyId: Int): List<TmdbDiscoverItem> {
+    // Studios make both movies and TV -- merge both, sorted by popularity,
+    // each item tagged so tapping it resolves to the right detail type
+    suspend fun getByCompany(companyId: Int): List<StudioItem> {
         if (apiKey.isBlank()) return emptyList()
-        return api.discoverByCompany(companyId, apiKey).results
+        val movies = runCatching { api.discoverMovieByCompany(companyId, apiKey).results }.getOrDefault(emptyList())
+        val shows = runCatching { api.discoverTvByCompany(companyId, apiKey).results }.getOrDefault(emptyList())
+        return (movies.map { StudioItem(it, "movie") } + shows.map { StudioItem(it, "series") })
+            .distinctBy { it.item.id to it.mediaType }
     }
 
-    suspend fun getByNetwork(networkId: Int): List<TmdbDiscoverItem> {
+    // Networks are a TV-only concept in TMDB
+    suspend fun getByNetwork(networkId: Int): List<StudioItem> {
         if (apiKey.isBlank()) return emptyList()
-        return api.discoverByNetwork(networkId, apiKey).results
+        return api.discoverByNetwork(networkId, apiKey).results.map { StudioItem(it, "series") }
     }
 
     companion object {
