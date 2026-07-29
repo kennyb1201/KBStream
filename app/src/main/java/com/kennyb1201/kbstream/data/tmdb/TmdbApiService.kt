@@ -44,4 +44,16 @@ interface TmdbApiService {
         @Query("api_key") apiKey: String,
         @Query("append_to_response") append: String = "combined_credits"
     ): TmdbPersonDetail
+
+    @GET("discover/movie")
+    suspend fun discoverByCompany(
+        @Query("with_companies") companyId: Int,
+        @Query("api_key") apiKey: String
+    ): TmdbDiscoverResponse
+
+    @GET("discover/tv")
+    suspend fun discoverByNetwork(
+        @Query("with_networks") networkId: Int,
+        @Query("api_key") apiKey: String
+    ): TmdbDiscoverResponse
 }

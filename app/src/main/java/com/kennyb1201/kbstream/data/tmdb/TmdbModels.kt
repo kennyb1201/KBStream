@@ -111,3 +111,16 @@ data class TmdbPersonDetail(
     @Json(name = "profile_path") val profilePath: String? = null,
     @Json(name = "combined_credits") val combinedCredits: TmdbCombinedCredits? = null
 )
+
+@JsonClass(generateAdapter = true)
+data class TmdbDiscoverItem(
+    val id: Int,
+    val title: String? = null,
+    val name: String? = null,
+    @Json(name = "poster_path") val posterPath: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class TmdbDiscoverResponse(
+    val results: List<TmdbDiscoverItem> = emptyList()
+)

@@ -29,6 +29,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.tv.material3.Card
+import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
@@ -42,7 +44,6 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.player.PlayerActivity
 import com.kennyb1201.kbstream.ui.theme.KBAccent
-import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
@@ -55,6 +56,7 @@ fun DetailScreen(
     id: String,
     onNavigateDetail: (String, String) -> Unit = { _, _ -> },
     onNavigateActor: (Int) -> Unit = {},
+    onNavigateStudio: (Int, String, Boolean) -> Unit = { _, _, _ -> },
     viewModel: DetailViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
     val context = LocalContext.current
@@ -105,13 +107,12 @@ fun DetailScreen(
             val m = meta!!
             val backdropUrl = tmdbDetail?.backdropPath?.let { "${TmdbRepository.BACKDROP_BASE}$it" } ?: m.background ?: m.poster
 
-            // group episodes by season, once
             val seasons = m.videos.orEmpty()
                 .mapNotNull { it.season }
                 .distinct()
-                .sorted()
+                .sortedWith(compareBy({ it == 0 }, { it }))
             if (selectedSeason == null && seasons.isNotEmpty()) {
-                selectedSeason = seasons.first { it > 0 }.takeIf { true } ?: seasons.first()
+                selectedSeason = seasons.first()
             }
             val episodesForSeason = m.videos.orEmpty()
                 .filter { it.season == selectedSeason }
@@ -198,17 +199,29 @@ fun DetailScreen(
                     item {
                         LazyRow(modifier = Modifier.padding(start = 24.dp)) {
                             items(networks) { n: TmdbNetwork ->
-                                KBCard(onClick = {}, modifier = Modifier.width(120.dp).height(60.dp).padding(end = 10.dp)) {
-                                    Column(modifier = Modifier.padding(8.dp)) {
-                                        n.logoPath?.let { AsyncImage(model = "${TmdbRepository.PROFILE_BASE}$it", contentDescription = n.name, contentScale = ContentScale.Fit, modifier = Modifier.height(24.dp)) }
+                                Card(
+                                    onClick = { onNavigateStudio(n.id, n.name, true) },
+                                    colors = CardDefaults.colors(containerColor = KBSurfaceRaised, contentColor = KBTextHi),
+                                    modifier = Modifier.width(130.dp).height(64.dp).padding(end = 10.dp)
+                                ) {
+                                    Column(modifier = Modifier.padding(10.dp)) {
+                                        n.logoPath?.let {
+                                            AsyncImage(model = "${TmdbRepository.PROFILE_BASE}$it", contentDescription = n.name, contentScale = ContentScale.Fit, modifier = Modifier.height(24.dp))
+                                        }
                                         Text(n.name)
                                     }
                                 }
                             }
                             items(companies) { c: TmdbProductionCompany ->
-                                KBCard(onClick = {}, modifier = Modifier.width(120.dp).height(60.dp).padding(end = 10.dp)) {
-                                    Column(modifier = Modifier.padding(8.dp)) {
-                                        c.logoPath?.let { AsyncImage(model = "${TmdbRepository.PROFILE_BASE}$it", contentDescription = c.name, contentScale = ContentScale.Fit, modifier = Modifier.height(24.dp)) }
+                                Card(
+                                    onClick = { onNavigateStudio(c.id, c.name, false) },
+                                    colors = CardDefaults.colors(containerColor = KBSurfaceRaised, contentColor = KBTextHi),
+                                    modifier = Modifier.width(130.dp).height(64.dp).padding(end = 10.dp)
+                                ) {
+                                    Column(modifier = Modifier.padding(10.dp)) {
+                                        c.logoPath?.let {
+                                            AsyncImage(model = "${TmdbRepository.PROFILE_BASE}$it", contentDescription = c.name, contentScale = ContentScale.Fit, modifier = Modifier.height(24.dp))
+                                        }
                                         Text(c.name)
                                     }
                                 }
@@ -217,7 +230,6 @@ fun DetailScreen(
                     }
                 }
 
-                // Season / episode picker -- Nuvio/Stremio/Harbor-style layout
                 if (type == "series" && seasons.isNotEmpty()) {
                     item { Text("EPISODES", style = MaterialTheme.typography.titleMedium, color = KBTextLo, modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)) }
                     item {
