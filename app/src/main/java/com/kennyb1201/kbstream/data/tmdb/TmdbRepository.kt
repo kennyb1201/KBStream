@@ -42,6 +42,16 @@ class TmdbRepository {
         return api.getPerson(personId, apiKey)
     }
 
+    suspend fun getByCompany(companyId: Int): List<TmdbDiscoverItem> {
+        if (apiKey.isBlank()) return emptyList()
+        return api.discoverByCompany(companyId, apiKey).results
+    }
+
+    suspend fun getByNetwork(networkId: Int): List<TmdbDiscoverItem> {
+        if (apiKey.isBlank()) return emptyList()
+        return api.discoverByNetwork(networkId, apiKey).results
+    }
+
     companion object {
         const val PROFILE_BASE = "https://image.tmdb.org/t/p/w185"
         const val BACKDROP_BASE = "https://image.tmdb.org/t/p/original"

@@ -18,6 +18,7 @@ import com.kennyb1201.kbstream.ui.addons.AddonsScreen
 import com.kennyb1201.kbstream.ui.detail.DetailScreen
 import com.kennyb1201.kbstream.ui.home.HomeScreen
 import com.kennyb1201.kbstream.ui.search.SearchScreen
+import com.kennyb1201.kbstream.ui.studio.StudioScreen
 import com.kennyb1201.kbstream.ui.theme.KBStreamTheme
 
 sealed class Screen {
@@ -26,6 +27,7 @@ sealed class Screen {
     object Search : Screen()
     data class Detail(val type: String, val id: String) : Screen()
     data class Actor(val personId: Int) : Screen()
+    data class Studio(val id: Int, val name: String, val isNetwork: Boolean) : Screen()
 }
 
 class MainActivity : ComponentActivity() {
@@ -63,11 +65,18 @@ fun AppRoot() {
             type = current.type,
             id = current.id,
             onNavigateDetail = { type, id -> screen = Screen.Detail(type, id) },
-            onNavigateActor = { personId -> screen = Screen.Actor(personId) }
+            onNavigateActor = { personId -> screen = Screen.Actor(personId) },
+            onNavigateStudio = { id, name, isNetwork -> screen = Screen.Studio(id, name, isNetwork) }
         )
         is Screen.Actor -> ActorScreen(
             personId = current.personId,
             onBack = { screen = Screen.Home },
+            onNavigateDetail = { type, id -> screen = Screen.Detail(type, id) }
+        )
+        is Screen.Studio -> StudioScreen(
+            id = current.id,
+            name = current.name,
+            isNetwork = current.isNetwork,
             onNavigateDetail = { type, id -> screen = Screen.Detail(type, id) }
         )
     }
