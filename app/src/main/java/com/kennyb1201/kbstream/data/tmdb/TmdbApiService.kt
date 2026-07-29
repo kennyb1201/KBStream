@@ -49,20 +49,23 @@ interface TmdbApiService {
     suspend fun discoverMovieByCompany(
         @Query("with_companies") companyId: Int,
         @Query("api_key") apiKey: String,
-        @Query("sort_by") sortBy: String = "popularity.desc"
+        @Query("sort_by") sortBy: String,
+        @Query("vote_count.gte") voteCountGte: Int? = null
     ): TmdbDiscoverResponse
 
     @GET("discover/tv")
     suspend fun discoverTvByCompany(
         @Query("with_companies") companyId: Int,
         @Query("api_key") apiKey: String,
-        @Query("sort_by") sortBy: String = "popularity.desc"
+        @Query("sort_by") sortBy: String,
+        @Query("vote_count.gte") voteCountGte: Int? = null
     ): TmdbDiscoverResponse
 
     @GET("discover/tv")
     suspend fun discoverByNetwork(
         @Query("with_networks") networkId: Int,
         @Query("api_key") apiKey: String,
-        @Query("sort_by") sortBy: String = "popularity.desc"
+        @Query("sort_by") sortBy: String,
+        @Query("vote_count.gte") voteCountGte: Int? = null
     ): TmdbDiscoverResponse
 }

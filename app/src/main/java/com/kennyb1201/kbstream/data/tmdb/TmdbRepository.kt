@@ -8,6 +8,7 @@ import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 
 data class StudioItem(val item: TmdbDiscoverItem, val mediaType: String)
+data class StudioSection(val title: String, val items: List<StudioItem>)
 
 class TmdbRepository {
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
@@ -44,20 +45,36 @@ class TmdbRepository {
         return api.getPerson(personId, apiKey)
     }
 
-    // Studios make both movies and TV -- merge both, sorted by popularity,
-    // each item tagged so tapping it resolves to the right detail type
-    suspend fun getByCompany(companyId: Int): List<StudioItem> {
+    suspend fun getByCompany(companyId: Int): List<StudioSection> {
         if (apiKey.isBlank()) return emptyList()
-        val movies = runCatching { api.discoverMovieByCompany(companyId, apiKey).results }.getOrDefault(emptyList())
-        val shows = runCatching { api.discoverTvByCompany(companyId, apiKey).results }.getOrDefault(emptyList())
-        return (movies.map { StudioItem(it, "movie") } + shows.map { StudioItem(it, "series") })
-            .distinctBy { it.item.id to it.mediaType }
+
+        suspend fun fetch(sortBy: String, voteCountGte: Int?): List<StudioItem> {
+            val movies = runCatching { api.discoverMovieByCompany(companyId, apiKey, sortBy, voteCountGte).results }.getOrDefault(emptyList())
+            val shows = runCatching { api.discoverTvByCompany(companyId, apiKey, sortBy, voteCountGte).results }.getOrDefault(emptyList())
+            return (movies.map { StudioItem(it, "movie") } + shows.map { StudioItem(it, "series") })
+                .distinctBy { it.item.id to it.mediaType }
+        }
+
+        return listOf(
+            StudioSection("POPULAR", fetch("popularity.desc", null)),
+            StudioSection("TOP RATED", fetch("vote_average.desc", 100)),
+            StudioSection("RECENT", fetch("primary_release_date.desc", null))
+        ).filter { it.items.isNotEmpty() }
     }
 
-    // Networks are a TV-only concept in TMDB
-    suspend fun getByNetwork(networkId: Int): List<StudioItem> {
+    suspend fun getByNetwork(networkId: Int): List<StudioSection> {
         if (apiKey.isBlank()) return emptyList()
-        return api.discoverByNetwork(networkId, apiKey).results.map { StudioItem(it, "series") }
+
+        suspend fun fetch(sortBy: String, voteCountGte: Int?): List<StudioItem> =
+            runCatching { api.discoverByNetwork(networkId, apiKey, sortBy, voteCountGte).results }
+                .getOrDefault(emptyList())
+                .map { StudioItem(it, "series") }
+
+        return listOf(
+            StudioSection("POPULAR", fetch("popularity.desc", null)),
+            StudioSection("TOP RATED", fetch("vote_average.desc", 100)),
+            StudioSection("RECENT", fetch("first_air_date.desc", null))
+        ).filter { it.items.isNotEmpty() }
     }
 
     companion object {
