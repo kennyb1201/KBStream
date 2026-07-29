@@ -10,13 +10,18 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
@@ -24,6 +29,7 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.tmdb.TmdbPersonCredit
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.ui.theme.CardShape
 import kotlinx.coroutines.launch
 
 @Composable
@@ -36,33 +42,47 @@ fun ActorScreen(
     val scope = rememberCoroutineScope()
     val person by viewModel.person.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
+    val error by viewModel.error.collectAsState()
+    val firstCreditFocusRequester = remember { FocusRequester() }
 
     LaunchedEffect(personId) {
         viewModel.load(personId)
     }
 
+    // once credits load, explicitly hand focus to the first one --
+    // TV Compose has nothing focused by default, so D-pad down does
+    // nothing until something requests initial focus
+    LaunchedEffect(person) {
+        if (!person?.combinedCredits?.cast.isNullOrEmpty()) {
+            firstCreditFocusRequester.requestFocus()
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize().padding(24.dp)) {
         when {
             isLoading -> Text("Loading...")
-            person == null -> Text("Not found")
+            person == null -> Text("Not found${error?.let { " — $it" } ?: ""}")
             else -> {
                 val p = person!!
+                val credits = p.combinedCredits?.cast.orEmpty()
                 LazyColumn {
                     item {
                         AsyncImage(
                             model = p.profilePath?.let { "${TmdbRepository.PROFILE_BASE}$it" },
                             contentDescription = p.name,
+                            contentScale = ContentScale.Crop,
                             modifier = Modifier.height(220.dp)
                         )
                         Text(p.name, modifier = Modifier.padding(top = 12.dp))
                         p.biography?.takeIf { it.isNotBlank() }?.let {
                             Text(it, modifier = Modifier.padding(top = 8.dp))
                         }
-                        Text("Filmography", modifier = Modifier.padding(top = 20.dp, bottom = 8.dp))
+                        Text("Filmography (${credits.size})", modifier = Modifier.padding(top = 20.dp, bottom = 8.dp))
+                        error?.let { Text(it, modifier = Modifier.padding(bottom = 8.dp)) }
                     }
                     item {
                         LazyRow {
-                            items(p.combinedCredits?.cast.orEmpty()) { credit: TmdbPersonCredit ->
+                            itemsIndexed(credits) { index, credit: TmdbPersonCredit ->
                                 Card(
                                     onClick = {
                                         val mediaType = if (credit.mediaType == "tv") "series" else "movie"
@@ -71,11 +91,17 @@ fun ActorScreen(
                                             if (imdbId != null) onNavigateDetail(mediaType, imdbId)
                                         }
                                     },
-                                    modifier = Modifier.width(110.dp).height(160.dp).padding(end = 10.dp)
+                                    shape = CardDefaults.shape(shape = CardShape),
+                                    modifier = Modifier
+                                        .width(110.dp)
+                                        .height(160.dp)
+                                        .padding(end = 10.dp)
+                                        .let { if (index == 0) it.focusRequester(firstCreditFocusRequester) else it }
                                 ) {
                                     AsyncImage(
                                         model = credit.posterPath?.let { "${TmdbRepository.PROFILE_BASE}$it" },
                                         contentDescription = credit.title ?: credit.name,
+                                        contentScale = ContentScale.Crop,
                                         modifier = Modifier.fillMaxSize()
                                     )
                                 }
