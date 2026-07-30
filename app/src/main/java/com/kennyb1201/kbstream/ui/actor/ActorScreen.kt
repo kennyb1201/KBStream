@@ -1,15 +1,19 @@
 package com.kennyb1201.kbstream.ui.actor
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -51,7 +55,7 @@ fun ActorScreen(
 
     LaunchedEffect(person) {
         if (!person?.combinedCredits?.cast.isNullOrEmpty()) {
-            delay(100) // give the row's first item time to attach before requesting focus
+            delay(150)
             runCatching { firstCreditFocusRequester.requestFocus() }
         }
     }
@@ -63,57 +67,81 @@ fun ActorScreen(
             else -> {
                 val p = person!!
                 val credits = p.combinedCredits?.cast.orEmpty()
-                LazyColumn {
-                    item {
+                val bioScrollState = rememberScrollState()
+
+                // The whole screen is a fixed, non-scrolling Column -- every section
+                // has a bounded height, so nothing here can trigger the framework's
+                // automatic "scroll to bring focused item into view" behavior that
+                // was cropping the photo / hiding the filmography row before.
+                Column(modifier = Modifier.fillMaxSize()) {
+                    Row {
                         AsyncImage(
                             model = p.profilePath?.let { "${TmdbRepository.PROFILE_BASE}$it" },
                             contentDescription = p.name,
                             contentScale = ContentScale.Crop,
-                            modifier = Modifier.width(180.dp).height(240.dp)
+                            modifier = Modifier.width(140.dp).height(190.dp)
                         )
-                        Text(p.name, modifier = Modifier.padding(top = 12.dp))
-                        p.biography?.takeIf { it.isNotBlank() }?.let {
-                            Text(it, modifier = Modifier.padding(top = 8.dp))
-                        }
-                        Text("Filmography (${credits.size})", modifier = Modifier.padding(top = 20.dp, bottom = 8.dp))
-                        error?.let { Text(it, modifier = Modifier.padding(bottom = 8.dp)) }
-                    }
-                    item {
-                        LazyRow {
-                            itemsIndexed(credits) { index, credit: TmdbPersonCredit ->
-                                Card(
-                                    onClick = {
-                                        val mediaType = if (credit.mediaType == "tv") "series" else "movie"
-                                        scope.launch {
-                                            val imdbId = viewModel.resolveImdbId(credit.id, mediaType)
-                                            if (imdbId != null) onNavigateDetail(mediaType, imdbId)
-                                        }
-                                    },
-                                    shape = CardDefaults.shape(shape = CardShape),
+                        Column(modifier = Modifier.padding(start = 16.dp)) {
+                            Text(p.name)
+                            p.biography?.takeIf { it.isNotBlank() }?.let { bio ->
+                                LaunchedEffect(bio) {
+                                    delay(1800) // give the reader a moment before it starts moving
+                                    if (bioScrollState.maxValue > 0) {
+                                        val durationMs = (bio.length * 45).coerceIn(4000, 25000)
+                                        bioScrollState.animateScrollTo(
+                                            bioScrollState.maxValue,
+                                            animationSpec = tween(durationMillis = durationMs, easing = LinearEasing)
+                                        )
+                                    }
+                                }
+                                Box(
                                     modifier = Modifier
-                                        .width(110.dp)
-                                        .height(160.dp)
-                                        .padding(end = 10.dp)
-                                        .let { if (index == 0) it.focusRequester(firstCreditFocusRequester) else it }
+                                        .height(150.dp)
+                                        .padding(top = 6.dp)
+                                        .verticalScroll(bioScrollState)
                                 ) {
-                                    AsyncImage(
-                                        model = credit.posterPath?.let { "${TmdbRepository.PROFILE_BASE}$it" },
-                                        contentDescription = credit.title ?: credit.name,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
+                                    Text(bio)
                                 }
                             }
                         }
                     }
-                    item {
-                        Card(
-                            onClick = onBack,
-                            colors = CardDefaults.colors(containerColor = Color(0xFF1B3A57), contentColor = Color.White),
-                            modifier = Modifier.padding(top = 20.dp)
-                        ) {
-                            Text("Back", modifier = Modifier.padding(12.dp))
+
+                    Text("Filmography (${credits.size})", modifier = Modifier.padding(top = 16.dp, bottom = 8.dp))
+                    error?.let { Text(it, modifier = Modifier.padding(bottom = 8.dp)) }
+
+                    LazyRow {
+                        itemsIndexed(credits) { index, credit: TmdbPersonCredit ->
+                            Card(
+                                onClick = {
+                                    val mediaType = if (credit.mediaType == "tv") "series" else "movie"
+                                    scope.launch {
+                                        val imdbId = viewModel.resolveImdbId(credit.id, mediaType)
+                                        if (imdbId != null) onNavigateDetail(mediaType, imdbId)
+                                    }
+                                },
+                                shape = CardDefaults.shape(shape = CardShape),
+                                modifier = Modifier
+                                    .width(110.dp)
+                                    .height(160.dp)
+                                    .padding(end = 10.dp)
+                                    .let { if (index == 0) it.focusRequester(firstCreditFocusRequester) else it }
+                            ) {
+                                AsyncImage(
+                                    model = credit.posterPath?.let { "${TmdbRepository.PROFILE_BASE}$it" },
+                                    contentDescription = credit.title ?: credit.name,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
                         }
+                    }
+
+                    Card(
+                        onClick = onBack,
+                        colors = CardDefaults.colors(containerColor = Color(0xFF1B3A57), contentColor = Color.White),
+                        modifier = Modifier.padding(top = 16.dp)
+                    ) {
+                        Text("Back", modifier = Modifier.padding(12.dp))
                     }
                 }
             }
