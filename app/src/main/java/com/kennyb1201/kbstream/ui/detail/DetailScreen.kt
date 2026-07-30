@@ -357,9 +357,10 @@ fun DetailScreen(
                     }
                 }
 
+                val recs = tmdbDetail?.recommendations?.results.orEmpty()
                 if (recs.isNotEmpty()) {
-                    item 
-{ Text("MORE LIKE THIS", style = MaterialTheme.typography.titleMedium, color = KBTextLo, modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)) }
+                    item { Text("MORE LIKE THIS", style = MaterialTheme.typography.titleMedium, color = KBTextLo, modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)) }
+                    item {
                         LazyRow(modifier = Modifier.padding(start = 24.dp, bottom = 24.dp)) {
                             items(recs.take(15)) { rec: TmdbRecommendationItem ->
                                 KBCard(
@@ -370,6 +371,7 @@ fun DetailScreen(
                                         }
                                     },
                                     modifier = Modifier.width(120.dp).height(170.dp).padding(end = 10.dp)
+                                ) {
                                     AsyncImage(
                                         model = rec.posterPath?.let { "${TmdbRepository.PROFILE_BASE}$it" },
                                         contentDescription = rec.title ?: rec.name,
