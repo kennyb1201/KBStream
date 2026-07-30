@@ -357,7 +357,6 @@ fun DetailScreen(
                     }
                 }
 
-                val recs = tmdbDetail?.recommendations?.results.orEmpty()
                 if (recs.isNotEmpty()) {
                     item 
 { Text("MORE LIKE THIS", style = MaterialTheme.typography.titleMedium, color = KBTextLo, modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)) }
