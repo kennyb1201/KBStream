@@ -74,7 +74,12 @@ fun DetailScreen(
     val isLoading by viewModel.isLoading.collectAsState()
     val streamsLoading by viewModel.streamsLoading.collectAsState()
     val streamsRequested by viewModel.streamsRequested.collectAsState()
+    val episodeRuntimes by viewModel.episodeRuntimes.collectAsState()
     val error by viewModel.error.collectAsState()
+
+    LaunchedEffect(selectedSeason) {
+        selectedSeason?.let { if (type == "series") viewModel.loadEpisodeRuntimes(it) }
+    }
 
     fun playStream(stream: Stream) {
         val url = stream.url ?: return
@@ -265,24 +270,58 @@ fun DetailScreen(
                         }
                     }
                     items(episodesForSeason) { video: VideoEntry ->
-                        KBCard(
-                            onClick = {
-                                selectedVideoId = video.id
-                                viewModel.loadStreamsFor(video.id)
-                            },
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp)
-                        ) {
-                            Row(modifier = Modifier.padding(10.dp)) {
-                                AsyncImage(
-                                    model = video.thumbnail,
-                                    contentDescription = video.title,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.width(160.dp).height(90.dp)
-                                )
-                                Column(modifier = Modifier.padding(start = 12.dp)) {
-                                    Text("E${video.episode ?: 0}  ${video.title ?: ""}", style = MaterialTheme.typography.titleMedium)
-                                    video.overview?.takeIf { it.isNotBlank() }?.let {
-                                        Text(it, color = KBTextLo, modifier = Modifier.padding(top = 4.dp))
+                        val isSelected = selectedVideoId == video.id
+                        Column(modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)) {
+                            KBCard(
+                                onClick = {
+                                    selectedVideoId = video.id
+                                    viewModel.loadStreamsFor(video.id)
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(modifier = Modifier.padding(10.dp)) {
+                                    AsyncImage(
+                                        model = video.thumbnail,
+                                        contentDescription = video.title,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.width(160.dp).height(90.dp)
+                                    )
+                                    Column(modifier = Modifier.padding(start = 12.dp)) {
+                                        val runtimeText = video.episode?.let { episodeRuntimes[it] }?.let { " · ${it}m" } ?: ""
+                                        Text("E${video.episode ?: 0}$runtimeText  ${video.title ?: ""}", style = MaterialTheme.typography.titleMedium)
+                                        video.overview?.takeIf { it.isNotBlank() }?.let {
+                                            Text(it, color = KBTextLo, modifier = Modifier.padding(top = 4.dp))
+                                        }
+                                    }
+                                }
+                            }
+                            // Streams appear right under the episode you clicked, not
+                            // buried at the bottom of a long page
+                            if (isSelected) {
+                                Column(modifier = Modifier.padding(top = 8.dp)) {
+                                    Text(
+                                        when {
+                                            streamsLoading -> "LOADING STREAMS..."
+                                            streams.isEmpty() -> "NO STREAMS FOUND"
+                                            else -> "STREAMS"
+                                        },
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = KBTextLo,
+                                        modifier = Modifier.padding(bottom = 6.dp)
+                                    )
+                                    streams.forEach { stream ->
+                                        val playable = stream.url != null
+                                        KBCard(
+                                            onClick = { if (playable) playStream(stream) },
+                                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                                        ) {
+                                            Column(modifier = Modifier.padding(10.dp)) {
+                                                Text(streamLabel(stream), fontFamily = FontFamily.Monospace, color = if (playable) KBTextHi else KBTextLo)
+                                                if (!playable) {
+                                                    Text("Torrent link — direct playback not supported yet", color = KBTextLo)
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -290,7 +329,7 @@ fun DetailScreen(
                     }
                 }
 
-                if (streamsRequested) {
+                if (type == "movie" && streamsRequested) {
                     item {
                         Text(
                             when {

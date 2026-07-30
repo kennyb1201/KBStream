@@ -71,4 +71,11 @@ interface TmdbApiService {
         @Query("vote_count.gte") voteCountGte: Int? = null,
         @Query("page") page: Int = 1
     ): TmdbDiscoverResponse
+
+    @GET("tv/{id}/season/{season_number}")
+    suspend fun getSeasonDetail(
+        @Path("id") id: Int,
+        @Path("season_number") seasonNumber: Int,
+        @Query("api_key") apiKey: String
+    ): TmdbSeasonDetail
 }

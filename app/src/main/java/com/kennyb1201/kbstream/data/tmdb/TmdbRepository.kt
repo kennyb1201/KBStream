@@ -21,7 +21,7 @@ class TmdbRepository {
         .create(TmdbApiService::class.java)
 
     private val apiKey = BuildConfig.TMDB_API_KEY
-    private val pagesPerRail = 3 // ~60 items per rail instead of TMDB's default 20
+    private val pagesPerRail = 3
 
     suspend fun fetchEnrichedMeta(imdbId: String, type: String): TmdbDetail? {
         if (apiKey.isBlank()) return null
@@ -44,6 +44,16 @@ class TmdbRepository {
     suspend fun getPerson(personId: Int): TmdbPersonDetail? {
         if (apiKey.isBlank()) return null
         return api.getPerson(personId, apiKey)
+    }
+
+    // Cinemeta's per-episode data has no runtime -- TMDB's season endpoint does
+    suspend fun getSeasonRuntimes(tvId: Int, season: Int): Map<Int, Int> {
+        if (apiKey.isBlank()) return emptyMap()
+        return runCatching {
+            api.getSeasonDetail(tvId, season, apiKey).episodes
+                .mapNotNull { ep -> ep.runtime?.let { ep.episodeNumber to it } }
+                .toMap()
+        }.getOrDefault(emptyMap())
     }
 
     suspend fun getByCompany(companyId: Int): List<StudioSection> {

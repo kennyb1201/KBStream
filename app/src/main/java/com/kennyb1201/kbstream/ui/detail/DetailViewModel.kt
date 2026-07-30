@@ -35,10 +35,11 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
     private val _streamsLoading = MutableStateFlow(false)
     val streamsLoading: StateFlow<Boolean> = _streamsLoading.asStateFlow()
 
-    // tracks whether the user has actually asked to see streams yet --
-    // false means "not requested", not "loading" or "empty results"
     private val _streamsRequested = MutableStateFlow(false)
     val streamsRequested: StateFlow<Boolean> = _streamsRequested.asStateFlow()
+
+    private val _episodeRuntimes = MutableStateFlow<Map<Int, Int>>(emptyMap())
+    val episodeRuntimes: StateFlow<Map<Int, Int>> = _episodeRuntimes.asStateFlow()
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
@@ -49,6 +50,7 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
         contentType = type
         _streamsRequested.value = false
         _streams.value = emptyList()
+        _episodeRuntimes.value = emptyMap()
         viewModelScope.launch {
             _isLoading.value = true
             _error.value = null
@@ -69,6 +71,13 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
             } finally {
                 _isLoading.value = false
             }
+        }
+    }
+
+    fun loadEpisodeRuntimes(season: Int) {
+        val tvId = _tmdbDetail.value?.id ?: return
+        viewModelScope.launch {
+            _episodeRuntimes.value = tmdbRepository.getSeasonRuntimes(tvId, season)
         }
     }
 
