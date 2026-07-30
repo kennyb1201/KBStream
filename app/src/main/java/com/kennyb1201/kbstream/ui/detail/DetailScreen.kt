@@ -73,6 +73,7 @@ fun DetailScreen(
     val streams by viewModel.streams.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val streamsLoading by viewModel.streamsLoading.collectAsState()
+    val streamsRequested by viewModel.streamsRequested.collectAsState()
     val error by viewModel.error.collectAsState()
 
     fun playStream(stream: Stream) {
@@ -155,9 +156,22 @@ fun DetailScreen(
                         m.language?.let { Text("Language: $it", color = KBTextLo, modifier = Modifier.padding(top = 4.dp)) }
                         m.awards?.let { Text("Awards: $it", color = KBTextLo, modifier = Modifier.padding(top = 4.dp)) }
 
-                        if (tmdbDetail?.videos?.results?.any { it.site == "YouTube" && it.type == "Trailer" } == true) {
-                            KBCard(onClick = { playTrailer() }, modifier = Modifier.padding(top = 12.dp)) {
-                                Text("▶ PLAY TRAILER", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(10.dp))
+                        Row(modifier = Modifier.padding(top = 12.dp)) {
+                            if (type == "movie") {
+                                KBCard(
+                                    onClick = {
+                                        selectedVideoId = id
+                                        viewModel.loadStreamsFor(id)
+                                    },
+                                    modifier = Modifier.padding(end = 10.dp)
+                                ) {
+                                    Text("▶ PLAY", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(10.dp))
+                                }
+                            }
+                            if (tmdbDetail?.videos?.results?.any { it.site == "YouTube" && it.type == "Trailer" } == true) {
+                                KBCard(onClick = { playTrailer() }) {
+                                    Text("TRAILER", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(10.dp))
+                                }
                             }
                         }
                     }
@@ -276,28 +290,30 @@ fun DetailScreen(
                     }
                 }
 
-                item {
-                    Text(
-                        when {
-                            streamsLoading -> "LOADING STREAMS..."
-                            streams.isEmpty() -> "NO STREAMS YET"
-                            else -> "STREAMS"
-                        },
-                        style = MaterialTheme.typography.titleMedium,
-                        color = KBTextLo,
-                        modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)
-                    )
-                }
-                items(streams) { stream: Stream ->
-                    val playable = stream.url != null
-                    KBCard(
-                        onClick = { if (playable) playStream(stream) },
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Text(streamLabel(stream), fontFamily = FontFamily.Monospace, color = if (playable) KBTextHi else KBTextLo)
-                            if (!playable) {
-                                Text("Torrent link — direct playback not supported yet", color = KBTextLo)
+                if (streamsRequested) {
+                    item {
+                        Text(
+                            when {
+                                streamsLoading -> "LOADING STREAMS..."
+                                streams.isEmpty() -> "NO STREAMS FOUND"
+                                else -> "STREAMS"
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            color = KBTextLo,
+                            modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)
+                        )
+                    }
+                    items(streams) { stream: Stream ->
+                        val playable = stream.url != null
+                        KBCard(
+                            onClick = { if (playable) playStream(stream) },
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(streamLabel(stream), fontFamily = FontFamily.Monospace, color = if (playable) KBTextHi else KBTextLo)
+                                if (!playable) {
+                                    Text("Torrent link — direct playback not supported yet", color = KBTextLo)
+                                }
                             }
                         }
                     }
