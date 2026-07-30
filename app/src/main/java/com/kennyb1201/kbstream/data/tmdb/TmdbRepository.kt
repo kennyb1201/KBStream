@@ -10,6 +10,17 @@ import retrofit2.converter.moshi.MoshiConverterFactory
 data class StudioItem(val item: TmdbDiscoverItem, val mediaType: String)
 data class StudioSection(val title: String, val items: List<StudioItem>)
 
+// A TMDB episode, with its Stremio-style stream-request id already attached
+// (imdbId:season:episode) -- addons expect this exact format
+data class ResolvedEpisode(
+    val streamId: String,
+    val episodeNumber: Int,
+    val name: String?,
+    val overview: String?,
+    val thumbnail: String?,
+    val runtimeMinutes: Int?
+)
+
 class TmdbRepository {
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
 
@@ -46,14 +57,23 @@ class TmdbRepository {
         return api.getPerson(personId, apiKey)
     }
 
-    // Cinemeta's per-episode data has no runtime -- TMDB's season endpoint does
-    suspend fun getSeasonRuntimes(tvId: Int, season: Int): Map<Int, Int> {
-        if (apiKey.isBlank()) return emptyMap()
+    // TMDB is now the primary episode source: full name/overview/thumbnail/runtime
+    // in one call, with the Stremio-protocol stream id ("imdbId:season:episode")
+    // synthesized here since we already have the imdbId from navigation.
+    suspend fun getSeasonEpisodes(tvId: Int, season: Int, imdbId: String): List<ResolvedEpisode> {
+        if (apiKey.isBlank()) return emptyList()
         return runCatching {
-            api.getSeasonDetail(tvId, season, apiKey).episodes
-                .mapNotNull { ep -> ep.runtime?.let { ep.episodeNumber to it } }
-                .toMap()
-        }.getOrDefault(emptyMap())
+            api.getSeasonDetail(tvId, season, apiKey).episodes.map { ep ->
+                ResolvedEpisode(
+                    streamId = "$imdbId:$season:${ep.episodeNumber}",
+                    episodeNumber = ep.episodeNumber,
+                    name = ep.name,
+                    overview = ep.overview,
+                    thumbnail = ep.stillPath?.let { "$PROFILE_BASE$it" },
+                    runtimeMinutes = ep.runtime
+                )
+            }
+        }.getOrDefault(emptyList())
     }
 
     suspend fun getByCompany(companyId: Int): List<StudioSection> {

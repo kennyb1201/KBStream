@@ -35,7 +35,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.addon.Stream
-import com.kennyb1201.kbstream.data.addon.VideoEntry
+import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbCastMember
 import com.kennyb1201.kbstream.data.tmdb.TmdbNetwork
 import com.kennyb1201.kbstream.data.tmdb.TmdbProductionCompany
@@ -61,7 +61,7 @@ fun DetailScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var selectedVideoId by remember { mutableStateOf<String?>(null) }
+    var selectedStreamId by remember { mutableStateOf<String?>(null) }
     var selectedSeason by remember { mutableStateOf<Int?>(null) }
 
     LaunchedEffect(id) {
@@ -74,20 +74,28 @@ fun DetailScreen(
     val isLoading by viewModel.isLoading.collectAsState()
     val streamsLoading by viewModel.streamsLoading.collectAsState()
     val streamsRequested by viewModel.streamsRequested.collectAsState()
-    val episodeRuntimes by viewModel.episodeRuntimes.collectAsState()
+    val episodes by viewModel.episodes.collectAsState()
+    val episodesLoading by viewModel.episodesLoading.collectAsState()
     val error by viewModel.error.collectAsState()
 
+    val seasons = tmdbDetail?.seasons.orEmpty().map { it.seasonNumber }.sorted()
+
+    LaunchedEffect(tmdbDetail) {
+        if (selectedSeason == null && seasons.isNotEmpty()) {
+            selectedSeason = seasons.first()
+        }
+    }
     LaunchedEffect(selectedSeason) {
-        selectedSeason?.let { if (type == "series") viewModel.loadEpisodeRuntimes(it) }
+        selectedSeason?.let { if (type == "series") viewModel.loadEpisodesForSeason(it) }
     }
 
     fun playStream(stream: Stream) {
         val url = stream.url ?: return
         val intent = Intent(context, PlayerActivity::class.java).apply {
             putExtra("stream_url", url)
-            putExtra("item_id", selectedVideoId ?: id)
+            putExtra("item_id", selectedStreamId ?: id)
             putExtra("item_type", type)
-            putExtra("item_name", meta?.name ?: "")
+            putExtra("item_name", meta?.name ?: tmdbDetail?.name ?: tmdbDetail?.title ?: "")
             putExtra("item_poster", meta?.poster)
         }
         context.startActivity(intent)
@@ -111,25 +119,15 @@ fun DetailScreen(
         error != null -> Box(Modifier.fillMaxSize().padding(24.dp)) { Text("Error: $error") }
         meta != null -> {
             val m = meta!!
+            val displayName = m.name.ifBlank { tmdbDetail?.name ?: tmdbDetail?.title ?: m.name }
             val backdropUrl = tmdbDetail?.backdropPath?.let { "${TmdbRepository.BACKDROP_BASE}$it" } ?: m.background ?: m.poster
-
-            val seasons = m.videos.orEmpty()
-                .mapNotNull { it.season }
-                .distinct()
-                .sortedWith(compareBy({ it == 0 }, { it }))
-            if (selectedSeason == null && seasons.isNotEmpty()) {
-                selectedSeason = seasons.first()
-            }
-            val episodesForSeason = m.videos.orEmpty()
-                .filter { it.season == selectedSeason }
-                .sortedBy { it.episode ?: 0 }
 
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 item {
                     Box(modifier = Modifier.fillMaxWidth().height(320.dp)) {
                         AsyncImage(
                             model = backdropUrl,
-                            contentDescription = m.name,
+                            contentDescription = displayName,
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize()
                         )
@@ -139,7 +137,7 @@ fun DetailScreen(
                             )
                         )
                         Column(modifier = Modifier.padding(24.dp)) {
-                            Text(m.name, style = MaterialTheme.typography.displayLarge, modifier = Modifier.padding(top = 200.dp))
+                            Text(displayName, style = MaterialTheme.typography.displayLarge, modifier = Modifier.padding(top = 200.dp))
                         }
                     }
                     Column(modifier = Modifier.padding(24.dp)) {
@@ -165,7 +163,7 @@ fun DetailScreen(
                             if (type == "movie") {
                                 KBCard(
                                     onClick = {
-                                        selectedVideoId = id
+                                        selectedStreamId = id
                                         viewModel.loadStreamsFor(id)
                                     },
                                     modifier = Modifier.padding(end = 10.dp)
@@ -269,34 +267,35 @@ fun DetailScreen(
                             }
                         }
                     }
-                    items(episodesForSeason) { video: VideoEntry ->
-                        val isSelected = selectedVideoId == video.id
+                    if (episodesLoading) {
+                        item { Text("Loading episodes...", modifier = Modifier.padding(start = 24.dp)) }
+                    }
+                    items(episodes) { ep: ResolvedEpisode ->
+                        val isSelected = selectedStreamId == ep.streamId
                         Column(modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)) {
                             KBCard(
                                 onClick = {
-                                    selectedVideoId = video.id
-                                    viewModel.loadStreamsFor(video.id)
+                                    selectedStreamId = ep.streamId
+                                    viewModel.loadStreamsFor(ep.streamId)
                                 },
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Row(modifier = Modifier.padding(10.dp)) {
                                     AsyncImage(
-                                        model = video.thumbnail,
-                                        contentDescription = video.title,
+                                        model = ep.thumbnail,
+                                        contentDescription = ep.name,
                                         contentScale = ContentScale.Crop,
                                         modifier = Modifier.width(160.dp).height(90.dp)
                                     )
                                     Column(modifier = Modifier.padding(start = 12.dp)) {
-                                        val runtimeText = video.episode?.let { episodeRuntimes[it] }?.let { " · ${it}m" } ?: ""
-                                        Text("E${video.episode ?: 0}$runtimeText  ${video.title ?: ""}", style = MaterialTheme.typography.titleMedium)
-                                        video.overview?.takeIf { it.isNotBlank() }?.let {
+                                        val runtimeText = ep.runtimeMinutes?.let { " · ${it}m" } ?: ""
+                                        Text("E${ep.episodeNumber}$runtimeText  ${ep.name ?: ""}", style = MaterialTheme.typography.titleMedium)
+                                        ep.overview?.takeIf { it.isNotBlank() }?.let {
                                             Text(it, color = KBTextLo, modifier = Modifier.padding(top = 4.dp))
                                         }
                                     }
                                 }
                             }
-                            // Streams appear right under the episode you clicked, not
-                            // buried at the bottom of a long page
                             if (isSelected) {
                                 Column(modifier = Modifier.padding(top = 8.dp)) {
                                     Text(
@@ -360,7 +359,8 @@ fun DetailScreen(
 
                 val recs = tmdbDetail?.recommendations?.results.orEmpty()
                 if (recs.isNotEmpty()) {
-                    item { Text("MORE LIKE THIS", style = MaterialTheme.typography.titleMedium, color = KBTextLo, modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)) }
+                    item 
+{ Text("MORE LIKE THIS", style = MaterialTheme.typography.titleMedium, color = KBTextLo, modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)) }
                     item {
                         LazyRow(modifier = Modifier.padding(start = 24.dp, bottom = 24.dp)) {
                             items(recs.take(15)) { rec: TmdbRecommendationItem ->

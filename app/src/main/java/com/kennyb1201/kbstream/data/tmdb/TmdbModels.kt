@@ -70,6 +70,13 @@ data class TmdbRecommendations(
 )
 
 @JsonClass(generateAdapter = true)
+data class TmdbSeasonSummary(
+    @Json(name = "season_number") val seasonNumber: Int,
+    val name: String? = null,
+    @Json(name = "episode_count") val episodeCount: Int? = null
+)
+
+@JsonClass(generateAdapter = true)
 data class TmdbDetail(
     val id: Int,
     val title: String? = null,
@@ -78,6 +85,7 @@ data class TmdbDetail(
     @Json(name = "backdrop_path") val backdropPath: String? = null,
     @Json(name = "production_companies") val productionCompanies: List<TmdbProductionCompany> = emptyList(),
     val networks: List<TmdbNetwork> = emptyList(),
+    val seasons: List<TmdbSeasonSummary> = emptyList(),
     val credits: TmdbCredits? = null,
     val videos: TmdbVideos? = null,
     val recommendations: TmdbRecommendations? = null
@@ -128,6 +136,9 @@ data class TmdbDiscoverResponse(
 @JsonClass(generateAdapter = true)
 data class TmdbEpisode(
     @Json(name = "episode_number") val episodeNumber: Int,
+    val name: String? = null,
+    val overview: String? = null,
+    @Json(name = "still_path") val stillPath: String? = null,
     val runtime: Int? = null
 )
 
