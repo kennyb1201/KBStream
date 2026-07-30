@@ -21,6 +21,7 @@ class TmdbRepository {
         .create(TmdbApiService::class.java)
 
     private val apiKey = BuildConfig.TMDB_API_KEY
+    private val pagesPerRail = 3 // ~60 items per rail instead of TMDB's default 20
 
     suspend fun fetchEnrichedMeta(imdbId: String, type: String): TmdbDetail? {
         if (apiKey.isBlank()) return null
@@ -48,17 +49,23 @@ class TmdbRepository {
     suspend fun getByCompany(companyId: Int): List<StudioSection> {
         if (apiKey.isBlank()) return emptyList()
 
-        suspend fun fetch(sortBy: String, voteCountGte: Int?): List<StudioItem> {
-            val movies = runCatching { api.discoverMovieByCompany(companyId, apiKey, sortBy, voteCountGte).results }.getOrDefault(emptyList())
-            val shows = runCatching { api.discoverTvByCompany(companyId, apiKey, sortBy, voteCountGte).results }.getOrDefault(emptyList())
-            return (movies.map { StudioItem(it, "movie") } + shows.map { StudioItem(it, "series") })
-                .distinctBy { it.item.id to it.mediaType }
-        }
+        suspend fun fetchMovies(sortBy: String, voteCountGte: Int?): List<StudioItem> =
+            (1..pagesPerRail).flatMap { page ->
+                runCatching { api.discoverMovieByCompany(companyId, apiKey, sortBy, voteCountGte, page).results }.getOrDefault(emptyList())
+            }.distinctBy { it.id }.map { StudioItem(it, "movie") }
+
+        suspend fun fetchShows(sortBy: String, voteCountGte: Int?): List<StudioItem> =
+            (1..pagesPerRail).flatMap { page ->
+                runCatching { api.discoverTvByCompany(companyId, apiKey, sortBy, voteCountGte, page).results }.getOrDefault(emptyList())
+            }.distinctBy { it.id }.map { StudioItem(it, "series") }
 
         return listOf(
-            StudioSection("POPULAR", fetch("popularity.desc", null)),
-            StudioSection("TOP RATED", fetch("vote_average.desc", 100)),
-            StudioSection("RECENT", fetch("primary_release_date.desc", null))
+            StudioSection("MOVIES · POPULAR", fetchMovies("popularity.desc", null)),
+            StudioSection("MOVIES · TOP RATED", fetchMovies("vote_average.desc", 100)),
+            StudioSection("MOVIES · RECENT", fetchMovies("primary_release_date.desc", null)),
+            StudioSection("SERIES · POPULAR", fetchShows("popularity.desc", null)),
+            StudioSection("SERIES · TOP RATED", fetchShows("vote_average.desc", 100)),
+            StudioSection("SERIES · RECENT", fetchShows("first_air_date.desc", null))
         ).filter { it.items.isNotEmpty() }
     }
 
@@ -66,14 +73,14 @@ class TmdbRepository {
         if (apiKey.isBlank()) return emptyList()
 
         suspend fun fetch(sortBy: String, voteCountGte: Int?): List<StudioItem> =
-            runCatching { api.discoverByNetwork(networkId, apiKey, sortBy, voteCountGte).results }
-                .getOrDefault(emptyList())
-                .map { StudioItem(it, "series") }
+            (1..pagesPerRail).flatMap { page ->
+                runCatching { api.discoverByNetwork(networkId, apiKey, sortBy, voteCountGte, page).results }.getOrDefault(emptyList())
+            }.distinctBy { it.id }.map { StudioItem(it, "series") }
 
         return listOf(
-            StudioSection("POPULAR", fetch("popularity.desc", null)),
-            StudioSection("TOP RATED", fetch("vote_average.desc", 100)),
-            StudioSection("RECENT", fetch("first_air_date.desc", null))
+            StudioSection("SERIES · POPULAR", fetch("popularity.desc", null)),
+            StudioSection("SERIES · TOP RATED", fetch("vote_average.desc", 100)),
+            StudioSection("SERIES · RECENT", fetch("first_air_date.desc", null))
         ).filter { it.items.isNotEmpty() }
     }
 

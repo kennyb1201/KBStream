@@ -50,7 +50,8 @@ interface TmdbApiService {
         @Query("with_companies") companyId: Int,
         @Query("api_key") apiKey: String,
         @Query("sort_by") sortBy: String,
-        @Query("vote_count.gte") voteCountGte: Int? = null
+        @Query("vote_count.gte") voteCountGte: Int? = null,
+        @Query("page") page: Int = 1
     ): TmdbDiscoverResponse
 
     @GET("discover/tv")
@@ -58,7 +59,8 @@ interface TmdbApiService {
         @Query("with_companies") companyId: Int,
         @Query("api_key") apiKey: String,
         @Query("sort_by") sortBy: String,
-        @Query("vote_count.gte") voteCountGte: Int? = null
+        @Query("vote_count.gte") voteCountGte: Int? = null,
+        @Query("page") page: Int = 1
     ): TmdbDiscoverResponse
 
     @GET("discover/tv")
@@ -66,6 +68,7 @@ interface TmdbApiService {
         @Query("with_networks") networkId: Int,
         @Query("api_key") apiKey: String,
         @Query("sort_by") sortBy: String,
-        @Query("vote_count.gte") voteCountGte: Int? = null
+        @Query("vote_count.gte") voteCountGte: Int? = null,
+        @Query("page") page: Int = 1
     ): TmdbDiscoverResponse
 }
