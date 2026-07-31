@@ -74,7 +74,7 @@ data class StreamsTarget(
  * This prevents focus from appearing to "stick" or get lost at the
  * bottom of long lists (cast rows, episode lists, descriptions).
  */
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 private class TvPivotBringIntoViewSpec(
     private val parentFraction: Float = 0.3f,
     private val childFraction: Float = 0f
@@ -91,10 +91,10 @@ private class TvPivotBringIntoViewSpec(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 private val LocalTvBringIntoViewSpec = TvPivotBringIntoViewSpec()
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
 fun DetailScreen(
     type: String,
