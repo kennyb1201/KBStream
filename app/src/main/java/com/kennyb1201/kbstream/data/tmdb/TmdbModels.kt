@@ -88,7 +88,8 @@ data class TmdbDetail(
     val seasons: List<TmdbSeasonSummary> = emptyList(),
     val credits: TmdbCredits? = null,
     val videos: TmdbVideos? = null,
-    val recommendations: TmdbRecommendations? = null
+    val recommendations: TmdbRecommendations? = null,
+    @Json(name = "belongs_to_collection") val belongsToCollection: TmdbCollectionRef? = null
 )
 
 @JsonClass(generateAdapter = true)
