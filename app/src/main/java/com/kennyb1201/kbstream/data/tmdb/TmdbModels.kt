@@ -146,3 +146,30 @@ data class TmdbEpisode(
 data class TmdbSeasonDetail(
     val episodes: List<TmdbEpisode> = emptyList()
 )
+
+@JsonClass(generateAdapter = true)
+data class TmdbCollectionRef(
+    val id: Int,
+        val name: String,
+            @Json(name = "poster_path") val posterPath: String? = null,
+                @Json(name = "backdrop_path") val backdropPath: String? = null
+                )
+
+                @JsonClass(generateAdapter = true)
+                data class TmdbCollectionPart(
+                    val id: Int,
+                        val title: String? = null,
+                            val name: String? = null,
+                                @Json(name = "poster_path") val posterPath: String? = null,
+                                    @Json(name = "release_date") val releaseDate: String? = null
+                                    )
+
+                                    @JsonClass(generateAdapter = true)
+                                    data class TmdbCollectionDetail(
+                                        val id: Int,
+                                            val name: String,
+                                                val overview: String? = null,
+                                                    @Json(name = "poster_path") val posterPath: String? = null,
+                                                        @Json(name = "backdrop_path") val backdropPath: String? = null,
+                                                            val parts: List<TmdbCollectionPart> = emptyList()
+                                                            )
