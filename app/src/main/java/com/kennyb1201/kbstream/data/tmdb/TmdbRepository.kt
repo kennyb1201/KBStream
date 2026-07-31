@@ -114,6 +114,11 @@ class TmdbRepository {
         ).filter { it.items.isNotEmpty() }
     }
 
+    suspend fun getCollection(collectionId: Int): TmdbCollectionDetail? {
+        if (apiKey.isBlank()) return null
+            return runCatching { api.getCollection(collectionId, apiKey) }.getOrNull()
+            }
+            
     companion object {
         const val PROFILE_BASE = "https://image.tmdb.org/t/p/w185"
         const val BACKDROP_BASE = "https://image.tmdb.org/t/p/original"
