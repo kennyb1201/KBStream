@@ -49,7 +49,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")
 
-    implementation("androidx.tv:tv-material:1.1.0-alpha01") {
+    implementation("androidx.tv:tv-material:1.0.0") {
             exclude(group = "androidx.tv", module = "tv-foundation")
     }
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
