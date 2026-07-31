@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -45,7 +44,6 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbCastMember
-import com.kennyb1201.kbstream.data.tmdb.TmdbCollectionPart
 import com.kennyb1201.kbstream.data.tmdb.TmdbNetwork
 import com.kennyb1201.kbstream.data.tmdb.TmdbProductionCompany
 import com.kennyb1201.kbstream.data.tmdb.TmdbRecommendationItem
@@ -119,7 +117,6 @@ fun DetailScreen(
     val episodes by viewModel.episodes.collectAsState()
     val episodesLoading by viewModel.episodesLoading.collectAsState()
     val resumeInfo by viewModel.resumeInfo.collectAsState()
-    val collection by viewModel.collection.collectAsState()
     val error by viewModel.error.collectAsState()
 
     val seasons = remember(tmdbDetail) {
@@ -442,62 +439,70 @@ fun DetailScreen(
                                 }
                             }
 
-                            items(
-                                items = episodes,
-                                key = { it.streamId }
-                            ) { ep: ResolvedEpisode ->
-                                EpisodeRow(
-                                    ep = ep,
-                                    onClick = {
-                                        val hasResumeHere = resumeInfo?.episodeStreamId == ep.streamId
-                                        val target = StreamsTarget(
-                                            contentType = "series",
-                                            streamId = ep.streamId,
-                                            title = "$displayName · E${ep.episodeNumber}${ep.name?.let { " - $it" } ?: ""}",
-                                            displayName = displayName,
-                                            season = selectedSeason,
-                                            episode = ep.episodeNumber,
-                                            resumePositionMs = if (hasResumeHere) resumeInfo!!.positionMs else 0L
-                                        )
-                                        onNavigateStreams(target, id, type, m.poster)
-                                    }
-                                )
-                            }
-                        }
-
-                        val collectionParts = collection?.parts.orEmpty()
-                            .filter { it.id.toString() != tmdbDetail?.id?.toString() }
-                        if (collectionParts.isNotEmpty()) {
-                            item(key = "collection_header") {
-                                Text(
-                                    collection?.name?.uppercase() ?: "PART OF A COLLECTION",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = KBTextLo,
-                                    modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 10.dp)
-                                )
-                            }
-                            item(key = "collection_row") {
+                            item(key = "episodes_row") {
                                 LazyRow(
                                     modifier = Modifier
-                                        .padding(start = 24.dp, bottom = 12.dp)
+                                        .padding(start = 24.dp, bottom = 16.dp)
                                         .focusGroup()
                                         .focusRestorer()
                                 ) {
-                                    items(items = collectionParts, key = { it.id }) { part: TmdbCollectionPart ->
-                                        CollectionPartCard(
-                                            part = part,
+                                    items(
+                                        items = episodes,
+                                        key = { it.streamId }
+                                    ) { ep: ResolvedEpisode ->
+                                        EpisodeCard(
+                                            ep = ep,
                                             onClick = {
-                                                scope.launch {
-                                                    val imdbId = viewModel.resolveImdbId(part.id, "movie")
-                                                    if (imdbId != null) onNavigateDetail("movie", imdbId)
-                                                }
+                                                val hasResumeHere = resumeInfo?.episodeStreamId == ep.streamId
+                                                val target = StreamsTarget(
+                                                    contentType = "series",
+                                                    streamId = ep.streamId,
+                                                    title = "$displayName · E${ep.episodeNumber}${ep.name?.let { " - $it" } ?: ""}",
+                                                    displayName = displayName,
+                                                    season = selectedSeason,
+                                                    episode = ep.episodeNumber,
+                                                    resumePositionMs = if (hasResumeHere) resumeInfo!!.positionMs else 0L
+                                                )
+                                                onNavigateStreams(target, id, type, m.poster)
                                             }
                                         )
                                     }
                                 }
                             }
                         }
+val collection by viewModel.collection.collectAsState()
+val collectionParts = collection?.parts.orEmpty().filter { it.id != tmdbDetail?.id }
 
+if (collectionParts.isNotEmpty()) {
+    item(key = "collection_header") {
+            Text(
+                        collection?.name?.uppercase() ?: "COLLECTION",
+                                    style = MaterialTheme.typography.titleMedium,
+                                                color = KBTextLo,
+                                                            modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 10.dp)
+                                                                    )
+                                                                        }
+                                                                            item(key = "collection_row") {
+                                                                                    LazyRow(
+                                                                                                modifier = Modifier
+                                                                                                                .padding(start = 24.dp, bottom = 24.dp)
+                                                                                                                                .focusGroup()
+                                                                                                                                                .focusRestorer()
+                                                                                                                                                        ) {
+                                                                                                                                                                    items(items = collectionParts, key = { it.id }) { part: TmdbCollectionPart ->
+                                                                                                                                                                                    CollectionCard(
+                                                                                                                                                                                                        part = part,
+                                                                                                                                                                                                                            onClick = {
+                                                                                                                                                                                                                                                    scope.launch {
+                                                                                                                                                                                                                                                                                val imdbId = viewModel.resolveImdbId(part.id, "movie")
+                                                                                                                                                                                                                                                                                                            if (imdbId != null) onNavigateDetail("movie", imdbId)
+                                                                                                                                                                                                                                                                                                                                    }
+                                                                                                                                                                                                                                                                                                                                                        }
+                                                                                                                                                                                                                                                                                                                                                                        )
+                                                                                                                                                                                                                                                                                                                                                                                    }
+                                                                                                                                                                                                                                                                                                                                                                                            }
+                                                                                                                                                                                                                                                                                                                                                                                                }
+                                                                                                                                                                                                                                                                                                                                                                                                }
                         val recs = tmdbDetail?.recommendations?.results.orEmpty()
                         if (recs.isNotEmpty()) {
                             item(key = "recs_header") {
@@ -585,26 +590,34 @@ private fun StudioCard(name: String, logoPath: String?, onClick: () -> Unit) {
 }
 
 @Composable
-private fun EpisodeRow(ep: ResolvedEpisode, onClick: () -> Unit) {
+private fun EpisodeCard(ep: ResolvedEpisode, onClick: () -> Unit) {
     KBCard(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 6.dp)
+        modifier = Modifier.width(220.dp).padding(end = 12.dp)
     ) {
-        Row(modifier = Modifier.padding(12.dp)) {
+        Column {
             AsyncImage(
                 model = ep.thumbnail,
                 contentDescription = ep.name,
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.width(180.dp).height(100.dp)
+                modifier = Modifier.fillMaxWidth().height(124.dp)
             )
-            Column(modifier = Modifier.padding(start = 14.dp)) {
+            Column(modifier = Modifier.padding(10.dp)) {
                 val runtimeText = remember(ep.runtimeMinutes) { ep.runtimeMinutes?.let { " · ${it}m" } ?: "" }
                 Text(
-                    "E${ep.episodeNumber}$runtimeText  ${ep.name ?: ""}",
+                    "E${ep.episodeNumber}$runtimeText",
                     style = MaterialTheme.typography.titleMedium
                 )
+                ep.name?.let {
+                    Text(it, color = KBTextHi, modifier = Modifier.padding(top = 2.dp))
+                }
                 ep.overview?.takeIf { it.isNotBlank() }?.let {
-                    Text(it, color = KBTextLo, modifier = Modifier.padding(top = 6.dp))
+                    Text(
+                        it,
+                        color = KBTextLo,
+                        maxLines = 3,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
                 }
             }
         }
@@ -622,23 +635,6 @@ private fun RecCard(rec: TmdbRecommendationItem, onClick: () -> Unit) {
                 rec.posterPath?.let { "${TmdbRepository.PROFILE_BASE}$it" }
             },
             contentDescription = rec.title ?: rec.name,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize()
-        )
-    }
-}
-
-@Composable
-private fun CollectionPartCard(part: TmdbCollectionPart, onClick: () -> Unit) {
-    KBCard(
-        onClick = onClick,
-        modifier = Modifier.width(124.dp).height(180.dp).padding(end = 12.dp)
-    ) {
-        AsyncImage(
-            model = remember(part.posterPath) {
-                part.posterPath?.let { "${TmdbRepository.PROFILE_BASE}$it" }
-            },
-            contentDescription = part.title ?: part.name,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
         )
