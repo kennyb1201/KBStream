@@ -78,4 +78,10 @@ interface TmdbApiService {
         @Path("season_number") seasonNumber: Int,
         @Query("api_key") apiKey: String
     ): TmdbSeasonDetail
+
+    @GET("collection/{id}")
+    suspend fun getCollection(
+        @Path("id") id: Int,
+            @Query("api_key") apiKey: String
+            ): TmdbCollectionDetail
 }
