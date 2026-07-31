@@ -4,13 +4,16 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Surface
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.ui.actor.ActorScreen
@@ -44,7 +47,14 @@ class MainActivity : ComponentActivity() {
         setContent {
             KBStreamTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    AppRoot()
+                    // Manual TV safe-area margin. WindowInsets.safeDrawing (used
+                    // elsewhere in the app) reports zero on a fullscreen TV app
+                    // with no system bars, so it can't detect or prevent the
+                    // outer-edge clipping this TV applies -- a fixed margin does,
+                    // regardless of what's actually causing the clipping.
+                    Box(modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 27.dp)) {
+                        AppRoot()
+                    }
                 }
             }
         }
