@@ -39,8 +39,11 @@ class PlayerActivity : ComponentActivity() {
             finish()
             return
         }
-        val itemId = intent.getStringExtra("item_id") ?: ""
-        val itemType = intent.getStringExtra("item_type") ?: ""
+        val parentId = intent.getStringExtra("parent_id") ?: ""
+        val parentType = intent.getStringExtra("parent_type") ?: ""
+        val season = intent.getIntExtra("season", -1).takeIf { it >= 0 }
+        val episode = intent.getIntExtra("episode", -1).takeIf { it >= 0 }
+        val episodeStreamId = intent.getStringExtra("episode_stream_id")
         val itemName = intent.getStringExtra("item_name") ?: ""
         val itemPoster = intent.getStringExtra("item_poster")
         val startPositionMs = intent.getLongExtra("start_position_ms", 0L)
@@ -48,8 +51,11 @@ class PlayerActivity : ComponentActivity() {
         setContent {
             PlayerScreen(
                 url = url,
-                itemId = itemId,
-                itemType = itemType,
+                parentId = parentId,
+                parentType = parentType,
+                season = season,
+                episode = episode,
+                episodeStreamId = episodeStreamId,
                 itemName = itemName,
                 itemPoster = itemPoster,
                 startPositionMs = startPositionMs
@@ -61,8 +67,11 @@ class PlayerActivity : ComponentActivity() {
 @Composable
 fun PlayerScreen(
     url: String,
-    itemId: String,
-    itemType: String,
+    parentId: String,
+    parentType: String,
+    season: Int?,
+    episode: Int?,
+    episodeStreamId: String?,
     itemName: String,
     itemPoster: String?,
     startPositionMs: Long
@@ -85,9 +94,6 @@ fun PlayerScreen(
     }
 
     DisposableEffect(Unit) {
-        // A crash in this coroutine must never take down the whole app --
-        // an earlier version had no handler, and a Room failure here
-        // silently killed the process, dumping the user back to Home.
         val handler = CoroutineExceptionHandler { _, throwable ->
             errorMessage = "History save failed: ${throwable.message}"
         }
@@ -99,14 +105,17 @@ fun PlayerScreen(
                 try {
                     val position = exoPlayer.currentPosition
                     val duration = exoPlayer.duration.coerceAtLeast(1L)
-                    if (position > 0) {
+                    if (position > 0 && parentId.isNotBlank()) {
                         dao.upsert(
                             WatchHistoryEntity(
-                                id = itemId,
-                                type = itemType,
+                                id = parentId,
+                                type = parentType,
                                 name = itemName,
                                 poster = itemPoster,
                                 streamUrl = url,
+                                season = season,
+                                episode = episode,
+                                episodeStreamId = episodeStreamId,
                                 positionMs = position,
                                 durationMs = duration,
                                 updatedAt = System.currentTimeMillis()

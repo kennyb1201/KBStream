@@ -16,8 +16,10 @@ import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.ui.actor.ActorScreen
 import com.kennyb1201.kbstream.ui.addons.AddonsScreen
 import com.kennyb1201.kbstream.ui.detail.DetailScreen
+import com.kennyb1201.kbstream.ui.detail.StreamsTarget
 import com.kennyb1201.kbstream.ui.home.HomeScreen
 import com.kennyb1201.kbstream.ui.search.SearchScreen
+import com.kennyb1201.kbstream.ui.streams.StreamsScreen
 import com.kennyb1201.kbstream.ui.studio.StudioScreen
 import com.kennyb1201.kbstream.ui.theme.KBStreamTheme
 
@@ -28,6 +30,12 @@ sealed class Screen {
     data class Detail(val type: String, val id: String) : Screen()
     data class Actor(val personId: Int) : Screen()
     data class Studio(val id: Int, val name: String, val isNetwork: Boolean) : Screen()
+    data class Streams(
+        val target: StreamsTarget,
+        val parentId: String,
+        val parentType: String,
+        val itemPoster: String?
+    ) : Screen()
 }
 
 class MainActivity : ComponentActivity() {
@@ -48,7 +56,10 @@ fun AppRoot() {
     var screen by remember { mutableStateOf<Screen>(Screen.Home) }
 
     BackHandler(enabled = screen != Screen.Home) {
-        screen = Screen.Home
+        screen = when (val current = screen) {
+            is Screen.Streams -> Screen.Detail(current.parentType, current.parentId)
+            else -> Screen.Home
+        }
     }
 
     when (val current = screen) {
@@ -66,7 +77,10 @@ fun AppRoot() {
             id = current.id,
             onNavigateDetail = { type, id -> screen = Screen.Detail(type, id) },
             onNavigateActor = { personId -> screen = Screen.Actor(personId) },
-            onNavigateStudio = { id, name, isNetwork -> screen = Screen.Studio(id, name, isNetwork) }
+            onNavigateStudio = { id, name, isNetwork -> screen = Screen.Studio(id, name, isNetwork) },
+            onNavigateStreams = { target, parentId, parentType, poster ->
+                screen = Screen.Streams(target, parentId, parentType, poster)
+            }
         )
         is Screen.Actor -> ActorScreen(
             personId = current.personId,
@@ -78,6 +92,18 @@ fun AppRoot() {
             name = current.name,
             isNetwork = current.isNetwork,
             onNavigateDetail = { type, id -> screen = Screen.Detail(type, id) }
+        )
+        is Screen.Streams -> StreamsScreen(
+            contentType = current.target.contentType,
+            streamId = current.target.streamId,
+            title = current.target.title,
+            parentId = current.parentId,
+            parentType = current.parentType,
+            season = current.target.season,
+            episode = current.target.episode,
+            displayName = current.target.displayName,
+            itemPoster = current.itemPoster,
+            resumePositionMs = current.target.resumePositionMs
         )
     }
 }

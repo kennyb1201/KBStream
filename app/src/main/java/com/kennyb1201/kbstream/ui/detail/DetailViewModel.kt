@@ -6,11 +6,11 @@ import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.Meta
-import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
-import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -20,6 +20,7 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
     private val repository = AddonRepository()
     private val addonManager = AddonManager(application)
     private val tmdbRepository = TmdbRepository()
+    private val historyDao = WatchHistoryDatabase.getInstance(application).watchHistoryDao()
 
     private val _meta = MutableStateFlow<Meta?>(null)
     val meta: StateFlow<Meta?> = _meta.asStateFlow()
@@ -27,17 +28,8 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
     private val _tmdbDetail = MutableStateFlow<TmdbDetail?>(null)
     val tmdbDetail: StateFlow<TmdbDetail?> = _tmdbDetail.asStateFlow()
 
-    private val _streams = MutableStateFlow<List<Stream>>(emptyList())
-    val streams: StateFlow<List<Stream>> = _streams.asStateFlow()
-
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
-
-    private val _streamsLoading = MutableStateFlow(false)
-    val streamsLoading: StateFlow<Boolean> = _streamsLoading.asStateFlow()
-
-    private val _streamsRequested = MutableStateFlow(false)
-    val streamsRequested: StateFlow<Boolean> = _streamsRequested.asStateFlow()
 
     private val _episodes = MutableStateFlow<List<ResolvedEpisode>>(emptyList())
     val episodes: StateFlow<List<ResolvedEpisode>> = _episodes.asStateFlow()
@@ -45,17 +37,16 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
     private val _episodesLoading = MutableStateFlow(false)
     val episodesLoading: StateFlow<Boolean> = _episodesLoading.asStateFlow()
 
+    private val _resumeInfo = MutableStateFlow<WatchHistoryEntity?>(null)
+    val resumeInfo: StateFlow<WatchHistoryEntity?> = _resumeInfo.asStateFlow()
+
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
-    private var contentType: String = ""
     private var imdbId: String = ""
 
     fun load(type: String, id: String) {
-        contentType = type
         imdbId = id
-        _streamsRequested.value = false
-        _streams.value = emptyList()
         _episodes.value = emptyList()
         viewModelScope.launch {
             _isLoading.value = true
@@ -72,6 +63,7 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
                 } catch (e: Exception) {
                     // TMDB enrichment is optional -- never fail the screen over it
                 }
+                _resumeInfo.value = historyDao.getById(id)
             } catch (e: Exception) {
                 _error.value = "Failed to load: ${e.message}"
             } finally {
@@ -90,25 +82,6 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
             _episodesLoading.value = true
             _episodes.value = tmdbRepository.getSeasonEpisodes(tvId, season, imdbId)
             _episodesLoading.value = false
-        }
-    }
-
-    fun loadStreamsFor(streamId: String) {
-        _streamsRequested.value = true
-        viewModelScope.launch {
-            _streamsLoading.value = true
-            val allStreams = mutableListOf<Stream>()
-            val addons = addonManager.getInstalledAddons()
-            for (addon in addons.filter { it.resources.contains("stream") }) {
-                try {
-                    val baseUrl = addon.manifestUrl.removeSuffix("/manifest.json")
-                    allStreams += repository.getStreams(baseUrl, contentType, streamId)
-                } catch (e: Exception) {
-                    // one broken stream addon shouldn't block the others
-                }
-            }
-            _streams.value = StreamRanker.rank(allStreams)
-            _streamsLoading.value = false
         }
     }
 

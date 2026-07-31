@@ -10,6 +10,9 @@ data class WatchHistoryEntity(
     val name: String,
     val poster: String?,
     val streamUrl: String?,
+    val season: Int? = null,
+    val episode: Int? = null,
+    val episodeStreamId: String? = null,
     val positionMs: Long,
     val durationMs: Long,
     val updatedAt: Long
