@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.simkl
 
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
