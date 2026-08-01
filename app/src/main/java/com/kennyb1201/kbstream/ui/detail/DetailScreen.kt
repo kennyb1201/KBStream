@@ -855,6 +855,7 @@ private fun CollectionCard(part: TmdbCollectionPart, onClick: () -> Unit) {
 @Composable
 private fun ReviewCard(review: TmdbReview) {
     Card(
+        onClick = {},
         colors = CardDefaults.colors(containerColor = KBSurfaceRaised, contentColor = KBTextHi),
         modifier = Modifier.width(280.dp).padding(end = 12.dp)
     ) {
