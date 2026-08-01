@@ -259,6 +259,15 @@ class TmdbRepository {
         return TagRailPage(results.distinctBy { it.item.id }, results.isNotEmpty())
     }
 
+    suspend fun getByGenre(genreId: Int): List<StudioSection> =
+        getInitialGenreSections(genreId)
+
+    suspend fun getByKeyword(keywordId: Int): List<StudioSection> =
+        getInitialKeywordSections(keywordId)
+
+    suspend fun getByNetwork(networkId: Int): List<StudioSection> =
+        getInitialNetworkSections(networkId)
+
     companion object {
         const val PROFILE_BASE = "https://image.tmdb.org/t/p/w185"
         const val BACKDROP_BASE = "https://image.tmdb.org/t/p/original"
