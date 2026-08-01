@@ -98,6 +98,7 @@ fun DetailScreen(
     onNavigateDetail: (String, String) -> Unit = { _, _ -> },
     onNavigateActor: (Int) -> Unit = {},
     onNavigateStudio: (Int, String, Boolean) -> Unit = { _, _, _ -> },
+    onNavigateTag: (Int, String, Boolean, String) -> Unit = { _, _, _, _ -> },
     onNavigateStreams: (StreamsTarget, String, String, String?) -> Unit = { _, _, _, _ -> },
     viewModel: DetailViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
