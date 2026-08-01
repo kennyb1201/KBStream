@@ -1,0 +1,134 @@
+package com.kennyb1201.kbstream.data.tmdb
+
+import retrofit2.http.GET
+import retrofit2.http.Path
+import retrofit2.http.Query
+
+interface TmdbApiService {
+    @GET("find/{externalId}")
+    suspend fun find(
+        @Path("externalId") externalId: String,
+        @Query("api_key") apiKey: String,
+        @Query("external_source") externalSource: String = "imdb_id"
+    ): TmdbFindResponse
+
+    @GET("movie/{id}")
+    suspend fun getMovie(
+        @Path("id") id: Int,
+        @Query("api_key") apiKey: String,
+        @Query("append_to_response") append: String = "credits,videos,recommendations"
+    ): TmdbDetail
+
+    @GET("tv/{id}")
+    suspend fun getTv(
+        @Path("id") id: Int,
+        @Query("api_key") apiKey: String,
+        @Query("append_to_response") append: String = "credits,videos,recommendations"
+    ): TmdbDetail
+
+    @GET("movie/{id}/external_ids")
+    suspend fun getMovieExternalIds(
+        @Path("id") id: Int,
+        @Query("api_key") apiKey: String
+    ): TmdbExternalIds
+
+    @GET("tv/{id}/external_ids")
+    suspend fun getTvExternalIds(
+        @Path("id") id: Int,
+        @Query("api_key") apiKey: String
+    ): TmdbExternalIds
+
+    @GET("person/{id}")
+    suspend fun getPerson(
+        @Path("id") id: Int,
+        @Query("api_key") apiKey: String,
+        @Query("append_to_response") append: String = "combined_credits"
+    ): TmdbPersonDetail
+
+    @GET("discover/movie")
+    suspend fun discoverMovieByCompany(
+        @Query("with_companies") companyId: Int,
+        @Query("api_key") apiKey: String,
+        @Query("sort_by") sortBy: String,
+        @Query("vote_count.gte") voteCountGte: Int? = null,
+        @Query("with_original_language") originalLanguage: String = "en",
+        @Query("with_release_type") releaseType: String = "4|5|6",
+        @Query("release_date.lte") releaseDateLte: String,
+        @Query("page") page: Int = 1
+    ): TmdbDiscoverResponse
+
+    @GET("discover/tv")
+    suspend fun discoverTvByCompany(
+        @Query("with_companies") companyId: Int,
+        @Query("api_key") apiKey: String,
+        @Query("sort_by") sortBy: String,
+        @Query("vote_count.gte") voteCountGte: Int? = null,
+        @Query("with_original_language") originalLanguage: String = "en",
+        @Query("first_air_date.lte") firstAirDateLte: String,
+        @Query("page") page: Int = 1
+    ): TmdbDiscoverResponse
+
+    @GET("discover/tv")
+    suspend fun discoverByNetwork(
+        @Query("with_networks") networkId: Int,
+        @Query("api_key") apiKey: String,
+        @Query("sort_by") sortBy: String,
+        @Query("vote_count.gte") voteCountGte: Int? = null,
+        @Query("with_original_language") originalLanguage: String = "en",
+        @Query("first_air_date.lte") firstAirDateLte: String,
+        @Query("page") page: Int = 1
+    ): TmdbDiscoverResponse
+
+    @GET("discover/movie")
+    suspend fun discoverMovieByGenre(
+        @Query("with_genres") genreId: Int,
+        @Query("api_key") apiKey: String,
+        @Query("sort_by") sortBy: String,
+        @Query("vote_count.gte") voteCountGte: Int? = null,
+        @Query("with_original_language") originalLanguage: String = "en",
+        @Query("with_release_type") releaseType: String = "4|5|6",
+        @Query("release_date.lte") releaseDateLte: String,
+        @Query("page") page: Int = 1
+    ): TmdbDiscoverResponse
+
+    @GET("discover/tv")
+    suspend fun discoverTvByGenre(
+        @Query("with_genres") genreId: Int,
+        @Query("api_key") apiKey: String,
+        @Query("sort_by") sortBy: String,
+        @Query("vote_count.gte") voteCountGte: Int? = null,
+        @Query("with_original_language") originalLanguage: String = "en",
+        @Query("first_air_date.lte") firstAirDateLte: String,
+        @Query("page") page: Int = 1
+    ): TmdbDiscoverResponse
+
+    @GET("discover/movie")
+    suspend fun discoverMovieByKeyword(
+        @Query("with_keywords") keywordId: Int,
+        @Query("api_key") apiKey: String,
+        @Query("sort_by") sortBy: String,
+        @Query("vote_count.gte") voteCountGte: Int? = null,
+        @Query("with_original_language") originalLanguage: String = "en",
+        @Query("with_release_type") releaseType: String = "4|5|6",
+        @Query("release_date.lte") releaseDateLte: String,
+        @Query("page") page: Int = 1
+    ): TmdbDiscoverResponse
+
+    @GET("discover/tv")
+    suspend fun discoverTvByKeyword(
+        @Query("with_keywords") keywordId: Int,
+        @Query("api_key") apiKey: String,
+        @Query("sort_by") sortBy: String,
+        @Query("vote_count.gte") voteCountGte: Int? = null,
+        @Query("with_original_language") originalLanguage: String = "en",
+        @Query("first_air_date.lte") firstAirDateLte: String,
+        @Query("page") page: Int = 1
+    ): TmdbDiscoverResponse
+
+    @GET("tv/{id}/season/{season_number}")
+    suspend fun getSeasonDetail(
+        @Path("id") id: Int,
+        @Path("season_number") seasonNumber: Int,
+        @Query("api_key") apiKey: String
+    ): TmdbSeasonDetail
+}
