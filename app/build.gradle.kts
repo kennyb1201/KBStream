@@ -11,17 +11,9 @@ val localProps = Properties()
 val localPropsFile = rootProject.file("local.properties")
 if (localPropsFile.exists()) localProps.load(localPropsFile.inputStream())
 
-val tmdbApiKey = localProps.getProperty("TMDB_API_KEY")
-    ?: System.getenv("TMDB_API_KEY")
-    ?: ""
-
-val simklClientId = localProps.getProperty("SIMKL_CLIENT_ID")
-    ?: System.getenv("SIMKL_CLIENT_ID")
-    ?: ""
-
-val simklClientSecret = localProps.getProperty("SIMKL_CLIENT_SECRET")
-    ?: System.getenv("SIMKL_CLIENT_SECRET")
-    ?: ""
+buildConfigField("String", "TMDB_API_KEY", ""$tmdbApiKey"")
+buildConfigField("String", "SIMKL_CLIENT_ID", ""$simklClientId"")
+buildConfigField("String", "SIMKL_CLIENT_SECRET", ""$simklClientSecret"")
 
 android {
     namespace = "com.kennyb1201.kbstream"
