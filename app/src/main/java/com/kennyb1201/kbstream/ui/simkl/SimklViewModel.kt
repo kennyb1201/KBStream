@@ -60,7 +60,7 @@ class SimklViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun startPolling() {
-        val deviceCode = _uiState.value.deviceCode ?: return
+        val userCode = _uiState.value.userCode ?: return
         val interval = _uiState.value.intervalSeconds.coerceAtLeast(3)
 
         pollJob?.cancel()
@@ -69,7 +69,7 @@ class SimklViewModel(application: Application) : AndroidViewModel(application) {
                 delay(interval * 1000L)
 
                 val result = runCatching {
-                    repository.exchangePin(deviceCode)
+                    repository.checkPin(userCode)
                 }
 
                 result.onSuccess { token ->
