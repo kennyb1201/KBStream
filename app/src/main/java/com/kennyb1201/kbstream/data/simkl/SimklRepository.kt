@@ -86,7 +86,7 @@ class SimklRepository(
         require(clientId.isNotBlank()) { "SIMKL_CLIENT_ID is missing" }
         return api.getPlayback(
             authorization = bearer(accessToken),
-            type = "shows"
+            type = "tv"
         )
     }
 
