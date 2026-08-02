@@ -150,7 +150,6 @@ fun AppRoot() {
             tagId = current.id,
             tagName = current.name,
             isKeyword = current.isKeyword,
-            mediaType = current.mediaType,
             onNavigateDetail = { type, id ->
                 screen = Screen.Detail(type, id)
             }
