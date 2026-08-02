@@ -864,18 +864,16 @@ private fun ReviewCard(review: TmdbReview, onClick: (TmdbReview) -> Unit) {
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             Text(
-                review.author ?: "Anonymous",
+                review.author,
                 style = MaterialTheme.typography.titleSmall
             )
-            review.content?.let {
-                Text(
-                    it,
-                    color = KBTextLo,
-                    maxLines = 6,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 6.dp)
-                )
-            }
+            Text(
+                review.content,
+                color = KBTextLo,
+                maxLines = 6,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 6.dp)
+            )
         }
     }
 }
@@ -889,16 +887,14 @@ private fun ReviewOverlay(review: TmdbReview, onDismiss: () -> Unit) {
     ) {
         Column(modifier = Modifier.padding(32.dp)) {
             Text(
-                review.author ?: "Anonymous",
+                review.author,
                 style = MaterialTheme.typography.headlineSmall
             )
-            review.content?.let {
-                Text(
-                    it,
-                    modifier = Modifier.padding(top = 16.dp),
-                    color = KBTextHi
-                )
-            }
+            Text(
+                review.content,
+                modifier = Modifier.padding(top = 16.dp),
+                color = KBTextHi
+            )
             KBCard(
                 onClick = onDismiss,
                 modifier = Modifier.padding(top = 20.dp)
