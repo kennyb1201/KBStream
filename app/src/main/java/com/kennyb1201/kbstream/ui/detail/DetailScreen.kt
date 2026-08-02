@@ -933,34 +933,6 @@ private fun ReviewCard(
 }
 
 @Composable
-private fun ReviewCard(
-    review: TmdbReview,
-    onClick: (TmdbReview) -> Unit
-) {
-    Card(
-        onClick = { onClick(review) },
-        colors = CardDefaults.colors(containerColor = KBSurfaceRaised, contentColor = KBTextHi),
-        modifier = Modifier.width(280.dp).padding(end = 12.dp)
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Text(
-                review.author,
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                review.content,
-                color = KBTextLo,
-                maxLines = 6,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 8.dp)
-            )
-        }
-    }
-}
-
-@Composable
 private fun ReviewOverlay(
     review: TmdbReview,
     onDismiss: () -> Unit
