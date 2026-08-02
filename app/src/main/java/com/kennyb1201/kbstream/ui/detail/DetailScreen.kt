@@ -453,11 +453,7 @@ fun DetailScreen(
                                         ) { ep: ResolvedEpisode ->
                                             EpisodeCard(
                                                 ep = ep,
-                                                isWatched = viewModel.isEpisodeWatched(
-                                                    parentId = id,
-                                                    season = selectedSeason,
-                                                    episode = ep.episodeNumber,
-                                                    episodeStreamId = ep.streamId
+                                                isWatched = true,
                                                 ),
                                                 onClick = {
                                                     val hasResumeHere = resumeInfo?.episodeStreamId == ep.streamId
