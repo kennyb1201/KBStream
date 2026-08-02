@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.theme.KBAccent
