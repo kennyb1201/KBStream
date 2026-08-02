@@ -454,7 +454,6 @@ fun DetailScreen(
                                             EpisodeCard(
                                                 ep = ep,
                                                 isWatched = true,
-                                                ),
                                                 onClick = {
                                                     val hasResumeHere = resumeInfo?.episodeStreamId == ep.streamId
                                                     val epSuffix = ep.name?.let { " - " + it } ?: ""
