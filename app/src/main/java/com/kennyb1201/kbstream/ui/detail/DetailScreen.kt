@@ -893,12 +893,12 @@ private fun CollectionCard(
                 modifier = Modifier.fillMaxWidth().height(180.dp)
             )
             Column(modifier = Modifier.padding(8.dp)) {
-                Text(
-                    part.title,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.bodyMedium
-                )
+               Text(
+    text = part.title ?: "",
+    maxLines = 2,
+    overflow = TextOverflow.Ellipsis,
+    style = MaterialTheme.typography.bodyMedium
+) 
             }
         }
     }
