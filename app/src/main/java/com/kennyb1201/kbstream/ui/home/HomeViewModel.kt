@@ -351,31 +351,48 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun refreshWatchedStatus(rails: List<Rail>) {
-        viewModelScope.launch {
-            try {
-                val items = rails
-                    .flatMap { rail -> rail.items.map { it.id to it.type } }
-                    .distinct()
+    viewModelScope.launch {
+        try {
+            val items = rails
+                .flatMap { rail ->
+                    rail.items.mapNotNull { item ->
+                        val id = item.id.takeIf { it.isNotBlank() } ?: return@mapNotNull null
 
-                Log.e("HOME_WATCHED", "refreshWatchedStatus starting, item count = ${items.size}")
+                        val rawType = item.type
+                            ?.takeIf { it.isNotBlank() }
+                            ?: rail.type
 
-                if (items.isEmpty()) return@launch
+                        val normalizedType = when (rawType.lowercase()) {
+                            "movie" -> "movie"
+                            "series", "show", "tv" -> "series"
+                            else -> return@mapNotNull null
+                        }
 
-                watchedStatusRepository.preload(items)
+                        id to normalizedType
+                    }
+                }
+                .distinct()
 
-                val newlyWatched = items
-                    .filter { (id, type) -> watchedStatusRepository.isWatchedCached(id) }
-                    .map { (id, type) -> watchedKey(id, type) }
-                    .toSet()
+            Log.e("HOME_WATCHED", "refreshWatchedStatus starting, item count = ${items.size}")
+            Log.e("HOME_WATCHED", "preload sample = ${items.take(20)}")
 
-                Log.e("HOME_WATCHED", "refreshWatchedStatus done, watched count = ${newlyWatched.size}")
-                Log.e("HOME_WATCHED", "sample watched keys = ${newlyWatched.take(10)}")
+            if (items.isEmpty()) return@launch
 
-                _watchedKeys.value = _watchedKeys.value + newlyWatched
-            } catch (e: Exception) {
-                Log.e("HOME_WATCHED", "refreshWatchedStatus failed: ${e.message}", e)
-            }
+            watchedStatusRepository.preload(items)
+
+            val newlyWatched = items
+                .filter { (id, _) -> watchedStatusRepository.isWatchedCached(id) }
+                .map { (id, type) -> watchedKey(id, type) }
+                .toSet()
+
+            Log.e("HOME_WATCHED", "refreshWatchedStatus done, watched count = ${newlyWatched.size}")
+            Log.e("HOME_WATCHED", "sample watched keys = ${newlyWatched.take(10)}")
+
+            _watchedKeys.value = newlyWatched
+        } catch (e: Exception) {
+            Log.e("HOME_WATCHED", "refreshWatchedStatus failed: ${e.message}", e)
         }
+    }
     }
 
     companion object {
