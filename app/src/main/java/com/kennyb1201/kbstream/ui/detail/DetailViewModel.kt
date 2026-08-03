@@ -70,39 +70,50 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
     fun watchedKey(id: String, type: String): String = "$type::$id"
 
     private fun refreshPosterWatchedStatus(type: String) {
-        viewModelScope.launch {
-            try {
-                val items = buildList {
-                    _collection.value?.parts.orEmpty().forEach { part ->
-                        add(part.id.toString() to "movie")
-                    }
-                    _tmdbDetail.value?.recommendations?.results.orEmpty().forEach { rec ->
-                        add(rec.id.toString() to type.lowercase())
-                    }
-                }.distinct()
-
-                if (items.isEmpty()) {
-                    _watchedKeys.value = emptySet()
-                    Log.e("KBStream", "poster watched refresh: no items")
-                    return@launch
+    viewModelScope.launch {
+        try {
+            val rawItems = buildList {
+                _collection.value?.parts.orEmpty().forEach { part ->
+                    add(part.id to "movie")
                 }
+                _tmdbDetail.value?.recommendations?.results.orEmpty().forEach { rec ->
+                    add(rec.id to type.lowercase())
+                }
+            }.distinct()
 
-                watchedStatusRepository.preload(items)
-
-                _watchedKeys.value = items
-                    .filter { (id, _) -> watchedStatusRepository.isWatchedCached(id) }
-                    .map { (id, mediaType) -> watchedKey(id, mediaType) }
-                    .toSet()
-
-                Log.e(
-                    "KBStream",
-                    "poster watched refresh items=${items.size} watched=${_watchedKeys.value.size}"
-                )
-            } catch (e: Exception) {
+            if (rawItems.isEmpty()) {
                 _watchedKeys.value = emptySet()
-                Log.e("KBStream", "poster watched refresh failed", e)
+                Log.e("KBStream", "poster watched refresh: no items")
+                return@launch
             }
+
+            val resolvedItems = rawItems.mapNotNull { (tmdbId, mediaType) ->
+                val imdb = resolveImdbId(tmdbId, mediaType)
+                imdb?.let { it to mediaType }
+            }.distinct()
+
+            if (resolvedItems.isEmpty()) {
+                _watchedKeys.value = emptySet()
+                Log.e("KBStream", "poster watched refresh: no resolvable imdb ids")
+                return@launch
+            }
+
+            watchedStatusRepository.preload(resolvedItems)
+
+            _watchedKeys.value = resolvedItems
+                .filter { (id, _) -> watchedStatusRepository.isWatchedCached(id) }
+                .map { (id, mediaType) -> watchedKey(id, mediaType) }
+                .toSet()
+
+            Log.e(
+                "KBStream",
+                "poster watched refresh resolved=${resolvedItems.size} watched=${_watchedKeys.value.size}"
+            )
+        } catch (e: Exception) {
+            _watchedKeys.value = emptySet()
+            Log.e("KBStream", "poster watched refresh failed", e)
         }
+    }
     }
 
     fun load(type: String, id: String) {
