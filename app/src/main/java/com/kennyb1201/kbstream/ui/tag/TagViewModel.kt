@@ -105,7 +105,7 @@ class TagViewModel(application: Application) : AndroidViewModel(application) {
             _watchedKeys.value = emptySet()
         }
     }
-    }
+ }
 
     fun loadGenre(tagId: Int) {
         if (currentTagId == tagId && currentMode == Mode.GENRE && _sections.value.isNotEmpty()) return
