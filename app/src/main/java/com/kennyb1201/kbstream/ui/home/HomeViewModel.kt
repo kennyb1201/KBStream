@@ -364,7 +364,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 watchedStatusRepository.preload(items)
 
                 val newlyWatched = items
-                    .filter { (id, type) -> watchedStatusRepository.isWatchedCached(id, type) }
+                    .filter { (id, type) -> watchedStatusRepository.isWatchedCached(id) }
                     .map { (id, type) -> watchedKey(id, type) }
                     .toSet()
 
