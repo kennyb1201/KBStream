@@ -43,45 +43,68 @@ class TagViewModel(application: Application) : AndroidViewModel(application) {
     fun watchedKey(id: String, type: String): String = "$type::$id"
 
     private fun refreshWatchedStatus(sections: List<PagedStudioSection>) {
-        viewModelScope.launch {
-            try {
-                if (sections.isEmpty()) {
-                    _watchedKeys.value = emptySet()
-                    return@launch
-                }
-
-                val items = sections
-                    .flatMap { it.items }
-                    .mapNotNull { studioItem ->
-                        val id = studioItem.item.id.toString()
-                        val type = studioItem.mediaType.lowercase()
-
-                        if (id.isBlank() || type.isBlank()) return@mapNotNull null
-                        id to type
-                    }
-                    .distinct()
-
-                if (items.isEmpty()) {
-                    _watchedKeys.value = emptySet()
-                    return@launch
-                }
-
-                watchedStatusRepository.preload(items)
-
-                _watchedKeys.value = items
-                    .filter { (id, _) -> watchedStatusRepository.isWatchedCached(id) }
-                    .map { (id, type) -> watchedKey(id, type) }
-                    .toSet()
-
-                Log.e(
-                    "TAG_WATCHED",
-                    "refreshWatchedStatus done, items=${items.size}, watched=${_watchedKeys.value.size}"
-                )
-            } catch (e: Exception) {
-                Log.e("TAG_WATCHED", "refreshWatchedStatus failed: ${e.message}", e)
+    viewModelScope.launch {
+        try {
+            if (sections.isEmpty()) {
                 _watchedKeys.value = emptySet()
+                return@launch
             }
+
+            val uniqueItems = sections
+                .flatMap { it.items }
+                .mapNotNull { studioItem ->
+                    val tmdbId = studioItem.item.id
+                    val mediaType = studioItem.mediaType.lowercase()
+
+                    if (tmdbId <= 0 || mediaType.isBlank()) return@mapNotNull null
+                    tmdbId to mediaType
+                }
+                .distinct()
+
+            if (uniqueItems.isEmpty()) {
+                _watchedKeys.value = emptySet()
+                return@launch
+            }
+
+            val resolved = uniqueItems.mapNotNull { (tmdbId, mediaType) ->
+                val imdbId = runCatching {
+                    repository.resolveImdbId(tmdbId, mediaType)
+                }.getOrNull()
+
+                if (imdbId.isNullOrBlank()) {
+                    null
+                } else {
+                    Triple(tmdbId, mediaType, imdbId)
+                }
+            }
+
+            if (resolved.isEmpty()) {
+                _watchedKeys.value = emptySet()
+                return@launch
+            }
+
+            watchedStatusRepository.preload(
+                resolved.map { (_, mediaType, imdbId) -> imdbId to mediaType }
+            )
+
+            _watchedKeys.value = resolved
+                .filter { (_, mediaType, imdbId) ->
+                    watchedStatusRepository.isWatchedCached(imdbId)
+                }
+                .map { (tmdbId, mediaType, _) ->
+                    watchedKey(tmdbId.toString(), mediaType)
+                }
+                .toSet()
+
+            Log.e(
+                "TAG_WATCHED",
+                "refreshWatchedStatus done, resolved=${resolved.size}, watched=${_watchedKeys.value.size}"
+            )
+        } catch (e: Exception) {
+            Log.e("TAG_WATCHED", "refreshWatchedStatus failed: ${e.message}", e)
+            _watchedKeys.value = emptySet()
         }
+    }
     }
 
     fun loadGenre(tagId: Int) {
