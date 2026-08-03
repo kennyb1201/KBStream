@@ -40,6 +40,7 @@ fun StudioScreen(
     val scope = rememberCoroutineScope()
     val sections by viewModel.sections.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
+    val watchedKeys by viewModel.watchedKeys.collectAsState()
     val firstItemFocusRequester = remember { FocusRequester() }
 
     LaunchedEffect(id) {
@@ -87,11 +88,15 @@ fun StudioScreen(
 
                                 LazyRow {
                                     itemsIndexed(section.items) { itemIndex, studioItem: StudioItem ->
+                                        val watched = viewModel.watchedKey(
+                                            studioItem.item.id.toString(),
+                                            studioItem.mediaType.lowercase()
+                                        ) in watchedKeys
                                         PosterCard(
                                             posterUrl = studioItem.item.posterPath
                                                 ?.let { "${TmdbRepository.PROFILE_BASE}$it" },
                                             contentDescription = studioItem.item.title ?: studioItem.item.name,
-                                            isWatched = false,
+                                            isWatched = watched,
                                             onClick = {
                                                 scope.launch {
                                                     val imdbId = viewModel.resolveImdbId(
