@@ -649,9 +649,9 @@ fun DetailScreen(
                                         items(items = collectionParts, key = { it.id }) { part: TmdbCollectionPart ->
                                             CollectionCard(
                                                 part = part,
-                                                isWatched = viewModel.resolveImdbId(part.id, "movie")?.let {
-                                                viewModel.watchedKey(it, "movie") in watchedKeys
-                                                } == true,
+                                                isWatched = resolvedPosterIds[viewModel.posterLookupKey(part.id, "movie")]
+                                                ?.let { imdbId -> viewModel.watchedKey(imdbId, "movie") in watchedKeys }
+                                                == true,
                                                 onClick = {
                                                     scope.launch {
                                                         val imdbId = viewModel.resolveImdbId(part.id, "movie")
@@ -685,9 +685,9 @@ fun DetailScreen(
                                         items(items = recs.take(15), key = { it.id }) { rec: TmdbRecommendationItem ->
                                             RecCard(
                                                 rec = rec,
-                                                isWatched = viewModel.resolveImdbId(part.id, "movie")?.let {
-                                                viewModel.watchedKey(it, "movie") in watchedKeys
-                                                } == true,
+                                                isWatched = resolvedPosterIds[viewModel.posterLookupKey(rec.id, type.lowercase())]
+                                                ?.let { imdbId -> viewModel.watchedKey(imdbId, type.lowercase()) in watchedKeys }
+                                                == true,
                                                 onClick = {
                                                     scope.launch {
                                                         val imdbId = viewModel.resolveImdbId(rec.id, type)
@@ -992,7 +992,7 @@ private fun RecCard(
 ) {
     PosterCard(
         posterUrl = remember(rec.posterPath) {
-            rec.posterPath?.let { TmdbRepository.PROFILE_BASE + it }
+            rec.posterPath?.let { TmdbRepository.POSTER_BASE + it }
         },
         contentDescription = rec.title ?: rec.name ?: "",
         isWatched = isWatched,
