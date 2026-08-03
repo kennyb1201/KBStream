@@ -91,12 +91,8 @@ fun StudioScreen(
         }
 )
      {
-                                        AsyncImage(
-                                            model = studioItem.item.posterPath?.let { "${TmdbRepository.PROFILE_BASE}$it" },
-                                            contentDescription = studioItem.item.title ?: studioItem.item.name,
-                                            contentScale = ContentScale.Crop,
-                                            modifier = Modifier.fillMaxSize()
-                                        )
+                                    
+                                        
                                     }
                                 }
                             }
