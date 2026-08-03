@@ -125,6 +125,7 @@ fun DetailScreen(
     val resumeInfo by viewModel.resumeInfo.collectAsState()
     val collection by viewModel.collection.collectAsState()
     val watchedKeys by viewModel.watchedKeys.collectAsState()
+    val watchedKeys by viewModel.watchedKeys.collectAsState()
     val error by viewModel.error.collectAsState()
 
     val seasons = remember(tmdbDetail) {
@@ -648,7 +649,9 @@ fun DetailScreen(
                                         items(items = collectionParts, key = { it.id }) { part: TmdbCollectionPart ->
                                             CollectionCard(
                                                 part = part,
-                                                isWatched = viewModel.watchedKey(part.id.toString(), "movie") in watchedKeys,
+                                                isWatched = resolvedPosterIds[viewModel.posterLookupKey(part.id, "movie")]?.let {
+                                                viewModel.watchedKey(it, "movie") in watchedKeys
+                                                } == true,
                                                 onClick = {
                                                     scope.launch {
                                                         val imdbId = viewModel.resolveImdbId(part.id, "movie")
@@ -682,7 +685,9 @@ fun DetailScreen(
                                         items(items = recs.take(15), key = { it.id }) { rec: TmdbRecommendationItem ->
                                             RecCard(
                                                 rec = rec,
-                                                isWatched = viewModel.watchedKey(rec.id.toString(), type.lowercase()) in watchedKeys,
+                                                isWatched = resolvedPosterIds[viewModel.posterLookupKey(rec.id, type.lowercase())]?.let {
+                                                viewModel.watchedKey(it, type.lowercase()) in watchedKeys
+                                                } == true,
                                                 onClick = {
                                                     scope.launch {
                                                         val imdbId = viewModel.resolveImdbId(rec.id, type)
