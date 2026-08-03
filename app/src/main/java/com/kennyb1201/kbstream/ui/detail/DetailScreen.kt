@@ -893,18 +893,9 @@ private fun CollectionCard(
         onClick = onClick,
         modifier = Modifier
             .width(124.dp)
-            .height(220.dp)
+            .height(180.dp)
             .padding(end = 12.dp)
-    ) {
-        Column(modifier = Modifier.padding(8.dp)) {
-            Text(
-                text = part.title ?: "",
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.bodyMedium
-            )
-        }
-    }
+    )
 }
 
 @Composable
