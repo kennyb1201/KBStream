@@ -37,61 +37,66 @@ class WatchedStatusRepository(context: Context) {
     private var simklSetsFetchedAt: Long = 0L
 
     suspend fun preload(items: List<Pair<String, String>>) {
-        val now = System.currentTimeMillis()
+    val now = System.currentTimeMillis()
 
-        val needsLookup = items
-            .distinctBy { it.first }
-            .filter { (id, _) ->
-                id.isNotBlank() && run {
-                    val cached = cache[id]
-                    cached == null || now - cached.first >= CACHE_TTL_MS
-                }
-            }
+    val simklConfigured = simklRepository.isConfigured() && simklRepository.hasToken()
+    val simklSetsStale = !simklConfigured || now - simklSetsFetchedAt >= CACHE_TTL_MS ||
+        (completedMovieImdbIds.isEmpty() && completedShowImdbIds.isEmpty())
+
+    val needsLookup = items
+        .distinctBy { it.first }
+        .filter { (id, _) ->
+            if (id.isBlank()) return@filter false
+
+            val cached = cache[id]
+            val itemCacheStale = cached == null || now - cached.first >= CACHE_TTL_MS
+
+            itemCacheStale || (simklConfigured && simklSetsStale)
+        }
+
+    Log.e(
+        "WATCHED_REPO",
+        "preload called with ${items.size} items, ${needsLookup.size} need lookup"
+    )
+
+    if (needsLookup.isEmpty()) return
+
+    Log.e("WATCHED_REPO", "simkl configured+authed = $simklConfigured")
+
+    if (simklConfigured && simklSetsStale) {
+        completedMovieImdbIds = try {
+            simklRepository.getCompletedMovieImdbIds()
+        } catch (e: Exception) {
+            Log.e("WATCHED_REPO", "getCompletedMovieImdbIds failed: ${e.message}", e)
+            emptySet()
+        }
+
+        completedShowImdbIds = try {
+            simklRepository.getCompletedShowImdbIds()
+        } catch (e: Exception) {
+            Log.e("WATCHED_REPO", "getCompletedShowImdbIds failed: ${e.message}", e)
+            emptySet()
+        }
+
+        simklSetsFetchedAt = now
 
         Log.e(
             "WATCHED_REPO",
-            "preload called with ${items.size} items, ${needsLookup.size} need lookup"
+            "simkl sets refreshed: completedMovies=${completedMovieImdbIds.size}, " +
+                "completedShows=${completedShowImdbIds.size}"
         )
+    }
 
-        if (needsLookup.isEmpty()) return
-
-        val simklConfigured = simklRepository.isConfigured() && simklRepository.hasToken()
-        Log.e("WATCHED_REPO", "simkl configured+authed = $simklConfigured")
-
-        if (simklConfigured && now - simklSetsFetchedAt >= CACHE_TTL_MS) {
-            completedMovieImdbIds = try {
-                simklRepository.getCompletedMovieImdbIds()
-            } catch (e: Exception) {
-                Log.e("WATCHED_REPO", "getCompletedMovieImdbIds failed: ${e.message}", e)
-                emptySet()
-            }
-
-            completedShowImdbIds = try {
-                simklRepository.getCompletedShowImdbIds()
-            } catch (e: Exception) {
-                Log.e("WATCHED_REPO", "getCompletedShowImdbIds failed: ${e.message}", e)
-                emptySet()
-            }
-
-            simklSetsFetchedAt = now
-
-            Log.e(
-                "WATCHED_REPO",
-                "simkl sets refreshed: completedMovies=${completedMovieImdbIds.size}, " +
-                    "completedShows=${completedShowImdbIds.size}"
-            )
+    needsLookup.forEach { (id, type) ->
+        val watched = when (type) {
+            "movie" -> isMovieLocallyWatched(id) || id in completedMovieImdbIds
+            "series" -> id in completedShowImdbIds
+            else -> false
         }
+        cache[id] = now to watched
+    }
 
-        needsLookup.forEach { (id, type) ->
-            val watched = when (type) {
-                "movie" -> isMovieLocallyWatched(id) || id in completedMovieImdbIds
-                "series" -> id in completedShowImdbIds
-                else -> false
-            }
-            cache[id] = now to watched
-        }
-
-        Log.e("WATCHED_REPO", "cache updated for ${needsLookup.size} items")
+    Log.e("WATCHED_REPO", "cache updated for ${needsLookup.size} items")
     }
 
     private suspend fun isMovieLocallyWatched(id: String): Boolean {
