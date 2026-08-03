@@ -19,16 +19,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
-import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.tmdb.StudioItem
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
-import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
+import com.kennyb1201.kbstream.ui.components.PosterCard
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -74,21 +72,25 @@ fun StudioScreen(
                             )
                             LazyRow {
                                 itemsIndexed(section.items) { itemIndex, studioItem: StudioItem ->
-                                    KBCard(
-                                        onClick = {
-                                            scope.launch {
-                                                val imdbId = viewModel.resolveImdbId(studioItem.item.id, studioItem.mediaType)
-                                                if (imdbId != null) onNavigateDetail(studioItem.mediaType, imdbId)
-                                            }
-                                        },
-                                        modifier = Modifier
-                                            .width(140.dp)
-                                            .height(210.dp)
-                                            .padding(end = 12.dp)
-                                            .let {
-                                                if (sectionIndex == 0 && itemIndex == 0) it.focusRequester(firstItemFocusRequester) else it
-                                            }
-                                    ) {
+                                    PosterCard(
+    posterUrl = studioItem.item.posterPath?.let { "${TmdbRepository.PROFILE_BASE}$it" },
+    contentDescription = studioItem.item.title ?: studioItem.item.name,
+    isWatched = false,
+    onClick = {
+        scope.launch {
+            val imdbId = viewModel.resolveImdbId(studioItem.item.id, studioItem.mediaType)
+            if (imdbId != null) onNavigateDetail(studioItem.mediaType, imdbId)
+        }
+    },
+    modifier = Modifier
+        .width(140.dp)
+        .height(210.dp)
+        .padding(end = 12.dp)
+        .let {
+            if (sectionIndex == 0 && itemIndex == 0) it.focusRequester(firstItemFocusRequester) else it
+        }
+)
+     {
                                         AsyncImage(
                                             model = studioItem.item.posterPath?.let { "${TmdbRepository.PROFILE_BASE}$it" },
                                             contentDescription = studioItem.item.title ?: studioItem.item.name,
