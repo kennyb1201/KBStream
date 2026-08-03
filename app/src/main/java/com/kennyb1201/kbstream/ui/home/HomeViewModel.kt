@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kennyb1201.kbstream.data.watched.preloadWatchedKeys
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.MetaPreview
@@ -353,37 +354,32 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private fun refreshWatchedStatus(rails: List<Rail>) {
     viewModelScope.launch {
         try {
-            val items = rails
-                .flatMap { rail ->
-                    rail.items.mapNotNull { item ->
-                        val id = item.id.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            if (rails.isEmpty()) {
+                Log.e("HOME_WATCHED", "refreshWatchedStatus skipped: no rails")
+                _watchedKeys.value = emptySet()
+                return@launch
+            }
 
-                        val rawType = item.type
-                            ?.takeIf { it.isNotBlank() }
-                            ?: rail.type
+            val metas = rails
+                .flatMap { it.items }
+                .filter { it.id.isNotBlank() }
 
-                        val normalizedType = when (rawType.lowercase()) {
-                            "movie" -> "movie"
-                            "series", "show", "tv" -> "series"
-                            else -> return@mapNotNull null
-                        }
+            if (metas.isEmpty()) {
+                Log.e("HOME_WATCHED", "refreshWatchedStatus skipped: no valid items")
+                _watchedKeys.value = emptySet()
+                return@launch
+            }
 
-                        id to normalizedType
-                    }
-                }
-                .distinct()
+            Log.e("HOME_WATCHED", "refreshWatchedStatus starting, item count = ${metas.size}")
+            Log.e(
+                "HOME_WATCHED",
+                "preload sample = ${metas.take(20).map { it.id to it.type }}"
+            )
 
-            Log.e("HOME_WATCHED", "refreshWatchedStatus starting, item count = ${items.size}")
-            Log.e("HOME_WATCHED", "preload sample = ${items.take(20)}")
-
-            if (items.isEmpty()) return@launch
-
-            watchedStatusRepository.preload(items)
-
-            val newlyWatched = items
-                .filter { (id, _) -> watchedStatusRepository.isWatchedCached(id) }
-                .map { (id, type) -> watchedKey(id, type) }
-                .toSet()
+            val newlyWatched = preloadWatchedKeys(
+                watchedStatusRepository = watchedStatusRepository,
+                items = metas
+            )
 
             Log.e("HOME_WATCHED", "refreshWatchedStatus done, watched count = ${newlyWatched.size}")
             Log.e("HOME_WATCHED", "sample watched keys = ${newlyWatched.take(10)}")
