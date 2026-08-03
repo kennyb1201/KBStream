@@ -142,7 +142,7 @@ fun ActorScreen(
                 Column(modifier = Modifier.fillMaxSize()) {
                     Row {
                         AsyncImage(
-                            model = p.profilePath?.let { TmdbRepository.PROFILEBASE + it },
+                            model = p.profilePath?.let { TmdbRepository.PROFILE_BASE + it },
                             contentDescription = p.name,
                             contentScale = ContentScale.Crop,
                             modifier = Modifier
@@ -296,7 +296,7 @@ private fun CreditCard(
             ) {
                 if (credit.posterPath != null) {
                     AsyncImage(
-                        model = TmdbRepository.POSTERBASE + credit.posterPath,
+                        model = TmdbRepository.POSTER_BASE + credit.posterPath,
                         contentDescription = credit.title ?: credit.name,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
