@@ -125,7 +125,7 @@ fun DetailScreen(
     val resumeInfo by viewModel.resumeInfo.collectAsState()
     val collection by viewModel.collection.collectAsState()
     val watchedKeys by viewModel.watchedKeys.collectAsState()
-    val watchedKeys by viewModel.watchedKeys.collectAsState()
+    val resolvedPosterIds by viewModel.resolvedPosterIds.collectAsState()
     val error by viewModel.error.collectAsState()
 
     val seasons = remember(tmdbDetail) {
