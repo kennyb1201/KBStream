@@ -645,11 +645,11 @@ fun DetailScreen(
                                             .padding(bottom = 32.dp)
                                             .focusGroup()
                                             .focusRestorer()
-                                    ) {
+                                     ) {
                                         items(items = collectionParts, key = { it.id }) { part: TmdbCollectionPart ->
                                             CollectionCard(
                                                 part = part,
-                                                isWatched = resolvedPosterIds[viewModel.posterLookupKey(part.id, "movie")]?.let {
+                                                isWatched = viewModel.resolveImdbId(part.id, "movie")?.let {
                                                 viewModel.watchedKey(it, "movie") in watchedKeys
                                                 } == true,
                                                 onClick = {
@@ -685,8 +685,8 @@ fun DetailScreen(
                                         items(items = recs.take(15), key = { it.id }) { rec: TmdbRecommendationItem ->
                                             RecCard(
                                                 rec = rec,
-                                                isWatched = resolvedPosterIds[viewModel.posterLookupKey(rec.id, type.lowercase())]?.let {
-                                                viewModel.watchedKey(it, type.lowercase()) in watchedKeys
+                                                isWatched = viewModel.resolveImdbId(part.id, "movie")?.let {
+                                                viewModel.watchedKey(it, "movie") in watchedKeys
                                                 } == true,
                                                 onClick = {
                                                     scope.launch {
@@ -891,7 +891,7 @@ private fun CollectionCard(
 ) {
     PosterCard(
         posterUrl = remember(part.posterPath) {
-            part.posterPath?.let { TmdbRepository.PROFILE_BASE + it }
+            part.posterPath?.let { TmdbRepository.POSTER_BASE + it }
         },
         contentDescription = part.title ?: "",
         isWatched = isWatched,
