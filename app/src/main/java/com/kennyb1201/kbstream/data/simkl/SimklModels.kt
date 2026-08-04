@@ -27,11 +27,13 @@ data class SimklActivitiesResponse(
 
 @JsonClass(generateAdapter = true)
 data class SimklPlaybackIds(
+    @JsonClass(generateAdapter = true)
+data class SimklPlaybackIds(
     @Json(name = "simkl") val simkl: Int?,
     @Json(name = "slug") val slug: String?,
     @Json(name = "imdb") val imdb: String?,
-    @Json(name = "tmdb") val tmdb: String?,
-    @Json(name = "tvdb") val tvdb: String?,
+    @Json(name = "tmdb") val tmdb: Int?,
+    @Json(name = "tvdb") val tvdb: Int?,
     @Json(name = "tvdbslug") val tvdbSlug: String?,
     @Json(name = "traktslug") val traktSlug: String?
 )
