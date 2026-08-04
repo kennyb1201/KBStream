@@ -26,31 +26,55 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
     val debug: StateFlow<List<String>> = _debug.asStateFlow()
 
     fun load(contentType: String, streamId: String) {
-        viewModelScope.launch {
-            _isLoading.value = true
-            val allStreams = mutableListOf<Stream>()
-            val debugLines = mutableListOf<String>()
-            val addons = addonManager.getInstalledAddons()
-            val streamAddons = addons.filter { it.resources.contains("stream") }
+    viewModelScope.launch {
+        _isLoading.value = true
+        _streams.value = emptyList()
+        _debug.value = emptyList()
 
-            if (streamAddons.isEmpty()) {
-                debugLines.add("No installed addon offers a 'stream' resource -- add one via Manage Add-ons.")
-            }
+        val addons = addonManager.getInstalledAddons()
+        val streamAddons = addons.filter { it.resources.contains("stream") }
 
-            for (addon in streamAddons) {
-                try {
-                    val baseUrl = addon.manifestUrl.removeSuffix("/manifest.json")
-                    val result = repository.getStreams(baseUrl, contentType, streamId)
-                    debugLines.add("${addon.name}: ${result.size} result(s) for $contentType/$streamId")
-                    allStreams += result
-                } catch (e: Exception) {
-                    debugLines.add("${addon.name}: FAILED -- ${e.message}")
+        val debugLines = mutableListOf<String>()
+        if (streamAddons.isEmpty()) {
+            debugLines.add("No installed addon offers a 'stream' resource -- add one via Manage Add-ons.")
+            _debug.value = debugLines
+            _isLoading.value = false
+            return@launch
+        }
+
+        val results = kotlinx.coroutines.supervisorScope {
+            streamAddons.map { addon ->
+                async {
+                    try {
+                        val baseUrl = addon.manifestUrl.removeSuffix("/manifest.json")
+                        val result = repository.getStreams(baseUrl, contentType, streamId)
+                        Pair(addon.name, result)
+                    } catch (e: Exception) {
+                        Pair(addon.name, e)
+                    }
+                }
+            }.awaitAll()
+        }
+
+        val allStreams = mutableListOf<Stream>()
+
+        results.forEach { outcome ->
+            when (outcome.second) {
+                is List<*> -> {
+                    @Suppress("UNCHECKED_CAST")
+                    val streamList = outcome.second as List<Stream>
+                    debugLines.add("${outcome.first}: ${streamList.size} result(s) for $contentType/$streamId")
+                    allStreams += streamList
+                }
+                is Exception -> {
+                    debugLines.add("${outcome.first}: FAILED -- ${(outcome.second as Exception).message}")
                 }
             }
-
-            _debug.value = debugLines
-            _streams.value = StreamRanker.rank(allStreams)
-            _isLoading.value = false
         }
+
+        _debug.value = debugLines
+        _streams.value = StreamRanker.rank(allStreams)
+        _isLoading.value = false
     }
+}
 }
