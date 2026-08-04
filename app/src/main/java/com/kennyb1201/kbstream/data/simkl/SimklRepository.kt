@@ -327,7 +327,7 @@ class SimklRepository(
         return isCompleted
     }
 
-    suspend fun getWatchedEpisodesForShowByImdb(
+suspend fun getWatchedEpisodesForShowByImdb(
     imdbId: String,
     tmdbId: Int? = null,
     accessToken: String = requireAccessToken()
@@ -379,9 +379,47 @@ class SimklRepository(
                 title.contains("The Bear", ignoreCase = true)
         }
         .take(10)
+        .map { item ->
+            "${item.show?.title}|imdb=${item.show?.ids?.imdb}|tmdb=${item.show?.ids?.tmdb}|simkl=${item.show?.ids?.simkl}|seasons=${item.seasons.size}"
+        }
 
     Log.e(
         "SIMKL_REPO",
+        "getAllShowItems totalShows=${body.shows.size} tedLassoLike=$tedLassoLike"
+    )
+
+    val match = body.shows.firstOrNull { item ->
+        item.show?.ids?.imdb == imdbId ||
+            (tmdbId != null && item.show?.ids?.tmdb == tmdbId)
+    }
+
+    Log.e(
+        "SIMKL_REPO",
+        "getAllShowItems lookup imdb=$imdbId tmdbId=$tmdbId found=${match != null} matchTitle=${match?.show?.title} matchImdb=${match?.show?.ids?.imdb} matchTmdb=${match?.show?.ids?.tmdb} matchSimkl=${match?.show?.ids?.simkl} seasons=${match?.seasons?.size ?: 0}"
+    )
+
+    val pairs = match?.seasons
+        ?.flatMap { season ->
+            val seasonNumber = season.number
+            season.episodes.mapNotNull { ep ->
+                val episodeNumber = ep.number ?: ep.episode
+                if (seasonNumber != null && episodeNumber != null) {
+                    seasonNumber to episodeNumber
+                } else {
+                    null
+                }
+            }
+        }
+        ?.toSet()
+        .orEmpty()
+
+    Log.e(
+        "SIMKL_REPO",
+        "getAllShowItems episodes imdb=$imdbId count=${pairs.size} sample=${pairs.take(30)}"
+    )
+
+    return pairs
+}
 suspend fun getWatchedEpisodesForShowByImdb(
     imdbId: String,
     tmdbId: Int? = null,
