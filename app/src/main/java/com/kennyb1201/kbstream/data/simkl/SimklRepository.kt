@@ -334,6 +334,16 @@ class SimklRepository(
 ): Set<Pair<Int, Int>> {
     if (imdbId.isBlank()) return emptySet()
 
+    val bulkDebug = getWatchedBulkImport(
+        showImdbIds = listOf(imdbId),
+        accessToken = accessToken
+    )
+
+    Log.e(
+        "SIMKL_REPO",
+        "bulk debug imdb=$imdbId watchedShowImdbIds=${bulkDebug.watchedShowImdbIds} watchedShowSimklIds=${bulkDebug.watchedShowSimklIds} watchedEpisodesKeys=${bulkDebug.watchedEpisodesByShowKey.keys} watchedEpisodes=${bulkDebug.watchedEpisodesByShowKey["imdb:$imdbId"]}"
+    )
+
     val response = try {
         api.getAllShowItems(
             authorization = bearer(accessToken),
@@ -362,6 +372,19 @@ class SimklRepository(
         return emptySet()
     }
 
+    val tedLassoLike = body.shows
+        .filter { item ->
+            val title = item.show?.title.orEmpty()
+            title.contains("Ted Lasso", ignoreCase = true) ||
+                title.contains("The Bear", ignoreCase = true)
+        }
+        .take(10)
+
+    Log.e(
+        "SIMKL_REPO",
+        "getAllShowItems totalShows=${body.shows.size} tedLassoLike=${tedLassoLike.map { "${it.show?.title}|imdb=${it.show?.ids?.imdb}|tmdb=${it.show?.ids?.tmdb}|simkl=${it.show?.ids?.simkl}|seasons=${it.seasons.size}" }}"
+    )
+
     val match = body.shows.firstOrNull { item ->
         item.show?.ids?.imdb == imdbId ||
             (tmdbId != null && item.show?.ids?.tmdb == tmdbId)
@@ -369,7 +392,7 @@ class SimklRepository(
 
     Log.e(
         "SIMKL_REPO",
-        "getAllShowItems lookup imdb=$imdbId tmdbId=$tmdbId totalShows=${body.shows.size} found=${match != null} matchImdb=${match?.show?.ids?.imdb} matchTmdb=${match?.show?.ids?.tmdb} title=${match?.show?.title}"
+        "getAllShowItems lookup imdb=$imdbId tmdbId=$tmdbId found=${match != null} matchTitle=${match?.show?.title} matchImdb=${match?.show?.ids?.imdb} matchTmdb=${match?.show?.ids?.tmdb} matchSimkl=${match?.show?.ids?.simkl} seasons=${match?.seasons?.size ?: 0}"
     )
 
     val pairs = match?.seasons
