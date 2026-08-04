@@ -185,14 +185,18 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
                 }
 
                 val simklDeferred = async {
-                    if (type == "series" && simklRepository.isConfigured() && simklRepository.hasToken()) {
-                        runCatching {
-                            simklRepository.getWatchedEpisodesForShowByImdb(id)
-                        }
-                    } else {
-                        Result.success(emptySet())
-                    }
-                }
+    if (type == "series" && simklRepository.isConfigured() && simklRepository.hasToken()) {
+        val tmdbShowId = tmdbDeferred.await().getOrNull()?.id
+        runCatching {
+            simklRepository.getWatchedEpisodesForShowByImdb(
+                imdbId = id,
+                tmdbId = tmdbShowId
+            )
+        }
+    } else {
+        Result.success(emptySet())
+    }
+}
 
                 val addons = addonsDeferred.await()
                 val metaAddon = addons.firstOrNull { it.resources.contains("meta") }
