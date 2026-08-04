@@ -260,7 +260,15 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
                 val simklCompleted = simklDeferred.await()
                     .getOrDefault(emptySet())
                 _simklWatchedEpisodes.value = simklCompleted
-                Log.e("KBStream", "simkl completed episodes for $id = $simklCompleted")
+                                _simklSeriesWatched.value =
+                    type == "series" && simklRepository.isConfigured() && simklRepository.hasToken() &&
+                        simklRepository.isShowWatchedByImdb(id)
+
+                Log.e("KBStream", "simkl series watched fallback for $id = ${_simklSeriesWatched.value}")
+                Log.e(
+                    "KBStream",
+                    "series fallback check imdbId=$id simklSeriesWatched=${_simklSeriesWatched.value} simklEpisodes=${_simklWatchedEpisodes.value.size}"
+                )
 
                 _simklSeriesWatched.value =
                     type == "series" && simklRepository.isConfigured() && simklRepository.hasToken() &&
