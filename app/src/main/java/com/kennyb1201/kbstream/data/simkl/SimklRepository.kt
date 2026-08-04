@@ -363,7 +363,6 @@ class SimklRepository(
     }
 
     suspend fun getWatchedEpisodesForShowByImdb(
-    suspend fun getWatchedEpisodesForShowByImdb(
     imdbId: String,
     accessToken: String = requireAccessToken()
 ): Set<Pair<Int, Int>> {
