@@ -364,9 +364,10 @@ class SimklRepository(
 
 
         suspend fun getWatchedEpisodesForShowByImdb(
-        imdbId: String,
-        accessToken: String = requireAccessToken()
-    ): Set<Pair<Int, Int>> {
+    imdbId: String,
+    tmdbId: Int? = null,
+    accessToken: String = requireAccessToken()
+): Set<Pair<Int, Int>> {
         if (imdbId.isBlank()) return emptySet()
 
         val watchingResponse = try {
