@@ -428,9 +428,9 @@ Log.e(
     val tmdbIdString = tmdbId?.toString()
 
     fun matchesShow(item: SimklWatchingShowDetailedItem): Boolean {
-        return item.show?.ids?.imdb == imdbId ||
-            (!tmdbIdString.isNullOrBlank() && item.show?.ids?.tmdb == tmdbIdString)
-    }
+    return item.show?.ids?.imdb == imdbId ||
+        (tmdbId != null && item.show?.ids?.tmdb == tmdbId)
+}
 
     suspend fun findInWatching(): SimklWatchingShowDetailedItem? {
     var page = 1
