@@ -419,9 +419,9 @@ val completedShow = completedResponse?.shows?.firstOrNull {
 }
 
         Log.e(
-            "SIMKL_REPO",
-            "episode lookup imdb=$imdbId watchingFound=${watchingShow != null} completedFound=${completedShow != null}"
-        )
+    "SIMKL_REPO",
+    "episode lookup imdb=$imdbId tmdbId=$tmdbId watchingFound=${watchingShow != null} completedFound=${completedShow != null} watchingMatchImdb=${watchingShow?.show?.ids?.imdb} watchingMatchTmdb=${watchingShow?.show?.ids?.tmdb} completedMatchImdb=${completedShow?.show?.ids?.imdb} completedMatchTmdb=${completedShow?.show?.ids?.tmdb}"
+)
 
         fun episodesFrom(
             tag: String,
