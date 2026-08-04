@@ -428,28 +428,24 @@ class SimklRepository(
             null
         }
 
-        val completedResponse = try {
-            api.getCompletedShowsDetailed(
-                authorization = bearer(accessToken),
-                dateFrom = null,
-                extended = "full",
-                includeAllEpisodes = "yes",
-                episodeWatchedAt = "yes"
-            )
-        } catch (e: Exception) {
-            Log.e("SIMKL_REPO", "getCompletedShowsDetailed failed for imdb=$imdbId: ${e.message}", e)
-            null
-        }
+val completedResponse = try {
+    api.getCompletedShowsDetailed(
+        authorization = bearer(accessToken),
+        dateFrom = null,
+        extended = "full",
+        includeAllEpisodes = "yes",
+        episodeWatchedAt = "yes",
+        page = 1
+    )
+} catch (e: Exception) {
+    Log.e("SIMKL_REPO", "getCompletedShowsDetailed failed for imdb=$imdbId: ${e.message}", e)
+    null
+}
 
-        Log.e(
-            "SIMKL_REPO",
-            "watching detailed imdb sample=${watchingResponse?.shows?.mapNotNull { it.show?.ids?.imdb }?.take(20)}"
-        )
-
-        Log.e(
-            "SIMKL_REPO",
-            "completed detailed imdb sample=${completedResponse?.shows?.mapNotNull { it.show?.ids?.imdb }?.take(20)}"
-        )
+Log.e(
+    "SIMKL_REPO",
+    "completed detailed imdb sample=${completedResponse?.body()?.shows?.mapNotNull { it.show?.ids?.imdb }?.take(20)}"
+)
 
         val tmdbIdString = tmdbId?.toString()
 
@@ -458,15 +454,10 @@ class SimklRepository(
                 (!tmdbIdString.isNullOrBlank() && it.show?.ids?.tmdb == tmdbIdString)
         }
 
-        val completedShow = completedResponse?.shows?.firstOrNull {
-            it.show?.ids?.imdb == imdbId ||
-                (!tmdbIdString.isNullOrBlank() && it.show?.ids?.tmdb == tmdbIdString)
-        }
-
-        Log.e(
-            "SIMKL_REPO",
-            "episode lookup imdb=$imdbId tmdbId=$tmdbId watchingFound=${watchingShow != null} completedFound=${completedShow != null} watchingMatchImdb=${watchingShow?.show?.ids?.imdb} watchingMatchTmdb=${watchingShow?.show?.ids?.tmdb} completedMatchImdb=${completedShow?.show?.ids?.imdb} completedMatchTmdb=${completedShow?.show?.ids?.tmdb}"
-        )
+        val completedShow = completedResponse?.body()?.shows?.firstOrNull {
+    it.show?.ids?.imdb == imdbId ||
+        (!tmdbIdString.isNullOrBlank() && it.show?.ids?.tmdb == tmdbIdString)
+}
 
         fun episodesFrom(
             tag: String,
