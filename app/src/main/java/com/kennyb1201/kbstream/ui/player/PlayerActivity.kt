@@ -183,6 +183,11 @@ fun PlayerScreen(
                 completedAt = if (isCompleted) now else null
             )
 
+            
+Log.e(
+    "KBStream",
+    "save history historyId=${entry.id} parentId=${entry.parentId} type=${entry.type} season=${entry.season} episode=${entry.episode} episodeStreamId=${entry.episodeStreamId} positionMs=${entry.positionMs} isCompleted=${entry.isCompleted}"
+)
             withContext(Dispatchers.IO) {
                 dao.upsert(entry)
             }
