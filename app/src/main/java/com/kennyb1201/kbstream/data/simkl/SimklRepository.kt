@@ -363,6 +363,7 @@ class SimklRepository(
     }
 
     suspend fun getWatchedEpisodesForShowByImdb(
+    suspend fun getWatchedEpisodesForShowByImdb(
     imdbId: String,
     accessToken: String = requireAccessToken()
 ): Set<Pair<Int, Int>> {
@@ -436,6 +437,19 @@ class SimklRepository(
     )
 
     return merged
+    }
+
+    val watchingPairs = episodesFrom("watching", watchingShow)
+    val completedPairs = episodesFrom("completed", completedShow)
+    val merged = watchingPairs + completedPairs
+
+    Log.e(
+        "SIMKL_REPO",
+        "merged watched episodes for imdb=$imdbId total=${merged.size} sample=${merged.take(30)}"
+    )
+
+    return merged
+        
 }
 
 fun episodesFrom(show: SimklWatchingShowDetailedItem?): Set<Pair<Int, Int>> {
