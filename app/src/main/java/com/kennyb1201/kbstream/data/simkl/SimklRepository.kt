@@ -423,34 +423,62 @@ suspend fun getWatchedEpisodesForShowByImdb(
     }
 
     suspend fun findInWatching(): SimklWatchingShowDetailedItem? {
-        val firstPage = try {
+    var page = 1
+
+    while (true) {
+        val response = try {
             api.getWatchingShowsDetailed(
                 authorization = bearer(accessToken),
                 dateFrom = null,
                 extended = "full",
                 includeAllEpisodes = "yes",
-                episodeWatchedAt = "yes"
+                episodeWatchedAt = "yes",
+                page = page
             )
         } catch (e: Exception) {
-            Log.e("SIMKL_REPO", "getWatchingShowsDetailed failed for imdb=$imdbId: ${e.message}", e)
+            Log.e("SIMKL_REPO", "getWatchingShowsDetailed failed for imdb=$imdbId page=$page: ${e.message}", e)
             return null
         }
 
-        firstPage.shows.firstOrNull(::matchesShow)?.let { found ->
+        if (!response.isSuccessful) {
+            val errorText = try {
+                response.errorBody()?.string()
+            } catch (e: Exception) {
+                "unreadable: ${e.message}"
+            }
+            Log.e("SIMKL_REPO", "getWatchingShowsDetailed page=$page failed body: $errorText")
+            return null
+        }
+
+        val body = response.body()
+        if (body == null) {
+            Log.e("SIMKL_REPO", "getWatchingShowsDetailed page=$page body was null")
+            return null
+        }
+
+        body.shows.firstOrNull(::matchesShow)?.let { found ->
             Log.e(
                 "SIMKL_REPO",
-                "watching match found on first page imdb=$imdbId tmdbId=$tmdbId matchImdb=${found.show?.ids?.imdb} matchTmdb=${found.show?.ids?.tmdb}"
+                "watching match found on page=$page imdb=$imdbId tmdbId=$tmdbId matchImdb=${found.show?.ids?.imdb} matchTmdb=${found.show?.ids?.tmdb}"
             )
             return found
         }
 
+        val pageCount = response.headers()["X-Pagination-Page-Count"]?.toIntOrNull()
+        val currentPage = response.headers()["X-Pagination-Page"]?.toIntOrNull()
+
         Log.e(
             "SIMKL_REPO",
-            "watching first page had no match for imdb=$imdbId tmdbId=$tmdbId sample=${firstPage.shows.mapNotNull { it.show?.ids?.imdb }.take(20)}"
+            "watching page=$page currentPage=$currentPage pageCount=$pageCount no match yet for imdb=$imdbId"
         )
 
-        return null
+        if (pageCount == null || currentPage == null || currentPage >= pageCount) {
+            return null
+        }
+
+        page += 1
     }
+}
 
     suspend fun findInCompleted(): SimklWatchingShowDetailedItem? {
         var page = 1
