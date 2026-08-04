@@ -128,6 +128,7 @@ fun DetailScreen(
     val resolvedPosterIds by viewModel.resolvedPosterIds.collectAsState()
     val completedEpisodeIds by viewModel.completedEpisodeIds.collectAsState()
     val watchedEpisodeKeys by viewModel.watchedEpisodeKeys.collectAsState()
+    val simklSeriesWatched by viewModel.simklSeriesWatched.collectAsState()
     val error by viewModel.error.collectAsState()
 
     val seasons = remember(tmdbDetail) {
