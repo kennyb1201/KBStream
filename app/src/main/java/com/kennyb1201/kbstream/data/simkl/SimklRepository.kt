@@ -1041,4 +1041,4 @@ suspend fun getWatchedEpisodesForShowByImdb(
         private const val PREFS_NAME = "simkl_auth"
         private const val KEY_ACCESS_TOKEN = "access_token"
     }
-}
+
