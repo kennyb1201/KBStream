@@ -415,6 +415,16 @@ suspend fun getWatchedEpisodesForShowByImdb(
 ): Set<Pair<Int, Int>> {
     if (imdbId.isBlank()) return emptySet()
 
+    val bulkDebug = getWatchedBulkImport(
+    showImdbIds = listOf(imdbId),
+    accessToken = accessToken
+)
+
+Log.e(
+    "SIMKL_REPO",
+    "bulk debug imdb=$imdbId watchedShowImdbIds=${bulkDebug.watchedShowImdbIds} watchedShowSimklIds=${bulkDebug.watchedShowSimklIds} watchedEpisodesKeys=${bulkDebug.watchedEpisodesByShowKey.keys} watchedEpisodes=${bulkDebug.watchedEpisodesByShowKey["imdb:$imdbId"]}"
+)
+
     val tmdbIdString = tmdbId?.toString()
 
     fun matchesShow(item: SimklWatchingShowDetailedItem): Boolean {
