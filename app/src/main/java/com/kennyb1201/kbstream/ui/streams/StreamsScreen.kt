@@ -23,6 +23,7 @@ import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.player.PlayerActivity
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
+import android.util.Log
 
 @Composable
 fun StreamsScreen(
@@ -55,6 +56,11 @@ fun StreamsScreen(
 
     fun playStream(stream: Stream) {
         val url = stream.url ?: return
+
+        Log.e(
+    "KBStream",
+    "launch player parentId=$parentId parentType=$parentType contentType=$contentType season=$season episode=$episode streamId=$streamId resumePositionMs=$resumePositionMs"
+)
         val intent = Intent(context, PlayerActivity::class.java).apply {
             putExtra("stream_url", url)
             putExtra("parent_id", parentId)
