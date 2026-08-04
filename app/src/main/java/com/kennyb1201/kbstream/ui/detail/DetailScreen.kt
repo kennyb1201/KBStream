@@ -126,6 +126,8 @@ fun DetailScreen(
     val collection by viewModel.collection.collectAsState()
     val watchedKeys by viewModel.watchedKeys.collectAsState()
     val resolvedPosterIds by viewModel.resolvedPosterIds.collectAsState()
+    val completedEpisodeIds by viewModel.completedEpisodeIds.collectAsState()
+    val watchedEpisodeKeys by viewModel.watchedEpisodeKeys.collectAsState()
     val error by viewModel.error.collectAsState()
 
     val seasons = remember(tmdbDetail) {
@@ -456,11 +458,13 @@ fun DetailScreen(
                                         ) { ep: ResolvedEpisode ->
                                             EpisodeCard(
                                                 ep = ep,
-                                                isWatched = viewModel.isEpisodeWatched(
-                                                    parentId = id,
-                                                    season = selectedSeason,
-                                                    episode = ep.episodeNumber,
-                                                    episodeStreamId = ep.streamId
+                                                isWatched = computeEpisodeWatched(
+                                                parentId = id,
+                                                season = selectedSeason,
+                                                episode = ep.episodeNumber,
+                                                episodeStreamId = ep.streamId,
+                                                completedIds = completedEpisodeIds,
+                                                watchedKeys = watchedEpisodeKeys
                                                 ),
                                                 onClick = {
                                                     val hasResumeHere = resumeInfo?.episodeStreamId == ep.streamId
