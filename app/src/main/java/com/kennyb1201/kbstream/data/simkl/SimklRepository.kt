@@ -403,24 +403,23 @@ class SimklRepository(
                 "foundInCompleted=${completedShow != null}"
         )
 
-        fun episodesFrom(show: SimklWatchingShowDetailedItem?): Set<Pair<Int, Int>> {
-            return show?.seasons
-                ?.flatMap { season ->
-                    val seasonNumber = season.number
-                    season.episodes.mapNotNull { ep ->
-                        val episodeNumber = ep.number ?: ep.episode
-                        val watchedAt = ep.watchedAt
+fun episodesFrom(show: SimklWatchingShowDetailedItem?): Set<Pair<Int, Int>> {
+    return show?.seasons
+        ?.flatMap { season ->
+            val seasonNumber = season.number
+            season.episodes.mapNotNull { ep ->
+                val episodeNumber = ep.number ?: ep.episode
 
-                        if (seasonNumber != null && episodeNumber != null && !watchedAt.isNullOrBlank()) {
-                            seasonNumber to episodeNumber
-                        } else {
-                            null
-                        }
-                    }
+                if (seasonNumber != null && episodeNumber != null) {
+                    seasonNumber to episodeNumber
+                } else {
+                    null
                 }
-                ?.toSet()
-                .orEmpty()
+            }
         }
+        ?.toSet()
+        .orEmpty()
+}
 
         val merged = episodesFrom(watchingShow) + episodesFrom(completedShow)
         Log.e("SIMKL_REPO", "merged watched episodes for imdb=$imdbId = $merged")
