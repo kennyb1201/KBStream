@@ -363,45 +363,80 @@ class SimklRepository(
     }
 
     suspend fun getWatchedEpisodesForShowByImdb(
-        imdbId: String,
-        accessToken: String = requireAccessToken()
-    ): Set<Pair<Int, Int>> {
-        if (imdbId.isBlank()) return emptySet()
+    imdbId: String,
+    accessToken: String = requireAccessToken()
+): Set<Pair<Int, Int>> {
+    if (imdbId.isBlank()) return emptySet()
 
-        val watchingResponse = try {
-            api.getWatchingShowsDetailed(
-                authorization = bearer(accessToken),
-                dateFrom = null,
-                extended = "full",
-                includeAllEpisodes = "yes",
-                episodeWatchedAt = "yes"
-            )
-        } catch (e: Exception) {
-            Log.e("SIMKL_REPO", "getWatchingShowsDetailed failed for imdb=$imdbId: ${e.message}", e)
-            null
-        }
+    val watchingResponse = try {
+        api.getWatchingShowsDetailed(
+            authorization = bearer(accessToken),
+            dateFrom = null,
+            extended = "full",
+            includeAllEpisodes = "yes",
+            episodeWatchedAt = "yes"
+        )
+    } catch (e: Exception) {
+        Log.e("SIMKL_REPO", "getWatchingShowsDetailed failed for imdb=$imdbId: ${e.message}", e)
+        null
+    }
 
-        val completedResponse = try {
-            api.getCompletedShowsDetailed(
-                authorization = bearer(accessToken),
-                dateFrom = null,
-                extended = "full",
-                includeAllEpisodes = "yes",
-                episodeWatchedAt = "yes"
-            )
-        } catch (e: Exception) {
-            Log.e("SIMKL_REPO", "getCompletedShowsDetailed failed for imdb=$imdbId: ${e.message}", e)
-            null
-        }
+    val completedResponse = try {
+        api.getCompletedShowsDetailed(
+            authorization = bearer(accessToken),
+            dateFrom = null,
+            extended = "full",
+            includeAllEpisodes = "yes",
+            episodeWatchedAt = "yes"
+        )
+    } catch (e: Exception) {
+        Log.e("SIMKL_REPO", "getCompletedShowsDetailed failed for imdb=$imdbId: ${e.message}", e)
+        null
+    }
 
-        val watchingShow = watchingResponse?.shows?.firstOrNull { it.show?.ids?.imdb == imdbId }
-        val completedShow = completedResponse?.shows?.firstOrNull { it.show?.ids?.imdb == imdbId }
+    val watchingShow = watchingResponse?.shows?.firstOrNull { it.show?.ids?.imdb == imdbId }
+    val completedShow = completedResponse?.shows?.firstOrNull { it.show?.ids?.imdb == imdbId }
+
+    Log.e(
+        "SIMKL_REPO",
+        "episode lookup imdb=$imdbId watchingFound=${watchingShow != null} completedFound=${completedShow != null}"
+    )
+
+    fun episodesFrom(tag: String, show: SimklWatchingShowDetailedItem?): Set<Pair<Int, Int>> {
+        val pairs = show?.seasons
+            ?.flatMap { season ->
+                val seasonNumber = season.number
+                season.episodes.mapNotNull { ep ->
+                    val episodeNumber = ep.number ?: ep.episode
+                    if (seasonNumber != null && episodeNumber != null) {
+                        seasonNumber to episodeNumber
+                    } else {
+                        null
+                    }
+                }
+            }
+            ?.toSet()
+            .orEmpty()
 
         Log.e(
             "SIMKL_REPO",
-            "detailed episode lookup imdb=$imdbId: foundInWatching=${watchingShow != null}, " +
-                "foundInCompleted=${completedShow != null}"
+            "$tag imdb=$imdbId seasons=${show?.seasons?.size ?: 0} pairs=${pairs.size} sample=${pairs.take(20)}"
         )
+
+        return pairs
+    }
+
+    val watchingPairs = episodesFrom("watching", watchingShow)
+    val completedPairs = episodesFrom("completed", completedShow)
+    val merged = watchingPairs + completedPairs
+
+    Log.e(
+        "SIMKL_REPO",
+        "merged watched episodes for imdb=$imdbId total=${merged.size} sample=${merged.take(30)}"
+    )
+
+    return merged
+}
 
 fun episodesFrom(show: SimklWatchingShowDetailedItem?): Set<Pair<Int, Int>> {
     return show?.seasons
