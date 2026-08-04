@@ -77,4 +77,15 @@ interface SimklApiService {
         @Header("Authorization") authorization: String,
         @Body body: SimklWatchedBulkRequest
     ): Response<ResponseBody>
+
+    @GET("sync/all-items/shows")
+suspend fun getAllShowItems(
+    @Header("Authorization") authorization: String,
+    @Query("extended") extended: String = "full",
+    @Query("include_all_episodes") includeAllEpisodes: String = "original",
+    @Query("episode_watched_at") episodeWatchedAt: String = "yes"
+    ): Response<SimklAllShowsResponse>
+    
 }
+
+
