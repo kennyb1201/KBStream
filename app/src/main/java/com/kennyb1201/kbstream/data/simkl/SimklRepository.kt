@@ -363,7 +363,7 @@ class SimklRepository(
     }
 
 
-    suspend fun getWatchedEpisodesForShowByImdb(
+        suspend fun getWatchedEpisodesForShowByImdb(
         imdbId: String,
         accessToken: String = requireAccessToken()
     ): Set<Pair<Int, Int>> {
@@ -394,6 +394,16 @@ class SimklRepository(
             Log.e("SIMKL_REPO", "getCompletedShowsDetailed failed for imdb=$imdbId: ${e.message}", e)
             null
         }
+
+        Log.e(
+            "SIMKL_REPO",
+            "watching detailed imdb sample=${watchingResponse?.shows?.mapNotNull { it.show?.ids?.imdb }?.take(20)}"
+        )
+
+        Log.e(
+            "SIMKL_REPO",
+            "completed detailed imdb sample=${completedResponse?.shows?.mapNotNull { it.show?.ids?.imdb }?.take(20)}"
+        )
 
         val watchingShow = watchingResponse?.shows?.firstOrNull { it.show?.ids?.imdb == imdbId }
         val completedShow = completedResponse?.shows?.firstOrNull { it.show?.ids?.imdb == imdbId }
