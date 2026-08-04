@@ -406,8 +406,17 @@ class SimklRepository(
             "completed detailed imdb sample=${completedResponse?.shows?.mapNotNull { it.show?.ids?.imdb }?.take(20)}"
         )
 
-        val watchingShow = watchingResponse?.shows?.firstOrNull { it.show?.ids?.imdb == imdbId }
-        val completedShow = completedResponse?.shows?.firstOrNull { it.show?.ids?.imdb == imdbId }
+        val tmdbIdString = tmdbId?.toString()
+
+val watchingShow = watchingResponse?.shows?.firstOrNull {
+    it.show?.ids?.imdb == imdbId ||
+        (!tmdbIdString.isNullOrBlank() && it.show?.ids?.tmdb == tmdbIdString)
+}
+
+val completedShow = completedResponse?.shows?.firstOrNull {
+    it.show?.ids?.imdb == imdbId ||
+        (!tmdbIdString.isNullOrBlank() && it.show?.ids?.tmdb == tmdbIdString)
+}
 
         Log.e(
             "SIMKL_REPO",
