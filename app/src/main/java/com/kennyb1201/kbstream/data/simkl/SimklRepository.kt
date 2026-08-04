@@ -296,19 +296,28 @@ class SimklRepository(
             .toSet()
     }
 
-    suspend fun isMovieWatchedByImdb(
-        imdbId: String,
-        accessToken: String = requireAccessToken()
-    ): Boolean {
-        if (imdbId.isBlank()) return false
+    suspend fun isShowWatchedByImdb(
+    imdbId: String,
+    tmdbId: Int? = null,
+    accessToken: String = requireAccessToken()
+): Boolean {
+    if (imdbId.isBlank()) return false
 
-        val result = getWatchedBulkImport(
-            movieImdbIds = listOf(imdbId),
-            accessToken = accessToken
-        )
+    val watchedPairs = getWatchedEpisodesForShowByImdb(
+        imdbId = imdbId,
+        tmdbId = tmdbId,
+        accessToken = accessToken
+    )
 
-        return imdbId in result.watchedMovieImdbIds
-    }
+    val isWatched = watchedPairs.isNotEmpty()
+
+    Log.e(
+        "SIMKL_REPO",
+        "isShowWatchedByImdb imdb=$imdbId watched=$isWatched episodeCount=${watchedPairs.size}"
+    )
+
+    return isWatched
+}
 
     suspend fun isShowWatchedByImdb(
         imdbId: String,
