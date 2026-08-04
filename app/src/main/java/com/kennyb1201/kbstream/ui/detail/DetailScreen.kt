@@ -453,35 +453,44 @@ fun DetailScreen(
                                             .focusRestorer()
                                     ) {
                                         items(
-                                            items = episodes,
-                                            key = { it.streamId }
-                                        ) { ep: ResolvedEpisode ->
-                                            EpisodeCard(
-                                                ep = ep,
-                                                isWatched = computeEpisodeWatched(
-                                                parentId = id,
-                                                season = selectedSeason,
-                                                episode = ep.episodeNumber,
-                                                episodeStreamId = ep.streamId,
-                                                completedIds = completedEpisodeIds,
-                                                watchedKeys = watchedEpisodeKeys
-                                                ),
-                                                onClick = {
-                                                    val hasResumeHere = resumeInfo?.episodeStreamId == ep.streamId
-                                                    val epSuffix = ep.name?.let { " - " + it } ?: ""
-                                                    val target = StreamsTarget(
-                                                        contentType = "series",
-                                                        streamId = ep.streamId,
-                                                        title = displayName + " · E" + ep.episodeNumber + epSuffix,
-                                                        displayName = displayName,
-                                                        season = selectedSeason,
-                                                        episode = ep.episodeNumber,
-                                                        resumePositionMs = if (hasResumeHere) resumeInfo!!.positionMs else 0L
-                                                    )
-                                                    onNavigateStreams(target, id, type, m.poster)
-                                                }
-                                            )
-                                        }
+    items = episodes,
+    key = { it.streamId }
+) { ep: ResolvedEpisode ->
+    val episodeKey = remember(id, selectedSeason, ep.episodeNumber) {
+        selectedSeason?.let { season -> "$id:$season:${ep.episodeNumber}" }
+    }
+
+    val isEpisodeWatched = remember(
+        simklSeriesWatched,
+        episodeKey,
+        ep.streamId,
+        completedEpisodeIds,
+        watchedEpisodeKeys
+    ) {
+        simklSeriesWatched ||
+            (episodeKey != null && episodeKey in watchedEpisodeKeys) ||
+            (ep.streamId in completedEpisodeIds)
+    }
+
+    EpisodeCard(
+        ep = ep,
+        isWatched = isEpisodeWatched,
+        onClick = {
+            val hasResumeHere = resumeInfo?.episodeStreamId == ep.streamId
+            val epSuffix = ep.name?.let { " - " + it } ?: ""
+            val target = StreamsTarget(
+                contentType = "series",
+                streamId = ep.streamId,
+                title = displayName + " · E" + ep.episodeNumber + epSuffix,
+                displayName = displayName,
+                season = selectedSeason,
+                episode = ep.episodeNumber,
+                resumePositionMs = if (hasResumeHere) resumeInfo!!.positionMs else 0L
+            )
+            onNavigateStreams(target, id, type, m.poster)
+        }
+    )
+}
                                     }
                                 }
                             }
