@@ -282,13 +282,40 @@ class SimklRepository(
     // All IMDb ids for shows the user has fully watched (per isShowFullyWatched),
     // for use as a general watched-indicator signal anywhere in the app -- not
     // just the Continue Watching row.
-    suspend fun getCompletedShowImdbIds(
+        suspend fun getCompletedShowImdbIds(
         accessToken: String = requireAccessToken()
     ): Set<String> {
-        val watchingShows = getWatchingShows(accessToken).shows
+        val httpResponse = api.getCompletedShows(
+            authorization = bearer(accessToken),
+            dateFrom = null,
+            extended = "full"
+        )
 
-        return watchingShows
-            .filter { isShowFullyWatched(it) }
+        Log.e(
+            "SIMKL_REPO",
+            "getCompletedShows raw: code=${httpResponse.code()}, message=${httpResponse.message()}"
+        )
+
+        if (!httpResponse.isSuccessful) {
+            val errorText = try {
+                httpResponse.errorBody()?.string()
+            } catch (e: Exception) {
+                "unreadable: ${e.message}"
+            }
+            Log.e("SIMKL_REPO", "getCompletedShows failed body: $errorText")
+            return emptySet()
+        }
+
+        val body = httpResponse.body()
+
+        if (body == null) {
+            Log.e("SIMKL_REPO", "getCompletedShows succeeded but body was null")
+            return emptySet()
+        }
+
+        Log.e("SIMKL_REPO", "getCompletedShows parsed ok: shows=${body.shows.size}")
+
+        return body.shows
             .mapNotNull { it.show?.ids?.imdb?.takeIf { id -> id.isNotBlank() } }
             .toSet()
     }
