@@ -351,4 +351,4 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
     suspend fun resolveImdbId(tmdbId: Int, type: String): String? =
         tmdbRepository.resolveImdbId(tmdbId, type)
 }
-</query>
+
