@@ -32,20 +32,14 @@ interface SimklApiService {
     ): List<SimklPlaybackItem>
 
     @GET("sync/all-items/shows/watching")
-    suspend fun getWatchingShows(
-        @Header("Authorization") authorization: String,
-        @Query("date_from") dateFrom: String? = null,
-        @Query("extended") extended: String? = "full"
-    ): SimklWatchingShowsResponse
-
-    @GET("sync/all-items/shows/watching")
-    suspend fun getWatchingShowsDetailed(
-        @Header("Authorization") authorization: String,
-        @Query("date_from") dateFrom: String? = null,
-        @Query("extended") extended: String? = "full",
-        @Query("include_all_episodes") includeAllEpisodes: String? = "yes",
-        @Query("episode_watched_at") episodeWatchedAt: String? = "yes"
-    ): SimklWatchingShowsDetailedResponse
+suspend fun getWatchingShowsDetailed(
+    @Header("Authorization") authorization: String,
+    @Query("date_from") dateFrom: String? = null,
+    @Query("extended") extended: String? = "full",
+    @Query("include_all_episodes") includeAllEpisodes: String? = "yes",
+    @Query("episode_watched_at") episodeWatchedAt: String? = "yes",
+    @Query("page") page: Int = 1
+): Response<SimklWatchingShowsDetailedResponse>
 
     @GET("sync/all-items/shows/completed")
     suspend fun getCompletedShowsDetailed(
