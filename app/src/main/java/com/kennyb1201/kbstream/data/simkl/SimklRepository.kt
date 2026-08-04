@@ -408,14 +408,22 @@ class SimklRepository(
         return isCompleted
     }
 
-    suspend fun getWatchedEpisodesForShowByImdb(
-        imdbId: String,
-        tmdbId: Int? = null,
-        accessToken: String = requireAccessToken()
-    ): Set<Pair<Int, Int>> {
-        if (imdbId.isBlank()) return emptySet()
+suspend fun getWatchedEpisodesForShowByImdb(
+    imdbId: String,
+    tmdbId: Int? = null,
+    accessToken: String = requireAccessToken()
+): Set<Pair<Int, Int>> {
+    if (imdbId.isBlank()) return emptySet()
 
-        val watchingResponse = try {
+    val tmdbIdString = tmdbId?.toString()
+
+    fun matchesShow(item: SimklWatchingShowDetailedItem): Boolean {
+        return item.show?.ids?.imdb == imdbId ||
+            (!tmdbIdString.isNullOrBlank() && item.show?.ids?.tmdb == tmdbIdString)
+    }
+
+    suspend fun findInWatching(): SimklWatchingShowDetailedItem? {
+        val firstPage = try {
             api.getWatchingShowsDetailed(
                 authorization = bearer(accessToken),
                 dateFrom = null,
@@ -425,78 +433,129 @@ class SimklRepository(
             )
         } catch (e: Exception) {
             Log.e("SIMKL_REPO", "getWatchingShowsDetailed failed for imdb=$imdbId: ${e.message}", e)
-            null
+            return null
         }
 
-val completedResponse = try {
-    api.getCompletedShowsDetailed(
-        authorization = bearer(accessToken),
-        dateFrom = null,
-        extended = "full",
-        includeAllEpisodes = "yes",
-        episodeWatchedAt = "yes",
-        page = 1
-    )
-} catch (e: Exception) {
-    Log.e("SIMKL_REPO", "getCompletedShowsDetailed failed for imdb=$imdbId: ${e.message}", e)
-    null
-}
-
-Log.e(
-    "SIMKL_REPO",
-    "completed detailed imdb sample=${completedResponse?.body()?.shows?.mapNotNull { it.show?.ids?.imdb }?.take(20)}"
-)
-
-        val tmdbIdString = tmdbId?.toString()
-
-        val watchingShow = watchingResponse?.shows?.firstOrNull {
-            it.show?.ids?.imdb == imdbId ||
-                (!tmdbIdString.isNullOrBlank() && it.show?.ids?.tmdb == tmdbIdString)
-        }
-
-        val completedShow = completedResponse?.body()?.shows?.firstOrNull {
-    it.show?.ids?.imdb == imdbId ||
-        (!tmdbIdString.isNullOrBlank() && it.show?.ids?.tmdb == tmdbIdString)
-}
-
-        fun episodesFrom(
-            tag: String,
-            show: SimklWatchingShowDetailedItem?
-        ): Set<Pair<Int, Int>> {
-            val pairs = show?.seasons
-                ?.flatMap { season ->
-                    val seasonNumber = season.number
-                    season.episodes.mapNotNull { ep ->
-                        val episodeNumber = ep.number ?: ep.episode
-                        if (seasonNumber != null && episodeNumber != null) {
-                            seasonNumber to episodeNumber
-                        } else {
-                            null
-                        }
-                    }
-                }
-                ?.toSet()
-                .orEmpty()
-
+        firstPage.shows.firstOrNull(::matchesShow)?.let { found ->
             Log.e(
                 "SIMKL_REPO",
-                "$tag imdb=$imdbId seasons=${show?.seasons?.size ?: 0} pairs=${pairs.size} sample=${pairs.take(20)}"
+                "watching match found on first page imdb=$imdbId tmdbId=$tmdbId matchImdb=${found.show?.ids?.imdb} matchTmdb=${found.show?.ids?.tmdb}"
             )
-
-            return pairs
+            return found
         }
-
-        val watchingPairs = episodesFrom("watching", watchingShow)
-        val completedPairs = episodesFrom("completed", completedShow)
-        val merged = watchingPairs + completedPairs
 
         Log.e(
             "SIMKL_REPO",
-            "merged watched episodes for imdb=$imdbId total=${merged.size} sample=${merged.take(30)}"
+            "watching first page had no match for imdb=$imdbId tmdbId=$tmdbId sample=${firstPage.shows.mapNotNull { it.show?.ids?.imdb }.take(20)}"
         )
 
-        return merged
+        return null
     }
+
+    suspend fun findInCompleted(): SimklWatchingShowDetailedItem? {
+        var page = 1
+
+        while (true) {
+            val response = try {
+                api.getCompletedShowsDetailed(
+                    authorization = bearer(accessToken),
+                    dateFrom = null,
+                    extended = "full",
+                    includeAllEpisodes = "yes",
+                    episodeWatchedAt = "yes",
+                    page = page
+                )
+            } catch (e: Exception) {
+                Log.e("SIMKL_REPO", "getCompletedShowsDetailed failed for imdb=$imdbId page=$page: ${e.message}", e)
+                return null
+            }
+
+            if (!response.isSuccessful) {
+                val errorText = try {
+                    response.errorBody()?.string()
+                } catch (e: Exception) {
+                    "unreadable: ${e.message}"
+                }
+                Log.e("SIMKL_REPO", "getCompletedShowsDetailed page=$page failed body: $errorText")
+                return null
+            }
+
+            val body = response.body()
+            if (body == null) {
+                Log.e("SIMKL_REPO", "getCompletedShowsDetailed page=$page body was null")
+                return null
+            }
+
+            body.shows.firstOrNull(::matchesShow)?.let { found ->
+                Log.e(
+                    "SIMKL_REPO",
+                    "completed match found on page=$page imdb=$imdbId tmdbId=$tmdbId matchImdb=${found.show?.ids?.imdb} matchTmdb=${found.show?.ids?.tmdb}"
+                )
+                return found
+            }
+
+            val pageCount = response.headers()["X-Pagination-Page-Count"]?.toIntOrNull()
+            val currentPage = response.headers()["X-Pagination-Page"]?.toIntOrNull()
+
+            Log.e(
+                "SIMKL_REPO",
+                "completed page=$page currentPage=$currentPage pageCount=$pageCount no match yet for imdb=$imdbId"
+            )
+
+            if (pageCount == null || currentPage == null || currentPage >= pageCount) {
+                return null
+            }
+
+            page += 1
+        }
+    }
+
+    fun episodesFrom(
+        tag: String,
+        show: SimklWatchingShowDetailedItem?
+    ): Set<Pair<Int, Int>> {
+        val pairs = show?.seasons
+            ?.flatMap { season ->
+                val seasonNumber = season.number
+                season.episodes.mapNotNull { ep ->
+                    val episodeNumber = ep.number ?: ep.episode
+                    if (seasonNumber != null && episodeNumber != null) {
+                        seasonNumber to episodeNumber
+                    } else {
+                        null
+                    }
+                }
+            }
+            ?.toSet()
+            .orEmpty()
+
+        Log.e(
+            "SIMKL_REPO",
+            "$tag imdb=$imdbId seasons=${show?.seasons?.size ?: 0} pairs=${pairs.size} sample=${pairs.take(20)}"
+        )
+
+        return pairs
+    }
+
+    val watchingShow = findInWatching()
+    val completedShow = findInCompleted()
+
+    Log.e(
+        "SIMKL_REPO",
+        "episode lookup imdb=$imdbId tmdbId=$tmdbId watchingFound=${watchingShow != null} completedFound=${completedShow != null} watchingMatchImdb=${watchingShow?.show?.ids?.imdb} watchingMatchTmdb=${watchingShow?.show?.ids?.tmdb} completedMatchImdb=${completedShow?.show?.ids?.imdb} completedMatchTmdb=${completedShow?.show?.ids?.tmdb}"
+    )
+
+    val watchingPairs = episodesFrom("watching", watchingShow)
+    val completedPairs = episodesFrom("completed", completedShow)
+    val merged = watchingPairs + completedPairs
+
+    Log.e(
+        "SIMKL_REPO",
+        "merged watched episodes for imdb=$imdbId total=${merged.size} sample=${merged.take(30)}"
+    )
+
+    return merged
+}
 
     suspend fun getContinueWatching(
         accessToken: String = requireAccessToken()
