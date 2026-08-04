@@ -25,9 +25,6 @@ data class SimklActivitiesResponse(
     @Json(name = "all") val all: String?
 )
 
-@JsonClass(generateAdapter = true)
-data class SimklPlaybackIds(
-    )
     @JsonClass(generateAdapter = true)
 data class SimklPlaybackIds(
     @Json(name = "simkl") val simkl: Int?,
