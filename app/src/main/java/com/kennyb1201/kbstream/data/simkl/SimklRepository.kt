@@ -382,6 +382,61 @@ class SimklRepository(
 
     Log.e(
         "SIMKL_REPO",
+suspend fun getWatchedEpisodesForShowByImdb(
+    imdbId: String,
+    tmdbId: Int? = null,
+    accessToken: String = requireAccessToken()
+): Set<Pair<Int, Int>> {
+    if (imdbId.isBlank()) return emptySet()
+
+    val bulkDebug = getWatchedBulkImport(
+        showImdbIds = listOf(imdbId),
+        accessToken = accessToken
+    )
+
+    Log.e(
+        "SIMKL_REPO",
+        "bulk debug imdb=$imdbId watchedShowImdbIds=${bulkDebug.watchedShowImdbIds} watchedShowSimklIds=${bulkDebug.watchedShowSimklIds} watchedEpisodesKeys=${bulkDebug.watchedEpisodesByShowKey.keys} watchedEpisodes=${bulkDebug.watchedEpisodesByShowKey["imdb:$imdbId"]}"
+    )
+
+    val response = try {
+        api.getAllShowItems(
+            authorization = bearer(accessToken),
+            extended = "full",
+            includeAllEpisodes = "original",
+            episodeWatchedAt = "yes"
+        )
+    } catch (e: Exception) {
+        Log.e("SIMKL_REPO", "getAllShowItems failed for imdb=$imdbId: ${e.message}", e)
+        return emptySet()
+    }
+
+    if (!response.isSuccessful) {
+        val errorText = try {
+            response.errorBody()?.string()
+        } catch (e: Exception) {
+            "unreadable: ${e.message}"
+        }
+        Log.e("SIMKL_REPO", "getAllShowItems failed body: $errorText")
+        return emptySet()
+    }
+
+    val body = response.body()
+    if (body == null) {
+        Log.e("SIMKL_REPO", "getAllShowItems body was null for imdb=$imdbId")
+        return emptySet()
+    }
+
+    val tedLassoLike = body.shows
+        .filter { item ->
+            val title = item.show?.title.orEmpty()
+            title.contains("Ted Lasso", ignoreCase = true) ||
+                title.contains("The Bear", ignoreCase = true)
+        }
+        .take(10)
+
+    Log.e(
+        "SIMKL_REPO",
         "getAllShowItems totalShows=${body.shows.size} tedLassoLike=${tedLassoLike.map { "${it.show?.title}|imdb=${it.show?.ids?.imdb}|tmdb=${it.show?.ids?.tmdb}|simkl=${it.show?.ids?.simkl}|seasons=${it.seasons.size}" }}"
     )
 
@@ -417,6 +472,7 @@ class SimklRepository(
 
     return pairs
 }
+    
 
         suspend fun findInWatching(): SimklWatchingShowDetailedItem? {
             var page = 1
