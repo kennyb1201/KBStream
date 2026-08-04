@@ -456,6 +456,19 @@ suspend fun getWatchedEpisodesForShowByImdb(
             return null
         }
 
+        body.shows
+    .filter { item ->
+        val title = item.show?.title.orEmpty()
+        title.contains("Ted Lasso", ignoreCase = true) ||
+            title.contains("The Bear", ignoreCase = true)
+    }
+    .forEach { item ->
+        Log.e(
+            "SIMKL_REPO",
+            "debug show page=$page title=${item.show?.title} imdb=${item.show?.ids?.imdb} tmdb=${item.show?.ids?.tmdb} simkl=${item.show?.ids?.simkl} seasons=${item.seasons?.size}"
+        )
+    }
+
         body.shows.firstOrNull(::matchesShow)?.let { found ->
             Log.e(
                 "SIMKL_REPO",
@@ -513,6 +526,19 @@ suspend fun getWatchedEpisodesForShowByImdb(
                 Log.e("SIMKL_REPO", "getCompletedShowsDetailed page=$page body was null")
                 return null
             }
+
+            body.shows
+    .filter { item ->
+        val title = item.show?.title.orEmpty()
+        title.contains("Ted Lasso", ignoreCase = true) ||
+            title.contains("The Bear", ignoreCase = true)
+    }
+    .forEach { item ->
+        Log.e(
+            "SIMKL_REPO",
+            "debug show page=$page title=${item.show?.title} imdb=${item.show?.ids?.imdb} tmdb=${item.show?.ids?.tmdb} simkl=${item.show?.ids?.simkl} seasons=${item.seasons?.size}"
+        )
+    }
 
             body.shows.firstOrNull(::matchesShow)?.let { found ->
                 Log.e(
