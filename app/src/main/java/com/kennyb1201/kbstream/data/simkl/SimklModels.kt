@@ -104,6 +104,11 @@ data class SimklWatchingShowsDetailedResponse(
 )
 
 @JsonClass(generateAdapter = true)
+data class SimklAllShowsResponse(
+    @Json(name = "shows") val shows: List<SimklWatchingShowDetailedItem> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
 data class SimklWatchingShowDetailedItem(
     @Json(name = "show") val show: SimklWatchingShow?,
     @Json(name = "seasons") val seasons: List<SimklWatchingSeason> = emptyList(),
