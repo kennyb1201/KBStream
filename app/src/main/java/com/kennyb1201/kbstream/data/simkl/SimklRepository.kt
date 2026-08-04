@@ -136,59 +136,34 @@ class SimklRepository(
             )
         }
 
-        val httpResponse = api.getWatchedBulk(
-            authorization = bearer(accessToken),
-            body = SimklWatchedBulkRequest(
-                movies = movieRefs.map { SimklWatchedLookupMovie(ids = it) },
-                shows = showRefs.map { SimklWatchedLookupShow(ids = it) }
-            )
-        )
+val requestBody = SimklWatchedBulkRequest(
+    movies = movieRefs.map { SimklWatchedLookupMovie(ids = it) },
+    shows = showRefs.map { SimklWatchedLookupShow(ids = it) }
+)
 
-        Log.e(
-            "SIMKL_REPO",
-            "getWatchedBulk raw: code=${httpResponse.code()}, " +
-                "message=${httpResponse.message()}, " +
-                "contentType=${httpResponse.headers()["Content-Type"]}"
-        )
+val rawResponse = api.getWatchedBulkRaw(
+    authorization = bearer(accessToken),
+    body = requestBody
+)
 
-        if (!httpResponse.isSuccessful) {
-            val errorText = try {
-                httpResponse.errorBody()?.string()
-            } catch (e: Exception) {
-                "unreadable: ${e.message}"
-            }
-            Log.e("SIMKL_REPO", "getWatchedBulk failed body: $errorText")
-            return SimklWatchedImport(
-                watchedMovieImdbIds = emptySet(),
-                watchedMovieSimklIds = emptySet(),
-                watchedShowImdbIds = emptySet(),
-                watchedShowSimklIds = emptySet(),
-                watchedEpisodesByShowKey = emptyMap()
-            )
-        }
+val rawText = try {
+    rawResponse.body()?.string()
+} catch (e: Exception) {
+    "unreadable raw body: ${e.message}"
+}
 
-        val response = httpResponse.body()
+Log.e(
+    "SIMKL_REPO",
+    "getWatchedBulk RAW code=${rawResponse.code()} message=${rawResponse.message()} contentType=${rawResponse.headers()["Content-Type"]} body=$rawText"
+)
 
-        if (response == null) {
-            Log.e(
-                "SIMKL_REPO",
-                "getWatchedBulk succeeded (${httpResponse.code()}) but body was null -- " +
-                    "endpoint likely returned a shape Moshi couldn't map to SimklWatchedBulkResponse, " +
-                    "or a genuinely empty successful body"
-            )
-            return SimklWatchedImport(
-                watchedMovieImdbIds = emptySet(),
-                watchedMovieSimklIds = emptySet(),
-                watchedShowImdbIds = emptySet(),
-                watchedShowSimklIds = emptySet(),
-                watchedEpisodesByShowKey = emptyMap()
-            )
-        }
-
-        Log.e(
-            "SIMKL_REPO",
-            "getWatchedBulk parsed ok: movies=${response.movies.size}, shows=${response.shows.size}"
-        )
+return SimklWatchedImport(
+    watchedMovieImdbIds = emptySet(),
+    watchedMovieSimklIds = emptySet(),
+    watchedShowImdbIds = emptySet(),
+    watchedShowSimklIds = emptySet(),
+    watchedEpisodesByShowKey = emptyMap()
+)
 
         val watchedMovieImdbIds = mutableSetOf<String>()
         val watchedMovieSimklIds = mutableSetOf<Int>()
