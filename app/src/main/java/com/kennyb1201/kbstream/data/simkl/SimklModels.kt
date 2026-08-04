@@ -27,6 +27,7 @@ data class SimklActivitiesResponse(
 
 @JsonClass(generateAdapter = true)
 data class SimklPlaybackIds(
+    )
     @JsonClass(generateAdapter = true)
 data class SimklPlaybackIds(
     @Json(name = "simkl") val simkl: Int?,
