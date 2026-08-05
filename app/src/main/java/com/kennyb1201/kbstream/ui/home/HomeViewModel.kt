@@ -366,15 +366,30 @@ private fun refreshWatchedStatus(rails: List<Rail>) {
                 .flatMap { it.items }
                 .filter { it.id.isNotBlank() }
 
+            Log.e("HOME_WATCHED", "metas count=${metas.size}")
+            metas.take(10).forEach { meta ->
+                Log.e(
+                    "HOME_WATCHED",
+                    "meta title=${meta.name}, id=${meta.id}, type=${meta.type}, watchedKey=${watchedKey(meta.id, meta.type)}"
+                )
+            }
+
             if (metas.isEmpty()) {
                 _watchedKeys.value = emptySet()
                 return@launch
             }
 
-            _watchedKeys.value = preloadWatchedKeys(
+            val watched = preloadWatchedKeys(
                 watchedStatusRepository = watchedStatusRepository,
                 items = metas
             )
+
+            Log.e("HOME_WATCHED", "watched keys count=${watched.size}")
+            watched.take(20).forEach { key ->
+                Log.e("HOME_WATCHED", "watched key=$key")
+            }
+
+            _watchedKeys.value = watched
         } catch (e: Exception) {
             Log.e("HOME_WATCHED", "refreshWatchedStatus failed: ${e.message}", e)
             _watchedKeys.value = emptySet()
