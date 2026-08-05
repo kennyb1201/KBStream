@@ -98,7 +98,14 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         refreshWatchedStatus(_rails.value)
     }
 
-    fun watchedKey(id: String, type: String): String = "$type::$id"
+    fun watchedKey(id: String, type: String): String {
+    val normalizedType = when (type.lowercase()) {
+        "movie" -> "movie"
+        "series", "show", "tv" -> "series"
+        else -> type.lowercase()
+    }
+    return "$normalizedType::$id"
+    }
 
     private fun observeUpNext() {
         viewModelScope.launch {
