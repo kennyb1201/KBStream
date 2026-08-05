@@ -63,6 +63,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val historyDao = WatchHistoryDatabase.getInstance(application).watchHistoryDao()
     private val simklRepository = SimklRepository(application)
     private val tmdbRepository = TmdbRepository()
+    private val watchedStatusRepository = WatchedStatusRepository(application)
     private val tmdbLookupSemaphore = Semaphore(TMDB_MAX_CONCURRENT_LOOKUPS)
 
 
