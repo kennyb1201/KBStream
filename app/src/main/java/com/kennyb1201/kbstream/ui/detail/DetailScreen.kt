@@ -841,32 +841,15 @@ private fun EpisodeCard(
         modifier = Modifier.width(220.dp).padding(end = 12.dp)
     ) {
         Column(modifier = Modifier.width(220.dp)) {
-            Box {
-                AsyncImage(
-                    model = ep.thumbnail,
-                    contentDescription = ep.name,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxWidth().height(124.dp)
-                )
-
-                if (isWatched) {
-                    Box(
-                        modifier = Modifier
-                            .padding(8.dp)
-                            .background(
-                                color = KBSurfaceRaised,
-                                shape = CircleShape
-                            )
-                            .padding(6.dp)
-                    ) {
-                        Text(
-                            text = "✓",
-                            color = KBAccent,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
-            }
+            PosterCard(
+                posterUrl = ep.thumbnail,
+                contentDescription = ep.name ?: "",
+                isWatched = isWatched,
+                onClick = onClick,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(124.dp)
+            )
 
             Column(modifier = Modifier.padding(10.dp)) {
                 val runtimeText = remember(ep.runtimeMinutes) {
