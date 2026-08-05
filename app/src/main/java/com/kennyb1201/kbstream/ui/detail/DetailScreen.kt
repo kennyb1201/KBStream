@@ -848,18 +848,23 @@ private fun EpisodeCard(
                     modifier = Modifier.fillMaxWidth().height(124.dp)
                 )
 
-                if (isWatched) {
-                    Text(
-                        text = "WATCHED",
-                        color = KBTextHi,
-                        style = MaterialTheme.typography.bodySmall,
+                                if (isWatched) {
+                    Box(
                         modifier = Modifier
                             .padding(8.dp)
-                            .background(KBAccent)
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
+                            .background(
+                                color = KBSurfaceRaised,
+                                shape = CircleShape
+                            )
+                            .padding(6.dp)
+                    ) {
+                        Text(
+                            text = "✓",
+                            color = KBAccent,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
                 }
-            }
 
             Column(modifier = Modifier.padding(10.dp)) {
                 val runtimeText = remember(ep.runtimeMinutes) {
