@@ -23,7 +23,7 @@ suspend fun preloadWatchedKeys(
     watchedStatusRepository.preload(preloadItems)
 
     return preloadItems
-        .filter { (id, _) -> watchedStatusRepository.isWatchedCached(id) }
+        .filter { (id, _) -> watchedStatusRepository.isWatchedCached(resolvedId, resolvedType) }
         .map { (id, type) -> "$type::$id" }
         .toSet()
 }
