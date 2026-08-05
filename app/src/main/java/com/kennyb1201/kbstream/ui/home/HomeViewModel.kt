@@ -376,15 +376,27 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 "preload sample = ${metas.take(20).map { it.id to it.type }}"
             )
 
-            val newlyWatched = preloadWatchedKeys(
+                        val preloadKeys = preloadWatchedKeys(
                 watchedStatusRepository = watchedStatusRepository,
                 items = metas
             )
 
-            Log.e("HOME_WATCHED", "refreshWatchedStatus done, watched count = ${newlyWatched.size}")
-            Log.e("HOME_WATCHED", "sample watched keys = ${newlyWatched.take(10)}")
+            val expandedKeys = buildSet {
+                addAll(preloadKeys)
 
-            _watchedKeys.value = newlyWatched
+                metas.forEach { meta ->
+                    val typedKey = watchedKey(meta.id, meta.type)
+                    if (typedKey in preloadKeys || meta.id in preloadKeys) {
+                        add(meta.id)
+                        add(typedKey)
+                    }
+                }
+            }
+
+            Log.e("HOME_WATCHED", "refreshWatchedStatus done, watched count = ${expandedKeys.size}")
+            Log.e("HOME_WATCHED", "sample watched keys = ${expandedKeys.take(10)}")
+
+            _watchedKeys.value = expandedKeys
         } catch (e: Exception) {
             Log.e("HOME_WATCHED", "refreshWatchedStatus failed: ${e.message}", e)
         }
