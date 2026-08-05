@@ -44,7 +44,7 @@ fun StudioScreen(
     val resolvedIds by viewModel.resolvedIds.collectAsState()
     val firstItemFocusRequester = remember { FocusRequester() }
 
-    LaunchedEffect(id) {
+    LaunchedEffect(id, isNetwork) {
         viewModel.load(id, isNetwork)
     }
 
