@@ -849,7 +849,7 @@ private fun EpisodeCard(
                     modifier = Modifier.fillMaxWidth().height(124.dp)
                 )
 
-                                if (isWatched) {
+                if (isWatched) {
                     Box(
                         modifier = Modifier
                             .padding(8.dp)
@@ -866,6 +866,7 @@ private fun EpisodeCard(
                         )
                     }
                 }
+            }
 
             Column(modifier = Modifier.padding(10.dp)) {
                 val runtimeText = remember(ep.runtimeMinutes) {
