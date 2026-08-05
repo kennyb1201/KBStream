@@ -463,16 +463,11 @@ fun DetailScreen(
     }
 
     val isEpisodeWatched = remember(
-        simklSeriesWatched,
-        episodeKey,
-        ep.streamId,
-        completedEpisodeIds,
-        watchedEpisodeKeys
-    ) {
-        simklSeriesWatched ||
-            (episodeKey != null && episodeKey in watchedEpisodeKeys) ||
-            (ep.streamId in completedEpisodeIds)
-    }
+    episodeKey,
+    watchedEpisodeKeys
+) {
+    episodeKey != null && episodeKey in watchedEpisodeKeys
+}
 
     EpisodeCard(
         ep = ep,
