@@ -64,7 +64,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val simklRepository = SimklRepository(application)
     private val tmdbRepository = TmdbRepository()
     private val tmdbLookupSemaphore = Semaphore(TMDB_MAX_CONCURRENT_LOOKUPS)
-    private val watchedStatusRepository = WatchedStatusRepository(application)
+
 
     private val _rails = MutableStateFlow<List<Rail>>(emptyList())
     val rails: StateFlow<List<Rail>> = _rails.asStateFlow()
