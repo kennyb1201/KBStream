@@ -309,7 +309,7 @@ fun HomeScreen(
                                 items = rail.items,
                                 key = { meta -> meta.id }
                             ) { meta ->
-                                val watched = viewModel.watchedKey(meta.id, meta.type) in watchedKeys
+                                val watched = meta.id in watchedKeys || viewModel.watchedKey(meta.id, meta.type) in watchedKeys
 
                                 Log.e(
                                     "HOME_UI",
