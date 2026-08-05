@@ -364,24 +364,10 @@ private fun refreshWatchedStatus(rails: List<Rail>) {
                 return@launch
             }
 
-            val watchedIds = preloadWatchedKeys(
-                application = getApplication(),
+            _watchedKeys.value = preloadWatchedKeys(
+                watchedStatusRepository = watchedStatusRepository,
                 items = metas
             )
-
-            val resolvedKeys = buildSet {
-                metas.forEach { meta ->
-                    val rawId = meta.id
-                    val typedKey = watchedKey(rawId, meta.type)
-
-                    if (rawId in watchedIds || typedKey in watchedIds) {
-                        add(rawId)
-                        add(typedKey)
-                    }
-                }
-            }
-
-            _watchedKeys.value = resolvedKeys
         } catch (e: Exception) {
             Log.e("HOME_WATCHED", "refreshWatchedStatus failed: ${e.message}", e)
             _watchedKeys.value = emptySet()
