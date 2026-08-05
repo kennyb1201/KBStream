@@ -109,9 +109,9 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
             watchedStatusRepository.preload(preloadItems.toList())
 
             _watchedKeys.value = preloadItems
-                .filter { (imdbId, _) -> watchedStatusRepository.isWatchedCached(imdbId) }
-                .map { (imdbId, mediaType) -> watchedKey(imdbId, mediaType) }
-                .toSet()
+    .filter { (imdbId, mediaType) -> watchedStatusRepository.isWatchedCached(imdbId, mediaType) }
+    .map { (imdbId, mediaType) -> watchedKey(imdbId, mediaType) }
+    .toSet()
 
             Log.e(
                 "ACTOR_WATCHED",
