@@ -361,15 +361,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
 
-            val keys = coroutineScope {
-                metas.map { meta ->
-                    async {
-                        val typedKey = watchedKey(meta.id, meta.type)
-                        val isWatched = watchedStatusRepository.isWatched(meta.id, meta.type)
-                        if (isWatched) setOf(meta.id, typedKey) else emptySet()
-                    }
-                }.awaitAll().flatten().toSet()
-            }
+            val rawWatchedIds = preloadWatchedKeys(getApplication())
+
+            val keys = metas.flatMap { meta ->
+                val typedKey = watchedKey(meta.id, meta.type)
+                if (meta.id in rawWatchedIds || typedKey in rawWatchedIds) {
+                    listOf(meta.id, typedKey)
+                } else {
+                    emptyList()
+                }
+            }.toSet()
 
             _watchedKeys.value = keys
         } catch (e: Exception) {
