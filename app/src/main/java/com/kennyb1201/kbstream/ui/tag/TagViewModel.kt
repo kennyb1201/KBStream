@@ -103,13 +103,13 @@ class TagViewModel(application: Application) : AndroidViewModel(application) {
                 watchedStatusRepository.preload(preloadItems)
 
                 _watchedKeys.value = resolved
-                    .filter { (_, _, imdbId) ->
-                        watchedStatusRepository.isWatchedCached(imdbId)
-                    }
-                    .map { (_, mediaType, imdbId) ->
-                        watchedKey(imdbId, mediaType)
-                    }
-                    .toSet()
+    .filter { (_, mediaType, imdbId) ->
+        watchedStatusRepository.isWatchedCached(imdbId, mediaType)
+    }
+    .map { (_, mediaType, imdbId) ->
+        watchedKey(imdbId, mediaType)
+    }
+    .toSet()
 
                 Log.e(
                     "TAG_WATCHED",
