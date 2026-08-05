@@ -354,54 +354,29 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private fun refreshWatchedStatus(rails: List<Rail>) {
     viewModelScope.launch {
         try {
-            if (rails.isEmpty()) {
-                Log.e("HOME_WATCHED", "refreshWatchedStatus skipped: no rails")
-                _watchedKeys.value = emptySet()
-                return@launch
-            }
-
-            val metas = rails
-                .flatMap { it.items }
-                .filter { it.id.isNotBlank() }
-
+            val metas = rails.flatMap { it.items }.filter { it.id.isNotBlank() }
             if (metas.isEmpty()) {
-                Log.e("HOME_WATCHED", "refreshWatchedStatus skipped: no valid items")
                 _watchedKeys.value = emptySet()
                 return@launch
             }
 
-            Log.e("HOME_WATCHED", "refreshWatchedStatus starting, item count = ${metas.size}")
-            Log.e(
-                "HOME_WATCHED",
-                "preload sample = ${metas.take(20).map { it.id to it.type }}"
-            )
-
-                        val preloadKeys = preloadWatchedKeys(
-                watchedStatusRepository = watchedStatusRepository,
-                items = metas
-            )
-
-            val expandedKeys = buildSet {
-                addAll(preloadKeys)
-
-                metas.forEach { meta ->
-                    val typedKey = watchedKey(meta.id, meta.type)
-                    if (typedKey in preloadKeys || meta.id in preloadKeys) {
-                        add(meta.id)
-                        add(typedKey)
+            val keys = coroutineScope {
+                metas.map { meta ->
+                    async {
+                        val typedKey = watchedKey(meta.id, meta.type)
+                        val isWatched = watchedStatusRepository.isWatched(meta.id, meta.type)
+                        if (isWatched) setOf(meta.id, typedKey) else emptySet()
                     }
-                }
+                }.awaitAll().flatten().toSet()
             }
 
-            Log.e("HOME_WATCHED", "refreshWatchedStatus done, watched count = ${expandedKeys.size}")
-            Log.e("HOME_WATCHED", "sample watched keys = ${expandedKeys.take(10)}")
-
-            _watchedKeys.value = expandedKeys
+            _watchedKeys.value = keys
         } catch (e: Exception) {
             Log.e("HOME_WATCHED", "refreshWatchedStatus failed: ${e.message}", e)
+            _watchedKeys.value = emptySet()
         }
     }
-    }
+}
 
     companion object {
         private const val NEW_RELEASE_WINDOW_DAYS = 7
