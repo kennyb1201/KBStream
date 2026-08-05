@@ -146,14 +146,16 @@ fun AppRoot() {
             }
         )
 
-        is Screen.Tag -> TagScreen(
-            tagId = current.id,
-            tagName = current.name,
-            isKeyword = current.isKeyword,
-            onNavigateDetail = { type, id ->
-                screen = Screen.Detail(type, id)
-            }
-        )
+        is Screen.Tag ->TagScreen(
+    id = currentTagId,
+    name = currentTagName,
+    isKeyword = currentIsKeyword,
+    type = currentTagType,
+    onBack = { /* back */ },
+    onNavigateDetail = { mediaType, imdbId ->
+        /* navigate */
+    }
+)
 
         is Screen.Streams -> StreamsScreen(
             contentType = current.target.contentType,
