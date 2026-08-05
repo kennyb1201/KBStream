@@ -352,27 +352,36 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-     private fun refreshWatchedStatus(rails: List<Rail>) {
+private fun refreshWatchedStatus(rails: List<Rail>) {
     viewModelScope.launch {
         try {
-            val metas = rails.flatMap { it.items }.filter { it.id.isNotBlank() }
+            val metas = rails
+                .flatMap { it.items }
+                .filter { it.id.isNotBlank() }
+
             if (metas.isEmpty()) {
                 _watchedKeys.value = emptySet()
                 return@launch
             }
 
-            val rawWatchedIds = preloadWatchedKeys(getApplication())
+            val watchedIds = preloadWatchedKeys(
+                application = getApplication(),
+                items = metas
+            )
 
-            val keys = metas.flatMap { meta ->
-                val typedKey = watchedKey(meta.id, meta.type)
-                if (meta.id in rawWatchedIds || typedKey in rawWatchedIds) {
-                    listOf(meta.id, typedKey)
-                } else {
-                    emptyList()
+            val resolvedKeys = buildSet {
+                metas.forEach { meta ->
+                    val rawId = meta.id
+                    val typedKey = watchedKey(rawId, meta.type)
+
+                    if (rawId in watchedIds || typedKey in watchedIds) {
+                        add(rawId)
+                        add(typedKey)
+                    }
                 }
-            }.toSet()
+            }
 
-            _watchedKeys.value = keys
+            _watchedKeys.value = resolvedKeys
         } catch (e: Exception) {
             Log.e("HOME_WATCHED", "refreshWatchedStatus failed: ${e.message}", e)
             _watchedKeys.value = emptySet()
