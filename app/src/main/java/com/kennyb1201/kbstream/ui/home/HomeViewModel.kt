@@ -360,15 +360,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
 
-            val keys = coroutineScope {
-                metas.map { meta ->
-                    async {
-                        val typedKey = watchedKey(meta.id, meta.type)
-                        val isWatched = watchedStatusRepository.isWatched(meta.id, meta.type)
-                        if (isWatched) setOf(meta.id, typedKey) else emptySet()
-                    }
-                }.awaitAll().flatten().toSet()
-            }
+            val keys = preloadWatchedKeys(
+                items = metas,
+                typeSelector = { it.type },
+                idSelector = { it.id }
+            )
 
             _watchedKeys.value = keys
         } catch (e: Exception) {
@@ -376,6 +372,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             _watchedKeys.value = emptySet()
         }
     }
+}
 }
 
     companion object {
