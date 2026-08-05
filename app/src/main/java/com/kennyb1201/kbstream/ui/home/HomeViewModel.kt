@@ -352,27 +352,31 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
      private fun refreshWatchedStatus(rails: List<Rail>) {
-        viewModelScope.launch {
-            try {
-                val metas = rails.flatMap { it.items }.filter { it.id.isNotBlank() }
-                if (metas.isEmpty()) {
-                    _watchedKeys.value = emptySet()
-                    return@launch
-                }
-
-                val keys = preloadWatchedKeys(
-                    items = metas,
-                    typeSelector = { it.type },
-                    idSelector = { it.id }
-                )
-
-                _watchedKeys.value = keys
-            } catch (e: Exception) {
-                Log.e("HOME_WATCHED", "refreshWatchedStatus failed: ${e.message}", e)
+    viewModelScope.launch {
+        try {
+            val metas = rails.flatMap { it.items }.filter { it.id.isNotBlank() }
+            if (metas.isEmpty()) {
                 _watchedKeys.value = emptySet()
+                return@launch
             }
+
+            val keys = coroutineScope {
+                metas.map { meta ->
+                    async {
+                        val typedKey = watchedKey(meta.id, meta.type)
+                        val isWatched = watchedStatusRepository.isWatched(meta.id, meta.type)
+                        if (isWatched) setOf(meta.id, typedKey) else emptySet()
+                    }
+                }.awaitAll().flatten().toSet()
+            }
+
+            _watchedKeys.value = keys
+        } catch (e: Exception) {
+            Log.e("HOME_WATCHED", "refreshWatchedStatus failed: ${e.message}", e)
+            _watchedKeys.value = emptySet()
         }
     }
+}
 
     companion object {
         private const val NEW_RELEASE_WINDOW_DAYS = 7
