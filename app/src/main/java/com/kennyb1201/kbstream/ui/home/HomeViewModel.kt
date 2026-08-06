@@ -379,10 +379,30 @@ private fun refreshWatchedStatus(rails: List<Rail>) {
                 return@launch
             }
 
-            val watched = preloadWatchedKeys(
-                watchedStatusRepository = watchedStatusRepository,
-                items = metas
-            )
+            val preloadItems = metas
+                .mapNotNull { meta ->
+                    val normalizedType = normalizeMediaType(meta.type) ?: return@mapNotNull null
+                    val imdbId = meta.id.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    imdbId to normalizedType
+                }
+                .distinct()
+                .take(100)
+
+            if (preloadItems.isEmpty()) {
+                _watchedKeys.value = emptySet()
+                return@launch
+            }
+
+            watchedStatusRepository.preload(preloadItems)
+
+            val watched = preloadItems
+                .filter { (imdbId, mediaType) ->
+                    watchedStatusRepository.isWatchedCached(imdbId, mediaType)
+                }
+                .map { (imdbId, mediaType) ->
+                    watchedKey(imdbId, mediaType)
+                }
+                .toSet()
 
             Log.e("HOME_WATCHED", "watched keys count=${watched.size}")
             watched.take(20).forEach { key ->
@@ -396,6 +416,14 @@ private fun refreshWatchedStatus(rails: List<Rail>) {
         }
     }
 }
+
+private fun normalizeMediaType(type: String?): String? =
+    when (type?.lowercase()) {
+        "movie" -> "movie"
+        "series", "show", "tv" -> "series"
+        else -> null
+    }
+
 
     companion object {
         private const val NEW_RELEASE_WINDOW_DAYS = 7
