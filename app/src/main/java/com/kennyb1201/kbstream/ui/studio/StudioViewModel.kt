@@ -15,7 +15,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 
 class StudioViewModel(application: Application) : AndroidViewModel(application) {
-    private val tmdbRepository = TmdbRepository()
+    private val tmdbRepository = TmdbRepository(application)
     private val watchedStatusRepository = WatchedStatusRepository(application)
 
     private val _sections = MutableStateFlow<List<StudioSection>>(emptyList())
