@@ -107,7 +107,13 @@ class WatchedStatusRepository(context: Context) {
                     }
                 }
                 else -> false
+ 
             }
+
+            Log.e(
+    "WATCHED_REPO",
+    "resolved id=$id type=$normalizedType watched=$watched"
+)
 
             val key = cacheKey(id, normalizedType)
             cache[key] = now to watched
