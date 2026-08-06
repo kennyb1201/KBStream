@@ -151,9 +151,9 @@ fun AppRoot() {
             name = current.name,
             isKeyword = current.isKeyword,
             type = current.mediaType,
-            onBack = {
-                screen = Screen.Home
-            },
+            
+            
+        
             onNavigateDetail = { mediaType, imdbId ->
                 screen = Screen.Detail(mediaType, imdbId)
             }
