@@ -138,13 +138,16 @@ fun AppRoot() {
         )
 
         is Screen.Studio -> StudioScreen(
-            id = current.id,
-            name = current.name,
-            isNetwork = current.isNetwork,
-            onNavigateDetail = { type, id ->
-                screen = Screen.Detail(type, id)
-            }
-        )
+    id = current.id,
+    name = current.name,
+    isNetwork = current.isNetwork,
+    onBack = {
+        screen = Screen.Home
+    },
+    onNavigateDetail = { type, id ->
+        screen = Screen.Detail(type, id)
+    }
+)
 
         is Screen.Tag -> TagScreen(
             id = current.id,
