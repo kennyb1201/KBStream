@@ -127,15 +127,15 @@ fun AppRoot() {
             }
         )
 
-        is Screen.Actor -> ActorScreen(
-            personId = current.personId,
-            onBack = {
-                screen = Screen.Home
-            },
-            onNavigateDetail = { type, id ->
-                screen = Screen.Detail(type, id)
-            }
-        )
+        is ActorScreen(
+    personId = selectedActorId,
+    onBack = {
+        screen = Screen.Home
+    },
+    onNavigateDetail = { type, id ->
+        screen = Screen.Detail(type, id)
+    }
+)
 
         is Screen.Studio -> StudioScreen(
             id = current.id,
