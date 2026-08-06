@@ -128,6 +128,108 @@ fun AppRoot() {
         )
 
         is Screen.Actor -> ActorScreen(
+            personId = current.personId,
+            onBack = {
+                screen = Screen.Home
+            },
+            onNavigateDetail = { type, id ->
+                screen = Screen.Detail(type, id)
+            }
+        )
+
+        is Screen.Studio -> StudioScreen(
+            id = current.id,
+            name = current.name,
+            isNetwork = current.isNetwork,
+            onNavigateDetail = { type, id ->
+                screen = Screen.Detail(type, id)
+            }
+        )
+
+        is Screen.Tag -> TagScreen(
+            id = current.id,
+            name = current.name,
+            isKeyword = current.isKeyword,
+            type = current.mediaType,
+            onNavigateDetail = { mediaType, imdbId ->
+                screen = Screen.Detail(mediaType, imdbId)
+            }
+        )
+
+        is Screen.Streams -> StreamsScreen(
+            contentType = current.target.contentType,
+            streamId = current.target.streamId,
+            title = current.target.title,
+            parentId = current.parentId,
+            parentType = current.parentType,
+            season = current.target.season,
+            episode = current.target.episode,
+            displayName = current.target.displayName,
+            itemPoster = current.itemPoster,
+            resumePositionMs = current.target.resumePositionMs
+        )
+    }
+}
+            is Screen.Streams -> Screen.Detail(current.parentType, current.parentId)
+            else -> Screen.Home
+        }
+    }
+
+    when (val current = screen) {
+        is Screen.Home -> HomeScreen(
+            onItemClick = { meta: MetaPreview ->
+                screen = Screen.Detail(meta.type, meta.id)
+            },
+            onManageAddons = {
+                screen = Screen.Addons
+            },
+            onSearch = {
+                screen = Screen.Search
+            },
+            onOpenSimkl = {
+                screen = Screen.Simkl
+            }
+        )
+
+        is Screen.Addons -> AddonsScreen(
+            onBack = {
+                screen = Screen.Home
+            }
+        )
+
+        is Screen.Search -> SearchScreen(
+            onItemClick = { meta: MetaPreview ->
+                screen = Screen.Detail(meta.type, meta.id)
+            }
+        )
+
+        is Screen.Simkl -> SimklConnectScreen(
+            onBackToHome = {
+                screen = Screen.Home
+            }
+        )
+
+        is Screen.Detail -> DetailScreen(
+            type = current.type,
+            id = current.id,
+            onNavigateDetail = { type, id ->
+                screen = Screen.Detail(type, id)
+            },
+            onNavigateActor = { personId ->
+                screen = Screen.Actor(personId)
+            },
+            onNavigateStudio = { id, name, isNetwork ->
+                screen = Screen.Studio(id, name, isNetwork)
+            },
+            onNavigateTag = { id, name, isKeyword, mediaType ->
+                screen = Screen.Tag(id, name, isKeyword, mediaType)
+            },
+            onNavigateStreams = { target, parentId, parentType, poster ->
+                screen = Screen.Streams(target, parentId, parentType, poster)
+            }
+        )
+
+        is Screen.Actor -> ActorScreen(
     personId = current.personId,
     onBack = {
         screen = Screen.Home
