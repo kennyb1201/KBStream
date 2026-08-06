@@ -36,37 +36,40 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
 
     fun creditLookupKey(tmdbId: Int, mediaType: String): String = "${mediaType.lowercase()}::$tmdbId"
 
-    fun load(personId: Int) {
-        viewModelScope.launch {
-            _isLoading.value = true
-            _error.value = null
-            _person.value = null
-            _watchedKeys.value = emptySet()
-            _resolvedCreditIds.value = emptyMap()
+fun load(personId: Int) {
+    viewModelScope.launch {
+        _isLoading.value = true
+        _error.value = null
+        _person.value = null
+        _watchedKeys.value = emptySet()
+        _resolvedCreditIds.value = emptyMap()
 
-            try {
-                val result = tmdbRepository.getPerson(personId)
-                _person.value = result
+        try {
+            val result = tmdbRepository.getPerson(personId)
+            _person.value = result
 
-                if (result != null) {
-                    refreshWatchedStatus(result)
-                }
+            if (
+                result != null &&
+                result.combinedCredits?.cast.isNullOrEmpty() &&
+                result.combinedCredits?.crew.isNullOrEmpty()
+            ) {
+                _error.value = "TMDB returned this person but with zero credits"
+            }
+        } catch (e: Exception) {
+            _error.value = "TMDB request failed: ${e.message}"
+            Log.e("ACTOR_LOAD", "load failed for personId=$personId", e)
+        } finally {
+            _isLoading.value = false
+        }
 
-                if (
-                    result != null &&
-                    result.combinedCredits?.cast.isNullOrEmpty() &&
-                    result.combinedCredits?.crew.isNullOrEmpty()
-                ) {
-                    _error.value = "TMDB returned this person but with zero credits"
-                }
-            } catch (e: Exception) {
-                _error.value = "TMDB request failed: ${e.message}"
-                Log.e("ACTOR_LOAD", "load failed for personId=$personId", e)
-            } finally {
-                _isLoading.value = false
+        val loadedPerson = _person.value
+        if (loadedPerson != null) {
+            launch {
+                refreshWatchedStatus(loadedPerson)
             }
         }
     }
+}
 
     private suspend fun refreshWatchedStatus(person: TmdbPersonDetail) {
         try {
