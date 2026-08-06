@@ -1,0 +1,22 @@
+stages:
+  - build
+
+variables:
+  ANDROID_SDK_ROOT: "/sdk"
+  ANDROID_HOME: "/sdk"
+
+android-build:
+  stage: build
+  image: eclipse-temurin:17
+  before_script:
+    - apt-get update && apt-get install -y wget unzip
+    - mkdir -p /sdk/cmdline-tools
+    - wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/cmdline-tools.zip
+    - unzip -q /tmp/cmdline-tools.zip -d /sdk/cmdline-tools
+    - mv /sdk/cmdline-tools/cmdline-tools /sdk/cmdline-tools/latest
+    - export PATH="$PATH:/sdk/cmdline-tools/latest/bin:/sdk/platform-tools"
+    - yes | sdkmanager --licenses >/dev/null
+    - sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+    - chmod +x ./gradlew
+  script:
+    - ./gradlew assembleDebug --stacktrace --console=plain
