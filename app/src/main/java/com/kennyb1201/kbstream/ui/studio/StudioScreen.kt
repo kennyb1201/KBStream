@@ -34,6 +34,7 @@ fun StudioScreen(
     id: Int,
     name: String,
     isNetwork: Boolean,
+    onBack: () -> Unit = {},
     onNavigateDetail: (String, String) -> Unit,
     viewModel: StudioViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
