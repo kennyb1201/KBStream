@@ -117,7 +117,7 @@ fun StudioScreen(
 
                                         PosterCard(
                                             posterUrl = studioItem.item.posterPath
-                                                ?.let { "${TmdbRepository.PROFILE_BASE}$it" },
+                                                ?.let { "${TmdbRepository.POSTER_BASE}$it" },
                                             contentDescription = studioItem.item.title
                                                 ?: studioItem.item.name,
                                             isWatched = watched,
