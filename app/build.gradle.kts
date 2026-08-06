@@ -68,6 +68,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.4")
 
+    implementation("androidx.compose.runtime:runtime")
+
     implementation("androidx.tv:tv-material:1.0.0")
     implementation("androidx.tv:tv-foundation:1.0.0")
     implementation(platform("androidx.compose:compose-bom:2024.06.00"))
