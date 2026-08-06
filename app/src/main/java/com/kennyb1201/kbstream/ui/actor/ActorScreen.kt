@@ -70,8 +70,8 @@ private val LocalTvBringIntoViewSpec = TvPivotBringIntoViewSpec()
 @Composable
 fun ActorScreen(
     personId: Int,
-    onBack: () -> Unit,
-    onNavigateDetail: (String, String) -> Unit,
+    onBack: () -> Unit = {},
+    onNavigateDetail: (String, String) -> Unit = { _, _ -> },
     viewModel: ActorViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
     val scope = rememberCoroutineScope()
