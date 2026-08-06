@@ -1,0 +1,27 @@
+stages:
+  - build
+  - test
+
+lintDebug:
+  stage: build
+  image: eclipse-temurin:17
+  script:
+    - chmod +x ./gradlew
+    - ./gradlew -Pci --console=plain :app:lintDebug
+
+assembleDebug:
+  stage: build
+  image: eclipse-temurin:17
+  script:
+    - chmod +x ./gradlew
+    - ./gradlew assembleDebug
+  artifacts:
+    paths:
+      - app/build/outputs/
+
+debugTests:
+  stage: test
+  image: eclipse-temurin:17
+  script:
+    - chmod +x ./gradlew
+    - ./gradlew -Pci --console=plain :app:KBStream
