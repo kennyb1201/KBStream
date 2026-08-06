@@ -341,6 +341,37 @@ class SimklRepository(
         return pairs
     }
 
+suspend fun getCompletedMovieKeys(
+    accessToken: String = requireAccessToken()
+): Set<String> {
+    val httpResponse = api.getCompletedMovies(
+        authorization = bearer(accessToken),
+        dateFrom = null,
+        extended = "full"
+    )
+
+    if (!httpResponse.isSuccessful) {
+        val errorText = try {
+            httpResponse.errorBody()?.string()
+        } catch (e: Exception) {
+            "unreadable: ${e.message}"
+        }
+        Log.e("SIMKL_REPO", "getCompletedMovies failed body: $errorText")
+        return emptySet()
+    }
+
+    val body = httpResponse.body() ?: return emptySet()
+
+    return body.movies.flatMap { item ->
+        val ids = item.movie?.ids
+        buildList {
+            ids?.imdb?.takeIf { it.isNotBlank() }?.let { add("imdb:$it") }
+            ids?.tmdb?.let { add("tmdb:$it") }
+            ids?.simkl?.let { add("simkl:$it") }
+        }
+    }.toSet()
+}
+    
     suspend fun getContinueWatching(
         accessToken: String = requireAccessToken()
     ): List<SimklContinueWatchingItem> {
