@@ -1,0 +1,9 @@
+stages:
+  - test
+
+gradle-smoke:
+  stage: test
+  image: eclipse-temurin:17
+  script:
+    - chmod +x ./gradlew
+    - ./gradlew --version
