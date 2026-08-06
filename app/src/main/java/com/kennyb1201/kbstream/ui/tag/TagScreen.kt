@@ -56,12 +56,13 @@ private val LocalTvBringIntoViewSpec = TvPivotBringIntoViewSpec()
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
+@Composable
 fun TagScreen(
     id: Int,
     name: String,
     isKeyword: Boolean,
-    type: String,
-    onBack: () -> Unit,
+    mediaType: String,
+    onBack: () -> Unit = {},
     onNavigateDetail: (String, String) -> Unit,
     viewModel: TagViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
