@@ -127,8 +127,8 @@ fun AppRoot() {
             }
         )
 
-        is ActorScreen(
-    personId = selectedActorId,
+        is Screen.Actor -> ActorScreen(
+    personId = current.personId,
     onBack = {
         screen = Screen.Home
     },
