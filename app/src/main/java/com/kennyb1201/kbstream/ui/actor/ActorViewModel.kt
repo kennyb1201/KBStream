@@ -16,7 +16,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 
 class ActorViewModel(application: Application) : AndroidViewModel(application) {
-    private val tmdbRepository = TmdbRepository()
+    private val private val tmdbRepository = TmdbRepository(application)
     private val watchedStatusRepository = WatchedStatusRepository(application)
 
     private val _person = MutableStateFlow<TmdbPersonDetail?>(null)
