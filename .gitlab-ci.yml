@@ -22,7 +22,6 @@ android-build:
     - sdkmanager "platform-tools" "platforms;android-${ANDROID_COMPILE_SDK}" "build-tools;${ANDROID_BUILD_TOOLS}"
     - chmod +x ./gradlew
   script:
-    - if [ -n "$TMDB_API_KEY" ]; then echo "TMDB_API_KEY is set"; else echo "TMDB_API_KEY is missing"; fi
     - ./gradlew assembleDebug --stacktrace --console=plain
   artifacts:
     when: always
