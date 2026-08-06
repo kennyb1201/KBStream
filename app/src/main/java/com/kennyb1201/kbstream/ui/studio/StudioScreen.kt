@@ -35,7 +35,7 @@ fun StudioScreen(
     name: String,
     isNetwork: Boolean,
     onBack: () -> Unit = {},
-    onNavigateDetail: (String, String) -> Unit,
+    onNavigateDetail: (String, String) -> Unit = { _, _ -> },
     viewModel: StudioViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
     val scope = rememberCoroutineScope()
