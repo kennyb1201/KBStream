@@ -136,7 +136,7 @@ fun ActorScreen(
                 }
                 .thenBy { it.title ?: it.name ?: "" }
         )
-        .take(60)
+        .take(100)
 }
 
             CompositionLocalProvider(LocalBringIntoViewSpec provides LocalTvBringIntoViewSpec) {
