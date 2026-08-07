@@ -74,6 +74,13 @@ interface SimklApiService {
         @Query("extended") extended: String? = "full"
     ): Response<SimklCompletedMoviesResponse>
 
+    @GET("sync/all-items/movies")
+    suspend fun getAllMovieItems(
+    @Header("Authorization") authorization: String,
+    @Query("date_from") dateFrom: String? = null,
+    @Query("extended") extended: String? = "full"
+    ): Response<SimklCompletedMoviesResponse>
+
     @POST("sync/watched")
     suspend fun getWatchedBulk(
         @Header("Authorization") authorization: String,
@@ -85,4 +92,5 @@ interface SimklApiService {
         @Header("Authorization") authorization: String,
         @Body body: SimklWatchedBulkRequest
     ): Response<ResponseBody>
+
 }
