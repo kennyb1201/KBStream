@@ -78,6 +78,18 @@ data class StreamsTarget(
     val resumePositionMs: Long
 )
 
+private sealed interface PeopleItem {
+        data class Crew(
+                val id: Int,
+                        val name: String,
+                                val role: String,
+                                        val profilePath: String?
+                                            ) : PeopleItem
+
+                                                data class Cast(val member: TmdbCastMember) : PeopleItem
+                                                }
+
+
 @OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 private class TvPivotBringIntoViewSpec(
     private val parentFraction: Float = 0.3f,
@@ -492,17 +504,57 @@ fun DetailScreen(
                                 }
                             }
 
-                            val tmdbCast = tmdbDetail?.credits?.cast
-                            if (!tmdbCast.isNullOrEmpty()) {
-                                item(key = "cast_header") {
+                                                      val tmdbCast = tmdbDetail?.credits?.cast.orEmpty()
+                            val tmdbDirector = tmdbDetail?.credits.director()
+                            val tmdbWriters = tmdbDetail?.credits.writers().distinctBy { it.id }
+
+                            val peopleItems = remember(tmdbDetail) {
+                                buildList<PeopleItem> {
+                                    val mainWriter = tmdbWriters.firstOrNull()
+
+                                    mainWriter?.let { writer ->
+                                        add(
+                                            PeopleItem.Crew(
+                                                id = writer.id,
+                                                name = writer.name,
+                                                role = "Writer",
+                                                profilePath = writer.profilePath
+                                            )
+                                        )
+                                    }
+
+                                    tmdbDirector?.let { director ->
+                                        if (director.id != mainWriter?.id) {
+                                            add(
+                                                PeopleItem.Crew(
+                                                    id = director.id,
+                                                    name = director.name,
+                                                    role = "Director",
+                                                    profilePath = director.profilePath
+                                                )
+                                            )
+                                        }
+                                    }
+
+                                    tmdbCast
+                                        .distinctBy { it.id }
+                                        .take(15)
+                                        .forEach { member ->
+                                            add(PeopleItem.Cast(member))
+                                        }
+                                }
+                            }
+
+                            if (peopleItems.isNotEmpty()) {
+                                item(key = "people_header") {
                                     Text(
-                                        "CAST",
+                                        "PEOPLE",
                                         style = MaterialTheme.typography.titleMedium,
                                         color = KBTextLo,
                                         modifier = Modifier.padding(start = 24.dp, top = 8.dp, bottom = 10.dp)
                                     )
                                 }
-                                item(key = "cast_row") {
+                                item(key = "people_row") {
                                     LazyRow(
                                         contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 16.dp),
                                         modifier = Modifier
@@ -511,10 +563,31 @@ fun DetailScreen(
                                             .focusRestorer()
                                     ) {
                                         items(
-                                            items = tmdbCast.take(15),
-                                            key = { it.id }
-                                        ) { member: TmdbCastMember ->
-                                            CastCard(member = member, onClick = { onNavigateActor(member.id) })
+                                            items = peopleItems,
+                                            key = { item ->
+                                                when (item) {
+                                                    is PeopleItem.Crew -> "crew_${item.role}_${item.id}"
+                                                    is PeopleItem.Cast -> "cast_${item.member.id}"
+                                                }
+                                            }
+                                        ) { item ->
+                                            when (item) {
+                                                is PeopleItem.Crew -> {
+                                                    CrewCard(
+                                                        name = item.name,
+                                                        role = item.role,
+                                                        profilePath = item.profilePath,
+                                                        onClick = { onNavigateActor(item.id) }
+                                                    )
+                                                }
+
+                                                is PeopleItem.Cast -> {
+                                                    CastCard(
+                                                        member = item.member,
+                                                        onClick = { onNavigateActor(item.member.id) }
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -524,41 +597,6 @@ fun DetailScreen(
                                         "Cast: " + m.cast!!.joinToString(", "),
                                         modifier = Modifier.padding(start = 24.dp, top = 12.dp, end = 24.dp)
                                     )
-                                }
-                            }
-
-                            val tmdbDirector = tmdbDetail?.credits.director()
-                            val tmdbWriters = tmdbDetail?.credits.writers().distinctBy { it.id }
-                            val crewChips = (listOfNotNull(tmdbDirector?.let { it to "Director" }) +
-                                tmdbWriters.map { it to "Writer" }).distinctBy { it.first.id }
-
-                            if (crewChips.isNotEmpty()) {
-                                item(key = "crew_header") {
-                                    Text(
-                                        "CREW",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        color = KBTextLo,
-                                        modifier = Modifier.padding(start = 24.dp, top = 8.dp, bottom = 10.dp)
-                                    )
-                                }
-                                item(key = "crew_row") {
-                                    LazyRow(
-                                        contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 16.dp),
-                                        modifier = Modifier
-                                            .padding(bottom = 12.dp)
-                                            .focusGroup()
-                                            .focusRestorer()
-                                    ) {
-                                        items(items = crewChips, key = { it.first.id.toString() + it.second }) { pair ->
-                                            val (member, role) = pair
-                                            CrewCard(
-                                                name = member.name,
-                                                role = role,
-                                                profilePath = member.profilePath,
-                                                onClick = { onNavigateActor(member.id) }
-                                            )
-                                        }
-                                    }
                                 }
                             } else {
                                 m.director?.takeIf { it.isNotEmpty() }?.let {
@@ -570,7 +608,7 @@ fun DetailScreen(
                                         )
                                     }
                                 }
-                            }
+                            }  
 
                             val reviews = tmdbDetail?.reviews?.results.orEmpty()
                             if (reviews.isNotEmpty()) {
