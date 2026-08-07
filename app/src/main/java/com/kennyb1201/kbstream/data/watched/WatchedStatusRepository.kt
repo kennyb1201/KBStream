@@ -87,10 +87,18 @@ class WatchedStatusRepository(context: Context) {
         if (needsLookup.isEmpty()) return
 
         val simklConfigured = simklRepository.isConfigured() && simklRepository.hasToken()
-        Log.e("WATCHED_REPO", "simkl configured+authed = $simklConfigured")
+Log.e("WATCHED_REPO", "simkl configured+authed = $simklConfigured")
 
-        var activityChanged = false
-        if (simklConfigured && !forceRemoteRefresh) {
+if (!simklConfigured) {
+    Log.e(
+        "WATCHED_REPO",
+        "Skipping watched preload because Simkl auth is not ready yet"
+    )
+    return
+}
+
+var activityChanged = false
+if (!forceRemoteRefresh) {
             activityChanged = try {
                 simklRepository.hasWatchedActivityChanged()
             } catch (e: Exception) {
