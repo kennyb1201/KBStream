@@ -170,7 +170,7 @@ class TmdbRepository(context: Context) {
                     episodeNumber = ep.episodeNumber,
                     name = ep.name,
                     overview = ep.overview,
-                    thumbnail = ep.stillPath?.let { "$PROFILE_BASE$it" },
+                    thumbnail = ep.stillPath?.let { "https://image.tmdb.org/t/p/w780$it" },
                     runtimeMinutes = ep.runtime
                 )
             }
