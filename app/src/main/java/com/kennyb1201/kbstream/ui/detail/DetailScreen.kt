@@ -498,7 +498,7 @@ fun DetailScreen(
                                 }
                             }
 
-                                                                                                             val tmdbCast = tmdbDetail?.credits?.cast.orEmpty()
+                                                                                                                                      val tmdbCast = tmdbDetail?.credits?.cast.orEmpty()
                             val tmdbDirector = tmdbDetail?.credits.director()
                             val tmdbWriters = tmdbDetail?.credits.writers().distinctBy { it.id }
 
@@ -556,7 +556,12 @@ fun DetailScreen(
                                 }
                                 item(key = "people_row") {
                                     LazyRow(
-                                        contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 16.dp),
+                                        contentPadding = PaddingValues(
+                                            start = 24.dp,
+                                            end = 24.dp,
+                                            top = 16.dp,
+                                            bottom = 16.dp
+                                        ),
                                         modifier = Modifier
                                             .padding(bottom = 12.dp)
                                             .focusGroup()
@@ -566,8 +571,10 @@ fun DetailScreen(
                                             items = peopleItems,
                                             key = { person ->
                                                 when (person) {
-                                                    is PeopleRowItem.Person -> "person_${person.member.id}_${person.member.character.orEmpty()}"
-                                                    PeopleRowItem.Separator -> "people_separator"
+                                                    is PeopleRowItem.Person ->
+                                                        "person_${person.member.id}_${person.member.character.orEmpty()}"
+                                                    PeopleRowItem.Separator ->
+                                                        "people_separator"
                                                 }
                                             }
                                         ) { person ->
@@ -603,7 +610,7 @@ fun DetailScreen(
                                         )
                                     }
                                 }
-                            }  
+                            }   
 
                             val reviews = tmdbDetail?.reviews?.results.orEmpty()
                             if (reviews.isNotEmpty()) {
