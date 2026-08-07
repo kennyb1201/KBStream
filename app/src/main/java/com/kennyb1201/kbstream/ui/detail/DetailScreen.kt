@@ -504,34 +504,34 @@ fun DetailScreen(
                                 }
                             }
 
-                                                      val tmdbCast = tmdbDetail?.credits?.cast.orEmpty()
+                                                                                 val tmdbCast = tmdbDetail?.credits?.cast.orEmpty()
                             val tmdbDirector = tmdbDetail?.credits.director()
                             val tmdbWriters = tmdbDetail?.credits.writers().distinctBy { it.id }
 
                             val peopleItems = remember(tmdbDetail) {
-                                buildList<PeopleItem> {
+                                buildList<Pair<TmdbCastMember, String?>> {
                                     val mainWriter = tmdbWriters.firstOrNull()
 
                                     mainWriter?.let { writer ->
                                         add(
-                                            PeopleItem.Crew(
+                                            TmdbCastMember(
                                                 id = writer.id,
                                                 name = writer.name,
-                                                role = "Writer",
+                                                character = "Writer",
                                                 profilePath = writer.profilePath
-                                            )
+                                            ) to "crew"
                                         )
                                     }
 
                                     tmdbDirector?.let { director ->
                                         if (director.id != mainWriter?.id) {
                                             add(
-                                                PeopleItem.Crew(
+                                                TmdbCastMember(
                                                     id = director.id,
                                                     name = director.name,
-                                                    role = "Director",
+                                                    character = "Director",
                                                     profilePath = director.profilePath
-                                                )
+                                                ) to "crew"
                                             )
                                         }
                                     }
@@ -540,7 +540,7 @@ fun DetailScreen(
                                         .distinctBy { it.id }
                                         .take(15)
                                         .forEach { member ->
-                                            add(PeopleItem.Cast(member))
+                                            add(member to "cast")
                                         }
                                 }
                             }
@@ -564,30 +564,17 @@ fun DetailScreen(
                                     ) {
                                         items(
                                             items = peopleItems,
-                                            key = { item ->
-                                                when (item) {
-                                                    is PeopleItem.Crew -> "crew_${item.role}_${item.id}"
-                                                    is PeopleItem.Cast -> "cast_${item.member.id}"
-                                                }
+                                            key = { person ->
+                                                val member = person.first
+                                                val kind = person.second
+                                                "${kind}_${member.id}"
                                             }
-                                        ) { item ->
-                                            when (item) {
-                                                is PeopleItem.Crew -> {
-                                                    CrewCard(
-                                                        name = item.name,
-                                                        role = item.role,
-                                                        profilePath = item.profilePath,
-                                                        onClick = { onNavigateActor(item.id) }
-                                                    )
-                                                }
-
-                                                is PeopleItem.Cast -> {
-                                                    CastCard(
-                                                        member = item.member,
-                                                        onClick = { onNavigateActor(item.member.id) }
-                                                    )
-                                                }
-                                            }
+                                        ) { person ->
+                                            val member = person.first
+                                            CastCard(
+                                                member = member,
+                                                onClick = { onNavigateActor(member.id) }
+                                            )
                                         }
                                     }
                                 }
@@ -608,7 +595,7 @@ fun DetailScreen(
                                         )
                                     }
                                 }
-                            }  
+                            }   
 
                             val reviews = tmdbDetail?.reviews?.results.orEmpty()
                             if (reviews.isNotEmpty()) {
