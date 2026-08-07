@@ -203,13 +203,15 @@ data class TmdbDiscoverResponse(
     val results: List<TmdbDiscoverItem> = emptyList()
 )
 
+
 @JsonClass(generateAdapter = true)
 data class TmdbEpisode(
     @Json(name = "episode_number") val episodeNumber: Int,
     val name: String? = null,
     val overview: String? = null,
     @Json(name = "still_path") val stillPath: String? = null,
-    val runtime: Int? = null
+    val runtime: Int? = null,
+    @Json(name = "air_date") val airDate: String? = null
 )
 
 @JsonClass(generateAdapter = true)
