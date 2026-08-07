@@ -306,13 +306,7 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 _episodes.value = tmdbRepository.getSeasonEpisodes(tvId, season, imdbId)
 
-                if (_simklWatchedEpisodes.value.isEmpty() && _simklSeriesWatched.value) {
-                    val fallbackKeys = _episodes.value.mapNotNull { ep ->
-                        buildEpisodeKey(imdbId, season, ep.episodeNumber)
-                    }.toSet()
-
-                    _watchedEpisodeKeys.value = _watchedEpisodeKeys.value + fallbackKeys
-                }
+            
             } catch (e: Exception) {
                 Log.e("KBStream", "episodes load failed for season=$season imdbId=$imdbId", e)
                 _episodes.value = emptyList()
