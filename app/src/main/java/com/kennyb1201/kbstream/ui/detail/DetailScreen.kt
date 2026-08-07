@@ -732,7 +732,7 @@ fun DetailScreen(
                                             .focusGroup()
                                             .focusRestorer()
                                     ) {
-                                        items(items = recs.take(15), key = { it.id }) { rec: TmdbRecommendationItem ->
+                                        items(items = recs.take(30), key = { it.id }) { rec: TmdbRecommendationItem ->
                                             RecCard(
                                                 rec = rec,
                                                 isWatched = resolvedPosterIds[viewModel.posterLookupKey(rec.id, type.lowercase())]
