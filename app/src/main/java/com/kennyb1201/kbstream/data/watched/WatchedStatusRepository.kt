@@ -156,37 +156,9 @@ if (!forceRemoteRefresh) {
                     localWatched || simklWatched
                 }
 
-                "series" -> {
-                    if (!simklConfigured) {
-                        false
-                    } else {
-                        val cachedValue = cacheMutex.withLock {
-                            cache[cacheKey(id, normalizedType)]?.second
-                        }
-                        val canReuseCachedSeries =
-                            !forceRemoteRefresh &&
-                                !activityChanged &&
-                                cachedValue != null
-
-                        if (canReuseCachedSeries) {
-                            cachedValue
-                        } else {
-                            try {
-                                simklRepository.isShowWatchedByImdb(id)
-                            } catch (e: Exception) {
-                                Log.e(
-                                    "WATCHED_REPO",
-                                    "isShowWatchedByImdb failed for $id: ${e.message}",
-                                    e
-                                )
-                                cachedValue ?: false
-                            }
-                        }
-                    }
-                }
+                "series" -> false
 
                 else -> false
-            }
 
             Log.e(
                 "WATCHED_REPO",
