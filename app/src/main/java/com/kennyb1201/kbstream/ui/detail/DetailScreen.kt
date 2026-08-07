@@ -78,16 +78,10 @@ data class StreamsTarget(
     val resumePositionMs: Long
 )
 
-private sealed interface PeopleItem {
-        data class Crew(
-                val id: Int,
-                        val name: String,
-                                val role: String,
-                                        val profilePath: String?
-                                            ) : PeopleItem
-
-                                                data class Cast(val member: TmdbCastMember) : PeopleItem
-                                                }
+private sealed interface PeopleRowItem {
+        data class Person(val member: TmdbCastMember) : PeopleRowItem
+            data object Separator : PeopleRowItem
+            }
 
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
