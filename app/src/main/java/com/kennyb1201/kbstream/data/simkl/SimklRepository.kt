@@ -229,20 +229,35 @@ class SimklRepository(
         )
     }
 
-    private fun isShowFullyWatched(item: SimklWatchingShowDetailedItem): Boolean {
-        val status = item.status?.trim()?.lowercase()
-        val watched = item.watchedEpisodesCount
-        val total = item.totalEpisodesCount
-        val notAired = item.notAiredEpisodesCount ?: 0
-        val airedTotal = total?.let { it - notAired }
-        val caughtUpOnAired =
-            watched != null && airedTotal != null && airedTotal > 0 && watched >= airedTotal
+private fun isShowFullyWatched(item: SimklWatchingShowItem): Boolean {
+    val status = item.status?.trim()?.lowercase()
+    val watched = item.watchedEpisodesCount
+    val total = item.totalEpisodesCount
+    val notAired = item.notAiredEpisodesCount ?: 0
+    val airedTotal = total?.let { it - notAired }
+    val caughtUpOnAired =
+        watched != null && airedTotal != null && airedTotal > 0 && watched >= airedTotal
 
-        if (caughtUpOnAired) return true
+    if (caughtUpOnAired) return true
 
-        val hasNext = !item.nextToWatch.isNullOrBlank()
-        return status == "completed" && !hasNext
-    }
+    val hasNext = !item.nextToWatch.isNullOrBlank()
+    return status == "completed" && !hasNext
+}
+
+private fun isShowFullyWatched(item: SimklWatchingShowDetailedItem): Boolean {
+    val status = item.status?.trim()?.lowercase()
+    val watched = item.watchedEpisodesCount
+    val total = item.totalEpisodesCount
+    val notAired = item.notAiredEpisodesCount ?: 0
+    val airedTotal = total?.let { it - notAired }
+    val caughtUpOnAired =
+        watched != null && airedTotal != null && airedTotal > 0 && watched >= airedTotal
+
+    if (caughtUpOnAired) return true
+
+    val hasNext = !item.nextToWatch.isNullOrBlank()
+    return status == "completed" && !hasNext
+}
 
     suspend fun getCompletedMovieImdbIds(
         accessToken: String = requireAccessToken()
