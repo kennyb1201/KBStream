@@ -845,19 +845,19 @@ private fun CrewCard(name: String, role: String, profilePath: String?, onClick: 
 @Composable
 private fun PeopleSeparatorCard() {
     Box(
-            modifier = Modifier
-                        .width(32.dp)
-                                    .height(130.dp)
-                                                .padding(end = 12.dp)
-                                                    ) {
-                                                            Box(
-                                                                        modifier = Modifier
-                                                                                        .width(8.dp)
-                                                                                                        .height(8.dp)
-                                                                                                                        .background(KBTextLo.copy(alpha = 0.7f), CircleShape)
-                                                                                                                                )
-                                                                                                                                    }
-                                                                                                                                    }
+        modifier = Modifier
+            .width(32.dp)
+            .height(130.dp)
+            .padding(end = 12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = "/",
+            color = KBTextLo,
+            style = MaterialTheme.typography.titleMedium
+        )
+    }
+}
 
 
 @Composable
