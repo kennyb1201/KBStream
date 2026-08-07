@@ -309,7 +309,14 @@ class SimklRepository(
         imdbId: String,
         tmdbId: Int? = null,
         accessToken: String = requireAccessToken()
-    ): Set<Pair<Int, Int>> {
+    ): Set<Pair<Int, Int>> { 
+
+Log.e(
+    "SIMKL_REPO",
+    "show lookup imdb=$imdbId accessTokenLength=${accessToken.length} " +
+        "savedTokenLength=${getSavedAccessToken()?.length ?: 0}"
+)
+        
         if (imdbId.isBlank()) return emptySet()
 
         val bulkDebug = getWatchedBulkImport(
