@@ -116,16 +116,28 @@ fun ActorScreen(
             }
 
             val credits = remember(p) {
-                p.combinedCredits?.cast
-                    .orEmpty()
-                    .filter { credit ->
-                        credit.id > 0 &&
-                            !credit.mediaType.isNullOrBlank() &&
-                            (credit.mediaType == "movie" || credit.mediaType == "tv")
+    p.combinedCredits?.cast
+        .orEmpty()
+        .filter { credit ->
+            credit.id > 0 &&
+                !credit.mediaType.isNullOrBlank() &&
+                (credit.mediaType == "movie" || credit.mediaType == "tv")
+        }
+        .distinctBy { "${it.mediaType}:${it.id}" }
+        .sortedWith(
+            compareByDescending<TmdbPersonCredit> { it.popularity ?: 0.0 }
+                .thenByDescending { it.voteAverage ?: 0.0 }
+                .thenByDescending {
+                    when (it.mediaType) {
+                        "movie" -> it.releaseDate ?: ""
+                        "tv" -> it.firstAirDate ?: ""
+                        else -> ""
                     }
-                    .distinctBy { "${it.mediaType}:${it.id}" }
-                    .take(60)
-            }
+                }
+                .thenBy { it.title ?: it.name ?: "" }
+        )
+        .take(60)
+}
 
             CompositionLocalProvider(LocalBringIntoViewSpec provides LocalTvBringIntoViewSpec) {
                 Box(modifier = Modifier.fillMaxSize()) {
