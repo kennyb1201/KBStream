@@ -30,7 +30,7 @@ data class ResolvedEpisode(
     val name: String?,
     val overview: String?,
     val thumbnail: String?,
-    val runtimeMinutes: Int?
+    val runtimeMinutes: Int?,
         val airDate: String?
 )
 
