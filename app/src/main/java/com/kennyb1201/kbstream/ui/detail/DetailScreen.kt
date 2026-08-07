@@ -67,6 +67,8 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import kotlinx.coroutines.launch
 
 data class StreamsTarget(
@@ -120,7 +122,9 @@ fun DetailScreen(
     val scope = rememberCoroutineScope()
     var selectedSeason by remember { mutableStateOf<Int?>(null) }
     var selectedReview by remember { mutableStateOf<TmdbReview?>(null) }
-
+    val resumeEpisodeFocusRequester = remember { FocusRequester() }
+    var shouldFocusResumeEpisode by remember { mutableStateOf(true) }
+    
     LaunchedEffect(id) {
         viewModel.load(type, id)
     }
@@ -146,17 +150,28 @@ fun DetailScreen(
             .sortedWith(compareBy({ it == 0 }, { it }))
     }
 
-    LaunchedEffect(tmdbDetail) {
-        if (selectedSeason == null && seasons.isNotEmpty()) {
-            selectedSeason = seasons.first()
-        }
-    }
-
+    val resumeEpisodeFocusRequester = remember { FocusRequester() }
+var shouldFocusResumeEpisode by remember { mutableStateOf(true) }
     LaunchedEffect(type, selectedSeason, tmdbDetail?.id) {
     val season = selectedSeason
     val tvId = tmdbDetail?.id
     if (type == "series" && season != null && tvId != null) {
         viewModel.loadEpisodesForSeason(season)
+    }
+}
+
+    LaunchedEffect(selectedSeason, episodes, resumeInfo, shouldFocusResumeEpisode) {
+    if (
+        shouldFocusResumeEpisode &&
+        type == "series" &&
+        selectedSeason == resumeInfo?.season &&
+        episodes.any {
+            it.episodeNumber == resumeInfo?.episode &&
+            it.streamId == resumeInfo?.episodeStreamId
+        }
+    ) {
+        resumeEpisodeFocusRequester.requestFocus()
+        shouldFocusResumeEpisode = false
     }
 }
 
@@ -456,47 +471,59 @@ playTarget = remember(resumeInfo, id, displayName, targetSeason, targetEpisode) 
                                     }
                                 }
 
-                                item(key = "episodes_row") {
-                                    LazyRow(
-                                        contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 16.dp),
-                                        modifier = Modifier
-                                            .padding(bottom = 20.dp)
-                                            .focusGroup()
-                                            .focusRestorer()
-                                    ) {
-                                        items(
-    items = episodes,
-    key = { it.streamId }
-) { ep: ResolvedEpisode ->
-    val episodeKey = remember(id, selectedSeason, ep.episodeNumber) {
-        selectedSeason?.let { season -> "$id:$season:${ep.episodeNumber}" }
-    }
+item(key = "episodes_row") {
+    LazyRow(
+        contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 16.dp),
+        modifier = Modifier
+            .padding(bottom = 20.dp)
+            .focusGroup()
+            .focusRestorer()
+    ) {
+        items(
+            items = episodes,
+            key = { it.streamId }
+        ) { ep: ResolvedEpisode ->
+            val episodeKey = remember(id, selectedSeason, ep.episodeNumber) {
+                selectedSeason?.let { season -> "$id:$season:${ep.episodeNumber}" }
+            }
 
-    val isEpisodeWatched = remember(
-    episodeKey,
-    watchedEpisodeKeys
-) {
-    episodeKey != null && episodeKey in watchedEpisodeKeys
-}
+            val isEpisodeWatched = remember(
+                episodeKey,
+                watchedEpisodeKeys
+            ) {
+                episodeKey != null && episodeKey in watchedEpisodeKeys
+            }
 
-    EpisodeCard(
-        ep = ep,
-        isWatched = isEpisodeWatched,
-        onClick = {
-            val hasResumeHere = resumeInfo?.episodeStreamId == ep.streamId
-            val epSuffix = ep.name?.let { " - " + it } ?: ""
-            val target = StreamsTarget(
-                contentType = "series",
-                streamId = ep.streamId,
-                title = displayName + " · E" + ep.episodeNumber + epSuffix,
-                displayName = displayName,
-                season = selectedSeason,
-                episode = ep.episodeNumber,
-                resumePositionMs = if (hasResumeHere) resumeInfo!!.positionMs else 0L
+            val isResumeEpisode =
+                selectedSeason == resumeInfo?.season &&
+                ep.episodeNumber == resumeInfo?.episode &&
+                ep.streamId == resumeInfo?.episodeStreamId
+
+            EpisodeCard(
+                ep = ep,
+                isWatched = isEpisodeWatched,
+                modifier = if (isResumeEpisode) {
+                    Modifier.focusRequester(resumeEpisodeFocusRequester)
+                } else {
+                    Modifier
+                },
+                onClick = {
+                    val hasResumeHere = resumeInfo?.episodeStreamId == ep.streamId
+                    val epSuffix = ep.name?.let { " - " + it } ?: ""
+                    val target = StreamsTarget(
+                        contentType = "series",
+                        streamId = ep.streamId,
+                        title = displayName + " · E" + ep.episodeNumber + epSuffix,
+                        displayName = displayName,
+                        season = selectedSeason,
+                        episode = ep.episodeNumber,
+                        resumePositionMs = if (hasResumeHere) resumeInfo!!.positionMs else 0L
+                    )
+                    onNavigateStreams(target, id, type, m.poster)
+                }
             )
-            onNavigateStreams(target, id, type, m.poster)
         }
-    )
+    }
 }
                                     }
                                 }
@@ -891,11 +918,14 @@ private fun StudioCard(name: String, logoPath: String?, onClick: () -> Unit) {
 private fun EpisodeCard(
     ep: ResolvedEpisode,
     isWatched: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     KBCard(
         onClick = onClick,
-        modifier = Modifier.width(220.dp).padding(end = 12.dp)
+        modifier = modifier
+            .width(220.dp)
+            .padding(end = 12.dp)
     ) {
         Column(modifier = Modifier.width(220.dp)) {
             PosterCard(
