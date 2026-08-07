@@ -151,11 +151,13 @@ fun DetailScreen(
         }
     }
 
-    LaunchedEffect(selectedSeason) {
-        selectedSeason?.let {
-            if (type == "series") viewModel.loadEpisodesForSeason(it)
-        }
+    LaunchedEffect(type, selectedSeason, tmdbDetail?.id) {
+    val season = selectedSeason
+    val tvId = tmdbDetail?.id
+    if (type == "series" && season != null && tvId != null) {
+        viewModel.loadEpisodesForSeason(season)
     }
+}
 
     fun playTrailer(context: android.content.Context) {
         val trailer = tmdbDetail?.videos?.results?.firstOrNull {
