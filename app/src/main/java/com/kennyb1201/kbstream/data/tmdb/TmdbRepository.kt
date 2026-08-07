@@ -161,22 +161,27 @@ class TmdbRepository(context: Context) {
         return runCatching { api.getCollection(collectionId, apiKey) }.getOrNull()
     }
 
-    suspend fun getSeasonEpisodes(tvId: Int, season: Int, imdbId: String): List<ResolvedEpisode> {
-        if (apiKey.isBlank()) return emptyList()
+suspend fun getSeasonEpisodes(
+    tvId: Int,
+    season: Int,
+    imdbId: String
+): List<ResolvedEpisode> {
+    if (apiKey.isBlank()) return emptyList()
 
- return runCatching {
-    api.getSeasonDetail(tvId, season, apiKey).episodes.map { ep ->
-        ResolvedEpisode(
-            streamId = "$imdbId:$season:${ep.episodeNumber}",
-            episodeNumber = ep.episodeNumber,
-            name = ep.name,
-            overview = ep.overview,
-            thumbnail = ep.stillPath?.let { "https://image.tmdb.org/t/p/w780$it" },
-            runtimeMinutes = ep.runtime,
-            airDate = ep.airDate
-        )
-    }
-}.getOrDefault(emptyList())
+    return runCatching {
+        api.getSeasonDetail(tvId, season, apiKey).episodes.map { ep ->
+            ResolvedEpisode(
+                streamId = "$imdbId:$season:${ep.episodeNumber}",
+                episodeNumber = ep.episodeNumber,
+                name = ep.name,
+                overview = ep.overview,
+                thumbnail = ep.stillPath?.let { "https://image.tmdb.org/t/p/w780$it" },
+                runtimeMinutes = ep.runtime,
+                airDate = ep.airDate
+            )
+        }
+    }.getOrDefault(emptyList())
+}
 
     suspend fun getByCompany(companyId: Int): List<StudioSection> =
         getInitialCompanySections(companyId)
