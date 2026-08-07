@@ -143,7 +143,7 @@ data class SimklContinueWatchingItem(
     val progress: Float?,
     val upNextText: String?,
     val mediaType: String,
-    val source: String
+    val source: String,
     val season: Int? = null,
 val episode: Int? = null
 )
