@@ -209,26 +209,27 @@ fun DetailScreen(
                 }
             } else {
                 val resumeSeason = resumeInfo?.season
-                val resumeEpisode = resumeInfo?.episode
-                val resumeStreamId = resumeInfo?.episodeStreamId
-                val hasResume = resumeStreamId != null && resumeSeason != null && resumeEpisode != null
-                val targetSeason = resumeSeason ?: 1
-                val targetEpisode = resumeEpisode ?: 1
-                val targetStreamId = resumeStreamId ?: (id + ":" + targetSeason + ":" + targetEpisode)
+val resumeEpisode = resumeInfo?.episode
+val resumeStreamId = resumeInfo?.episodeStreamId
+val hasResume = resumeStreamId != null && resumeSeason != null && resumeEpisode != null
+val targetSeason = resumeSeason ?: 1
+val targetEpisode = resumeEpisode ?: 1
+val targetStreamId = resumeStreamId ?: (id + ":" + targetSeason + ":" + targetEpisode)
 
-                val playLabelPrefix = if (hasResume) "▶ RESUME" else "▶ PLAY"
-                playLabel = playLabelPrefix + " S" + targetSeason + "E" + targetEpisode
-                playTarget = remember(resumeInfo, id, displayName, targetSeason, targetEpisode) {
-                    StreamsTarget(
-                        contentType = "series",
-                        streamId = targetStreamId,
-                        title = displayName + " · S" + targetSeason + "E" + targetEpisode,
-                        displayName = displayName,
-                        season = targetSeason,
-                        episode = targetEpisode,
-                        resumePositionMs = if (hasResume) resumeInfo!!.positionMs else 0L
-                    )
-                }
+val playLabelPrefix = if (hasResume) "▶ RESUME" else "▶ PLAY"
+playLabel = playLabelPrefix + " S" + targetSeason + " E" + targetEpisode
+
+playTarget = remember(resumeInfo, id, displayName, targetSeason, targetEpisode) {
+    StreamsTarget(
+        contentType = "series",
+        streamId = targetStreamId,
+        title = displayName + " · S" + targetSeason + " E" + targetEpisode,
+        displayName = displayName,
+        season = targetSeason,
+        episode = targetEpisode,
+        resumePositionMs = if (hasResume) resumeInfo!!.positionMs else 0L
+    )
+}
             }
 
             CompositionLocalProvider(LocalBringIntoViewSpec provides LocalTvBringIntoViewSpec) {
