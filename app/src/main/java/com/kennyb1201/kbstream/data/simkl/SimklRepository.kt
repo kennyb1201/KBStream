@@ -229,7 +229,7 @@ class SimklRepository(
         )
     }
 
-    private fun isShowFullyWatched(item: SimklWatchingShowItem): Boolean {
+    private fun isShowFullyWatched(item: SimklWatchingShowDetailedItem): Boolean {
         val status = item.status?.trim()?.lowercase()
         val watched = item.watchedEpisodesCount
         val total = item.totalEpisodesCount
