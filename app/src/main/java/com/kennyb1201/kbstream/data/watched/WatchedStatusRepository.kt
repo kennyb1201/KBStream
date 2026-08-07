@@ -138,27 +138,32 @@ if (!forceRemoteRefresh) {
         val snapshotMovieKeys = cacheMutex.withLock { completedMovieKeys }
 
         val resolvedEntities = needsLookup.map { (id, normalizedType) ->
-            val watched = when (normalizedType) {
-                "movie" -> {
-                    val localWatched = isMovieLocallyWatched(id)
-                    val imdbKey = "imdb:$id"
-                    val rawKey = id
-                    val simklWatched = simklConfigured && (
-                        imdbKey in snapshotMovieKeys ||
-                            rawKey in snapshotMovieKeys
-                        )
+val watched = when (normalizedType) {
+    "movie" -> {
+        val localWatched = isMovieLocallyWatched(id)
+        val imdbKey = "imdb:$id"
+        val rawKey = id
+        val simklWatched = simklConfigured && (
+            imdbKey in snapshotMovieKeys ||
+                rawKey in snapshotMovieKeys
+            )
 
-                    Log.e(
-                        "WATCHED_REPO",
-                        "movie membership imdb=$id imdbKeyMatch=${imdbKey in snapshotMovieKeys} rawKeyMatch=${rawKey in snapshotMovieKeys} simklWatched=$simklWatched keyCount=${snapshotMovieKeys.size}"
-                    )
+        Log.e(
+            "WATCHED_REPO",
+            "movie membership imdb=$id imdbKeyMatch=${imdbKey in snapshotMovieKeys} rawKeyMatch=${rawKey in snapshotMovieKeys} simklWatched=$simklWatched keyCount=${snapshotMovieKeys.size}"
+        )
 
-                    localWatched || simklWatched
-                }
+        localWatched || simklWatched
+    }
 
-                "series" -> false
+    "series" -> {
+        false
+    }
 
-                else -> false
+    else -> {
+        false
+    }
+}
 
             Log.e(
                 "WATCHED_REPO",
