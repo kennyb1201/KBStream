@@ -31,6 +31,7 @@ data class ResolvedEpisode(
     val overview: String?,
     val thumbnail: String?,
     val runtimeMinutes: Int?
+        val airDate: String?
 )
 
 class TmdbRepository(context: Context) {
