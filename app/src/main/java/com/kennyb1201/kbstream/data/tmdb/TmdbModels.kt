@@ -309,3 +309,29 @@ fun TmdbDetail.bestReleaseDate(): String? {
 
     return rawDate?.substringBefore("T")?.takeIf { it.isNotBlank() }
 }
+
+
+fun TmdbDetail.certification(isMovie: Boolean): String? {
+    return if (isMovie) {
+        releaseDates?.results
+            ?.firstOrNull { it.iso31661 == "US" }
+            ?.releaseDates
+            ?.firstOrNull { !it.certification.isNullOrBlank() }
+            ?.certification
+            ?.takeIf { it.isNotBlank() }
+            ?: releaseDates?.results
+                ?.asSequence()
+                ?.flatMap { it.releaseDates.asSequence() }
+                ?.mapNotNull { it.certification?.takeIf(String::isNotBlank) }
+                ?.firstOrNull()
+    } else {
+        contentRatings?.results
+            ?.firstOrNull { it.iso31661 == "US" }
+            ?.rating
+            ?.takeIf { it.isNotBlank() }
+            ?: contentRatings?.results
+                ?.asSequence()
+                ?.mapNotNull { it.rating?.takeIf(String::isNotBlank) }
+                ?.firstOrNull()
+    }
+}
