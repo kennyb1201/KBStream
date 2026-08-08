@@ -116,6 +116,8 @@ fun DetailScreen(
     type: String,
     id: String,
     onNavigateDetail: (String, String) -> Unit = { _, _ -> },
+    initialTarget: StreamsTarget? = null,
+initialPoster: String? = null,
     onNavigateActor: (Int) -> Unit = {},
     onNavigateStudio: (Int, String, Boolean) -> Unit = { _, _, _ -> },
     onNavigateTag: (Int, String, Boolean, String) -> Unit = { _, _, _, _ -> },
@@ -127,10 +129,10 @@ fun DetailScreen(
     var selectedReview by remember { mutableStateOf<TmdbReview?>(null) }
     val episodesRowState = rememberLazyListState()
 
-    LaunchedEffect(type, id) {
-        selectedSeason = null
-        viewModel.load(type, id)
-    }
+    LaunchedEffect(type, id, initialTarget?.season, initialTarget?.episode) {
+    selectedSeason = initialTarget?.season
+    viewModel.load(type, id)
+}
 
     val meta by viewModel.meta.collectAsState()
     val tmdbDetail by viewModel.tmdbDetail.collectAsState()
@@ -155,15 +157,22 @@ fun DetailScreen(
             .sortedWith(compareBy({ it == 0 }, { it }))
     }
 
-    val effectiveSeason = remember(type, selectedSeason, seasons, resumeInfo?.season) {
-        if (type != "series") {
-            null
-        } else {
-            selectedSeason
-                ?: resumeInfo?.season?.takeIf { it in seasons }
-                ?: seasons.firstOrNull()
-        }
+    val effectiveSeason = remember(
+    type,
+    selectedSeason,
+    seasons,
+    initialTarget?.season,
+    resumeInfo?.season
+) {
+    if (type != "series") {
+        null
+    } else {
+        selectedSeason
+            ?: initialTarget?.season?.takeIf { it in seasons }
+            ?: resumeInfo?.season?.takeIf { it in seasons }
+            ?: seasons.firstOrNull()
     }
+}
 
     LaunchedEffect(type, id, effectiveSeason) {
         if (type == "series" && effectiveSeason != null) {
@@ -213,46 +222,70 @@ fun DetailScreen(
     }
 
     val resolvedTargetEpisode = remember(
-        type,
-        effectiveSeason,
-        episodes,
-        resumeSeason,
-        resumeEpisode,
-        resumeStreamId,
-        hasSeriesResume,
-        watchedEpisodesForSeason
+    type,
+    effectiveSeason,
+    episodes,
+    initialTarget?.season,
+    initialTarget?.episode,
+    initialTarget?.streamId,
+    resumeSeason,
+    resumeEpisode,
+    resumeStreamId,
+    hasSeriesResume,
+    watchedEpisodesForSeason
+) {
+    if (type != "series") {
+        null
+    } else if (
+        initialTarget?.season == effectiveSeason &&
+        (initialTarget.episode != null || !initialTarget.streamId.isNullOrBlank())
     ) {
-        if (type != "series") {
-            null
-        } else if (hasSeriesResume && effectiveSeason == resumeSeason) {
-            episodes.firstOrNull { ep ->
-                (resumeStreamId != null && ep.streamId == resumeStreamId) ||
-                    ep.episodeNumber == resumeEpisode
-            } ?: episodes.firstOrNull { ep ->
-                ep.episodeNumber == resumeEpisode
-            } ?: episodes.firstOrNull()
-        } else {
-            episodes.firstOrNull { ep -> ep.episodeNumber !in watchedEpisodesForSeason }
-                ?: episodes.firstOrNull()
-        }
+        episodes.firstOrNull { episode ->
+            (!initialTarget.streamId.isNullOrBlank() &&
+                episode.streamId == initialTarget.streamId) ||
+                (initialTarget.episode != null &&
+                    episode.episodeNumber == initialTarget.episode)
+        } ?: episodes.firstOrNull { episode ->
+            initialTarget.episode != null &&
+                episode.episodeNumber == initialTarget.episode
+        } ?: episodes.firstOrNull()
+    } else if (hasSeriesResume && effectiveSeason == resumeSeason) {
+        episodes.firstOrNull { episode ->
+            (resumeStreamId != null && episode.streamId == resumeStreamId) ||
+                episode.episodeNumber == resumeEpisode
+        } ?: episodes.firstOrNull { episode ->
+            episode.episodeNumber == resumeEpisode
+        } ?: episodes.firstOrNull()
+    } else {
+        episodes.firstOrNull { episode ->
+            episode.episodeNumber !in watchedEpisodesForSeason
+        } ?: episodes.firstOrNull()
     }
+}
 
     val targetEpisodeNumber = remember(
-        type,
-        hasSeriesResume,
-        effectiveSeason,
-        resumeSeason,
-        resumeEpisode,
-        resolvedTargetEpisode
+    type,
+    effectiveSeason,
+    initialTarget?.season,
+    initialTarget?.episode,
+    hasSeriesResume,
+    resumeSeason,
+    resumeEpisode,
+    resolvedTargetEpisode
+) {
+    if (type != "series") {
+        null
+    } else if (
+        initialTarget?.season == effectiveSeason &&
+        initialTarget.episode != null
     ) {
-        if (type != "series") {
-            null
-        } else if (hasSeriesResume && effectiveSeason == resumeSeason) {
-            resolvedTargetEpisode?.episodeNumber ?: resumeEpisode
-        } else {
-            resolvedTargetEpisode?.episodeNumber
-        }
+        resolvedTargetEpisode?.episodeNumber ?: initialTarget.episode
+    } else if (hasSeriesResume && effectiveSeason == resumeSeason) {
+        resolvedTargetEpisode?.episodeNumber ?: resumeEpisode
+    } else {
+        resolvedTargetEpisode?.episodeNumber
     }
+}
 
     val targetEpisodeIndex = remember(episodes, resolvedTargetEpisode?.streamId, targetEpisodeNumber) {
         when {
@@ -348,6 +381,12 @@ LaunchedEffect(type, id, effectiveSeason, tmdbDetail?.id) {
                         displayName = displayName,
                         season = targetSeason,
                         episode = targetEpisode,
+                        contentType = "series",
+                        streamId = targetStreamId,
+                        title = displayName + " · S" + targetSeason + "E" + targetEpisode,
+                        displayName = displayName,
+                        season = targetSeason,
+                        episode = targetEpisode,
                         resumePositionMs = if (hasSeriesResume && targetSeason == resumeSeason) {
                             resumeInfo?.positionMs ?: 0L
                         } else {
@@ -355,7 +394,10 @@ LaunchedEffect(type, id, effectiveSeason, tmdbDetail?.id) {
                         }
                     )
                 }
-            }
+            }}
+                    
+                
+            
 
             CompositionLocalProvider(LocalBringIntoViewSpec provides LocalTvBringIntoViewSpec) {
                 Box(modifier = Modifier.fillMaxSize()) {
