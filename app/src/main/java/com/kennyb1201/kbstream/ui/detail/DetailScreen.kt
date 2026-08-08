@@ -295,18 +295,7 @@ fun DetailScreen(
             else -> -1
         }
     }
-LaunchedEffect(type, id, effectiveSeason, tmdbDetail?.id) {
-    if (
-        type == "series" &&
-        effectiveSeason != null &&
-        tmdbDetail?.id != null
-    ) {
-        if (selectedSeason != effectiveSeason) {
-            selectedSeason = effectiveSeason
-        }
-        viewModel.loadEpisodesForSeason(effectiveSeason)
-    }
-}
+
 
     fun playTrailer(context: android.content.Context) {
         val trailer = tmdbDetail?.videos?.results?.firstOrNull {
@@ -337,7 +326,6 @@ LaunchedEffect(type, id, effectiveSeason, tmdbDetail?.id) {
                     ?: m.poster
             }
             val context = androidx.compose.ui.platform.LocalContext.current
-
             val playLabel: String
             val playTarget: StreamsTarget
             if (type == "movie") {
@@ -354,31 +342,67 @@ LaunchedEffect(type, id, effectiveSeason, tmdbDetail?.id) {
                         resumePositionMs = resumeInfo?.positionMs ?: 0L
                     )
                 }
-                        } else {
-                val targetSeason = effectiveSeason ?: selectedSeason ?: seasons.firstOrNull() ?: 1
-                val targetEpisode = resolvedTargetEpisode?.episodeNumber
-                    ?: if (hasSeriesResume && targetSeason == resumeSeason) resumeEpisode!! else 1
+            } else {
+                val targetSeason =
+                    effectiveSeason ?: selectedSeason ?: initialTarget?.season ?: seasons.firstOrNull() ?: 1
 
-                val targetStreamId = resolvedTargetEpisode?.streamId
-                    ?: if (hasSeriesResume && targetSeason == resumeSeason) {
-                        resumeStreamId ?: (id + ":" + targetSeason + ":" + targetEpisode)
-                    } else {
-                        id + ":" + targetSeason + ":" + targetEpisode
+                val usingInitialTarget =
+                    initialTarget?.season == targetSeason &&
+                        (
+                            initialTarget?.episode == targetEpisodeNumber ||
+                                (!initialTarget?.streamId.isNullOrBlank() &&
+                                    initialTarget?.streamId == resolvedTargetEpisode?.streamId)
+                            )
+
+                val usingResumeTarget =
+                    !usingInitialTarget &&
+                        hasSeriesResume &&
+                        targetSeason == resumeSeason
+
+                val targetEpisode =
+                    when {
+                        usingInitialTarget ->
+                            resolvedTargetEpisode?.episodeNumber ?: initialTarget?.episode ?: 1
+
+                        usingResumeTarget ->
+                            resolvedTargetEpisode?.episodeNumber ?: resumeEpisode ?: 1
+
+                        else ->
+                            resolvedTargetEpisode?.episodeNumber ?: 1
+                    }
+
+                val targetStreamId =
+                    when {
+                        usingInitialTarget ->
+                            resolvedTargetEpisode?.streamId
+                                ?: initialTarget?.streamId
+                                ?: (id + ":" + targetSeason + ":" + targetEpisode)
+
+                        usingResumeTarget ->
+                            resolvedTargetEpisode?.streamId
+                                ?: resumeStreamId
+                                ?: (id + ":" + targetSeason + ":" + targetEpisode)
+
+                        else ->
+                            resolvedTargetEpisode?.streamId
+                                ?: (id + ":" + targetSeason + ":" + targetEpisode)
                     }
 
                 val playLabelPrefix =
-                    if (hasSeriesResume && targetSeason == resumeSeason) "▶ RESUME" else "▶ PLAY"
+                    if (usingInitialTarget || usingResumeTarget) "▶ RESUME" else "▶ PLAY"
 
                 playLabel = playLabelPrefix + " S" + targetSeason + "E" + targetEpisode
 
                 playTarget = remember(
+                    initialTarget,
                     resumeInfo,
                     id,
                     displayName,
                     targetSeason,
                     targetEpisode,
                     targetStreamId,
-                    resolvedTargetEpisode
+                    resolvedTargetEpisode,
+                    targetEpisodeNumber
                 ) {
                     StreamsTarget(
                         contentType = "series",
@@ -387,12 +411,10 @@ LaunchedEffect(type, id, effectiveSeason, tmdbDetail?.id) {
                         displayName = displayName,
                         season = targetSeason,
                         episode = targetEpisode,
-                        resumePositionMs = if (
-                            hasSeriesResume && targetSeason == resumeSeason
-                        ) {
-                            resumeInfo?.positionMs ?: 0L
-                        } else {
-                            0L
+                        resumePositionMs = when {
+                            usingInitialTarget -> initialTarget?.resumePositionMs ?: 0L
+                            usingResumeTarget -> resumeInfo?.positionMs ?: 0L
+                            else -> 0L
                         }
                     )
                 }
