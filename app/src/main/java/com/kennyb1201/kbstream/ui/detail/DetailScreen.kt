@@ -71,6 +71,7 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import androidx.compose.ui.Alignment
 import kotlinx.coroutines.launch
 import java.text.NumberFormat
 import java.util.Locale
@@ -112,16 +113,17 @@ private val LocalTvBringIntoViewSpec = TvPivotBringIntoViewSpec()
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
+@Composable
 fun DetailScreen(
     type: String,
     id: String,
     onNavigateDetail: (String, String) -> Unit = { _, _ -> },
-    initialTarget: StreamsTarget? = null,
-initialPoster: String? = null,
     onNavigateActor: (Int) -> Unit = {},
     onNavigateStudio: (Int, String, Boolean) -> Unit = { _, _, _ -> },
     onNavigateTag: (Int, String, Boolean, String) -> Unit = { _, _, _, _ -> },
     onNavigateStreams: (StreamsTarget, String, String, String?) -> Unit = { _, _, _, _ -> },
+    initialTarget: StreamsTarget? = null,
+    initialPoster: String? = null,
     viewModel: DetailViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
     val scope = rememberCoroutineScope()
