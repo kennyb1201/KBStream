@@ -113,7 +113,6 @@ private val LocalTvBringIntoViewSpec = TvPivotBringIntoViewSpec()
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
-@Composable
 fun DetailScreen(
     type: String,
     id: String,
@@ -125,7 +124,7 @@ fun DetailScreen(
     initialTarget: StreamsTarget? = null,
     initialPoster: String? = null,
     viewModel: DetailViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
-) {
+)  {
     val scope = rememberCoroutineScope()
     var selectedSeason by remember { mutableStateOf<Int?>(null) }
     var selectedReview by remember { mutableStateOf<TmdbReview?>(null) }
