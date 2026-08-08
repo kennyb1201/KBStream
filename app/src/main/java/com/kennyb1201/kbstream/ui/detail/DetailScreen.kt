@@ -261,17 +261,18 @@ fun DetailScreen(
             else -> -1
         }
     }
-
-    LaunchedEffect(type, effectiveSeason, episodesLoading, targetEpisodeIndex) {
-        if (
-            type == "series" &&
-            effectiveSeason != null &&
-            !episodesLoading &&
-            targetEpisodeIndex >= 0
-        ) {
-            episodesRowState.scrollToItem(targetEpisodeIndex)
+LaunchedEffect(type, id, effectiveSeason, tmdbDetail?.id) {
+    if (
+        type == "series" &&
+        effectiveSeason != null &&
+        tmdbDetail?.id != null
+    ) {
+        if (selectedSeason != effectiveSeason) {
+            selectedSeason = effectiveSeason
         }
+        viewModel.loadEpisodesForSeason(effectiveSeason)
     }
+}
 
     fun playTrailer(context: android.content.Context) {
         val trailer = tmdbDetail?.videos?.results?.firstOrNull {
