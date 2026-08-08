@@ -68,8 +68,8 @@ fun StreamsScreen(
             season?.let { putExtra("season", it) }
             episode?.let { putExtra("episode", it) }
             if (contentType == "series" && season != null && episode != null) {
-    putExtra("episode_stream_id", "$parentId:$season:$episode")
-            }
+    putExtra("episode_stream_id", streamId)
+}
             putExtra("item_name", displayName)
             putExtra("item_poster", itemPoster)
             putExtra("start_position_ms", resumePositionMs)
