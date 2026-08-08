@@ -116,6 +116,54 @@ fun ActorScreen(
             }
 
             val credits = remember(p) {
+    fun TmdbPersonCredit.displayTitle(): String =
+        title?.ifBlank { null } ?: name?.ifBlank { null } ?: ""
+
+    fun TmdbPersonCredit.displayDate(): String =
+        when (mediaType) {
+            "movie" -> releaseDate ?: ""
+            "tv" -> firstAirDate ?: ""
+            else -> ""
+        }
+
+    fun TmdbPersonCredit.isLikelyTalkOrVariety(): Boolean {
+        val text = buildString {
+            append(displayTitle())
+            append(' ')
+            append(character.orEmpty())
+        }.lowercase()
+
+        val keywords = listOf(
+            "talk show", "late night", "tonight show", "daily show",
+            "news", "guest", "host", "interview", "panel", "variety",
+            "reality", "game show"
+        )
+
+        return mediaType == "tv" && keywords.any { it in text }
+    }
+
+    fun TmdbPersonCredit.rankScore(): Int {
+        var score = 0
+
+        if (mediaType == "movie") score += 500
+        if (mediaType == "tv") score += 250
+        if (isLikelyTalkOrVariety()) score -= 500 else score += 220
+        if (!posterPath.isNullOrBlank()) score += 100
+
+        val votes = voteCount ?: 0
+        if (votes >= 25) score += 40
+        if (votes >= 100) score += 80
+        if (votes >= 500) score += 120
+
+        score += ((popularity ?: 0.0) * 8).toInt().coerceAtMost(320)
+        score += ((voteAverage ?: 0.0) * 18).toInt().coerceAtMost(180)
+
+        val year = displayDate().take(4).toIntOrNull() ?: 0
+        if (year >= 1900) score += (year - 1900).coerceAtMost(140)
+
+        return score
+    }
+
     p.combinedCredits?.cast
         .orEmpty()
         .filter { credit ->
@@ -125,16 +173,12 @@ fun ActorScreen(
         }
         .distinctBy { "${it.mediaType}:${it.id}" }
         .sortedWith(
-            compareByDescending<TmdbPersonCredit> { it.popularity ?: 0.0 }
+            compareByDescending<TmdbPersonCredit> { it.rankScore() }
+                .thenByDescending { it.voteCount ?: 0 }
+                .thenByDescending { it.popularity ?: 0.0 }
                 .thenByDescending { it.voteAverage ?: 0.0 }
-                .thenByDescending {
-                    when (it.mediaType) {
-                        "movie" -> it.releaseDate ?: ""
-                        "tv" -> it.firstAirDate ?: ""
-                        else -> ""
-                    }
-                }
-                .thenBy { it.title ?: it.name ?: "" }
+                .thenByDescending { it.displayDate() }
+                .thenBy { it.displayTitle() }
         )
         .take(100)
 }
