@@ -788,8 +788,8 @@ class SimklRepository(
             val normalized = next.lowercase()
 
             return when {
-                Regex("""sd+ed+""").matches(normalized) -> "$next • Next episode"
-                Regex("""sd+""").matches(normalized) -> "$next • New season"
+                Regex("""s\d+e\d+""", RegexOption.IGNORE_CASE).matches(normalized) -> "$next • Next episode"
+                Regex("""s\d+""", RegexOption.IGNORE_CASE).matches(normalized) -> "$next • New season"
                 normalized.startsWith("s") -> next
                 else -> next
             }
