@@ -288,20 +288,7 @@ fun TmdbCredits?.director(): TmdbCrewMember? =
 fun TmdbCredits?.writers(): List<TmdbCrewMember> =
     this?.crew?.filter { it.department == "Writing" || it.job == "Writer" || it.job == "Screenplay" } ?: emptyList()
 
-fun TmdbDetail.bestReleaseDate(): String? {
-    return releaseDates?.results
-        ?.firstOrNull { it.iso31661 == "US" }
-        ?.releaseDates
-        ?.firstOrNull { !it.releaseDate.isNullOrBlank() }
-        ?.releaseDate
-        ?: releaseDates?.results
-            ?.asSequence()
-            ?.flatMap { it.releaseDates.asSequence() }
-            ?.firstOrNull { !it.releaseDate.isNullOrBlank() }
-            ?.releaseDate
-            ?: releaseDate
-            ?: firstAirDate
-}
+
 
 fun TmdbDetail.releaseYear(): String? =
     bestReleaseDate()?.take(4)?.takeIf { it.length == 4 && it.all(Char::isDigit) }
