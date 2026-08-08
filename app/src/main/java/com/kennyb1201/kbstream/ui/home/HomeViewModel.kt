@@ -505,6 +505,19 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         return (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0.02f, 0.98f)
     }
 
+    private fun parseEpisodeKey(key: String): Triple<String, Int, Int>? {
+    val parts = key.split(":")
+    if (parts.size < 3) return null
+
+    val season = parts[parts.size - 2].toIntOrNull() ?: return null
+    val episode = parts[parts.size - 1].toIntOrNull() ?: return null
+    val showId = parts.dropLast(2).joinToString(":")
+
+    if (showId.isBlank()) return null
+
+    return Triple(showId, season, episode)
+}
+
     private fun dedupeKey(item: UpNextItem): String {
         return buildString {
             append(item.parentType ?: "unknown")
