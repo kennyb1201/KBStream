@@ -116,8 +116,8 @@ fun ActorScreen(
             }
 
             val credits = remember(p) {
-    fun TmdbPersonCredit.displayTitle(): String =
-        title?.ifBlank { null } ?: name?.ifBlank { null } ?: ""
+    viewModel.sortedCredits(p).take(100)
+}
 
     fun TmdbPersonCredit.displayDate(): String =
         when (mediaType) {
