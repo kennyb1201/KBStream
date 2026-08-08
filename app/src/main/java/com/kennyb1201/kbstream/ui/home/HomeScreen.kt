@@ -151,7 +151,7 @@ fun HomeScreen(
         item(key = "up_next_rail") {
             Column(modifier = Modifier.padding(start = 24.dp, bottom = 20.dp)) {
                 Text(
-                    "UP NEXT",
+                    "Continue Watching",
                     color = KBTextLo,
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
