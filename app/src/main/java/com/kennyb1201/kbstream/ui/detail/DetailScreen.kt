@@ -1045,26 +1045,47 @@ private fun PeopleSeparatorCard() {
 }
 
 @Composable
-private fun StudioCard(name: String, logoPath: String?, onClick: () -> Unit) {
+private fun StudioCard(
+    name: String,
+    logoPath: String?,
+    onClick: () -> Unit
+) {
     Card(
         onClick = onClick,
-        colors = CardDefaults.colors(containerColor = KBSurfaceRaised, contentColor = KBTextHi),
-        modifier = Modifier.width(140.dp).height(72.dp).padding(end = 12.dp)
+        colors = CardDefaults.colors(
+            containerColor = KBSurfaceRaised,
+            contentColor = KBTextHi
+        ),
+        modifier = Modifier
+            .width(200.dp)
+            .height(110.dp)
+            .padding(end = 12.dp)
     ) {
-        Column(modifier = Modifier.padding(10.dp)) {
-            logoPath?.let {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            if (logoPath != null) {
                 AsyncImage(
-                    model = remember(it) { TmdbRepository.PROFILE_BASE + it },
+                    model = remember(logoPath) {
+                        TmdbRepository.PROFILE_BASE + logoPath
+                    },
                     contentDescription = name,
                     contentScale = ContentScale.Fit,
-                    modifier = Modifier.height(24.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp)
+                        .padding(horizontal = 18.dp)
+                )
+            } else {
+                Text(
+                    text = name,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 16.dp)
                 )
             }
-            Text(
-                text = name,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
         }
     }
 }
