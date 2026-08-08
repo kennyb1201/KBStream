@@ -354,18 +354,23 @@ LaunchedEffect(type, id, effectiveSeason, tmdbDetail?.id) {
                         resumePositionMs = resumeInfo?.positionMs ?: 0L
                     )
                 }
-            } else {
+                        } else {
                 val targetSeason = effectiveSeason ?: selectedSeason ?: seasons.firstOrNull() ?: 1
                 val targetEpisode = resolvedTargetEpisode?.episodeNumber
                     ?: if (hasSeriesResume && targetSeason == resumeSeason) resumeEpisode!! else 1
+
                 val targetStreamId = resolvedTargetEpisode?.streamId
                     ?: if (hasSeriesResume && targetSeason == resumeSeason) {
                         resumeStreamId ?: (id + ":" + targetSeason + ":" + targetEpisode)
                     } else {
                         id + ":" + targetSeason + ":" + targetEpisode
                     }
-                val playLabelPrefix = if (hasSeriesResume && targetSeason == resumeSeason) "▶ RESUME" else "▶ PLAY"
+
+                val playLabelPrefix =
+                    if (hasSeriesResume && targetSeason == resumeSeason) "▶ RESUME" else "▶ PLAY"
+
                 playLabel = playLabelPrefix + " S" + targetSeason + "E" + targetEpisode
+
                 playTarget = remember(
                     resumeInfo,
                     id,
@@ -382,25 +387,21 @@ LaunchedEffect(type, id, effectiveSeason, tmdbDetail?.id) {
                         displayName = displayName,
                         season = targetSeason,
                         episode = targetEpisode,
-                        contentType = "series",
-                        streamId = targetStreamId,
-                        title = displayName + " · S" + targetSeason + "E" + targetEpisode,
-                        displayName = displayName,
-                        season = targetSeason,
-                        episode = targetEpisode,
-                        resumePositionMs = if (hasSeriesResume && targetSeason == resumeSeason) {
+                        resumePositionMs = if (
+                            hasSeriesResume && targetSeason == resumeSeason
+                        ) {
                             resumeInfo?.positionMs ?: 0L
                         } else {
                             0L
                         }
                     )
                 }
-            }}
-                    
-                
-            
+            }
 
-            CompositionLocalProvider(LocalBringIntoViewSpec provides LocalTvBringIntoViewSpec) {
+            CompositionLocalProvider(
+                LocalBringIntoViewSpec provides LocalTvBringIntoViewSpec
+            ) {
+                
                 Box(modifier = Modifier.fillMaxSize()) {
                     AsyncImage(
                         model = remember(backdropUrl) {
