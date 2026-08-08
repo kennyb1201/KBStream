@@ -306,24 +306,19 @@ fun TmdbDetail.bestReleaseDate(): String? {
 fun TmdbDetail.releaseYear(): String? =
     bestReleaseDate()?.take(4)?.takeIf { it.length == 4 && it.all(Char::isDigit) }
 
-fun TmdbDetail.certification(isMovie: Boolean): String? {
-    return if (isMovie) {
-        releaseDates?.results
-            ?.firstOrNull { it.iso31661 == "US" }
-            ?.releaseDates
-            ?.firstOrNull { !it.certification.isNullOrBlank() }
-            ?.certification
-            ?: releaseDates?.results
-                ?.asSequence()
-                ?.flatMap { it.releaseDates.asSequence() }
-                ?.firstOrNull { !it.certification.isNullOrBlank() }
-                ?.certification
-    } else {
-        contentRatings?.results
-            ?.firstOrNull { it.iso31661 == "US" && !it.rating.isNullOrBlank() }
-            ?.rating
-            ?: contentRatings?.results
-                ?.firstOrNull { !it.rating.isNullOrBlank() }
-                ?.rating
-    }
+fun TmdbDetail.bestReleaseDate(): String? {
+    val rawDate = releaseDates?.results
+        ?.firstOrNull { it.iso31661 == "US" }
+        ?.releaseDates
+        ?.firstOrNull { !it.releaseDate.isNullOrBlank() }
+        ?.releaseDate
+        ?: releaseDates?.results
+            ?.asSequence()
+            ?.flatMap { it.releaseDates.asSequence() }
+            ?.firstOrNull { !it.releaseDate.isNullOrBlank() }
+            ?.releaseDate
+        ?: releaseDate
+        ?: firstAirDate
+
+    return rawDate?.substringBefore("T")?.takeIf { it.isNotBlank() }
 }
