@@ -302,13 +302,10 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
 
     fun loadEpisodesForSeason(season: Int) {
         val tvId = _tmdbDetail.value?.id
-        if (tvId == null) {
-            _episodes.value = emptyList()
-            _episodeError.value = "Show details unavailable"
-            Log.e("KBStream", "episodes skipped: tmdbDetail id is null for imdbId=$imdbId season=$season")
-            return
-        }
-
+if (tvId == null) {
+    Log.e("KBStream", "episodes skipped: tmdbDetail id is null for imdbId=$imdbId season=$season")
+    return
+}
         latestEpisodeSeasonRequest = season
         _episodes.value = emptyList()
         _episodeError.value = null
