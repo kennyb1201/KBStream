@@ -103,8 +103,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun refreshUpNext() {
-        _refreshTrigger.value += 1
-    }
+    simklWatchedEpisodesByShow.clear()
+    watchedEpisodeKeysByShow.clear()
+    _refreshTrigger.value += 1
+}
 
     fun refreshWatchedStatusForCurrentRails() {
         refreshWatchedStatus(_rails.value)
