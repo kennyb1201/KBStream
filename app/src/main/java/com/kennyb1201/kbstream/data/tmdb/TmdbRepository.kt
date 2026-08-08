@@ -162,26 +162,30 @@ class TmdbRepository(context: Context) {
     }
 
     suspend fun getSeasonEpisodes(
-        tvId: Int,
-        season: Int,
-        imdbId: String
-    ): List<ResolvedEpisode> {
-        if (apiKey.isBlank()) return emptyList()
-
-        return runCatching {
-            api.getSeasonDetail(tvId, season, apiKey).episodes.map { ep ->
-                ResolvedEpisode(
-                    streamId = "$imdbId:$season:${ep.episodeNumber}",
-                    episodeNumber = ep.episodeNumber,
-                    name = ep.name,
-                    overview = ep.overview,
-                    thumbnail = ep.stillPath?.let { "https://image.tmdb.org/t/p/w780$it" },
-                    runtimeMinutes = ep.runtime,
-                    airDate = ep.airDate
-                )
-            }
-        }.getOrDefault(emptyList())
+    tvId: Int,
+    season: Int,
+    imdbId: String
+): List<ResolvedEpisode> {
+    if (apiKey.isBlank()) {
+        throw IllegalStateException("TMDB API key is missing")
     }
+
+    val seasonDetail = api.getSeasonDetail(tvId, season, apiKey)
+
+    return seasonDetail.episodes.map { ep ->
+        ResolvedEpisode(
+            streamId = "$imdbId:$season:${ep.episodeNumber}",
+            episodeNumber = ep.episodeNumber,
+            name = ep.name,
+            overview = ep.overview,
+            thumbnail = ep.stillPath?.let {
+                "https://image.tmdb.org/t/p/w780$it"
+            },
+            runtimeMinutes = ep.runtime,
+            airDate = ep.airDate
+        )
+    }
+}
 
     suspend fun getByCompany(companyId: Int): List<StudioSection> =
         getInitialCompanySections(companyId)
