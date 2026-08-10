@@ -581,6 +581,98 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
         }
 
         if (simklSeasonEpisodes.isEmpty()) {
+private suspend fun resolveSeriesTargetFromSharedWatchedState(
+    parentId: String,
+    tmdbId: Int,
+    simklSeason: Int?,
+    simklEpisode: Int?
+): ResolvedHomeSeriesTarget? {
+    val resume = try {
+        historyDao.getResumeForParent(parentId)
+    } catch (e: Exception) {
+        Log.e(
+            "HOME_UPNEXT",
+            "resume lookup failed for $parentId: ${e.message}",
+            e
+        )
+        null
+    }
+
+    if (
+        resume != null &&
+        resume.season != null &&
+        resume.episode != null &&
+        resume.positionMs > 0L
+    ) {
+        val resumeEpisodes = try {
+            tmdbLookupSemaphore.withPermit {
+                tmdbRepository.getSeasonEpisodes(
+                    tmdbId,
+                    resume.season,
+                    parentId
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(
+                "HOME_UPNEXT",
+                "resume episode lookup failed for $parentId: ${e.message}",
+                e
+            )
+            emptyList()
+        }
+
+        val matchedResumeEpisode = resumeEpisodes.firstOrNull { episode ->
+            episode.episodeNumber == resume.episode
+        }
+
+        return ResolvedHomeSeriesTarget(
+            season = resume.season,
+            episode = matchedResumeEpisode?.episodeNumber ?: resume.episode,
+            streamId = resume.episodeStreamId ?: matchedResumeEpisode?.streamId,
+            startPositionMs = resume.positionMs,
+            isResume = true,
+            airDate = matchedResumeEpisode?.airDate
+        )
+    }
+
+    val simklWatchedEpisodes =
+        simklWatchedEpisodesByShow[parentId].orEmpty()
+
+    val watchedEpisodeKeys =
+        watchedEpisodeKeysByShow[parentId].orEmpty()
+
+    if (simklSeason != null && simklEpisode != null) {
+        val simklSeasonEpisodes = try {
+            tmdbLookupSemaphore.withPermit {
+                tmdbRepository.getSeasonEpisodes(
+                    tmdbId,
+                    simklSeason,
+                    parentId
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(
+                "HOME_UPNEXT",
+                "simkl fallback lookup failed for $parentId season=$simklSeason: ${e.message}",
+                e
+            )
+            emptyList()
+        }
+
+        val simklMatchedEpisode = simklSeasonEpisodes.firstOrNull { episode ->
+            episode.episodeNumber == simklEpisode
+        }
+
+        if (simklMatchedEpisode != null) {
+            return ResolvedHomeSeriesTarget(
+                season = simklSeason,
+                episode = simklEpisode,
+                streamId = simklMatchedEpisode.streamId,
+                airDate = simklMatchedEpisode.airDate
+            )
+        }
+
+        if (simklSeasonEpisodes.isEmpty()) {
             return ResolvedHomeSeriesTarget(
                 season = simklSeason,
                 episode = simklEpisode
@@ -642,6 +734,12 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
         }
 
         if (firstUnwatchedAired != null) {
+            Log.e(
+                "HOME_UPNEXT",
+                "Resolved $parentId to S${season}E${firstUnwatchedAired.episodeNumber}; " +
+                    "watched=$watchedEpisodesForSeason"
+            )
+
             return ResolvedHomeSeriesTarget(
                 season = season,
                 episode = firstUnwatchedAired.episodeNumber,
@@ -660,7 +758,6 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
         null
     }
 }
-
     private fun initialBadgeFromSimkl(
         item: SimklContinueWatchingItem
     ): UpNextBadge {
