@@ -798,52 +798,7 @@ private fun targetPrecisionScore(item: UpNextItem): Int {
     return score
 }
 
-    private fun dedupeKey(item: UpNextItem): String {
-        val normalizedType = item.parentType
-            ?.trim()
-            ?.lowercase()
-            ?.let {
-                when (it) {
-                    "tv", "show" -> "series"
-                    else -> it
-                }
-            }
-            ?: "unknown"
-
-        val normalizedParentId = item.parentId
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-
-        val normalizedEpisodeStreamId = item.episodeStreamId
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-
-        val normalizedTitle = item.title
-            .trim()
-            .lowercase()
-
-        return when {
-            normalizedEpisodeStreamId != null -> {
-                "episode-stream:$normalizedType:$normalizedEpisodeStreamId"
-            }
-
-            normalizedParentId != null && item.season != null && item.episode != null -> {
-                "episode-target:$normalizedType:$normalizedParentId:s${item.season}:e${item.episode}"
-            }
-
-            normalizedParentId != null -> {
-                "parent:$normalizedType:$normalizedParentId"
-            }
-
-            item.season != null && item.episode != null -> {
-                "title-episode:$normalizedType:$normalizedTitle:s${item.season}:e${item.episode}"
-            }
-
-            else -> {
-                "title:$normalizedType:$normalizedTitle"
-            }
-        }
-    }
+    
 
     fun loadRails() {
         viewModelScope.launch {
