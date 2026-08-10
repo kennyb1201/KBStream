@@ -1,4 +1,4 @@
-package com.kennyb1201.kbstream.ui.detail
+,package com.kennyb1201.kbstream.ui.detail
 
 import android.app.Application
 import android.util.Log
@@ -298,10 +298,7 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
         localCompletedEntries = localCompletedEntries
     )
                 }
-
-                if (normalizedType == "series") {
-    autoLoadRelevantSeason(_tmdbDetail.value)
-                }
+                
             } catch (e: Exception) {
                 _error.value = "Failed to load: ${e.message}"
                 Log.e("KBStream", "detail load failed", e)
