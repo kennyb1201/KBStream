@@ -603,7 +603,7 @@ class SimklRepository(
     id = "show-$simklId",
     imdbId = imdbId,
     tmdbId = show.ids?.tmdb,
-        simklId = movie.ids?.simkl ?: simklId.toIntOrNull(),
+        simklId = show.ids?.simkl ?: simklId.toIntOrNull(),
     title = show.title ?: "Untitled show",
     year = show.year,
     posterUrl = normalizePosterUrl(show.poster),
