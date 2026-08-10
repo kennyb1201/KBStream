@@ -490,7 +490,7 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
             )
         }
 
-        if (simklSeasonEpisodes.isEmpty()) {
+        if (simklSeasonEpisodes.isEmpty())
 private suspend fun resolveSeriesTargetFromSharedWatchedState(
     parentId: String,
     tmdbId: Int,
