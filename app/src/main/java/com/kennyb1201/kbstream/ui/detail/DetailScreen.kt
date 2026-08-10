@@ -702,30 +702,76 @@ fun DetailScreen(
 
                             
                             val companies = tmdbDetail?.productionCompanies.orEmpty()
-                            val networks = tmdbDetail?.networks.orEmpty()
-                            if (companies.isNotEmpty() || networks.isNotEmpty()) {
-                                item(key = "studioheader") {
-                                    Text(
-                                        if (type == "series") "NETWORKS" else "PRODUCTION",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        color = KBTextLo,
-                                        modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 10.dp)
-                                    )
-                                }
-                                item(key = "studiorow") {
-                                    LazyRow(
-                                        contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 16.dp),
-                                        modifier = Modifier.padding(bottom = 12.dp).focusGroup().focusRestorer()
-                                    ) {
-                                        items(networks, key = { it.id }) { n ->
-                                            StudioCard(name = n.name, logoPath = n.logoPath, onClick = { onNavigateStudio(n.id, n.name, true) })
-                                        }
-                                        items(companies, key = { it.id }) { c ->
-                                            StudioCard(name = c.name, logoPath = c.logoPath, onClick = { onNavigateStudio(c.id, c.name, false) })
-                                        }
-                                    }
-                                }
-                            }
+                            val companies = tmdbDetail?.productionCompanies.orEmpty()
+val networks = tmdbDetail?.networks.orEmpty()
+
+if (type == "series" && networks.isNotEmpty()) {
+    item(key = "networkheader") {
+        Text(
+            "NETWORK",
+            style = MaterialTheme.typography.titleMedium,
+            color = KBTextLo,
+            modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 10.dp)
+        )
+    }
+
+    item(key = "networkrow") {
+        LazyRow(
+            contentPadding = PaddingValues(
+                start = 24.dp,
+                end = 24.dp,
+                top = 16.dp,
+                bottom = 16.dp
+            ),
+            modifier = Modifier
+                .padding(bottom = 12.dp)
+                .focusGroup()
+                .focusRestorer()
+        ) {
+            items(networks, key = { it.id }) { n ->
+                StudioCard(
+                    name = n.name,
+                    logoPath = n.logoPath,
+                    onClick = { onNavigateStudio(n.id, n.name, true) }
+                )
+            }
+        }
+    }
+}
+
+if (companies.isNotEmpty()) {
+    item(key = "productionheader") {
+        Text(
+            "PRODUCTION",
+            style = MaterialTheme.typography.titleMedium,
+            color = KBTextLo,
+            modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 10.dp)
+        )
+    }
+
+    item(key = "productionrow") {
+        LazyRow(
+            contentPadding = PaddingValues(
+                start = 24.dp,
+                end = 24.dp,
+                top = 16.dp,
+                bottom = 16.dp
+            ),
+            modifier = Modifier
+                .padding(bottom = 12.dp)
+                .focusGroup()
+                .focusRestorer()
+        ) {
+            items(companies, key = { it.id }) { c ->
+                StudioCard(
+                    name = c.name,
+                    logoPath = c.logoPath,
+                    onClick = { onNavigateStudio(c.id, c.name, false) }
+                )
+            }
+        }
+    }
+}
 
                             val reviews = tmdbDetail?.reviews?.results.orEmpty()
                             if (reviews.isNotEmpty()) {
@@ -861,16 +907,19 @@ private fun StudioCard(
     logoPath: String?,
     onClick: () -> Unit
 ) {
+    val cardShape = RoundedCornerShape(10.dp)
+
     Box(
         modifier = Modifier
             .width(140.dp)
             .height(64.dp)
             .padding(end = 10.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .clip(cardShape)
+            .background(Color.White)
             .border(
                 width = 1.dp,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f),
-                shape = RoundedCornerShape(10.dp)
+                color = Color.White.copy(alpha = 0.35f),
+                shape = cardShape
             )
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -888,7 +937,7 @@ private fun StudioCard(
         } else {
             Text(
                 text = name,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = Color.Black,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Medium,
                 textAlign = TextAlign.Center,
@@ -898,8 +947,6 @@ private fun StudioCard(
         }
     }
 }
-
-@Composable
 private fun EpisodeCard(
     ep: ResolvedEpisode,
     isWatched: Boolean,
