@@ -691,6 +691,80 @@ class SimklRepository(
             )
     }
 
+        data class WatchedActivityRefreshResult(
+        val attempted: Boolean,
+        val changed: Boolean,
+        val latestActivity: String? = null,
+        val errorMessage: String? = null
+    )
+
+    suspend fun refreshWatchedActivity(): WatchedActivityRefreshResult {
+        if (!isConfigured()) {
+            Log.e("SIMKL_REPO", "refreshWatchedActivity skipped: Simkl is not configured")
+
+            return WatchedActivityRefreshResult(
+                attempted = false,
+                changed = false,
+                errorMessage = "Simkl is not configured"
+            )
+        }
+
+        if (!hasToken()) {
+            Log.e("SIMKL_REPO", "refreshWatchedActivity skipped: no saved access token")
+
+            return WatchedActivityRefreshResult(
+                attempted = false,
+                changed = false,
+                errorMessage = "Simkl is not authenticated"
+            )
+        }
+
+        return try {
+            val activities = getActivities()
+            val latestActivity = activities.all?.trim().orEmpty()
+            val savedActivity = getSavedWatchedActivityAll()?.trim().orEmpty()
+
+            if (latestActivity.isBlank()) {
+                Log.e(
+                    "SIMKL_REPO",
+                    "refreshWatchedActivity completed: activities.all was blank"
+                )
+
+                return WatchedActivityRefreshResult(
+                    attempted = true,
+                    changed = false,
+                    latestActivity = null
+                )
+            }
+
+            val changed = latestActivity != savedActivity
+
+            Log.e(
+                "SIMKL_REPO",
+                "refreshWatchedActivity completed: changed=$changed " +
+                    "saved=$savedActivity latest=$latestActivity"
+            )
+
+            WatchedActivityRefreshResult(
+                attempted = true,
+                changed = changed,
+                latestActivity = latestActivity
+            )
+        } catch (e: Exception) {
+            Log.e(
+                "SIMKL_REPO",
+                "refreshWatchedActivity failed: ${e.message}",
+                e
+            )
+
+            WatchedActivityRefreshResult(
+                attempted = true,
+                changed = false,
+                errorMessage = e.message
+            )
+        }
+    }
+
     private fun buildIdRefs(
         imdbIds: List<String>,
         simklIds: List<Int>
