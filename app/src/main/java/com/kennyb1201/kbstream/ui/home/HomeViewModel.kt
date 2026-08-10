@@ -617,11 +617,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun badgePriority(badge: UpNextBadge): Int = when (badge) {
-        UpNextBadge.NEW_SEASON -> 0
-        UpNextBadge.NEW_EPISODE -> 1
-        UpNextBadge.CONTINUE_WATCHING -> 2
-        UpNextBadge.NEXT_UP -> 3
-    }
+    UpNextBadge.CONTINUE_WATCHING -> 0
+    UpNextBadge.NEW_SEASON -> 1
+    UpNextBadge.NEW_EPISODE -> 2
+    UpNextBadge.NEXT_UP -> 3
+}
 
     private fun progressFromHistory(
         positionMs: Long,
