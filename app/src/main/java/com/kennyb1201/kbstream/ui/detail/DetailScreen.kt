@@ -79,6 +79,8 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
+import com.kennyb1201.kbstream.data.tmdb.tmdbImageOriginal
 import kotlinx.coroutines.launch
 import java.text.NumberFormat
 import java.util.Locale
@@ -139,6 +141,7 @@ fun DetailScreen(
 
     val meta by viewModel.meta.collectAsState()
     val tmdbDetail by viewModel.tmdbDetail.collectAsState()
+    val clearLogoUrl = tmdbImageOriginal(tmdbDetail?.bestLogoPath())
     val isLoading by viewModel.isLoading.collectAsState()
     val episodes by viewModel.episodes.collectAsState()
     val episodesLoading by viewModel.episodesLoading.collectAsState()
@@ -377,13 +380,24 @@ fun DetailScreen(
                         Spacer(modifier = Modifier.height(24.dp))
 
                         Column(modifier = Modifier.padding(horizontal = 24.dp)) {
-                            Text(
-                                displayName,
-                                style = MaterialTheme.typography.headlineLarge,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
+    if (!clearLogoUrl.isNullOrBlank()) {
+        AsyncImage(
+            model = clearLogoUrl,
+            contentDescription = displayName,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(88.dp)
+        )
+    } else {
+        Text(
+            displayName,
+            style = MaterialTheme.typography.headlineLarge,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
 
                         Row(
                             modifier = Modifier
