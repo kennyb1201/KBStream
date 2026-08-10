@@ -1,4 +1,4 @@
-Package com.kennyb1201.kbstream.ui.home
+package com.kennyb1201.kbstream.ui.home
 
 import android.app.Application
 import android.util.Log
