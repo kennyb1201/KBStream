@@ -291,6 +291,10 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
                     localCompletedEntries = localCompletedEntries,
                     simklCompletedEpisodes = simklCompleted
                 )
+
+                if (normalizedType == "series") {
+    autoLoadRelevantSeason(_tmdbDetail.value)
+                }
             } catch (e: Exception) {
                 _error.value = "Failed to load: ${e.message}"
                 Log.e("KBStream", "detail load failed", e)
@@ -312,6 +316,41 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
 
     Log.e("KBStream", "auto loading initial season=$firstSeason for imdbId=$imdbId")
     loadEpisodesForSeason(firstSeason)
+    }
+
+    private fun autoLoadRelevantSeason(detail: TmdbDetail?) {
+    if (detail == null) return
+    if (latestEpisodeSeasonRequest != null) return
+
+    val seasons = detail.seasons
+        ?.mapNotNull { it.seasonNumber }
+        ?.filter { it > 0 }
+        .orEmpty()
+
+    if (seasons.isEmpty()) return
+
+    val resumeSeason = _resumeInfo.value?.season
+        ?.takeIf { it > 0 && it in seasons }
+
+    val watchedSeason = _simklWatchedEpisodes.value
+        .maxByOrNull { (season, episode) -> season * 10000 + episode }
+        ?.first
+        ?.takeIf { it in seasons }
+        ?: _watchedEpisodeKeys.value
+            .mapNotNull { key ->
+                val parts = key.split(":")
+                if (parts.size < 3) return@mapNotNull null
+                parts.getOrNull(parts.lastIndex - 1)?.toIntOrNull()
+            }
+            .maxOrNull()
+            ?.takeIf { it in seasons }
+
+    val targetSeason = resumeSeason
+        ?: watchedSeason
+        ?: seasons.first()
+
+    Log.e("KBStream", "auto loading relevant season=$targetSeason for imdbId=$imdbId")
+    loadEpisodesForSeason(targetSeason)
     }
 
     fun loadEpisodesForSeason(season: Int) {
