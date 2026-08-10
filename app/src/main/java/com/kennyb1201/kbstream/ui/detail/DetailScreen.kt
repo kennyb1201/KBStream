@@ -23,6 +23,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -828,27 +832,69 @@ private fun PeopleSeparatorCard() {
 }
 
 @Composable
-private fun StudioCard(name: String, logoPath: String?, onClick: () -> Unit) {
+private fun StudioCard(
+    name: String,
+    logoPath: String?,
+    onClick: () -> Unit
+) {
     Card(
         onClick = onClick,
-        colors = CardDefaults.colors(containerColor = KBSurfaceRaised, contentColor = KBTextHi),
-        modifier = Modifier.width(200.dp).height(110.dp).padding(end = 12.dp)
+        colors = CardDefaults.colors(
+            containerColor = Color(0xFF2A2D33),
+            contentColor = Color.White
+        ),
+        modifier = Modifier
+            .width(220.dp)
+            .height(110.dp)
+            .padding(end = 12.dp)
     ) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            if (logoPath != null) {
-                AsyncImage(
-                    model = remember(logoPath) { TmdbRepository.PROFILE_BASE + logoPath },
-                    contentDescription = name,
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 18.dp)
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color(0xFF343943),
+                            Color(0xFF23272E)
+                        )
+                    )
                 )
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            if (logoPath != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color.White.copy(alpha = 0.96f))
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    AsyncImage(
+                        model = remember(logoPath) { TmdbRepository.PROFILE_BASE + logoPath },
+                        contentDescription = name,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp)
+                    )
+                }
             } else {
-                Text(text = name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 16.dp))
+                Text(
+                    text = name,
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                )
             }
         }
     }
 }
-
 @Composable
 private fun EpisodeCard(ep: ResolvedEpisode, isWatched: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     KBCard(onClick = onClick, modifier = modifier.width(220.dp).padding(end = 12.dp)) {
