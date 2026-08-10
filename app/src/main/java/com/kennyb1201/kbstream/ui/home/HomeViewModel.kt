@@ -715,37 +715,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        if (simklSeason != null && simklEpisode != null) {
-            val simklSeasonEpisodes = try {
-                tmdbLookupSemaphore.withPermit {
-                    tmdbRepository.getSeasonEpisodes(
-                        tmdbId,
-                        simklSeason,
-                        parentId
-                    )
-                }
-            } catch (e: Exception) {
-                Log.e(
-                    "HOME_UPNEXT",
-                    "simkl fallback lookup failed for $parentId " +
-                        "season=$simklSeason: ${e.message}",
-                    e
-                )
-                emptyList()
-            }
-
-            val simklMatchedEpisode = simklSeasonEpisodes.firstOrNull { episode ->
-                episode.episodeNumber == simklEpisode
-            }
-
-            return ResolvedHomeSeriesTarget(
-                season = simklSeason,
-                episode = simklMatchedEpisode?.episodeNumber ?: simklEpisode,
-                streamId = simklMatchedEpisode?.streamId,
-                airDate = simklMatchedEpisode?.airDate
-            )
-        }
-
         return null
     }
 
