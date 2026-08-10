@@ -293,6 +293,13 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
                 )
 
                 if (normalizedType == "series") {
+    autoLoadRelevantSeason(
+        detail = _tmdbDetail.value,
+        localCompletedEntries = localCompletedEntries
+    )
+                }
+
+                if (normalizedType == "series") {
     autoLoadRelevantSeason(_tmdbDetail.value)
                 }
             } catch (e: Exception) {
