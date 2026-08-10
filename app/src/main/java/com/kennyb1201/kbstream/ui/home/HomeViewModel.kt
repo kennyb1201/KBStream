@@ -310,14 +310,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         item: SimklContinueWatchingItem
     ): UpNextItem? {
         val navigationId = item.imdbId
+    ?: item.tmdbId?.let { "tmdb:$it" }
+    ?: item.simklId?.let { "simkl:$it" }
 
-        if (navigationId.isNullOrBlank()) {
-            Log.e(
-                "HOME_UPNEXT",
-                "dropping simkl item with no imdb id, title=${item.title}"
-            )
-            return null
-        }
+if (navigationId.isNullOrBlank()) {
+    Log.e(
+        "HOME_UPNEXT",
+        "dropping simkl item with no imdb/tmdb/simkl id, title=${item.title}"
+    )
+    return null
+}
 
         var posterUrl = item.posterUrl
         val recencyTimestamp = parseTimestampMillis(item.lastWatchedAt)
