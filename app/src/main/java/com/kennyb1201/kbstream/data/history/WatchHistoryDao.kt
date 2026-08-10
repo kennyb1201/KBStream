@@ -54,6 +54,23 @@ interface WatchHistoryDao {
     )
     fun observeRecent(): Flow<List<WatchHistoryEntity>>
 
+    @Query(
+    """
+    SELECT * FROM watch_history
+    WHERE positionMs > 0
+      AND isCompleted = 0
+      AND updatedAt IN (
+          SELECT MAX(updatedAt)
+          FROM watch_history
+          WHERE positionMs > 0
+            AND isCompleted = 0
+          GROUP BY parentId
+      )
+    ORDER BY updatedAt DESC
+    """
+)
+fun observeContinueWatchingParents(): Flow<List<WatchHistoryEntity>>
+
     @Query("DELETE FROM watch_history WHERE id = :id")
     suspend fun deleteById(id: String)
 
