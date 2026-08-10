@@ -13,9 +13,11 @@ import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -81,6 +83,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val tmdbLookupSemaphore = Semaphore(TMDB_MAX_CONCURRENT_LOOKUPS)
     private val watchedStateMutex = Mutex()
     private val upNextRequestMutex = Mutex()
+    private val railsRefreshMutex = Mutex()
 
     private val simklWatchedEpisodesByShow =
         mutableMapOf<String, Set<Pair<Int, Int>>>()
@@ -92,6 +95,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         mutableSetOf<String>()
 
     private var upNextRequestVersion = 0L
+    private var periodicRefreshJob: Job? = null
 
     private val _rails = MutableStateFlow<List<Rail>>(emptyList())
     val rails: StateFlow<List<Rail>> = _rails.asStateFlow()
@@ -114,18 +118,26 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         Log.e("HOME_VM", "HomeViewModel init")
         loadRails()
         observeUpNext()
+        startPeriodicSimklRefresh()
     }
 
     fun refreshUpNext() {
         viewModelScope.launch {
-            watchedStateMutex.withLock {
-                simklWatchedEpisodesByShow.clear()
-                watchedEpisodeKeysByShow.clear()
-                watchedStatePreloadInFlight.clear()
-            }
-
+            clearWatchedStateCaches()
             _refreshTrigger.value += 1
         }
+    }
+
+    fun refreshAllHomeData() {
+        viewModelScope.launch {
+            clearWatchedStateCaches()
+            _refreshTrigger.value += 1
+            loadRailsInternal(forceRefresh = true)
+        }
+    }
+
+    fun refreshRailsOnly() {
+        loadRails(forceRefresh = true)
     }
 
     fun refreshWatchedStatusForCurrentRails() {
@@ -140,6 +152,35 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         return "$normalizedType::$id"
+    }
+
+    private fun startPeriodicSimklRefresh() {
+        if (periodicRefreshJob?.isActive == true) return
+
+        periodicRefreshJob = viewModelScope.launch {
+            while (true) {
+                delay(PERIODIC_SIMKL_REFRESH_MS)
+
+                try {
+                    if (simklRepository.isConfigured() && simklRepository.hasToken()) {
+                        Log.e("HOME_REFRESH", "periodic Simkl refresh tick")
+                        clearWatchedStateCaches()
+                        _refreshTrigger.value += 1
+                        refreshWatchedStatus(_rails.value)
+                    }
+                } catch (e: Exception) {
+                    Log.e("HOME_REFRESH", "periodic refresh failed: ${e.message}", e)
+                }
+            }
+        }
+    }
+
+    private suspend fun clearWatchedStateCaches() {
+        watchedStateMutex.withLock {
+            simklWatchedEpisodesByShow.clear()
+            watchedEpisodeKeysByShow.clear()
+            watchedStatePreloadInFlight.clear()
+        }
     }
 
     private fun observeUpNext() {
@@ -871,14 +912,20 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         return score
     }
 
-    fun loadRails() {
+    fun loadRails(forceRefresh: Boolean = false) {
         viewModelScope.launch {
-            _isLoading.value = true
-            _error.value = null
+            loadRailsInternal(forceRefresh = forceRefresh)
+        }
+    }
 
-            val result = mutableListOf<Rail>()
+    private suspend fun loadRailsInternal(forceRefresh: Boolean) {
+        _isLoading.value = true
+        _error.value = null
 
-            try {
+        val result = mutableListOf<Rail>()
+
+        try {
+            railsRefreshMutex.withLock {
                 val addons = addonManager.getInstalledAddons()
 
                 for (addon in addons) {
@@ -912,15 +959,22 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                 }
-
-                _rails.value = result
-                refreshWatchedStatus(result)
-            } catch (e: Exception) {
-                Log.e("HOME_RAILS", "loadRails failed: ${e.message}", e)
-                _error.value = "Failed to load: ${e.message}"
-            } finally {
-                _isLoading.value = false
             }
+
+            _rails.value = result
+            refreshWatchedStatus(result)
+
+            if (forceRefresh) {
+                Log.e(
+                    "HOME_RAILS",
+                    "force refresh completed, railCount=${result.size}"
+                )
+            }
+        } catch (e: Exception) {
+            Log.e("HOME_RAILS", "loadRails failed: ${e.message}", e)
+            _error.value = "Failed to load: ${e.message}"
+        } finally {
+            _isLoading.value = false
         }
     }
 
@@ -994,10 +1048,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             else -> null
         }
 
+    override fun onCleared() {
+        periodicRefreshJob?.cancel()
+        super.onCleared()
+    }
+
     companion object {
         private const val NEW_RELEASE_WINDOW_DAYS = 7
         private const val TMDB_MAX_CONCURRENT_LOOKUPS = 5
         private const val MAX_FORWARD_SEASON_LOOKAHEAD = 8
         private const val MAX_WATCHED_STATUS_PRELOAD_ITEMS = 100
+        private const val PERIODIC_SIMKL_REFRESH_MS = 15 * 60 * 1000L
     }
 }
