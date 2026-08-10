@@ -186,11 +186,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private fun observeUpNext() {
         viewModelScope.launch {
             combine(
-                historyDao.observeRecent(),
-                _refreshTrigger
-            ) { history, _ ->
-                history
-            }.collectLatest { history ->
+    historyDao.observeContinueWatchingParents(),
+    _refreshTrigger
+) { history, _ ->
+    history
+}.collectLatest { history ->
                 val requestVersion = nextUpNextRequestVersion()
 
                 try {
