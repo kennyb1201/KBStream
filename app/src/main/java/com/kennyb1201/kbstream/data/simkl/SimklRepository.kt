@@ -817,7 +817,7 @@ class SimklRepository(
     }
 
     private fun parseNextTarget(value: String?): Pair<Int, Int?>? {
-        val match = Regex("""s(d+)(?:e(d+))?""", RegexOption.IGNORE_CASE)
+        val match = Regex("""s(\d+)(?:e(\d+))?""", RegexOption.IGNORE_CASE)
             .matchEntire(value?.trim().orEmpty())
             ?: return null
 
@@ -829,6 +829,7 @@ class SimklRepository(
 
         return season to episode
     }
+
 
     private fun buildEpisodeCode(
         season: Int?,
