@@ -558,19 +558,21 @@ class SimklRepository(
                     )
 
                     SimklContinueWatchingItem(
-                        id = "movie-$simklId",
-                        imdbId = imdbId,
-                        title = movie.title ?: "Untitled movie",
-                        year = movie.year,
-                        posterUrl = normalizePosterUrl(movie.poster),
-                        lastWatchedAt = item.pausedAt,
-                        progress = item.progress,
-                        upNextText = "Resume movie",
-                        mediaType = "movie",
-                        source = "playback",
-                        season = null,
-                        episode = null
-                    )
+    id = "movie-$simklId",
+    imdbId = imdbId,
+    tmdbId = movie.ids?.tmdb,
+    simklId = movie.ids?.simkl,
+    title = movie.title ?: "Untitled movie",
+    year = movie.year,
+    posterUrl = normalizePosterUrl(movie.poster),
+    lastWatchedAt = item.pausedAt,
+    progress = item.progress,
+    upNextText = "Resume movie",
+    mediaType = "movie",
+    source = "playback",
+    season = null,
+    episode = null
+)
                 }
 
                 item.show != null -> {
@@ -598,19 +600,21 @@ class SimklRepository(
                     )
 
                     SimklContinueWatchingItem(
-                        id = "show-$simklId",
-                        imdbId = imdbId,
-                        title = show.title ?: "Untitled show",
-                        year = show.year,
-                        posterUrl = normalizePosterUrl(show.poster),
-                        lastWatchedAt = item.pausedAt,
-                        progress = item.progress,
-                        upNextText = buildPlaybackUpNextText(item.episode),
-                        mediaType = "series",
-                        source = "playback",
-                        season = item.episode?.season,
-                        episode = item.episode?.episode
-                    )
+    id = "show-$simklId",
+    imdbId = imdbId,
+    tmdbId = show.ids?.tmdb,
+    simklId = show.ids?.simkl,
+    title = show.title ?: "Untitled show",
+    year = show.year,
+    posterUrl = normalizePosterUrl(show.poster),
+    lastWatchedAt = item.pausedAt,
+    progress = item.progress,
+    upNextText = buildPlaybackUpNextText(item.episode),
+    mediaType = "series",
+    source = "playback",
+    season = item.episode?.season,
+    episode = item.episode?.episode
+)
                 }
 
                 else -> null
@@ -655,31 +659,34 @@ class SimklRepository(
                     )
                 }
 
-                val parsedNext = parseNextTarget(item.nextToWatch)
-                val nextSeason = parsedNext?.first
-                val nextEpisode = parsedNext?.second
+val parsedNext = parseNextTarget(item.nextToWatch)
+val fallbackNext = fallbackWatchingTarget(item)
+val nextSeason = parsedNext?.first ?: fallbackNext?.first
+val nextEpisode = parsedNext?.second ?: fallbackNext?.second
 
                 SimklContinueWatchingItem(
-                    id = mergedId,
-                    imdbId = imdbId,
-                    title = show.title ?: "Untitled show",
-                    year = show.year,
-                    posterUrl = normalizePosterUrl(show.poster),
-                    lastWatchedAt = item.lastWatchedAt ?: item.addedToWatchlistAt,
-                    progress = buildWatchingProgress(
-                        watchedEpisodesCount = item.watchedEpisodesCount,
-                        totalEpisodesCount = item.totalEpisodesCount
-                    ),
-                    upNextText = buildWatchingUpNextText(
-                        nextToWatch = item.nextToWatch,
-                        lastWatched = item.lastWatched,
-                        status = item.status
-                    ),
-                    mediaType = "series",
-                    source = "watching",
-                    season = nextSeason,
-                    episode = nextEpisode
-                )
+    id = mergedId,
+    imdbId = imdbId,
+    tmdbId = show.ids?.tmdb,
+    simklId = show.ids?.simkl,
+    title = show.title ?: "Untitled show",
+    year = show.year,
+    posterUrl = normalizePosterUrl(show.poster),
+    lastWatchedAt = item.lastWatchedAt ?: item.addedToWatchlistAt,
+    progress = buildWatchingProgress(
+        watchedEpisodesCount = item.watchedEpisodesCount,
+        totalEpisodesCount = item.totalEpisodesCount
+    ),
+    upNextText = buildWatchingUpNextText(
+        nextToWatch = item.nextToWatch,
+        lastWatched = item.lastWatched,
+        status = item.status
+    ),
+    mediaType = "series",
+    source = "watching",
+    season = nextSeason,
+    episode = nextEpisode
+)
             }
             .toList()
 
@@ -902,6 +909,18 @@ class SimklRepository(
             ?.toIntOrNull()
 
         return season to episode
+    }
+
+    private fun fallbackWatchingTarget(
+    item: SimklWatchingShowItem
+): Pair<Int, Int?>? {
+    val watchedCount = item.watchedEpisodesCount ?: return null
+    if (watchedCount > 0) return null
+
+    val status = item.status?.trim()?.lowercase().orEmpty()
+    if (status == "dropped" || status == "completed") return null
+
+    return 1 to 1
     }
 
 
