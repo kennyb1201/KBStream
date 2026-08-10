@@ -854,7 +854,7 @@ private fun StudioCard(
             .clip(RoundedCornerShape(10.dp))
             .border(
                 width = 1.dp,
-                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f),
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f),
                 shape = RoundedCornerShape(10.dp)
             )
             .clickable(onClick = onClick)
