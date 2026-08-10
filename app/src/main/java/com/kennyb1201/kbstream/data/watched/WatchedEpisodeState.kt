@@ -67,23 +67,22 @@ object WatchedEpisodeState {
             .toSet()
     }
 
-    fun effectiveWatchedEpisodesForSeason(
-        parentId: String,
-        season: Int,
-        simklWatchedEpisodes: Set<Pair<Int, Int>>,
-        watchedEpisodeKeys: Set<String>
-    ): Set<Int> {
-        val localEpisodes = localWatchedEpisodesForSeason(
-            parentId = parentId,
-            season = season,
-            watchedEpisodeKeys = watchedEpisodeKeys
-        )
+fun effectiveWatchedEpisodesForSeason(
+    parentId: String,
+    season: Int,
+    simklWatchedEpisodes: Set<Pair<Int, Int>>,
+    watchedEpisodeKeys: Set<String>
+): Set<Int> {
+    val simklSeasonEpisodes = simklWatchedEpisodesForSeason(
+        season = season,
+        simklWatchedEpisodes = simklWatchedEpisodes
+    )
 
-        val simklEpisodes = simklWatchedEpisodesForSeason(
-            season = season,
-            simklWatchedEpisodes = simklWatchedEpisodes
-        )
+    val localSeasonEpisodes = localWatchedEpisodesForSeason(
+        parentId = parentId,
+        season = season,
+        watchedEpisodeKeys = watchedEpisodeKeys
+    )
 
-        return localEpisodes + simklEpisodes
-    }
+    return simklSeasonEpisodes + localSeasonEpisodes
 }
