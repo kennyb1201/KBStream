@@ -261,8 +261,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     )
 
                     if (isLatestUpNextRequest(requestVersion)) {
-                        _upNext.value = emptyList()
-                    }
+    Log.e("HOME_UPNEXT", "keeping existing up next after failure")
+}
                 }
             }
         }
@@ -420,6 +420,33 @@ if (navigationId.isNullOrBlank()) {
                 }
             }
         }
+
+            if (posterUrl?.isBlank() == true) {
+        posterUrl = null
+    }
+
+    if (item.mediaType == "series") {
+        if (resolvedSeason == null && item.season != null) {
+            resolvedSeason = item.season
+        }
+
+        if (resolvedEpisode == null && item.episode != null) {
+            resolvedEpisode = item.episode
+        }
+
+        if (subtitle.isBlank() || subtitle == "Up Next" || subtitle == "Resume") {
+            subtitle = when {
+                resolvedSeason != null && resolvedEpisode != null ->
+                    "Up Next • ${formatSeasonEpisode(resolvedSeason, resolvedEpisode)}"
+                resolvedSeason != null ->
+                    "Up Next • S$resolvedSeason"
+                item.upNextText?.isNotBlank() == true ->
+                    item.upNextText
+                else ->
+                    "Continue series"
+            }
+        }
+    }
 
         return UpNextItem(
             id = "simkl:${item.id}",
