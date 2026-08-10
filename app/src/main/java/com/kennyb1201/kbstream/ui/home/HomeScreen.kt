@@ -289,9 +289,12 @@ fun HomeScreen(
                     key = { "${it.addonName}:${it.catalogName}:${it.type}" }
                 ) { rail ->
                     Column(modifier = Modifier.padding(start = 24.dp, bottom = 20.dp)) {
-                        Text(
-                            text = rail.catalogName.split(" ").joinToString(" ") { word ->
-    word.lowercase().replaceFirstChar,
+                        text = rail.catalogName
+    .replace("_", " ")
+    .split(" ")
+    .joinToString(" ") { word ->
+        word.lowercase().replaceFirstChar { it.uppercase() }
+    },
                             color = KBTextLo,
                             modifier = Modifier.padding(bottom = 8.dp)
                         )
