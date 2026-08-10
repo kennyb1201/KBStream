@@ -947,6 +947,7 @@ private fun StudioCard(
         }
     }
 }
+@Composable
 private fun EpisodeCard(
     ep: ResolvedEpisode,
     isWatched: Boolean,
