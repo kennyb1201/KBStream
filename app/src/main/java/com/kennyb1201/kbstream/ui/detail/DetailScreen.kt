@@ -673,28 +673,7 @@ fun DetailScreen(
                                 }
                             }
 
-                            val reviews = tmdbDetail?.reviews?.results.orEmpty()
-                            if (reviews.isNotEmpty()) {
-                                item(key = "reviewsheader") {
-                                    Text(
-                                        "REVIEWS",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        color = KBTextLo,
-                                        modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 10.dp)
-                                    )
-                                }
-                                item(key = "reviewsrow") {
-                                    LazyRow(
-                                        contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 16.dp),
-                                        modifier = Modifier.padding(bottom = 20.dp).focusGroup().focusRestorer()
-                                    ) {
-                                        items(reviews.take(10), key = { it.id }) { review ->
-                                            ReviewCard(review = review, onClick = { selectedReview = it })
-                                        }
-                                    }
-                                }
-                            }
-
+                            
                             val companies = tmdbDetail?.productionCompanies.orEmpty()
                             val networks = tmdbDetail?.networks.orEmpty()
                             if (companies.isNotEmpty() || networks.isNotEmpty()) {
@@ -720,6 +699,29 @@ fun DetailScreen(
                                     }
                                 }
                             }
+
+                            val reviews = tmdbDetail?.reviews?.results.orEmpty()
+                            if (reviews.isNotEmpty()) {
+                                item(key = "reviewsheader") {
+                                    Text(
+                                        "REVIEWS",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = KBTextLo,
+                                        modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 10.dp)
+                                    )
+                                }
+                                item(key = "reviewsrow") {
+                                    LazyRow(
+                                        contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 16.dp),
+                                        modifier = Modifier.padding(bottom = 20.dp).focusGroup().focusRestorer()
+                                    ) {
+                                        items(reviews.take(10), key = { it.id }) { review ->
+                                            ReviewCard(review = review, onClick = { selectedReview = it })
+                                        }
+                                    }
+                                }
+                            }
+                            
 
                             val collectionParts = collection?.parts.orEmpty().filter { it.id != tmdbDetail?.id }
                             if (collectionParts.isNotEmpty()) {
