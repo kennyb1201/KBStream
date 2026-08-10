@@ -895,25 +895,74 @@ private fun StudioCard(
         }
     }
 }
+
 @Composable
-private fun EpisodeCard(ep: ResolvedEpisode, isWatched: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    KBCard(onClick = onClick, modifier = modifier.width(220.dp).padding(end = 12.dp)) {
-        Column(modifier = Modifier.width(220.dp)) {
+private fun EpisodeCard(
+    ep: ResolvedEpisode,
+    isWatched: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    KBCard(
+        onClick = onClick,
+        modifier = modifier
+            .width(260.dp)
+            .padding(end = 12.dp)
+    ) {
+        Column(modifier = Modifier.width(260.dp)) {
             PosterCard(
                 posterUrl = ep.thumbnail,
                 contentDescription = ep.name ?: "",
                 isWatched = isWatched,
                 onClick = onClick,
-                modifier = Modifier.fillMaxWidth().height(124.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(146.dp)
             )
-            Column(modifier = Modifier.padding(10.dp)) {
-                val runtimeText = remember(ep.runtimeMinutes) { ep.runtimeMinutes?.let { " • ${it}m" } ?: "" }
-                Text(text = "E${ep.episodeNumber}$runtimeText", style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                ep.name?.let {
-                    Text(text = it, color = KBTextHi, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
+
+            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                val runtimeText = remember(ep.runtimeMinutes) {
+                    ep.runtimeMinutes?.let { " • ${it}m" } ?: ""
                 }
+
+                Text(
+                    text = "E${ep.episodeNumber}$runtimeText",
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                ep.airDate?.takeIf { it.isNotBlank() }?.let { airDate ->
+                    Text(
+                        text = formatEpisodeAirDate(airDate),
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+
+                ep.name?.let {
+                    Text(
+                        text = it,
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+
                 ep.overview?.takeIf { it.isNotBlank() }?.let {
-                    Text(text = it, color = KBTextLo, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
+                    Text(
+                        text = it,
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 4,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
                 }
             }
         }
@@ -975,6 +1024,14 @@ private fun RecCard(rec: TmdbRecommendationItem, isWatched: Boolean, onClick: ()
         onClick = onClick,
         modifier = Modifier.width(124.dp).height(180.dp).padding(end = 12.dp)
     )
+}
+
+private fun formatEpisodeAirDate(raw: String): String {
+    return runCatching {
+        java.time.LocalDate.parse(raw).format(
+            java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy")
+        )
+    }.getOrDefault(raw)
 }
 
 private fun formatUsd(amount: Long): String = NumberFormat.getCurrencyInstance(Locale.US).format(amount)
