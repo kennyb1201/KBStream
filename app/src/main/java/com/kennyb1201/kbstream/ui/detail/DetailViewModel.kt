@@ -248,6 +248,9 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
                         Log.e(
                             "KBStream",
                             "tmdb fetch ok id=${detail?.id} reviewCount=${detail?.reviews?.results?.size}"
+                            if (normalizedType == "series") {
+    autoLoadInitialSeason(detail)
+                            }
                         )
 
                         val collectionId = detail?.belongsToCollection?.id
@@ -296,6 +299,19 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
                 Log.e("KBStream", "detail load finished type=$type id=$id")
             }
         }
+    }
+
+    private fun autoLoadInitialSeason(detail: TmdbDetail?) {
+    if (detail == null) return
+    if (latestEpisodeSeasonRequest != null) return
+
+    val firstSeason = detail.seasons
+        ?.mapNotNull { it.seasonNumber }
+        ?.firstOrNull { it > 0 }
+        ?: return
+
+    Log.e("KBStream", "auto loading initial season=$firstSeason for imdbId=$imdbId")
+    loadEpisodesForSeason(firstSeason)
     }
 
     fun loadEpisodesForSeason(season: Int) {
