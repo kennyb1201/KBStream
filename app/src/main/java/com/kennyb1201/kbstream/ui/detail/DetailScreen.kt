@@ -130,10 +130,17 @@ fun DetailScreen(
     var selectedSeason by remember { mutableStateOf<Int?>(null) }
     var selectedReview by remember { mutableStateOf<TmdbReview?>(null) }
     val episodesRowState = rememberLazyListState()
+    val seasonFocusRequesters = remember { mutableMapOf<Int, FocusRequester>() }
 
     LaunchedEffect(type, id) {
         selectedSeason = null
         viewModel.load(type, id)
+    }
+
+    LaunchedEffect(type, effectiveSeason, seasons) {
+    if (type == "series" && effectiveSeason != null && effectiveSeason in seasons) {
+        seasonFocusRequesters[effectiveSeason]?.requestFocus()
+    }
     }
 
     val meta by viewModel.meta.collectAsState()
@@ -518,21 +525,26 @@ fun DetailScreen(
                                         contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 8.dp),
                                         modifier = Modifier.padding(bottom = 14.dp).focusGroup().focusRestorer()
                                     ) {
-                                        items(seasons, key = { it }) { season ->
-                                            val selected = season == effectiveSeason
-                                            KBCard(
-                                                onClick = { selectedSeason = season },
-                                                modifier = Modifier.padding(end = 10.dp)
-                                            ) {
-                                                Text(
-                                                    if (season == 0) "SPECIALS" else "SEASON $season",
-                                                    style = MaterialTheme.typography.titleMedium,
-                                                    color = if (selected) KBAccent else KBTextHi,
-                                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
-                                                )
-                                            }
-                                        }
-                                    }
+                                        items(items = seasons, key = { it }) { season ->
+    val selected = season == effectiveSeason
+    val chipFocusRequester = remember(season) { FocusRequester() }
+
+    seasonFocusRequesters[season] = chipFocusRequester
+
+    KBCard(
+        onClick = { selectedSeason = season },
+        modifier = Modifier
+            .padding(end = 10.dp)
+            .focusRequester(chipFocusRequester)
+    ) {
+        Text(
+            text = if (season == 0) "SPECIALS" else "SEASON $season",
+            style = MaterialTheme.typography.titleMedium,
+            color = if (selected) KBAccent else KBTextHi,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+        )
+    }
+}
                                 }
 
                                 when {
