@@ -712,6 +712,92 @@ _upNext.value = merged
         return Triple(showId, season, episode)
     }
 
+    private fun dedupeAndSortUpNext(
+    items: List<UpNextItem>
+): List<UpNextItem> {
+    return items
+        .groupBy(::showDedupeKey)
+        .values
+        .mapNotNull { candidates ->
+            candidates.maxWithOrNull(
+                compareBy<UpNextItem> { winnerScore(it) }
+                    .thenBy { targetPrecisionScore(it) }
+                    .thenBy { it.recencyTimestamp }
+                    .thenBy { it.title.lowercase() }
+            )
+        }
+        .sortedWith(
+            compareBy<UpNextItem> { badgePriority(it.badge) }
+                .thenByDescending { it.recencyTimestamp }
+                .thenBy { it.title.lowercase() }
+        )
+}
+
+private fun showDedupeKey(item: UpNextItem): String {
+    val normalizedType = normalizeMediaType(item.parentType) ?: "unknown"
+
+    val parentId = item.parentId
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+
+    if (parentId != null) {
+        return "parent:$normalizedType:$parentId"
+    }
+
+    val normalizedTitle = item.title
+        .trim()
+        .lowercase()
+
+    return "title:$normalizedType:$normalizedTitle"
+}
+
+private fun winnerScore(item: UpNextItem): Int {
+    var score = 0
+
+    val hasPlaybackProgress = item.startPositionMs > 0L ||
+        (item.progressPercent ?: 0f) > 0f
+
+    val hasEpisodeTarget = item.season != null && item.episode != null
+    val hasStreamTarget = !item.episodeStreamId.isNullOrBlank()
+
+    if (item.badge == UpNextBadge.CONTINUE_WATCHING) {
+        score += 10_000
+    }
+
+    if (hasPlaybackProgress) {
+        score += 5_000
+    }
+
+    if (hasStreamTarget) {
+        score += 500
+    }
+
+    if (hasEpisodeTarget) {
+        score += 250
+    }
+
+    score += when (item.badge) {
+        UpNextBadge.NEW_SEASON -> 80
+        UpNextBadge.NEW_EPISODE -> 60
+        UpNextBadge.NEXT_UP -> 40
+        UpNextBadge.CONTINUE_WATCHING -> 0
+    }
+
+    return score
+}
+
+private fun targetPrecisionScore(item: UpNextItem): Int {
+    var score = 0
+
+    if (!item.episodeStreamId.isNullOrBlank()) score += 3
+    if (item.season != null) score += 2
+    if (item.episode != null) score += 2
+    if (!item.streamUrl.isNullOrBlank()) score += 1
+    if (!item.poster.isNullOrBlank()) score += 1
+
+    return score
+}
+
     private fun dedupeKey(item: UpNextItem): String {
         val normalizedType = item.parentType
             ?.trim()
