@@ -133,11 +133,7 @@ fun DetailScreen(
     val seasonFocusRequesters = remember { mutableMapOf<Int, FocusRequester>() }
 
 
-    LaunchedEffect(type, effectiveSeason, seasons) {
-    if (type == "series" && effectiveSeason != null && effectiveSeason in seasons) {
-        seasonFocusRequesters[effectiveSeason]?.requestFocus()
-    }
-    }
+
 
     val meta by viewModel.meta.collectAsState()
     val tmdbDetail by viewModel.tmdbDetail.collectAsState()
@@ -170,14 +166,10 @@ fun DetailScreen(
             ?: seasons.firstOrNull()
     }
 
-    LaunchedEffect(type, id, initialTarget?.season, initialTarget?.episode, seasons) {
-        if (type == "series") {
-            val desiredSeason = initialTarget?.season?.takeIf { it in seasons }
-            if (desiredSeason != null && selectedSeason != desiredSeason) {
-                selectedSeason = desiredSeason
-            }
-        }
-    }
+    LaunchedEffect(type, id, initialTarget?.season, initialTarget?.episode) {
+    selectedSeason = initialTarget?.season
+    viewModel.load(type, id)
+}
 
     LaunchedEffect(type, id, effectiveSeason) {
         if (type == "series" && effectiveSeason != null) {
