@@ -540,6 +540,7 @@ fun DetailScreen(
     }
 }
                                 }
+                                }
 
                                 when {
                                     episodesLoading -> {
