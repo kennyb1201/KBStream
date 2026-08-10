@@ -290,7 +290,8 @@ fun HomeScreen(
                 ) { rail ->
                     Column(modifier = Modifier.padding(start = 24.dp, bottom = 20.dp)) {
                         Text(
-                            text = rail.catalogName.uppercase(),
+                            text = rail.catalogName.split(" ").joinToString(" ") { word ->
+    word.lowercase().replaceFirstChar,
                             color = KBTextLo,
                             modifier = Modifier.padding(bottom = 8.dp)
                         )
