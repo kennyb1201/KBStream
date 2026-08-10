@@ -182,45 +182,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                             emptyList()
                         }
 
-                        val merged = (localItems + simklItems)
-                            .sortedWith(compareByDescending<UpNextItem> { it.recencyTimestamp })
-                            .fold(mutableListOf<UpNextItem>()) { acc, item ->
-                                val duplicateIndex = acc.indexOfFirst { existing ->
-                                    dedupeKey(existing) == dedupeKey(item) &&
-                                        !(existing.badge == UpNextBadge.CONTINUE_WATCHING &&
-                                            item.badge != UpNextBadge.CONTINUE_WATCHING) &&
-                                        !(item.badge == UpNextBadge.CONTINUE_WATCHING &&
-                                            existing.badge != UpNextBadge.CONTINUE_WATCHING)
-                                }
+val merged = dedupeAndSortUpNext(localItems + simklItems)
 
-                                if (duplicateIndex == -1) {
-                                    acc += item
-                                } else {
-                                    val existing = acc[duplicateIndex]
-                                    val preferred = when {
-                                        existing.badge == UpNextBadge.CONTINUE_WATCHING &&
-                                            item.badge != UpNextBadge.CONTINUE_WATCHING -> existing
-
-                                        item.badge == UpNextBadge.CONTINUE_WATCHING &&
-                                            existing.badge != UpNextBadge.CONTINUE_WATCHING -> item
-
-                                        existing.recencyTimestamp >= item.recencyTimestamp -> existing
-                                        else -> item
-                                    }
-
-                                    acc[duplicateIndex] = preferred
-                                }
-
-                                acc
-                            }
-                            .sortedWith(
-                                compareBy<UpNextItem> { badgePriority(it.badge) }
-                                    .thenByDescending { it.recencyTimestamp }
-                                    .thenBy { it.title.lowercase() }
-                            )
-
-                        Log.e("HOME_UPNEXT", "merged count = ${merged.size}")
-                        _upNext.value = merged
+Log.e("HOME_UPNEXT", "merged count = ${merged.size}")
+_upNext.value = merged
                     } catch (e: Exception) {
                         Log.e("HOME_UPNEXT", "observeUpNext failed: ${e.message}", e)
                         _upNext.value = emptyList()
