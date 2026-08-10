@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.detail
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.gestures.BringIntoViewSpec
@@ -853,7 +854,7 @@ private fun StudioCard(
             .clip(RoundedCornerShape(10.dp))
             .border(
                 width = 1.dp,
-                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f),
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f)
                 shape = RoundedCornerShape(10.dp)
             )
             .clickable(onClick = onClick)
