@@ -215,10 +215,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                             poster = entry.poster,
                             badge = UpNextBadge.CONTINUE_WATCHING,
                             subtitle = if (isEpisodePlayback) {
-                                "Resume • ${formatSeasonEpisode(entry.season, entry.episode)}"
-                            } else {
-                                "Resume"
-                            },
+    "Resume - ${formatSeasonEpisode(entry.season, entry.episode)}" // Changed to a clean dash
+} else {
+    "Resume"
+}
+
                             progressPercent = progressFromHistory(
                                 positionMs = entry.positionMs,
                                 durationMs = entry.durationMs
