@@ -13,18 +13,18 @@ interface TmdbApiService {
     ): TmdbFindResponse
 
     @GET("movie/{id}")
-    suspend fun getMovie(
-        @Path("id") id: Int,
-        @Query("api_key") apiKey: String,
-        @Query("append_to_response") append: String = "release_dates,credits,videos,recommendations,reviews,keywords"
-    ): TmdbDetail
+suspend fun getMovie(
+    @Path("id") id: Int,
+    @Query("api_key") apiKey: String,
+    @Query("append_to_response") append: String = "release_dates,credits,videos,recommendations,reviews,keywords,images"
+): TmdbDetail
 
-    @GET("tv/{id}")
-    suspend fun getTv(
-        @Path("id") id: Int,
-        @Query("api_key") apiKey: String,
-        @Query("append_to_response") append: String = "content_ratings,credits,videos,recommendations,reviews,keywords"
-    ): TmdbDetail
+@GET("tv/{id}")
+suspend fun getTv(
+    @Path("id") id: Int,
+    @Query("api_key") apiKey: String,
+    @Query("append_to_response") append: String = "content_ratings,credits,videos,recommendations,reviews,keywords,images"
+): TmdbDetail
 
     @GET("movie/{id}/external_ids")
     suspend fun getMovieExternalIds(
