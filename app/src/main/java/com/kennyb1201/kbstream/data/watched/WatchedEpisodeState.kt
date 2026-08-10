@@ -9,7 +9,10 @@ object WatchedEpisodeState {
         season: Int?,
         episode: Int?
     ): String? {
-        if (parentId.isBlank() || season == null || episode == null) return null
+        if (parentId.isBlank() || season == null || episode == null) {
+            return null
+        }
+
         return "$parentId:$season:$episode"
     }
 
@@ -81,21 +84,22 @@ object WatchedEpisodeState {
     }
 
     fun effectiveWatchedEpisodesForSeason(
-    parentId: String,
-    season: Int,
-    simklWatchedEpisodes: Set<Pair<Int, Int>>,
-    watchedEpisodeKeys: Set<String>
-): Set<Int> {
-    val simklSeasonEpisodes = simklWatchedEpisodesForSeason(
-        season = season,
-        simklWatchedEpisodes = simklWatchedEpisodes
-    )
+        parentId: String,
+        season: Int,
+        simklWatchedEpisodes: Set<Pair<Int, Int>>,
+        watchedEpisodeKeys: Set<String>
+    ): Set<Int> {
+        val simklSeasonEpisodes = simklWatchedEpisodesForSeason(
+            season = season,
+            simklWatchedEpisodes = simklWatchedEpisodes
+        )
 
-    val localSeasonEpisodes = localWatchedEpisodesForSeason(
-        parentId = parentId,
-        season = season,
-        watchedEpisodeKeys = watchedEpisodeKeys
-    )
+        val localSeasonEpisodes = localWatchedEpisodesForSeason(
+            parentId = parentId,
+            season = season,
+            watchedEpisodeKeys = watchedEpisodeKeys
+        )
 
-    return simklSeasonEpisodes + localSeasonEpisodes
+        return simklSeasonEpisodes + localSeasonEpisodes
+    }
 }
