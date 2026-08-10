@@ -79,6 +79,8 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.onFocusChanged
 import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
 import com.kennyb1201.kbstream.data.tmdb.tmdbImageOriginal
 import kotlinx.coroutines.launch
@@ -908,6 +910,7 @@ private fun StudioCard(
     onClick: () -> Unit
 ) {
     val cardShape = RoundedCornerShape(10.dp)
+    var isFocused by remember { mutableStateOf(false) }
 
     Box(
         modifier = Modifier
@@ -917,10 +920,11 @@ private fun StudioCard(
             .clip(cardShape)
             .background(Color.White)
             .border(
-                width = 1.dp,
-                color = Color.White.copy(alpha = 0.35f),
+                width = if (isFocused) 3.dp else 1.dp,
+                color = if (isFocused) KBAccent else Color.White.copy(alpha = 0.35f),
                 shape = cardShape
             )
+            .onFocusChanged { isFocused = it.isFocused }
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center
