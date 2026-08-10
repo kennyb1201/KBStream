@@ -12,6 +12,7 @@ object WatchedEpisodeState {
         if (parentId.isBlank() || season == null || episode == null) return null
         return "$parentId:$season:$episode"
     }
+}
 
     fun buildMergedWatchedKeys(
         parentId: String,
