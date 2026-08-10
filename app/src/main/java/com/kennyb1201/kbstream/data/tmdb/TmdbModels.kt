@@ -93,6 +93,22 @@ data class TmdbAuthorDetails(
 )
 
 @JsonClass(generateAdapter = true)
+data class TmdbImageAsset(
+    @Json(name = "file_path") val filePath: String? = null,
+    @Json(name = "iso_639_1") val iso639_1: String? = null,
+    @Json(name = "vote_average") val voteAverage: Double? = null,
+    val width: Int? = null,
+    val height: Int? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class TmdbImagesResponse(
+    val logos: List<TmdbImageAsset> = emptyList(),
+    val posters: List<TmdbImageAsset> = emptyList(),
+    val backdrops: List<TmdbImageAsset> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
 data class TmdbReview(
     val id: String,
     val author: String,
@@ -184,6 +200,7 @@ data class TmdbDetail(
     val reviews: TmdbReviews? = null,
     val genres: List<TmdbGenre> = emptyList(),
     val keywords: TmdbKeywords? = null,
+    val images: TmdbImagesResponse? = null,
     @Json(name = "belongs_to_collection") val belongsToCollection: TmdbCollectionRef? = null,
     @Json(name = "next_episode_to_air") val nextEpisodeToAir: TmdbEpisodeAirInfo? = null,
     @Json(name = "last_episode_to_air") val lastEpisodeToAir: TmdbEpisodeAirInfo? = null,
@@ -335,3 +352,19 @@ fun TmdbDetail.certification(isMovie: Boolean): String? {
                 ?.firstOrNull()
     }
 }
+
+fun TmdbDetail.bestLogoPath(): String? =
+    images?.logos
+        ?.asSequence()
+        ?.filter { !it.filePath.isNullOrBlank() }
+        ?.sortedWith(
+            compareByDescending<TmdbImageAsset> { it.iso639_1 == "en" }
+                .thenByDescending { it.iso639_1 == null }
+                .thenByDescending { it.voteAverage ?: 0.0 }
+                .thenByDescending { it.width ?: 0 }
+        )
+        ?.mapNotNull { it.filePath }
+        ?.firstOrNull()
+
+fun tmdbImageOriginal(path: String?): String? =
+    path?.takeIf { it.isNotBlank() }?.let { "https://image.tmdb.org/t/p/original$it" }
