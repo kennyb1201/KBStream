@@ -701,7 +701,7 @@ fun DetailScreen(
                             }
 
                             
-                            val companies = tmdbDetail?.productionCompanies.orEmpty()
+                        
                             val companies = tmdbDetail?.productionCompanies.orEmpty()
 val networks = tmdbDetail?.networks.orEmpty()
 
