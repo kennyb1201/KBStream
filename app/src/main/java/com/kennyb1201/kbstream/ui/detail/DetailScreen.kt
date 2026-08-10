@@ -809,6 +809,7 @@ fun DetailScreen(
         }
     }
 }
+}
 
 @Composable
 private fun CastCard(member: TmdbCastMember, onClick: () -> Unit) {
