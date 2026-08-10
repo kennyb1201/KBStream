@@ -136,8 +136,8 @@ data class SimklWatchingDetailedEpisode(
 data class SimklContinueWatchingItem(
     val id: String,
     val imdbId: String?,
-    val tmdbId: Int? = null,
-    val simklId: Int? = null,
+    val tmdbId: Int?,
+    val simklId: Int?,
     val title: String,
     val year: Int?,
     val posterUrl: String?,
