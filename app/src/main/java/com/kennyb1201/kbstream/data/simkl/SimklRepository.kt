@@ -581,8 +581,7 @@ class SimklRepository(
                         ?: item.id?.toString()
                         ?: return@mapNotNull null
 
-                    if (isTrulyCompleted(simklId)) {
-                        return@mapNotNull null
+if (isTrulyCompleted(simklId) && (item.progress ?: 0f) >= 95f) return@mapNotNull null
                     }
 
                     val imdbId = show.ids?.imdb?.takeIf { it.isNotBlank() }
@@ -626,23 +625,34 @@ class SimklRepository(
         val watchingMapped = watchingShows
             .asSequence()
             .filter { item ->
-                val status = item.status?.trim()?.lowercase()
-                val watched = item.watchedEpisodesCount
-                val total = item.totalEpisodesCount
-                val notAired = item.notAiredEpisodesCount ?: 0
-                val airedTotal = total?.let { it - notAired }
-                val caughtUpOnAired =
-                    watched != null && airedTotal != null && airedTotal > 0 && watched >= airedTotal
+        val status = item.status?.trim()?.lowercase()
 
-                if (caughtUpOnAired) {
-                    false
-                } else if (airedTotal == null) {
-                    val hasNext = !item.nextToWatch.isNullOrBlank()
-                    status != "dropped" && (status != "completed" || hasNext)
-                } else {
-                    status != "dropped"
-                }
-            }
+        if (status == "dropped") {
+            false
+        } else {
+            val hasNext = !item.nextToWatch.isNullOrBlank()
+            val hasLastWatchedAt = !item.lastWatchedAt.isNullOrBlank()
+            val watchedCount = item.watchedEpisodesCount ?: 0
+            val hasProgress = watchedCount > 0
+
+            hasNext || hasLastWatchedAt || hasProgress
+        }
+    }
+    .mapNotNull { item ->
+        val show = item.show ?: return@mapNotNull null
+        val simklId = show.ids?.simkl?.toString() ?: return@mapNotNull null
+        val mergedId = "show-$simklId"
+
+        if (mergedId in playbackIds) return@mapNotNull null
+
+        val imdbId = show.ids?.imdb?.takeIf { it.isNotBlank() }
+
+        if (imdbId == null) {
+            Log.e(
+                "SIMKL_REPO",
+                "Watching show missing imdb id, simklId=$simklId, title=${show.title}"
+            )
+        }
             .mapNotNull { item ->
                 val show = item.show ?: return@mapNotNull null
                 val simklId = show.ids?.simkl?.toString() ?: return@mapNotNull null
