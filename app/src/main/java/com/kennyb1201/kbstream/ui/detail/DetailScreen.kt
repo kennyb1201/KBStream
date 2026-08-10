@@ -132,10 +132,6 @@ fun DetailScreen(
     val episodesRowState = rememberLazyListState()
     val seasonFocusRequesters = remember { mutableMapOf<Int, FocusRequester>() }
 
-    LaunchedEffect(type, id) {
-        selectedSeason = null
-        viewModel.load(type, id)
-    }
 
     LaunchedEffect(type, effectiveSeason, seasons) {
     if (type == "series" && effectiveSeason != null && effectiveSeason in seasons) {
@@ -188,6 +184,12 @@ fun DetailScreen(
             if (selectedSeason != effectiveSeason) selectedSeason = effectiveSeason
             viewModel.loadEpisodesForSeason(effectiveSeason)
         }
+    }
+
+    LaunchedEffect(type, effectiveSeason, seasons) {
+    if (type == "series" && effectiveSeason != null && effectiveSeason in seasons) {
+        seasonFocusRequesters[effectiveSeason]?.requestFocus()
+    }
     }
 
     val resumeSeason = resumeInfo?.season
