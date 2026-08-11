@@ -1015,15 +1015,36 @@ private fun EpisodeCard(
             .padding(end = 12.dp)
     ) {
         Column(modifier = Modifier.width(260.dp)) {
-            PosterCard(
-                posterUrl = ep.thumbnail,
-                contentDescription = ep.name ?: "",
-                isWatched = isWatched,
-                onClick = onClick,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(146.dp)
-            )
+            val fallbackBackdropUrl = remember(ep.stillPath, ep.thumbnail) {
+                ep.thumbnail?.takeIf { it.isNotBlank() }
+                    ?: ep.stillPath?.let { TmdbRepository.BACKDROP_BASE + it }
+            }
+
+            if (!fallbackBackdropUrl.isNullOrBlank()) {
+                PosterCard(
+                    posterUrl = fallbackBackdropUrl,
+                    contentDescription = ep.name ?: "",
+                    isWatched = isWatched,
+                    onClick = onClick,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(146.dp)
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(146.dp)
+                        .background(KBSurfaceRaised),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "S${ep.seasonNumber ?: 1} E${ep.episodeNumber}",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = KBTextLo
+                    )
+                }
+            }
 
             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                 val runtimeText = remember(ep.runtimeMinutes) {
@@ -1073,6 +1094,7 @@ private fun EpisodeCard(
         }
     }
 }
+
 
 @Composable
 private fun CollectionCard(part: TmdbCollectionPart, isWatched: Boolean, onClick: () -> Unit) {
