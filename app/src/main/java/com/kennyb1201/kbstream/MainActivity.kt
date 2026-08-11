@@ -139,9 +139,10 @@ fun AppRoot() {
             onNavigateStudio = { id, name, isNetwork ->
                 screen = Screen.Studio(id, name, isNetwork)
             },
-            onNavigateTag = { id, name, isKeyword, type ->
+                        onNavigateTag = { id, name, isKeyword, type ->
                 screen = Screen.Tag(id = id, name = name, isKeyword = isKeyword, mediaType = type)
             },
+
             onNavigateStreams = { target, parentId, parentType, poster ->
                 screen = Screen.Streams(target, parentId, parentType, poster)
             }
