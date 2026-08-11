@@ -1,0 +1,314 @@
+package com.kennyb1201.kbstream.ui.home
+
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.kennyb1201.kbstream.data.models.UpNextBadge
+import com.kennyb1201.kbstream.data.models.UpNextItem
+import com.kennyb1201.kbstream.data.models.ResolvedHomeSeriesTarget
+import com.kennyb1201.kbstream.data.models.Rail
+import com.kennyb1201.kbstream.data.repository.TmdbRepository
+import com.kennyb1201.kbstream.data.repository.SimklRepository
+import com.kennyb1201.kbstream.data.local.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.state.WatchedEpisodeState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.max
+
+class HomeViewModel(
+    application: Application,
+    private val tmdbRepository: TmdbRepository,
+    private val simklRepository: SimklRepository,
+    private val watchHistoryDatabase: WatchHistoryDatabase,
+    private val watchedEpisodeState: WatchedEpisodeState
+) : AndroidViewModel(application) {
+
+    private val _upNext = MutableStateFlow<List<UpNextItem>>(emptyList())
+    val upNext: StateFlow<List<UpNextItem>> = _upNext.asStateFlow()
+
+    private val _rails = MutableStateFlow<List<Rail>>(emptyList())
+    val rails: StateFlow<List<Rail>> = _rails.asStateFlow()
+
+    private val _watchedKeys = MutableStateFlow<Set<String>>(emptySet())
+    val watchedKeys: StateFlow<Set<String>> = _watchedKeys.asStateFlow()
+
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error.asStateFlow()
+
+    private val requestVersion = AtomicInteger(0)
+
+    init {
+        startPeriodicSimklRefresh()
+        refreshAllHomeData()
+    }
+
+    fun refreshAllHomeData() {
+        refreshUpNext()
+        refreshRailsOnly()
+    }
+
+    fun refreshUpNext() {
+        val version = nextUpNextRequestVersion()
+        viewModelScope.launch(Dispatchers.IO) {
+            loadSimklUpNextItems(version)
+        }
+    }
+
+    fun refreshRailsOnly() {
+        viewModelScope.launch(Dispatchers.IO) {
+            loadRails()
+        }
+    }
+
+    fun refreshWatchedStatusForCurrentRails() {
+        viewModelScope.launch(Dispatchers.IO) {
+            refreshWatchedStatus()
+        }
+    }
+
+    private fun startPeriodicSimklRefresh() {}
+
+    fun clearWatchedStateCaches() {
+        watchedEpisodeState.clearCaches()
+    }
+
+    private fun nextUpNextRequestVersion(): Int {
+        return requestVersion.incrementAndGet()
+    }
+
+    private fun isLatestUpNextRequest(version: Int): Boolean {
+        return version == requestVersion.get()
+    }
+
+    private suspend fun loadSimklUpNextItems(version: Int) {
+        try {
+            val remoteItems = simklRepository.getUpNextItems()
+            if (!isLatestUpNextRequest(version)) return
+
+            val builtItems = remoteItems.mapNotNull { buildSimklUpNextItem(it) }
+            val dedupedAndSorted = dedupeAndSortUpNext(builtItems)
+
+            if (isLatestUpNextRequest(version)) {
+                _upNext.update { dedupedAndSorted }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private suspend fun buildSimklUpNextItem(remoteItem: UpNextItem): UpNextItem? {
+        val mediaType = normalizeMediaType(remoteItem.mediaType)
+        val identifier = normalizeIdentifier(remoteItem.id)
+        
+        var resolvedSeason = remoteItem.season
+        var resolvedEpisode = remoteItem.episode
+        var isExplicitResume = false
+        var badge = remoteItem.badge ?: UpNextBadge.NONE
+
+        if (mediaType == "series") {
+            val simklData = preloadWatchedEpisodeStateForShow(identifier)
+
+            val resolvedTarget = resolveSeriesTargetFromSharedWatchedState(
+                showId = identifier,
+                simklSeason = remoteItem.season,
+                simklEpisode = remoteItem.episode,
+                simklWatchedEpisodes = simklData.watchedEpisodes,
+                knownWatchedSeasons = simklData.knownSeasons
+            )
+
+            if (resolvedTarget != null) {
+                resolvedSeason = resolvedTarget.season
+                resolvedEpisode = resolvedTarget.episode
+                isExplicitResume = resolvedTarget.isResume
+                badge = if (isExplicitResume) UpNextBadge.CONTINUE_WATCHING else UpNextBadge.NEW_EPISODE
+            }
+        }
+
+        var subtitle = buildSimklSubtitle(remoteItem, resolvedSeason, resolvedEpisode)
+        
+        if (mediaType == "series") {
+            if (subtitle.isBlank() || subtitle == "Up Next" || subtitle == "Resume") {
+                subtitle = when {
+                    badge == UpNextBadge.CONTINUE_WATCHING && resolvedSeason != null && resolvedEpisode != null ->
+                        "Resume - ${formatSeasonEpisode(resolvedSeason, resolvedEpisode)}"
+                    resolvedSeason != null && resolvedEpisode != null ->
+                        "Up Next - ${formatSeasonEpisode(resolvedSeason, resolvedEpisode)}"
+                    isExplicitResume ->
+                        "Resume"
+                    else ->
+                        "Up Next"
+                }
+            }
+        }
+
+        return remoteItem.copy(
+            mediaType = mediaType,
+            season = resolvedSeason,
+            episode = resolvedEpisode,
+            badge = badge,
+            subtitle = subtitle
+        )
+    }
+
+    private suspend fun preloadWatchedEpisodeStateForShow(showId: String): PreloadedShowState {
+        val remoteWatched = watchedEpisodeState.getWatchedEpisodesForShow(showId)
+        val localHistory = watchHistoryDatabase.historyDao().getHistoryForShow(showId)
+        
+        val mergedEpisodes = remoteWatched.toMutableList()
+        localHistory.forEach { entry ->
+            val parsed = parseEpisodeKey(entry.episodeKey)
+            if (parsed != null && !mergedEpisodes.contains(parsed)) {
+                mergedEpisodes.add(parsed)
+            }
+        }
+        
+        val knownSeasons = mergedEpisodes.map { it.first }.toSet()
+        return PreloadedShowState(mergedEpisodes, knownSeasons)
+    }
+
+    private suspend fun resolveSeriesTargetFromSharedWatchedState(
+        showId: String,
+        simklSeason: Int?,
+        simklEpisode: Int?,
+        simklWatchedEpisodes: List<Pair<Int, Int>>,
+        knownWatchedSeasons: Set<Int>
+    ): ResolvedHomeSeriesTarget? {
+        val localResume = watchHistoryDatabase.historyDao().getLatestResumeForShow(showId)
+        if (localResume != null) {
+            val parsed = parseEpisodeKey(localResume.episodeKey)
+            if (parsed != null) {
+                return ResolvedHomeSeriesTarget(
+                    season = parsed.first,
+                    episode = parsed.second,
+                    isResume = true
+                )
+            }
+        }
+
+        val highestKnownSeason = maxOf(
+            simklSeason ?: 1,
+            simklWatchedEpisodes.maxOfOrNull { (season, _) -> season } ?: 1,
+            knownWatchedSeasons.maxOrNull() ?: 1
+        )
+
+        val firstSeasonToCheck = maxOf(
+            1,
+            simklSeason ?: knownWatchedSeasons.minOrNull() ?: 1
+        )
+
+        val lastSeasonToCheck = maxOf(
+            highestKnownSeason + 3,
+            firstSeasonToCheck + MAX_FORWARD_SEASON_LOOKAHEAD
+        )
+
+        for (seasonNum in firstSeasonToCheck..lastSeasonToCheck) {
+            val tmdbSeason = tmdbRepository.getSeasonDetails(showId, seasonNum) ?: continue
+            val watchedEpisodesInSeason = simklWatchedEpisodes.filter { it.first == seasonNum }.map { it.second }
+            
+            for (ep in tmdbSeason.episodes) {
+                if (ep.episodeNumber !in watchedEpisodesInSeason && isAiredOrUnknown(ep.airDate)) {
+                    return ResolvedHomeSeriesTarget(
+                        season = seasonNum,
+                        episode = ep.episodeNumber,
+                        isResume = false
+                    )
+                }
+            }
+        }
+        
+        return simklSeason?.let { s ->
+            simklEpisode?.let { e ->
+                ResolvedHomeSeriesTarget(season = s, episode = e, isResume = false)
+            }
+        }
+    }
+
+    private fun buildSimklSubtitle(item: UpNextItem, season: Int?, episode: Int?): String {
+        return item.subtitle ?: ""
+    }
+
+    private fun formatSeasonEpisode(season: Int, episode: Int): String {
+        return "S${season.toString().padStart(2, '0')} E${episode.toString().padStart(2, '0')}"
+    }
+
+    private fun isAiredOrUnknown(airDate: String?): Boolean {
+        if (airDate.isNullOrBlank()) return true
+        return true 
+    }
+
+    private fun badgePriority(badge: UpNextBadge): Int {
+        return when (badge) {
+            UpNextBadge.CONTINUE_WATCHING -> 3
+            UpNextBadge.NEW_EPISODE -> 2
+            UpNextBadge.NONE -> 1
+        }
+    }
+
+    private fun parseEpisodeKey(key: String): Pair<Int, Int>? {
+        val parts = key.split("_")
+        if (parts.size >= 3) {
+            return Pair(parts[1].toIntOrNull() ?: 1, parts[2].toIntOrNull() ?: 1)
+        }
+        return null
+    }
+
+    private fun normalizeIdentifier(id: String): String {
+        return id.trim()
+    }
+
+    private fun dedupeAndSortUpNext(items: List<UpNextItem>): List<UpNextItem> {
+        val grouped = items.groupBy { showDedupeKey(it) }
+        return grouped.map { (_, group) ->
+            group.maxByOrNull { winnerScore(it) } ?: group.first()
+        }.sortedByDescending { targetPrecisionScore(it) }
+    }
+
+    private fun showDedupeKey(item: UpNextItem): String {
+        return "${item.mediaType}_${item.id}"
+    }
+
+    private fun winnerScore(item: UpNextItem): Int {
+        return badgePriority(item.badge ?: UpNextBadge.NONE)
+    }
+
+    private fun targetPrecisionScore(item: UpNextItem): Int {
+        return if (item.season != null && item.episode != null) 1 else 0
+    }
+
+    private suspend fun loadRails() {
+        val loadedRails = loadRailsInternal()
+        _rails.update { loadedRails }
+    }
+
+    private suspend fun loadRailsInternal(): List<Rail> {
+        return emptyList()
+    }
+
+    private suspend fun refreshWatchedStatus() {}
+
+    private fun normalizeMediaType(type: String?): String {
+        return type?.lowercase() ?: "movie"
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        clearWatchedStateCaches()
+    }
+
+    companion object {
+        private const val MAX_FORWARD_SEASON_LOOKAHEAD = 3
+    }
+}
+
+data class PreloadedShowState(
+    val watchedEpisodes: List<Pair<Int, Int>>,
+    val knownSeasons: Set<Int>
+)
