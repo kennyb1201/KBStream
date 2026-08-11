@@ -125,7 +125,7 @@ fun AppRoot() {
             }
         )
 
-                is Screen.Detail -> DetailScreen(
+                        is Screen.Detail -> DetailScreen(
             type = current.type,
             id = current.id,
             initialTarget = current.pendingTarget,
@@ -139,13 +139,14 @@ fun AppRoot() {
             onNavigateStudio = { id, name, isNetwork ->
                 screen = Screen.Studio(id, name, isNetwork)
             },
-            onNavigateTag = { tagId, tagName, isKeyword, tagMediaType ->
-                screen = Screen.Tag(tagId, tagName, isKeyword, tagMediaType)
+            onNavigateTag = { id, name, isKeyword, mediaType ->
+                screen = Screen.Tag(id, name, isKeyword, mediaType)
             },
             onNavigateStreams = { target, parentId, parentType, poster ->
                 screen = Screen.Streams(target, parentId, parentType, poster)
             }
         )
+
 
 
         is Screen.Actor -> ActorScreen(
