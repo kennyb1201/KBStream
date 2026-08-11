@@ -1,4 +1,4 @@
-Package com.kennyb1201.kbstream.data.simkl
+package com.kennyb1201.kbstream.data.simkl
 
 import android.content.Context
 import android.util.Log
