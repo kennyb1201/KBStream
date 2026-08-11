@@ -718,38 +718,32 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    private fun buildSimklSubtitle(
+        private fun buildSimklSubtitle(
         item: SimklContinueWatchingItem,
         isExplicitResume: Boolean
     ): String {
-        if (isExplicitResume) {
-            return when {
-                item.mediaType == "series" &&
-                    item.season != null &&
-                    item.episode != null -> {
-                    "Resume - ${formatSeasonEpisode(item.season, item.episode)}"
-                }
-
-                else -> {
-                    "Resume"
-                }
-            }
-        }
-
         return when {
-            item.season != null && item.episode != null -> {
-                "Up Next - ${formatSeasonEpisode(item.season, item.episode)}"
+            item.mediaType == "series" && item.season != null && item.episode != null -> {
+                if (isExplicitResume) {
+                    "Resume - ${formatSeasonEpisode(item.season, item.episode)}"
+                } else {
+                    "Up Next - ${formatSeasonEpisode(item.season, item.episode)}"
+                }
             }
 
-            item.season != null -> {
-                "Up Next - S${item.season}"
+            item.mediaType == "series" && item.season != null -> {
+                if (isExplicitResume) {
+                    "Resume - S${item.season}"
+                } else {
+                    "Up Next - S${item.season}"
+                }
             }
 
-            else -> {
-                "Up Next"
-            }
+            isExplicitResume -> "Resume"
+            else -> "Up Next"
         }
     }
+
 
     private fun formatSeasonEpisode(
         season: Int?,
