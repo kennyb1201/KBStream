@@ -1089,6 +1089,76 @@ private fun EpisodeCard(
                 ep.name?.let {
                     Text(
                         text = it,
+@Composable
+private fun EpisodeCard(
+    ep: ResolvedEpisode,
+    isWatched: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    KBCard(
+        onClick = onClick,
+        modifier = modifier
+            .width(260.dp)
+            .padding(end = 12.dp)
+    ) {
+        Column(modifier = Modifier.width(260.dp)) {
+            val fallbackBackdropUrl = remember<String?>(ep.thumbnail) {
+                ep.thumbnail?.takeIf { it.isNotBlank() }
+            }
+
+            if (!fallbackBackdropUrl.isNullOrBlank()) {
+                PosterCard(
+                    posterUrl = fallbackBackdropUrl,
+                    contentDescription = ep.name ?: "",
+                    isWatched = isWatched,
+                    onClick = {}, // Handled entirely by the parent KBCard container
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(146.dp)
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(146.dp)
+                        .background(KBSurfaceRaised),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "E${ep.episodeNumber}",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = KBTextLo
+                    )
+                }
+            }
+
+            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                val runtimeText = remember(ep.runtimeMinutes) {
+                    ep.runtimeMinutes?.let { " • ${it}m" } ?: ""
+                }
+
+                Text(
+                    text = "E${ep.episodeNumber}$runtimeText",
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                ep.airDate?.takeIf { it.isNotBlank() }?.let { airDate ->
+                    Text(
+                        text = formatEpisodeAirDate(airDate),
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+
+                ep.name?.let {
+                    Text(
+                        text = it,
                         color = KBTextHi,
                         style = MaterialTheme.typography.titleSmall,
                         maxLines = 2,
@@ -1111,6 +1181,7 @@ private fun EpisodeCard(
         }
     }
 }
+
 
 
 
