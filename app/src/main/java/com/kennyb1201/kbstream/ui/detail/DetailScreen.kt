@@ -186,20 +186,18 @@ fun DetailScreen(
         }
     }
 
-    LaunchedEffect(episodesRowState, seasons, effectiveSeason) {
+            LaunchedEffect(episodesRowState, seasons, effectiveSeason) {
         if (type != "series" || effectiveSeason == null) return@LaunchedEffect
-
-        // snapshotFlow needs the explicit import
+        
         snapshotFlow {
             val layoutInfo = episodesRowState.layoutInfo
-            // Return a simple data class or custom object to avoid destructuring ambiguity
             Pair(layoutInfo.totalItemsCount, layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0)
         }.collect { (totalItems, lastVisibleItem) ->
+            // Only trigger if we are actively at the very last item and user is navigating/scrolling there
             if (totalItems > 0 && lastVisibleItem >= totalItems - 1) {
                 val currentIndex = seasons.indexOf(effectiveSeason)
                 if (currentIndex != -1 && currentIndex < seasons.size - 1) {
                     val nextSeason = seasons[currentIndex + 1]
-                    // Use a simple check to prevent infinite loops
                     if (selectedSeason != nextSeason) {
                         selectedSeason = nextSeason
                     }
@@ -207,6 +205,7 @@ fun DetailScreen(
             }
         }
     }
+
 
     val resumeSeason = resumeInfo?.season
     val resumeEpisode = resumeInfo?.episode
@@ -920,7 +919,10 @@ private fun SeasonRow(
 ) {
     LazyRow(
         contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 8.dp),
-        modifier = Modifier.padding(bottom = 14.dp).focusGroup().focusRestorer()
+        modifier = Modifier
+            .padding(bottom = 14.dp)
+            .focusGroup()
+            // Remove .focusRestorer() here so it doesn't try to capture/redirect focus upward unexpectedly
     ) {
         items(items = seasons, key = { it }) { season ->
             val selected = season == currentSelectedSeason
@@ -931,7 +933,7 @@ private fun SeasonRow(
                 seasonNumber = season,
                 seasonName = if (season == 0) "SPECIALS" else "SEASON $season",
                 isSelected = selected,
-                onFocusOrClick = {
+                onClick = {
                     onSeasonSelected(season)
                 },
                 modifier = Modifier
@@ -941,6 +943,7 @@ private fun SeasonRow(
         }
     }
 }
+
 
 @Composable
 private fun CastCard(member: TmdbCastMember, onClick: () -> Unit) {
