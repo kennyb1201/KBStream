@@ -753,8 +753,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
             .sortedWith(
-                compareByDescending<UpNextItem> { it.recencyTimestamp }
-                    .thenBy { badgePriority(it.badge) }
+                compareBy<UpNextItem> { badgePriority(it.badge) }
+                    .thenByDescending { it.recencyTimestamp }
                     .thenBy { it.title.lowercase() }
             )
     }
@@ -774,37 +774,35 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         return "title:$normalizedType:$normalizedTitle"
     }
 
-    private fun winnerScore(item: UpNextItem): Int {
+     private fun winnerScore(item: UpNextItem): Int {
         var score = 0
 
-        val hasPlaybackProgress = item.startPositionMs > 0L ||
-            (item.progressPercent ?: 0f) > 0f
-
-        val hasEpisodeTarget = item.season != null && item.episode != null
-        val hasStreamTarget = !item.episodeStreamId.isNullOrBlank()
-
+        // Prioritize active playback / continue watching for internal candidate selection
         if (item.badge == UpNextBadge.CONTINUE_WATCHING) {
-            score += 8_000
+            score += 5_000
         }
 
-        if (hasPlaybackProgress) {
-            score += 4_000
+        if (item.startPositionMs > 0L || (item.progressPercent ?: 0f) > 0f) {
+            score += 2_500
         }
 
-        if (hasStreamTarget) {
+        if (!item.episodeStreamId.isNullOrBlank()) {
             score += 500
         }
 
-        if (hasEpisodeTarget) {
+        if (item.season != null && item.episode != null) {
             score += 250
         }
 
-        score += when (item.badge) {
-            UpNextBadge.NEW_SEASON -> 120
-            UpNextBadge.NEW_EPISODE -> 90
-            UpNextBadge.NEXT_UP -> 60
-            UpNextBadge.CONTINUE_WATCHING -> 0
-        }
+        return score
+    }
+
+    private fun badgePriority(badge: UpNextBadge): Int = when (badge) {
+        UpNextBadge.NEW_SEASON -> 0
+        UpNextBadge.NEW_EPISODE -> 1
+        UpNextBadge.CONTINUE_WATCHING -> 2
+        UpNextBadge.NEXT_UP -> 3
+    }
 
         val timestampScore = (item.recencyTimestamp / 1_000_000L).coerceAtMost(500L).toInt()
         score += timestampScore
