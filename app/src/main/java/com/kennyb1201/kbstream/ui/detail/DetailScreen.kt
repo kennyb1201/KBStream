@@ -1049,6 +1049,53 @@ private fun EpisodeCard(
             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                 val runtimeText = remember(ep.runtimeMinutes) {
                     ep.runtimeMinutes?.let { " • ${it}m" } ?: ""
+@Composable
+private fun EpisodeCard(
+    ep: ResolvedEpisode,
+    isWatched: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    KBCard(
+        onClick = onClick,
+        modifier = modifier
+            .width(260.dp)
+            .padding(end = 12.dp)
+    ) {
+        Column(modifier = Modifier.width(260.dp)) {
+            val fallbackBackdropUrl = remember<String?>(ep.thumbnail) {
+                ep.thumbnail?.takeIf { it.isNotBlank() }
+            }
+
+            if (!fallbackBackdropUrl.isNullOrBlank()) {
+                PosterCard(
+                    posterUrl = fallbackBackdropUrl,
+                    contentDescription = ep.name ?: "",
+                    isWatched = isWatched,
+                    onClick = onClick,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(146.dp)
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(146.dp)
+                        .background(KBSurfaceRaised),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "E${ep.episodeNumber}",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = KBTextLo
+                    )
+                }
+            }
+
+            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                val runtimeText = remember(ep.runtimeMinutes) {
+                    ep.runtimeMinutes?.let { " • ${it}m" } ?: ""
                 }
 
                 Text(
@@ -1094,6 +1141,7 @@ private fun EpisodeCard(
         }
     }
 }
+
 
 
 @Composable
