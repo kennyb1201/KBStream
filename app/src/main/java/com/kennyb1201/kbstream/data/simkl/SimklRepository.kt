@@ -226,34 +226,45 @@ class SimklRepository(
     }
 
     private fun isShowFullyWatched(item: SimklWatchingShowItem): Boolean {
+        private fun isShowFullyWatched(item: SimklWatchingShowItem): Boolean {
         val status = item.status?.trim()?.lowercase()
-        val watched = item.watchedEpisodesCount
-        val total = item.totalEpisodesCount
+        val watched = item.watchedEpisodesCount ?: 0
+        val total = item.totalEpisodesCount ?: 0
         val notAired = item.notAiredEpisodesCount ?: 0
-        val airedTotal = total?.let { it - notAired }
-        val caughtUpOnAired =
-            watched != null && airedTotal != null && airedTotal > 0 && watched >= airedTotal
-
+        val airedTotal = total - notAired
+        
+        val caughtUpOnAired = airedTotal > 0 && watched >= airedTotal
         if (caughtUpOnAired) return true
 
         val hasNext = !item.nextToWatch.isNullOrBlank()
-        return (status == "completed" || status == "ended") && !hasNext
+        val isFinishedStatus = status == "completed" || status == "ended" || status == "canceled"
+
+        // If it's finished or has no next-to-watch marker and all available episodes are watched, consider it fully watched
+        if (isFinishedStatus && !hasNext) return true
+        if (total > 0 && watched >= total) return true
+
+        return false
     }
 
     private fun isShowFullyWatched(item: SimklWatchingShowDetailedItem): Boolean {
         val status = item.status?.trim()?.lowercase()
-        val watched = item.watchedEpisodesCount
-        val total = item.totalEpisodesCount
+        val watched = item.watchedEpisodesCount ?: 0
+        val total = item.totalEpisodesCount ?: 0
         val notAired = item.notAiredEpisodesCount ?: 0
-        val airedTotal = total?.let { it - notAired }
-        val caughtUpOnAired =
-            watched != null && airedTotal != null && airedTotal > 0 && watched >= airedTotal
+        val airedTotal = total - notAired
 
+        val caughtUpOnAired = airedTotal > 0 && watched >= airedTotal
         if (caughtUpOnAired) return true
 
         val hasNext = !item.nextToWatch.isNullOrBlank()
-        return (status == "completed" || status == "ended") && !hasNext
+        val isFinishedStatus = status == "completed" || status == "ended" || status == "canceled"
+
+        if (isFinishedStatus && !hasNext) return true
+        if (total > 0 && watched >= total) return true
+
+        return false
     }
+
 
     suspend fun getCompletedMovieImdbIds(
         accessToken: String = requireAccessToken()
