@@ -174,7 +174,7 @@ fun AppRoot() {
             id = current.id,
             name = current.name,
             isKeyword = current.isKeyword,
-            mediaType = current.mediaType,
+            type = current.mediaType,
             onBack = {
                 screen = Screen.Home
             },
