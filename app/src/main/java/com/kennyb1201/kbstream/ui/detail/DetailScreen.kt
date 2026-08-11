@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.detail
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
@@ -185,27 +186,28 @@ fun DetailScreen(
         }
     }
 
-    LaunchedEffect(episodesRowState, seasons, effectiveSeason) {
-    if (type != "series" || effectiveSeason == null) return@LaunchedEffect
-    
-    // Track scroll state to detect when the user hits the end of the episode list
-    snapshotFlow {
-        val layoutInfo = episodesRowState.layoutInfo
-        val totalItems = layoutInfo.totalItemsCount
-        val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-        Pair(totalItems, lastVisibleItem)
-    }.collect { (totalItems, lastVisibleItem) ->
-        // If we have items and the user has scrolled to the very last episode card
-        if (totalItems > 0 && lastVisibleItem >= totalItems - 1) {
-            val currentIndex = seasons.indexOf(effectiveSeason)
-            // If there is a next season available in the list, switch to it automatically
-            if (currentIndex != -1 && currentIndex < seasons.size - 1) {
-                val nextSeason = seasons[currentIndex + 1]
-                selectedSeason = nextSeason
+        LaunchedEffect(episodesRowState, seasons, effectiveSeason) {
+        if (type != "series" || effectiveSeason == null) return@LaunchedEffect
+        
+        // snapshotFlow needs the explicit import
+        snapshotFlow {
+            val layoutInfo = episodesRowState.layoutInfo
+            // Return a simple data class or custom object to avoid destructuring ambiguity
+            Pair(layoutInfo.totalItemsCount, layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0)
+        }.collect { (totalItems, lastVisibleItem) ->
+            if (totalItems > 0 && lastVisibleItem >= totalItems - 1) {
+                val currentIndex = seasons.indexOf(effectiveSeason)
+                if (currentIndex != -1 && currentIndex < seasons.size - 1) {
+                    val nextSeason = seasons[currentIndex + 1]
+                    // Use a simple check to prevent infinite loops
+                    if (selectedSeason != nextSeason) {
+                        selectedSeason = nextSeason
+                    }
+                }
             }
         }
     }
-    }
+
 
     val resumeSeason = resumeInfo?.season
     val resumeEpisode = resumeInfo?.episode
