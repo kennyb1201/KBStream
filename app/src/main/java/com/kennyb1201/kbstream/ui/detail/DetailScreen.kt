@@ -185,10 +185,26 @@ fun DetailScreen(
         }
     }
 
-    LaunchedEffect(type, effectiveSeason, seasons) {
-        if (type == "series" && effectiveSeason != null && effectiveSeason in seasons) {
-            seasonFocusRequesters[effectiveSeason]?.requestFocus()
+    LaunchedEffect(episodesRowState, seasons, effectiveSeason) {
+    if (type != "series" || effectiveSeason == null) return@LaunchedEffect
+    
+    // Track scroll state to detect when the user hits the end of the episode list
+    snapshotFlow {
+        val layoutInfo = episodesRowState.layoutInfo
+        val totalItems = layoutInfo.totalItemsCount
+        val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+        Pair(totalItems, lastVisibleItem)
+    }.collect { (totalItems, lastVisibleItem) ->
+        // If we have items and the user has scrolled to the very last episode card
+        if (totalItems > 0 && lastVisibleItem >= totalItems - 1) {
+            val currentIndex = seasons.indexOf(effectiveSeason)
+            // If there is a next season available in the list, switch to it automatically
+            if (currentIndex != -1 && currentIndex < seasons.size - 1) {
+                val nextSeason = seasons[currentIndex + 1]
+                selectedSeason = nextSeason
+            }
         }
+    }
     }
 
     val resumeSeason = resumeInfo?.season
