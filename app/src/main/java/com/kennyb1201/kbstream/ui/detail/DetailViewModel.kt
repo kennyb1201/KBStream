@@ -313,42 +313,46 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun autoLoadRelevantSeason(
-        detail: TmdbDetail?,
-        localCompletedEntries: List<WatchHistoryEntity>,
-        initialSeason: Int?
-    ) {
-        if (detail == null) return
+    detail: TmdbDetail?,
+    localCompletedEntries: List<WatchHistoryEntity>,
+    initialSeason: Int?
+) {
+    if (detail == null) return
 
-        val seasons = detail.seasons
-            ?.mapNotNull { it.seasonNumber }
-            ?.filter { it > 0 }
-            .orEmpty()
+    val seasons = detail.seasons
+        ?.mapNotNull { it.seasonNumber }
+        ?.filter { it > 0 }
+        .orEmpty()
 
-        if (seasons.isEmpty()) return
+    if (seasons.isEmpty()) return
 
-        val targetSeason = initialSeason?.takeIf { it in seasons }
-            ?: _resumeInfo.value?.season?.takeIf { it > 0 && it in seasons }
-            ?: localCompletedEntries
+    // Prioritize cleanly without letting asynchronous states override explicit intent
+    val targetSeason = when {
+        initialSeason != null && initialSeason in seasons -> initialSeason
+        _resumeInfo.value?.season?.let { it > 0 && it in seasons } == true -> _resumeInfo.value!!.season!!
+        else -> {
+            val latestLocal = localCompletedEntries
                 .mapNotNull { entry ->
                     val s = entry.season
                     val ep = entry.episode
-                    if (s != null && ep != null && s in seasons) {
-                        s to ep
-                    } else {
-                        null
-                    }
+                    if (s != null && ep != null && s in seasons) s to ep else null
                 }
                 .maxWithOrNull(compareBy<Pair<Int, Int>> { it.first }.thenBy { it.second })
                 ?.first
-            ?: _simklWatchedEpisodes.value
+
+            val latestSimkl = _simklWatchedEpisodes.value
                 .filter { it.first in seasons }
                 .maxWithOrNull(compareBy<Pair<Int, Int>> { it.first }.thenBy { it.second })
                 ?.first
-            ?: seasons.first()
 
-        Log.e("KBStream", "auto loading relevant season=$targetSeason for imdbId=$imdbId (initialRequested=$initialSeason)")
-        loadEpisodesForSeason(targetSeason)
+            listOfNotNull(latestLocal, latestSimkl).maxOrNull() ?: seasons.first()
+        }
     }
+
+    Log.e("KBStream", "auto loading relevant season=$targetSeason for imdbId=$imdbId (initialRequested=$initialSeason)")
+    loadEpisodesForSeason(targetSeason)
+}
+
 
     fun loadEpisodesForSeason(season: Int) {
         val tvId = _tmdbDetail.value?.id
