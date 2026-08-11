@@ -226,7 +226,6 @@ class SimklRepository(
     }
 
     private fun isShowFullyWatched(item: SimklWatchingShowItem): Boolean {
-        private fun isShowFullyWatched(item: SimklWatchingShowItem): Boolean {
         val status = item.status?.trim()?.lowercase()
         val watched = item.watchedEpisodesCount ?: 0
         val total = item.totalEpisodesCount ?: 0
@@ -264,6 +263,7 @@ class SimklRepository(
 
         return false
     }
+
 
 
     suspend fun getCompletedMovieImdbIds(
