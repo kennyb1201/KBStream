@@ -110,9 +110,9 @@ fun ActorScreen(
         }
 
         else -> {
-            val p = person!!
+                        val p = person!!
             val profileUrl = remember(p.profilePath) {
-                p.profilePath?.let { TmdbRepository.PROFILE_BASE + it }
+                p.profilePath?.let { "https://image.tmdb.org/t/p/original$it" }
             }
 
             val credits = remember(p) {
