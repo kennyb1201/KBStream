@@ -1027,7 +1027,6 @@ private fun StudioCard(
         }
     }
 }
-
 @Composable
 private fun EpisodeCard(
     ep: ResolvedEpisode,
@@ -1073,10 +1072,8 @@ private fun EpisodeCard(
             }
 
             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                val runtimeText = remember(ep.runtimeMinutes) {
-                    ep.runtimeMinutes?.let { " • ${it}m" } ?: ""
-                }
-
+                // Top row: Episode number and runtime (e.g., "E1 • 30m")
+                val runtimeText = ep.runtimeMinutes?.let { " • ${it}m" } ?: ""
                 Text(
                     text = "E${ep.episodeNumber}$runtimeText",
                     style = MaterialTheme.typography.titleMedium,
@@ -1084,6 +1081,7 @@ private fun EpisodeCard(
                     overflow = TextOverflow.Ellipsis
                 )
 
+                // Air Date (compacted right under the top row)
                 ep.airDate?.takeIf { it.isNotBlank() }?.let { airDate ->
                     Text(
                         text = formatEpisodeAirDate(airDate),
@@ -1095,17 +1093,19 @@ private fun EpisodeCard(
                     )
                 }
 
+                // Episode Title
                 ep.name?.let {
                     Text(
                         text = it,
                         color = KBTextHi,
                         style = MaterialTheme.typography.titleSmall,
-                        maxLines = 2,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(top = 4.dp)
                     )
                 }
 
+                // Description
                 ep.overview?.takeIf { it.isNotBlank() }?.let {
                     Text(
                         text = it,
@@ -1113,13 +1113,14 @@ private fun EpisodeCard(
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 6.dp)
+                        modifier = Modifier.padding(top = 4.dp)
                     )
                 }
             }
         }
     }
 }
+
 
 @Composable
 private fun CollectionCard(part: TmdbCollectionPart, isWatched: Boolean, onClick: () -> Unit) {
