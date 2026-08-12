@@ -109,11 +109,19 @@ fun ActorScreen(
             Text("Actor not found.")
         }
 
-        else -> {
-                        val p = person!!
-            val profileUrl = remember(p.profilePath) {
-                p.profilePath?.let { "https://image.tmdb.org/t/p/original$it" }
+                else -> {
+            val p = person!!
+            val credits = remember(p) {
+                viewModel.sortedCredits(p).take(100)
             }
+
+            // Find the first credit with a valid backdrop for a high-res background banner
+            val backdropUrl = remember(credits) {
+                credits.firstNotNullOrNull { it.backdropPath }?.let { "https://image.tmdb.org/t/p/original$it" }
+                    // Fallback to their profile image if no backdrop exists
+                    ?: p.profilePath?.let { "https://image.tmdb.org/t/p/original$it" }
+            }
+
 
             val credits = remember(p) {
     viewModel.sortedCredits(p).take(100)
@@ -123,10 +131,10 @@ fun ActorScreen(
 
             CompositionLocalProvider(LocalBringIntoViewSpec provides LocalTvBringIntoViewSpec) {
                 Box(modifier = Modifier.fillMaxSize()) {
-                    AsyncImage(
-                        model = remember(profileUrl, context) {
+                                        AsyncImage(
+                        model = remember(backdropUrl, context) {
                             ImageRequest.Builder(context)
-                                .data(profileUrl)
+                                .data(backdropUrl)
                                 .crossfade(true)
                                 .build()
                         },
@@ -134,6 +142,7 @@ fun ActorScreen(
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
                     )
+
 
                     Box(
                         modifier = Modifier
