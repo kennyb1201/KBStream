@@ -897,6 +897,7 @@ fun DetailScreen(
             }
         }
     }
+}
 
 
 @Composable
@@ -1253,4 +1254,4 @@ private fun formatEpisodeAirDate(raw: String): String {
 
 private fun formatUsd(amount: Long): String = NumberFormat.getCurrencyInstance(Locale.US).format(amount)
 
-}
+
