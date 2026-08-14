@@ -34,6 +34,12 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
+        private val _topWorkBackdropUrl = MutableStateFlow<String?>(null)
+    val topWorkBackdropUrl: StateFlow<String?> = _topWorkBackdropUrl.asStateFlow()
+
+    private val _topWorkCredit = MutableStateFlow<TmdbPersonCredit?>(null)
+    val topWorkCredit: StateFlow<TmdbPersonCredit?> = _topWorkCredit.asStateFlow()
+
     // Fully reactive hot StateFlow pipeline for watched keys combining person credits, resolved IDs, and repository updates
     val watchedKeys: StateFlow<Set<String>> = combine(
         _person,
@@ -69,8 +75,12 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
     fun load(personId: Int) {
         viewModelScope.launch {
             _isLoading.value = true
+                        _topWorkBackdropUrl.value = null
+            _topWorkCredit.value = null
             _error.value = null
             _person.value = null
+                            val topCredit = sortedCredits(result).firstOrNull()
+                _topWorkCredit.value = topCredit
             _resolvedCreditIds.value = emptyMap()
 
             try {
@@ -90,6 +100,9 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
             _person.value?.let { loadedPerson ->
                 launch {
                     resolveAndPreloadWatched(loadedPerson)
+                                    launch {
+                    loadTopWorkBackdrop(loadedPerson)
+                                    }
                 }
             }
         }
@@ -104,6 +117,30 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
             "tv" -> firstAirDate ?: ""
             else -> ""
         }
+
+            private suspend fun loadTopWorkBackdrop(person: TmdbPersonDetail) {
+        val topCredit = sortedCredits(person).firstOrNull()
+        _topWorkCredit.value = topCredit
+
+        if (topCredit == null) {
+            _topWorkBackdropUrl.value = null
+            return
+        }
+
+        val normalizedType = normalizeMediaType(topCredit.mediaType)
+        if (normalizedType == null) {
+            _topWorkBackdropUrl.value = null
+            return
+        }
+
+        val detail = runCatching {
+            tmdbRepository.getDetailByTmdbId(topCredit.id, normalizedType)
+        }.getOrNull()
+
+        _topWorkBackdropUrl.value = detail?.backdropPath
+            ?.takeIf { it.isNotBlank() }
+            ?.let { TmdbRepository.BACKDROP_BASE + it }
+            }
 
     private fun TmdbPersonCredit.isLikelyTalkOrVariety(): Boolean {
         val text = buildString {
