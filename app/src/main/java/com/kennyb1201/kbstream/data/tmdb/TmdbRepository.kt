@@ -32,6 +32,7 @@ data class ResolvedEpisode(
     val thumbnail: String?,
     val runtimeMinutes: Int?,
     val airDate: String?
+        val voteAverage: Double?
 )
 
 class TmdbRepository(context: Context) {
@@ -183,6 +184,7 @@ class TmdbRepository(context: Context) {
             },
             runtimeMinutes = ep.runtime,
             airDate = ep.airDate
+            voteAverage = ep.voteAverage
         )
     }
 }
