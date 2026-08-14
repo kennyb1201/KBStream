@@ -53,7 +53,8 @@ fun PosterCard(
     isWatched: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    onPosterError: ((Throwable?) -> Unit)? = null
+    onPosterError: ((Throwable?) -> Unit)? = null,
+    overlayContent: (@Composable BoxScope.() -> Unit)? = null 
 ) {
     val context = LocalContext.current
     var hasError by remember(posterUrl) { mutableStateOf(false) }
