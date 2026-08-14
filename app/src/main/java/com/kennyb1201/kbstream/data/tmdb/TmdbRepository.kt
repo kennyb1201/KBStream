@@ -189,6 +189,18 @@ class TmdbRepository(context: Context) {
     }
 }
 
+        suspend fun getDetailByTmdbId(tmdbId: Int, type: String): TmdbDetail? {
+        if (apiKey.isBlank()) return null
+
+        return runCatching {
+            if (normalizeType(type) == "series") {
+                api.getTv(tmdbId, apiKey)
+            } else {
+                api.getMovie(tmdbId, apiKey)
+            }
+        }.getOrNull()
+        }
+
     suspend fun getByCompany(companyId: Int): List<StudioSection> =
         getInitialCompanySections(companyId)
 
