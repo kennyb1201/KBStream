@@ -1474,8 +1474,14 @@ private fun ReviewOverlay(review: TmdbReview, onDismiss: () -> Unit) {
                 if (keyEvent.type != KeyEventType.KeyDown) return@onKeyEvent false
                 when (keyEvent.key) {
                     Key.Back, Key.Escape -> { onDismiss(); true }
-                    Key.DirectionDown -> { scope.launch { scrollState.animateScrollBy(220f) }; true }
-                    Key.DirectionUp -> { scope.launch { scrollState.animateScrollBy(-220f) }; true }
+                    Key.DirectionDown -> {
+    scope.launch { scrollState.scrollTo(scrollState.value + 220) }
+    true
+}
+Key.DirectionUp -> {
+    scope.launch { scrollState.scrollTo((scrollState.value - 220).coerceAtLeast(0)) }
+    true
+}
                     else -> false
                 }
             }
