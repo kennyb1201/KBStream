@@ -101,6 +101,8 @@ fun PosterCard(
                         .padding(8.dp)
                 )
             }
+                 overlayContent?.invoke(this)
         }
+        
     }
 }
