@@ -900,6 +900,7 @@ fun DetailScreen(
 }
 
 
+
 @Composable
 private fun SeasonChip(
     seasonNumber: Int,
@@ -920,7 +921,7 @@ private fun SeasonChip(
         )
     }
 }
-
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SeasonRow(
     seasons: List<Int>,
