@@ -50,6 +50,21 @@ private val KBStreamTypography = Typography(
     ),
     titleMedium = androidx.compose.ui.text.TextStyle(
         fontFamily = OswaldFamily, fontWeight = FontWeight.Medium, fontSize = 16.sp, letterSpacing = 1.5.sp
+    ),
+    bodyLarge = androidx.compose.ui.text.TextStyle(
+        fontFamily = OswaldFamily, fontWeight = FontWeight.Medium, fontSize = 16.sp, letterSpacing = 0.3.sp, lineHeight = 24.sp
+    ),
+    bodyMedium = androidx.compose.ui.text.TextStyle(
+        fontFamily = OswaldFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, letterSpacing = 0.3.sp, lineHeight = 20.sp
+    ),
+    bodySmall = androidx.compose.ui.text.TextStyle(
+        fontFamily = OswaldFamily, fontWeight = FontWeight.Medium, fontSize = 12.sp, letterSpacing = 0.3.sp, lineHeight = 16.sp
+    ),
+    labelLarge = androidx.compose.ui.text.TextStyle(
+        fontFamily = OswaldFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, letterSpacing = 0.8.sp
+    ),
+    labelSmall = androidx.compose.ui.text.TextStyle(
+        fontFamily = OswaldFamily, fontWeight = FontWeight.Medium, fontSize = 11.sp, letterSpacing = 1.sp
     )
 )
 
