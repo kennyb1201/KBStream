@@ -553,7 +553,7 @@ fun DetailScreen(
                                 item(key = "keywordsrow") {
                                     LazyRow(
                                         contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 8.dp),
-                                        modifier = Modifier.padding(bottom = 16.dp).focusGroup()
+                                        modifier = Modifier.padding(bottom = 16.dp).focusGroup().focusRestorer()
                                     ) {
                                         items(keywords, key = { it.id }) { kw ->
                                             KeywordChip(
