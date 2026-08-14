@@ -735,7 +735,7 @@ fun DetailScreen(
                                 item(key = "peoplerow") {
                                     LazyRow(
                                         contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 16.dp),
-                                        modifier = Modifier.padding(bottom = 12.dp).focusGroup()
+                                        modifier = Modifier.padding(bottom = 12.dp).focusGroup().focusRestorer()
                                     ) {
                                         items(items = peopleItems, key = { person ->
                                             when (person) {
@@ -789,7 +789,7 @@ fun DetailScreen(
                                         ),
                                         modifier = Modifier
                                             .padding(bottom = 12.dp)
-                                            .focusGroup()
+                                            .focusGroup().focusRestorer()
                                     ) {
                                         items(networks, key = { it.id }) { n ->
                                             StudioCard(
@@ -822,7 +822,7 @@ fun DetailScreen(
                                         ),
                                         modifier = Modifier
                                             .padding(bottom = 12.dp)
-                                            .focusGroup()
+                                            .focusGroup().focusRestorer()
                                     ) {
                                         items(companies, key = { it.id }) { c ->
                                             StudioCard(
@@ -848,7 +848,7 @@ fun DetailScreen(
                                 item(key = "reviewsrow") {
                                     LazyRow(
                                         contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 16.dp),
-                                        modifier = Modifier.padding(bottom = 20.dp).focusGroup()
+                                        modifier = Modifier.padding(bottom = 20.dp).focusGroup().focusRestorer()
                                     ) {
                                         items(reviews.take(10), key = { it.id }) { review ->
                                             ReviewCard(review = review, onClick = { selectedReview = it })
@@ -870,7 +870,7 @@ fun DetailScreen(
                                 item(key = "collectionrow") {
                                     LazyRow(
                                         contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 16.dp),
-                                        modifier = Modifier.padding(bottom = 32.dp).focusGroup()
+                                        modifier = Modifier.padding(bottom = 32.dp).focusGroup().focusRestorer()
                                     ) {
                                         items(collectionParts, key = { it.id }) { part ->
                                             CollectionCard(
@@ -902,7 +902,7 @@ fun DetailScreen(
                                 item(key = "recsrow") {
                                     LazyRow(
                                         contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 16.dp),
-                                        modifier = Modifier.padding(bottom = 32.dp).focusGroup()
+                                        modifier = Modifier.padding(bottom = 32.dp).focusGroup().focusRestorer()
                                     ) {
                                         items(recs.take(30), key = { it.id }) { rec ->
                                             RecCard(
