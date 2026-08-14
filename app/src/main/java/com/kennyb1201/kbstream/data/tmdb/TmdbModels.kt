@@ -206,6 +206,7 @@ data class TmdbDetail(
     @Json(name = "last_episode_to_air") val lastEpisodeToAir: TmdbEpisodeAirInfo? = null,
     @Json(name = "release_dates") val releaseDates: TmdbMovieReleaseDates? = null,
     @Json(name = "content_ratings") val contentRatings: TmdbTvContentRatings? = null
+    @Json(name = "status") val status: String? = null,
 )
 
 @JsonClass(generateAdapter = true)
