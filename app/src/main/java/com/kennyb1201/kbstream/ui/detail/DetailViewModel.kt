@@ -278,6 +278,14 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
 
                 tmdbDetailResult.onSuccess { detail ->
                     _tmdbDetail.value = detail
+                     Log.e(
+        "KBStream",
+        "tmdbDetail populated type=$normalizedType id=${detail?.id} " +
+            "genres=${detail?.genres?.size} keywords=${detail?.keywords?.list()?.size} " +
+            "cast=${detail?.credits?.cast?.size} crew=${detail?.credits?.crew?.size} " +
+            "companies=${detail?.productionCompanies?.size} " +
+            "reviews=${detail?.reviews?.results?.size} " +
+            "recs=${detail?.recommendations?.results?.size}"
                     val collectionId = detail?.belongsToCollection?.id
                     if (collectionId != null) {
                         runCatching { tmdbRepository.getCollection(collectionId) }
