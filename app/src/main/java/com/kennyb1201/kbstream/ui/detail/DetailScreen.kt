@@ -1460,72 +1460,113 @@ private fun ReviewCard(review: TmdbReview, onClick: (TmdbReview) -> Unit) {
 }
 
 @Composable
-private fun ReviewOverlay(review: TmdbReview, onDismiss: () -> Unit) {
+private fun ReviewOverlay(
+    review: TmdbReview,
+    onDismiss: () -> Unit
+) {
     val scrollFocusRequester = remember { FocusRequester() }
     val scrollState = androidx.compose.foundation.ScrollState(0)
     val scope = rememberCoroutineScope()
-    LaunchedEffect(Unit) { scrollFocusRequester.requestFocus() }
+
+    LaunchedEffect(Unit) {
+        scrollFocusRequester.requestFocus()
+    }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(KBVoid.copy(alpha = 0.88f))
             .onKeyEvent { keyEvent ->
-                if (keyEvent.type != KeyEventType.KeyDown) return@onKeyEvent false
+                if (keyEvent.type != KeyEventType.KeyDown) {
+                    return@onKeyEvent false
+                }
+
                 when (keyEvent.key) {
-                    Key.Back, Key.Escape -> { onDismiss(); true }
+                    Key.Back, Key.Escape -> {
+                        onDismiss()
+                        true
+                    }
+
                     Key.DirectionDown -> {
-    scope.launch { scrollState.scrollTo(scrollState.value + 220) }
-    true
-}
-Key.DirectionUp -> {
-    scope.launch { scrollState.scrollTo((scrollState.value - 220).coerceAtLeast(0)) }
-    true
-}
+                        scope.launch {
+                            scrollState.scrollTo(scrollState.value + 220)
+                        }
+                        true
+                    }
+
+                    Key.DirectionUp -> {
+                        scope.launch {
+                            scrollState.scrollTo(
+                                (scrollState.value - 220).coerceAtLeast(0)
+                            )
+                        }
+                        true
+                    }
+
                     else -> false
                 }
             }
     ) {
         Card(
             onClick = {},
-            colors = CardDefaults.colors(containerColor = KBSurfaceRaised, contentColor = KBTextHi),
+            colors = CardDefaults.colors(
+                containerColor = KBSurfaceRaised,
+                contentColor = KBTextHi
+            ),
             modifier = Modifier
                 .padding(horizontal = 64.dp, vertical = 40.dp)
                 .fillMaxWidth()
                 .fillMaxHeight()
         ) {
-            Column(modifier = Modifier.fillMaxSize().padding(32.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(32.dp)
+            ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(text = review.author, style = MaterialTheme.typography.headlineMedium)
+                        Text(
+                            text = review.author,
+                            style = MaterialTheme.typography.headlineMedium
+                        )
+
                         review.authorDetails?.rating?.let { rating ->
                             Text(
-                                text = "★ %.1f".format(rating),
+                                text = "%.1f".format(rating),
                                 color = KBAccent,
                                 style = MaterialTheme.typography.bodyMedium,
                                 modifier = Modifier.padding(top = 4.dp)
                             )
                         }
-                        review.createdAt?.substringBefore("T")?.takeIf { it.isNotBlank() }?.let { createdAt ->
-                            Text(
-                                text = createdAt,
-                                color = KBTextLo,
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.padding(top = 4.dp)
-                            )
-                        }
+
+                        review.createdAt
+                            ?.substringBefore("T")
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { createdAt ->
+                                Text(
+                                    text = createdAt,
+                                    color = KBTextLo,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
+                            }
                     }
+
                     KBCard(onClick = onDismiss) {
-                        Text("CLOSE", modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
+                        Text(
+                            text = "CLOSE",
+                            modifier = Modifier.padding(
+                                horizontal = 16.dp,
+                                vertical = 10.dp
+                            )
+                        )
                     }
                 }
 
-                // Scrollable body -- fills remaining space so long reviews are
-                // never clipped; DPAD up/down scrolls when the panel has focus.
                 Box(
                     modifier = Modifier
                         .weight(1f)
