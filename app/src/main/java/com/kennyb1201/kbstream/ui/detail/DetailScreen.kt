@@ -1668,9 +1668,8 @@ private fun RecCard(rec: TmdbRecommendationItem, isWatched: Boolean, onClick: ()
 
 private fun formatEpisodeAirDate(raw: String): String {
     return runCatching {
-        java.time.LocalDate.parse(raw).format(
-            java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy")
-        )
+        java.time.LocalDate.parse(raw)
+            .format(java.time.format.DateTimeFormatter.ofPattern("MMMM d, yyyy"))
     }.getOrDefault(raw)
 }
 
