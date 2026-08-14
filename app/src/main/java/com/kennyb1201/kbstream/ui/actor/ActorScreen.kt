@@ -95,12 +95,11 @@ fun ActorScreen(
             val p = person!!
             val context = androidx.compose.ui.platform.LocalContext.current
 
-            val sortedCredits = remember(p) { viewModel.sortedCredits(p) }
-            val heroCredit = remember(sortedCredits) {
-                sortedCredits.firstOrNull { !it.backdropPath.isNullOrBlank() }
-            }
-            val backdropUrl = remember(heroCredit) {
-                heroCredit?.backdropPath?.let { TmdbRepository.BACKDROP_BASE + it }
+                        val sortedCredits = remember(p) { viewModel.sortedCredits(p) }
+            val backdropUrl = topWorkBackdropUrl
+
+                    val topWorkBackdropUrl by viewModel.topWorkBackdropUrl.collectAsState()
+    val topWorkCredit by viewModel.topWorkCredit.collectAsState()
             }
             val headerPortraitUrl = remember(p) {
                 p.profilePath?.let { TmdbRepository.PROFILE_BASE + it }
@@ -116,10 +115,10 @@ fun ActorScreen(
             CompositionLocalProvider(LocalBringIntoViewSpec provides LocalActorBringIntoViewSpec) {
                 Box(modifier = Modifier.fillMaxSize()) {
                     backdropUrl?.let { url ->
-                        AsyncImage(
-                            model = remember(url) {
-                                ImageRequest.Builder(context).data(url).crossfade(true).build()
-                            },
+                                            AsyncImage(
+                        model = remember(backdropUrl) {
+                            ImageRequest.Builder(context).data(backdropUrl).crossfade(true).build()
+                        },
                             contentDescription = heroCredit?.title ?: heroCredit?.name ?: p.name,
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize()
@@ -222,6 +221,17 @@ fun ActorScreen(
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
                                             modifier = Modifier.padding(top = 6.dp)
+
+                                                                        topWorkCredit?.let { credit ->
+                                Text(
+                                    text = "Known for ${credit.title ?: credit.name ?: "Top work"}",
+                                    color = KBTextLo,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(top = 6.dp)
+                                )
+                                                                        }
                                         )
                                     }
                                 }
