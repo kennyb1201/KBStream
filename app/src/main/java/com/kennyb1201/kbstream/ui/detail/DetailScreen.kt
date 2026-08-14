@@ -531,9 +531,13 @@ fun DetailScreen(
                         }
 
                         LazyColumn(
-                            modifier = Modifier.weight(1f, fill = true).fillMaxWidth().focusGroup(),
-                            contentPadding = PaddingValues(top = 8.dp)
-                        ) {
+    modifier = Modifier
+        .weight(1f, fill = true)
+        .fillMaxWidth()
+        .focusGroup()
+        .focusRestorer(),
+    contentPadding = PaddingValues(top = 8.dp)
+) {
                             item(key = "infoblock") {
                                 Column(modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 16.dp)) {
                                     m.description?.let { Text(it, modifier = Modifier.padding(top = 4.dp)) }
