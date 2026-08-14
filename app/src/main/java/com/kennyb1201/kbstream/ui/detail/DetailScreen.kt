@@ -1158,7 +1158,7 @@ private fun EpisodeCard(
                         text = overviewText,
                         color = KBTextLo,
                         style = MaterialTheme.typography.bodySmall,
-                        maxLines = 4,
+                        maxLines = 5,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(vertical = 4.dp)
                     )
