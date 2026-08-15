@@ -149,13 +149,12 @@ fun AppRoot() {
                 screen = Screen.Actor(person.id)
             },
             onStudioClick = { studio ->
-                val isNetwork = studio.logoPath.isNullOrBlank().not() || studio.originCountry?.isNotBlank() == true
-                screen = Screen.Studio(
-                    id = studio.id,
-                    name = studio.name,
-                    isNetwork = isNetwork
-                )
-            },
+    screen = Screen.Studio(
+        id = studio.id,
+        name = studio.name,
+        isNetwork = false
+    )
+},
             onGenreClick = { genre ->
                 screen = Screen.Tag(
                     id = genre.id,
