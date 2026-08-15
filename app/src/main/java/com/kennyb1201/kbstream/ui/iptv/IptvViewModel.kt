@@ -112,7 +112,13 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
                 _selectedGroup.value = "All channels"
                 applyGroupFilter("All channels")
             } catch (t: Throwable) {
-                _error.value = t.message ?: "Failed to load playlist"
+                _error.value = buildString {
+    append(t::class.java.simpleName)
+    t.message?.takeIf { it.isNotBlank() }?.let {
+        append(": ")
+        append(it)
+    }
+                }
                 _lineup.value = null
                 _visibleChannels.value = emptyList()
                 _selectedChannel.value = null
