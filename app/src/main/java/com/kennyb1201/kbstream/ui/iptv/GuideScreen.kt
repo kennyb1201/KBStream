@@ -852,7 +852,7 @@ private fun GuideDetailPanel(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
                     ) {
                         Icon(
-                            imageVector = if (item.isFavorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                            imageVector = if (item.isFavorite) Icons.Filled.Star else Icons.Outlined.StarOutline,
                             contentDescription = if (item.isFavorite) "Remove favorite" else "Add favorite",
                             tint = if (item.isFavorite) KBAccent else KBTextHi,
                             modifier = Modifier.size(18.dp)
