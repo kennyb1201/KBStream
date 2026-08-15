@@ -927,4 +927,3 @@ private fun formatTimeRange(startMillis: Long, endMillis: Long): String {
     val formatter = SimpleDateFormat("h:mm a", Locale.getDefault())
     return "${formatter.format(Date(startMillis))} - ${formatter.format(Date(endMillis))}"
 }
-</query>numerusform
