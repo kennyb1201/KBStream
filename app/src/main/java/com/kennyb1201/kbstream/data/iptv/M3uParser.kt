@@ -88,7 +88,7 @@ class M3uParser {
     }
 
     private fun parseAttributes(input: String): Map<String, String> {
-        val regex = Regex("""([w-]+)="(.*?)"""")
+        val regex = Regex("""([\w-]+)="(.*?)"""")
         return regex.findAll(input)
             .associate { it.groupValues[1].lowercase() to it.groupValues[2] }
     }
