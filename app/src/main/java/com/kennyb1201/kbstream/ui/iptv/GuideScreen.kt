@@ -552,7 +552,7 @@ private fun ChannelRowCard(
                     overflow = TextOverflow.Ellipsis
                 )
 
-                val nowTitle = item.now?.title ?: "No programme data"
+                val nowTitle = item.now?.title ?: "No program data"
                 Text(
                     text = nowTitle,
                     color = KBTextLo,
@@ -699,7 +699,7 @@ private fun GuideDetailPanel(
                 item {
                     CenterMessage(
                         title = "No guide data",
-                        message = "Programme information is not available for this channel.",
+                        message = "Program information is not available for this channel.",
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(top = 32.dp)
@@ -778,7 +778,7 @@ private fun NowNextPanel(
 
         ProgramCard(
             label = "NEXT",
-            title = item.next?.title ?: "No next programme listed",
+            title = item.next?.title ?: "No next program listed",
             time = item.next?.let { formatTimeRange(it.startUtcMillis, it.endUtcMillis) },
             description = item.next?.description,
             modifier = Modifier.weight(1f)
