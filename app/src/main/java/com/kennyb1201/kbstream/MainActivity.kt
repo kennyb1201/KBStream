@@ -188,7 +188,7 @@ fun AppRoot() {
             }
         )
 
-        is Screen.Guide -> GuideScreen(
+ is Screen.Guide -> GuideScreen(
     defaultPlaylistUrl = "",
     defaultEpgUrl = "",
     defaultPlaylistName = "Live TV",
@@ -198,19 +198,16 @@ fun AppRoot() {
         val channelId = channel.id.ifBlank { channel.streamUrl }
         val poster = channel.logoUrl ?: channelWithEpg.epgChannel?.iconUrl
 
-        screen = Screen.Streams(
-            target = StreamsTarget(
-                contentType = "channel",
-                streamId = channel.streamUrl,
-                title = channelName,
-                displayName = channelName,
-                season = null,
-                episode = null,
-                resumePositionMs = 0L
-            ),
+        screen = Screen.Player(
+            url = channel.streamUrl,
             parentId = channelId,
             parentType = "channel",
-            itemPoster = poster
+            season = null,
+            episode = null,
+            episodeStreamId = channel.id,
+            itemName = channelName,
+            itemPoster = poster,
+            startPositionMs = 0L
         )
     }
 )
