@@ -115,14 +115,17 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
                 _lineup.value = loadedLineup
 
                 val derivedGroups = buildList {
-                    add("All channels")
-                    addAll(
-                        loadedLineup.channels
-                            .mapNotNull { it.channel.groupTitle?.trim()?.takeIf(String::isNotBlank) }
-                            .distinct()
-                            .sortedBy { it.lowercase() }
-                    )
-                }
+    add("All channels")
+    addAll(
+        loadedLineup.channels
+            .mapNotNull { channelWithEpg ->
+                channelWithEpg.channel.groupTitle
+                    ?.trim()
+                    ?.takeIf(String::isNotBlank)
+            }
+            .distinct()
+    )
+}
 
                 _groups.value = derivedGroups
                 _selectedGroup.value = "All channels"
