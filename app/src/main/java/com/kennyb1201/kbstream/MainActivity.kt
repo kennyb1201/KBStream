@@ -95,20 +95,24 @@ fun AppRoot() {
 
     BackHandler(enabled = screen != Screen.Home) {
         screen = when (val current = screen) {
-            is Screen.Player -> Screen.Streams(
-                target = StreamsTarget(
-                    contentType = current.parentType,
-                    streamId = current.episodeStreamId ?: "",
-                    title = current.itemName,
-                    displayName = current.itemName,
-                    season = current.season,
-                    episode = current.episode,
-                    resumePositionMs = current.startPositionMs
-                ),
-                parentId = current.parentId,
-                parentType = current.parentType,
-                itemPoster = current.itemPoster
-            )
+            is Screen.Player -> if (current.parentType == "channel") {
+    Screen.Guide
+} else {
+    Screen.Streams(
+        target = StreamsTarget(
+            contentType = current.parentType,
+            streamId = current.episodeStreamId ?: "",
+            title = current.itemName,
+            displayName = current.itemName,
+            season = current.season,
+            episode = current.episode,
+            resumePositionMs = current.startPositionMs
+        ),
+        parentId = current.parentId,
+        parentType = current.parentType,
+        itemPoster = current.itemPoster
+    )
+}
 
             is Screen.Streams -> {
                 if (current.parentType == "channel") {
