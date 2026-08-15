@@ -341,6 +341,19 @@ data class TmdbSearchStudioResult(
 @JsonClass(generateAdapter = true)
 data class TmdbSearchCompanyResponse(
     val results: List<TmdbSearchStudioResult> = emptyList()
+
+    @JsonClass(generateAdapter = true)
+data class TmdbSearchCollectionResult(
+    val id: Int,
+    val name: String,
+    @Json(name = "poster_path") val posterPath: String? = null,
+    @Json(name = "backdrop_path") val backdropPath: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class TmdbSearchCollectionResponse(
+    val results: List<TmdbSearchCollectionResult> = emptyList()
+)
 )
 
 @JsonClass(generateAdapter = true)
