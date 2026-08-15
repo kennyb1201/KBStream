@@ -132,7 +132,7 @@ fun GuideScreen(
             isLoading && lineup == null -> {
                 CenterMessage(
                     title = "Loading guide",
-                    message = "Fetching playlist and programme data...",
+                    message = "Fetching playlist and program data...",
                     modifier = Modifier.fillMaxSize()
                 )
             }
@@ -252,7 +252,7 @@ fun GuideScreen(
                                 } else {
                                     CenterMessage(
                                         title = "No channel selected",
-                                        message = "Choose a channel from the list to view programme details.",
+                                        message = "Choose a channel from the list to view program details.",
                                         modifier = Modifier.fillMaxSize()
                                     )
                                 }
