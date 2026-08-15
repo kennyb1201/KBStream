@@ -182,4 +182,15 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
     fun clearRecentSearches() {
         _recentSearches.value = emptyList()
     }
+
+    fun resetSearchState() {
+    searchJob?.cancel()
+    searchJob = null
+    _searchQuery.value = ""
+    _results.value = emptyList()
+    _actorResults.value = emptyList()
+    _studioResults.value = emptyList()
+    _collectionResults.value = emptyList()
+    _isLoading.value = false
+    }
 }
