@@ -434,6 +434,7 @@ private fun NativeUrlField(
                 textSize = 16f
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(18, 0, 18, 0)
+                setShowSoftInputOnFocus(false)
                 backgroundTintList = ColorStateList.valueOf(AndroidColor.rgb(120, 120, 120))
 
                 addTextChangedListener(object : TextWatcher {
