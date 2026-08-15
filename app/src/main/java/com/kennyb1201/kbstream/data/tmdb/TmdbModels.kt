@@ -351,6 +351,31 @@ data class TmdbGenreMatch(
 fun TmdbCredits?.director(): TmdbCrewMember? =
     this?.crew?.firstOrNull { it.job == "Director" }
 
+    @JsonClass(generateAdapter = true)
+data class TmdbKnownForItem(
+    val id: Int,
+    val title: String? = null,
+    val name: String? = null,
+    @Json(name = "media_type") val mediaType: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class TmdbSearchPersonResult(
+    val id: Int,
+    val name: String,
+    @Json(name = "profile_path") val profilePath: String? = null,
+    @Json(name = "known_for_department") val knownForDepartment: String? = null,
+    @Json(name = "known_for") val knownFor: List<TmdbKnownForItem> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class TmdbSearchStudioResult(
+    val id: Int,
+    val name: String,
+    @Json(name = "logo_path") val logoPath: String? = null,
+    @Json(name = "origin_country") val originCountry: String? = null
+)
+
 fun TmdbCredits?.writers(): List<TmdbCrewMember> =
     this?.crew?.filter { it.department == "Writing" || it.job == "Writer" || it.job == "Screenplay" } ?: emptyList()
 
