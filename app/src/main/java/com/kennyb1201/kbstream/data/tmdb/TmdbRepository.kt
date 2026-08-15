@@ -15,6 +15,7 @@ import retrofit2.converter.moshi.MoshiConverterFactory
 import java.time.LocalDate
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 
 data class StudioItem(val item: TmdbDiscoverItem, val mediaType: String)
 data class StudioSection(val title: String, val items: List<StudioItem>)
@@ -598,6 +599,12 @@ class TmdbRepository(context: Context) {
             items = results.distinctBy { it.item.id },
             hasMore = results.isNotEmpty()
         )
+    }
+
+    suspend fun searchCollection(query: String): List<TmdbSearchCollectionResult> {
+    if (apiKey.isBlank()) return emptyList()
+    return runCatching { api.searchCollection(query, apiKey).results }
+        .getOrDefault(emptyList())
     }
 
     suspend fun getByGenre(genreId: Int): List<StudioSection> =
