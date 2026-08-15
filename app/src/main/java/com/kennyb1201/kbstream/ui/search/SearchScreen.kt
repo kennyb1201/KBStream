@@ -147,7 +147,7 @@ fun SearchScreen(
                         body = if (query.isBlank()) {
                             "Finding results"
                         } else {
-                            "Looking for "$query" across catalogs, people, studios, networks, and genres"
+                            """Looking for "$query" across catalogs, people, studios, networks, and genres"""
                         }
                     )
                 }
