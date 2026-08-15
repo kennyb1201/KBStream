@@ -341,8 +341,9 @@ data class TmdbSearchStudioResult(
 @JsonClass(generateAdapter = true)
 data class TmdbSearchCompanyResponse(
     val results: List<TmdbSearchStudioResult> = emptyList()
+)
 
-    @JsonClass(generateAdapter = true)
+@JsonClass(generateAdapter = true)
 data class TmdbSearchCollectionResult(
     val id: Int,
     val name: String,
@@ -353,7 +354,6 @@ data class TmdbSearchCollectionResult(
 @JsonClass(generateAdapter = true)
 data class TmdbSearchCollectionResponse(
     val results: List<TmdbSearchCollectionResult> = emptyList()
-)
 )
 
 @JsonClass(generateAdapter = true)
