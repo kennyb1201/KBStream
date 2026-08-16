@@ -311,7 +311,7 @@ class XmltvParser {
     private companion object {
         const val TAG = "XmltvParser"
         const val DEFAULT_BATCH_SIZE = 1000
-        const val DEFAULT_PAST_WINDOW_MS = 60 * 60 * 1000L
+        const val DEFAULT_PAST_WINDOW_MS = 4 * 60 * 60 * 1000L
         const val DEFAULT_FUTURE_WINDOW_MS = 12 * 60 * 60 * 1000L
     }
 }
