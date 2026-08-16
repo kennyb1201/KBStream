@@ -239,32 +239,33 @@ class IptvRepository(
     }
 
     private fun normalizeId(value: String): String {
-        return value.trim().lowercase(Locale.US).replace(Regex("""s+"""), "")
-    }
+    private fun normalizeId(value: String): String {
+    return value.trim().lowercase(Locale.US).replace(Regex("""\s+"""), "")
+}
 
-    private fun normalizeName(value: String): String {
-        return value
-            .lowercase(Locale.US)
-            .replace(Regex("""[[^]]*]"""), " ")
-            .replace(Regex("""([^)]*)"""), " ")
-            .replace(Regex("""\b(hd|uhd|fhd|sd|4k|1080p|720p|hevc|h265|h264|hdr|aac|fps|usa|us|uk|ca|au)\b"""), " ")
-            .replace("+", " plus ")
-            .replace(Regex("""[^a-z0-9]+"""), "")
-            .trim()
-    }
+private fun normalizeName(value: String): String {
+    return value
+        .lowercase(Locale.US)
+        .replace(Regex("""\[[^\]]*\]"""), " ")   // strip [ ... ]
+        .replace(Regex("""\([^)]*\)"""), " ")    // strip ( ... )
+        .replace(Regex("""\b(hd|uhd|fhd|sd|4k|1080p|720p|hevc|h265|h264|hdr|aac|fps|usa|us|uk|ca|au)\b"""), " ")
+        .replace("+", " plus ")
+        .replace(Regex("""[^a-z0-9]+"""), "")
+        .trim()
+}
 
-    private fun simplifyName(value: String): String? {
-        val simplified = value
-            .lowercase(Locale.US)
-            .replace(Regex("""[[^]]*]"""), " ")
-            .replace(Regex("""([^)]*)"""), " ")
-            .replace(Regex("""\b(hd|uhd|fhd|sd|4k|1080p|720p|hevc|h265|h264|hdr|aac|fps)\b"""), " ")
-            .replace("+", " plus ")
-            .replace(Regex("""[^a-z0-9]+"""), "")
-            .trim()
+private fun simplifyName(value: String): String? {
+    val simplified = value
+        .lowercase(Locale.US)
+        .replace(Regex("""\[[^\]]*\]"""), " ")
+        .replace(Regex("""\([^)]*\)"""), " ")
+        .replace(Regex("""\b(hd|uhd|fhd|sd|4k|1080p|720p|hevc|h265|h264|hdr|aac|fps)\b"""), " ")
+        .replace("+", " plus ")
+        .replace(Regex("""[^a-z0-9]+"""), "")
+        .trim()
 
-        return simplified.ifBlank { null }
-    }
+    return simplified.ifBlank { null }
+}
 
     private companion object {
         const val TAG = "IptvRepository"
