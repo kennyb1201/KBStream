@@ -105,7 +105,7 @@ class XmltvParser {
     }
 
     private fun parseCompactXmltvDate(value: String): Long? {
-        val regex = Regex("""^(d{4})(d{2})(d{2})(d{2})?(d{2})?(d{2})?(?:s?(Z|[+-]d{4}))?.*$""")
+        val regex = Regex("""^(\d{4})(\d{2})(\d{2})(\d{2})?(\d{2})?(\d{2})?(?:\s?(Z|[+-]\d{4}))?.*$""")
         val match = regex.matchEntire(value) ?: return null
 
         val year = match.groupValues[1].toIntOrNull() ?: return null
