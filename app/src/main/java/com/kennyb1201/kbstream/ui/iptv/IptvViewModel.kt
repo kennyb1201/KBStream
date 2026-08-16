@@ -130,7 +130,8 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
                 _groups.value = buildGroups(enrichedLineup)
                 _selectedGroup.value = GROUP_ALL_CHANNELS
                 applyGroupFilter(GROUP_ALL_CHANNELS)
-            } catch (t: Throwable) {
+                        } catch (t: Throwable) {
+                if (t is kotlinx.coroutines.CancellationException) throw t
                 _error.value = buildString {
                     append(t::class.java.simpleName)
                     t.message?.takeIf { it.isNotBlank() }?.let {
