@@ -33,6 +33,8 @@ class XmltvImporter(
         windowStartMs: Long,
         windowEndMs: Long
     ) {
+        Log.e(TAG, "IMPORT START source=$sourceUrl")
+Log.e(TAG, "IMPORT WINDOW start=$windowStartMs end=$windowEndMs")
         dao.deleteProgramsBySource(sourceUrl)
         dao.deleteChannelsBySource(sourceUrl)
 
@@ -107,6 +109,11 @@ class XmltvImporter(
         if (programBatch.isNotEmpty()) {
             dao.insertPrograms(programBatch.toList())
         }
+
+        Log.e(
+    TAG,
+    "IMPORT END channels=$parsedChannels parsedPrograms=$parsedPrograms keptPrograms=$keptPrograms source=$sourceUrl"
+)
 
         Log.d(
             TAG,
