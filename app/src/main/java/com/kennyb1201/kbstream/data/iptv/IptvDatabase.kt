@@ -7,7 +7,7 @@ import androidx.room.RoomDatabase
 
 @Database(
     entities = [EpgChannelEntity::class, EpgProgramEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class IptvDatabase : RoomDatabase() {
