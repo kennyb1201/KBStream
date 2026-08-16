@@ -160,7 +160,7 @@ class IptvRepository(
         }
 
         Log.d(TAG, "observeLineupWithGuide rows=${rows.size} epgUrl=$epgUrl")
-        emit(mapChannels(playlist, rows, windowStart))
+        emit(mapChannels(playlist, rows, System.currentTimeMillis()))
     }
 
     private suspend fun loadProgramsChunked(
