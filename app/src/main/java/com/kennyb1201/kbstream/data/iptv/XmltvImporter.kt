@@ -27,21 +27,42 @@ class XmltvImporter(
         )
     }
 
-    suspend fun import(
-        sourceUrl: String,
-        input: InputStream,
-        windowStartMs: Long,
-        windowEndMs: Long
-    ) {
-        Log.e(TAG, "IMPORT START source=$sourceUrl")
-Log.e(TAG, "IMPORT WINDOW start=$windowStartMs end=$windowEndMs")
-        dao.deleteProgramsBySource(sourceUrl)
-        dao.deleteChannelsBySource(sourceUrl)
+suspend fun import(
+    sourceUrl: String,
+    input: InputStream,
+    windowStartMs: Long,
+    windowEndMs: Long
+) {
+    Log.e(TAG, "IMPORT START source=$sourceUrl")
+    Log.e(TAG, "IMPORT WINDOW start=$windowStartMs end=$windowEndMs")
 
-        val factory = XmlPullParserFactory.newInstance()
-        factory.isNamespaceAware = false
-        val parser = factory.newPullParser()
-        parser.setInput(InputStreamReader(input, Charsets.UTF_8))
+    Log.e(TAG, "DELETE PROGRAMS START")
+    dao.deleteProgramsBySource(sourceUrl)
+    Log.e(TAG, "DELETE PROGRAMS END")
+
+    Log.e(TAG, "DELETE CHANNELS START")
+    dao.deleteChannelsBySource(sourceUrl)
+    Log.e(TAG, "DELETE CHANNELS END")
+
+    val isGzip = sourceUrl.substringBefore("?").endsWith(".gz", ignoreCase = true)
+    Log.e(TAG, "STREAM TYPE gzip=$isGzip")
+
+    val xmlInput = if (isGzip) {
+        java.util.zip.GZIPInputStream(input)
+    } else {
+        input
+    }
+    Log.e(TAG, "STREAM READY")
+
+    val factory = XmlPullParserFactory.newInstance()
+    factory.isNamespaceAware = false
+    Log.e(TAG, "FACTORY READY")
+
+    val parser = factory.newPullParser()
+    Log.e(TAG, "PARSER CREATED")
+
+    parser.setInput(InputStreamReader(xmlInput, Charsets.UTF_8))
+    Log.e(TAG, "PARSER INPUT SET")
 
         val channelBatch = ArrayList<EpgChannelEntity>(CHANNEL_BATCH_SIZE)
         val programBatch = ArrayList<EpgProgramEntity>(PROGRAM_BATCH_SIZE)
