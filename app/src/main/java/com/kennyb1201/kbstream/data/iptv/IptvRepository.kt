@@ -239,7 +239,6 @@ class IptvRepository(
     }
 
     private fun normalizeId(value: String): String {
-    private fun normalizeId(value: String): String {
     return value.trim().lowercase(Locale.US).replace(Regex("""\s+"""), "")
 }
 
