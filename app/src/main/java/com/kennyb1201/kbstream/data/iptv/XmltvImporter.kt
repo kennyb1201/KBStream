@@ -259,83 +259,150 @@ class XmltvImporter(
     }
 
     private fun readProgram(
-        parser: XmlPullParser,
-        sourceUrl: String,
-        windowStartMs: Long,
-        windowEndMs: Long,
-        programIndex: Int
-    ): EpgProgramEntity? {
-        val channelId = parser.getAttributeValue(null, "channel")?.trim().orEmpty()
-        val start = parseXmltvDate(parser.getAttributeValue(null, "start"))
-        val end = parseXmltvDate(parser.getAttributeValue(null, "stop"))
+    parser: XmlPullParser,
+    sourceUrl: String,
+    windowStartMs: Long,
+    windowEndMs: Long,
+    programIndex: Int
+): EpgProgramEntity? {
+    parser.require(XmlPullParser.START_TAG, null, "programme")
 
-        if (programDetailLogsRemaining > 0) {
-            Log.e(
-                TAG,
-                "READ PROGRAM ATTR index=$programIndex channelId=$channelId start=$start end=$end"
-            )
-        }
+    val channelId = parser.getAttributeValue(null, "channel")?.trim().orEmpty()
+    val start = parseXmltvDate(parser.getAttributeValue(null, "start"))
+    val end = parseXmltvDate(parser.getAttributeValue(null, "stop"))
 
-        var title = ""
-        var description: String? = null
-        var category: String? = null
-        var steps = 0
+    if (programDetailLogsRemaining > 0) {
+        Log.e(
+            TAG,
+            "READ PROGRAM ATTR index=$programIndex channelId=$channelId start=$start end=$end"
+        )
+    }
 
-        while (!(parser.eventType == XmlPullParser.END_TAG && parser.name == "programme")) {
-            if (parser.eventType == XmlPullParser.START_TAG) {
-                when (parser.name) {
-                    "title" -> title = safeNextText(parser).trim()
-                    "desc" -> description = safeNextText(parser).trim().ifBlank { null }
-                    "category" -> category = safeNextText(parser).trim().ifBlank { null }
-                    else -> skip(parser)
+    var title = ""
+    var description: String? = null
+    var category: String? = null
+    var steps = 0
+
+    while (true) {
+        when (parser.next()) {
+            XmlPullParser.END_TAG -> {
+                if (parser.name == "programme") {
+                    break
                 }
             }
 
-            steps++
-            if (programDetailLogsRemaining > 0 && steps % PROGRAM_STEP_LOG_INTERVAL == 0) {
+            XmlPullParser.END_DOCUMENT -> {
                 Log.e(
                     TAG,
-                    "READ PROGRAM STEP index=$programIndex steps=$steps eventType=${parser.eventType} name=${parser.name.orEmpty()}"
+                    "READ PROGRAM HIT END_DOCUMENT index=$programIndex steps=$steps"
                 )
+                return null
             }
-            parser.next()
+
+            XmlPullParser.START_TAG -> {
+                when (parser.name) {
+                    "title" -> title = safeNextText(parser).trim()
+
+                    "desc" -> {
+                        description = safeNextText(parser).trim().ifBlank { null }
+                    }
+
+                    "category" -> {
+                        category = safeNextText(parser).trim().ifBlank { null }
+                    }
+
+                    else -> skip(parser)
+                }
+            }
         }
 
-        if (programDetailLogsRemaining > 0) {
+        steps++
+
+        if (
+            programDetailLogsRemaining > 0 &&
+            steps % PROGRAM_STEP_LOG_INTERVAL == 0
+        ) {
             Log.e(
                 TAG,
-                "READ PROGRAM FINISH index=$programIndex title=${title.ifBlank { "<blank>" }} channelId=${channelId.ifBlank { "<blank>" }} start=$start end=$end steps=$steps"
+                "READ PROGRAM STEP index=$programIndex steps=$steps " +
+                    "eventType=${parser.eventType} name=${parser.name.orEmpty()}"
             )
-            programDetailLogsRemaining--
         }
-
-        if (channelId.isBlank()) {
-            logProgramSkip("blank-channel", title, channelId, start, end, windowStartMs, windowEndMs)
-            return null
-        }
-        if (end <= start) {
-            logProgramSkip("end-before-start", title, channelId, start, end, windowStartMs, windowEndMs)
-            return null
-        }
-        if (end <= windowStartMs) {
-            logProgramSkip("before-window", title, channelId, start, end, windowStartMs, windowEndMs)
-            return null
-        }
-        if (start >= windowEndMs) {
-            logProgramSkip("after-window", title, channelId, start, end, windowStartMs, windowEndMs)
-            return null
-        }
-
-        return EpgProgramEntity(
-            sourceUrl = sourceUrl,
-            channelId = channelId,
-            title = title.ifBlank { "Untitled Program" },
-            description = description,
-            category = category,
-            startUtcMillis = start,
-            endUtcMillis = end
-        )
     }
+
+    if (programDetailLogsRemaining > 0) {
+        Log.e(
+            TAG,
+            "READ PROGRAM FINISH index=$programIndex " +
+                "title=${title.ifBlank { "<blank>" }} " +
+                "channelId=${channelId.ifBlank { "<blank>" }} " +
+                "start=$start end=$end steps=$steps"
+        )
+        programDetailLogsRemaining--
+    }
+
+    if (channelId.isBlank()) {
+        logProgramSkip(
+            "blank-channel",
+            title,
+            channelId,
+            start,
+            end,
+            windowStartMs,
+            windowEndMs
+        )
+        return null
+    }
+
+    if (end <= start) {
+        logProgramSkip(
+            "end-before-start",
+            title,
+            channelId,
+            start,
+            end,
+            windowStartMs,
+            windowEndMs
+        )
+        return null
+    }
+
+    if (end <= windowStartMs) {
+        logProgramSkip(
+            "before-window",
+            title,
+            channelId,
+            start,
+            end,
+            windowStartMs,
+            windowEndMs
+        )
+        return null
+    }
+
+    if (start >= windowEndMs) {
+        logProgramSkip(
+            "after-window",
+            title,
+            channelId,
+            start,
+            end,
+            windowStartMs,
+            windowEndMs
+        )
+        return null
+    }
+
+    return EpgProgramEntity(
+        sourceUrl = sourceUrl,
+        channelId = channelId,
+        title = title.ifBlank { "Untitled Program" },
+        description = description,
+        category = category,
+        startUtcMillis = start,
+        endUtcMillis = end
+    )
+}
 
     private fun logProgramSkip(
         reason: String,
