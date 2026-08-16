@@ -28,23 +28,6 @@ interface IptvDao {
         """
         SELECT channelId, title, description, category, startUtcMillis, endUtcMillis
         FROM epg_programs
-        WHERE stopUtcMillisHack > :windowStart
-          AND startUtcMillis < :windowEnd
-        ORDER BY startUtcMillis ASC
-        LIMIT :limit
-        """
-    """
-    )
-    fun observeProgramsInWindowRaw(
-        windowStart: Long,
-        windowEnd: Long,
-        limit: Int
-    ): Flow<List<EpgProgramRow>>
-
-    @Query(
-        """
-        SELECT channelId, title, description, category, startUtcMillis, endUtcMillis
-        FROM epg_programs
         WHERE endUtcMillis > :windowStart
           AND startUtcMillis < :windowEnd
           AND channelId IN (:channelIds)
