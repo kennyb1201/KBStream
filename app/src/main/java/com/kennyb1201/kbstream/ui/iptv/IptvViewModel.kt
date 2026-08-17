@@ -123,9 +123,11 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
         initialValue = emptyList()
     )
 
-    init {
-        if (_playlistUrl.value.isNotBlank()) load()
+init {
+    if (_playlistUrl.value.isNotBlank()) {
+        loadCachedPlaylist()
     }
+}
 
     fun onPlaylistUrlChanged(value: String) {
         _playlistUrl.value = value
@@ -145,6 +147,27 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectGroup(group: String) {
         _selectedGroup.value = group.ifBlank { ALL_GROUPS }
+    }
+
+    private fun loadCachedPlaylist() {
+    val playlistUrl = _playlistUrl.value.trim()
+    val playlistName = _playlistName.value.trim().ifBlank { null }
+
+    if (playlistUrl.isBlank()) return
+
+    viewModelScope.launch {
+        _playlist.value = repository.loadCachedPlaylist(
+            playlistUrl = playlistUrl,
+            playlistName = playlistName
+        )
+
+        if (_playlist.value == null) {
+            load()
+        } else {
+            _selectedGroup.value = ALL_GROUPS
+            _guideRefreshTick.value += 1
+        }
+    }
     }
 
     fun load() {
