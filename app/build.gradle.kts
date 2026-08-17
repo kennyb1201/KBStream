@@ -42,9 +42,8 @@ android {
         versionName = "0.1.0"
 
         buildConfigField("String", "TMDB_API_KEY", ""$tmdbApiKey"")
-        buildConfigField("String", "SIMKL_CLIENT_ID", ""$simklClientId"")
-        buildConfigField("String", "SIMKL_CLIENT_SECRET", ""$simklClientSecret"")
-    }
+buildConfigField("String", "SIMKL_CLIENT_ID", ""$simklClientId"")
+buildConfigField("String", "SIMKL_CLIENT_SECRET", ""$simklClientSecret"")
 
     buildFeatures {
         compose = true
