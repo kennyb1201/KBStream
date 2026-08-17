@@ -407,8 +407,8 @@ private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
 
     private companion object {
         const val TAG = "XmltvImporter"
-        const val CHANNEL_BATCH_SIZE = 2000
-        const val PROGRAM_BATCH_SIZE = 5000
+        const val CHANNEL_BATCH_SIZE = 500
+        const val PROGRAM_BATCH_SIZE = 1000
         const val CHANNEL_LOG_INTERVAL = 5_000
         const val PROGRAM_LOG_INTERVAL = 10_000
         const val MAX_DATE_PARSE_FAILURE_LOGS = 20
