@@ -97,16 +97,22 @@ fun GuideScreen(
     val channelListState = rememberLazyListState()
     val latestOnPlayChannel by rememberUpdatedState(onPlayChannel)
 
-    val groups = remember(visibleChannels) {
-        buildList {
-            add("All")
-            addAll(
-                visibleChannels.mapNotNull { it.channel.groupTitle?.trim()?.takeIf(String::isNotBlank) }
-                    .distinct()
-                    .sorted()
-            )
+ val groups = remember(visibleChannels) {
+    buildList {
+        add("All")
+
+        val seenGroups = LinkedHashSet<String>()
+
+        visibleChannels.forEach { item ->
+            item.channel.groupTitle
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?.let(seenGroups::add)
         }
+
+        addAll(seenGroups)
     }
+}
     var selectedGroup by remember { mutableStateOf("All") }
     val groupedChannels = remember(visibleChannels, selectedGroup) {
         if (selectedGroup == "All") visibleChannels
