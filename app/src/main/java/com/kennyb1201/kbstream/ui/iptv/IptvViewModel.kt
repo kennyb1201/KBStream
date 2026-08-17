@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 class IptvViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -71,6 +72,7 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
     private var loadJob: Job? = null
     private var importJob: Job? = null
     private var refreshJob: Job? = null
+    private var guideWarmupJob: Job? = null
 
     private val playlistOnlyLineup: StateFlow<List<IptvChannelWithEpg>> = _playlist
         .map { currentPlaylist ->
@@ -213,14 +215,42 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun requestInitialGuideWindow() {
-        val initialChannelIds = _playlist.value
-            ?.channels
-            ?.take(INITIAL_GUIDE_WINDOW_SIZE)
-            ?.map { it.id }
-            .orEmpty()
+    val channels = _playlist.value?.channels.orEmpty()
 
-        updateGuideChannels(initialChannelIds)
+    updateGuideChannels(
+        channels
+            .take(INITIAL_GUIDE_WINDOW_SIZE)
+            .map { it.id }
+    )
+
+    startGuideWarmup(channels)
+}
+
+private fun startGuideWarmup(channels: List<IptvChannel>) {
+    guideWarmupJob?.cancel()
+
+    if (_epgUrl.value.isBlank() || channels.size <= INITIAL_GUIDE_WINDOW_SIZE) {
+        return
     }
+
+    val remainingChannelIds = channels
+        .drop(INITIAL_GUIDE_WINDOW_SIZE)
+        .map { it.id }
+
+    guideWarmupJob = viewModelScope.launch {
+        remainingChannelIds
+            .chunked(GUIDE_WARMUP_BATCH_SIZE)
+            .forEach { channelIdBatch ->
+                delay(GUIDE_WARMUP_DELAY_MS)
+
+                if (_isImportingGuide.value || _epgUrl.value.isBlank()) {
+                    return@launch
+                }
+
+                updateGuideChannels(channelIdBatch)
+            }
+    }
+}
 
     private fun restoreCachedPlaylist() {
         val url = _playlistUrl.value.trim()
@@ -496,6 +526,8 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
 
         const val STOP_TIMEOUT_MS = 5_000L
         const val INITIAL_GUIDE_WINDOW_SIZE = 80
+        const val GUIDE_WARMUP_BATCH_SIZE = 20
+        const val GUIDE_WARMUP_DELAY_MS = 1_000L
         const val VISIBLE_GUIDE_PROGRAM_LIMIT = 240
 
         const val GUIDE_PAST_WINDOW_MS = 30 * 60 * 1000L
