@@ -352,8 +352,8 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
         const val ALL_GROUPS = "All"
 
         const val STOP_TIMEOUT_MS = 5_000L
-        const val GUIDE_PAST_WINDOW_MS = 60 * 60 * 1000L
-        const val GUIDE_FUTURE_WINDOW_MS = 12 * 60 * 60 * 1000L
+        const val GUIDE_PAST_WINDOW_MS = 30 * 60 * 1000L
+        const val GUIDE_FUTURE_WINDOW_MS = 2 * 60 * 60 * 1000L
         const val PLAYLIST_REFRESH_MS = 6 * 60 * 60 * 1000L
         const val EPG_REFRESH_MS = 12 * 60 * 60 * 1000L
     }
