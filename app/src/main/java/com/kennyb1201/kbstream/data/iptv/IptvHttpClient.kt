@@ -33,71 +33,66 @@ object IptvHttpClient {
     }
 
     suspend fun fetchTextWithRetry(
-        client: OkHttpClient,
-        url: String,
-        maxAttempts: Int = 4,
-        initialDelayMs: Long = 1_000,
-        maxDelayMs: Long = 8_000
-    ): String {
-        return retryWithBackoff(maxAttempts, initialDelayMs, maxDelayMs) {
-            val request = Request.Builder().url(url).get().build()
-            client.newCall(request).execute().use { response ->
-                val bodyText = response.body?.string().orEmpty()
-                if (!response.isSuccessful) {
-                    error("HTTP ${response.code} ${response.message}: ${bodyText.take(300)}")
-                }
-                if (bodyText.isBlank()) {
-                    error("Empty response body")
-                }
-                bodyText
+    client: OkHttpClient,
+    url: String,
+    maxAttempts: Int = 4,
+    initialDelayMs: Long = 1_000,
+    maxDelayMs: Long = 8_000
+): String = withContext(Dispatchers.IO) {
+    retryWithBackoff(maxAttempts, initialDelayMs, maxDelayMs) {
+        val request = Request.Builder().url(url).get().build()
+        client.newCall(request).execute().use { response ->
+            val bodyText = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                error("HTTP ${response.code} ${response.message}: ${bodyText.take(300)}")
             }
+            if (bodyText.isBlank()) {
+                error("Empty response body")
+            }
+            bodyText
         }
     }
+}
 
     suspend fun <T> streamXmltvWithRetry(
-        client: OkHttpClient,
-        url: String,
-        maxAttempts: Int = 4,
-        initialDelayMs: Long = 1_000,
-        maxDelayMs: Long = 8_000,
-        block: suspend (InputStream) -> T
-    ): T {
-        return retryWithBackoff(maxAttempts, initialDelayMs, maxDelayMs) {
-            val request = Request.Builder().url(url).get().build()
-            client.newCall(request).execute().use { response ->
-                val body = response.body ?: error("Empty response body")
-                if (!response.isSuccessful) {
-                    val preview = response.peekBody(4096).string().take(300)
-                    error("HTTP ${response.code} ${response.message}: $preview")
-                }
-
-                val contentType = response.header("Content-Type").orEmpty()
-                val contentEncoding = response.header("Content-Encoding").orEmpty()
-                val isGzipByUrl = url.substringAfterLast('/', missingDelimiterValue = "")
-                    .contains(".gz", ignoreCase = true)
-                val isGzipByHeader = contentType.contains("gzip", ignoreCase = true) ||
-                    contentEncoding.contains("gzip", ignoreCase = true)
-
-                val buffered = BufferedInputStream(body.byteStream(), 64 * 1024)
-                buffered.mark(2)
-                val magic1 = buffered.read()
-                val magic2 = buffered.read()
-                buffered.reset()
-                val isGzipByMagic = magic1 == 0x1f && magic2 == 0x8b
-                val isGzip = isGzipByUrl || isGzipByHeader || isGzipByMagic
-
-                val stream: InputStream = if (isGzip) {
-                    GZIPInputStream(buffered, 64 * 1024)
-                } else {
-                    buffered
-                }
-
-                stream.use { input ->
-                    block(input)
-                }
+    client: OkHttpClient,
+    url: String,
+    maxAttempts: Int = 4,
+    initialDelayMs: Long = 1_000,
+    maxDelayMs: Long = 8_000,
+    block: suspend (InputStream) -> T
+): T = withContext(Dispatchers.IO) {
+    retryWithBackoff(maxAttempts, initialDelayMs, maxDelayMs) {
+        val request = Request.Builder().url(url).get().build()
+        client.newCall(request).execute().use { response ->
+            val body = response.body ?: error("Empty response body")
+            if (!response.isSuccessful) {
+                val preview = response.peekBody(4096).string().take(300)
+                error("HTTP ${response.code} ${response.message}: $preview")
             }
+
+            val contentType = response.header("Content-Type").orEmpty()
+            val contentEncoding = response.header("Content-Encoding").orEmpty()
+            val isGzipByUrl = url.substringAfterLast('/', missingDelimiterValue = "")
+                .contains(".gz", ignoreCase = true)
+            val isGzipByHeader = contentType.contains("gzip", ignoreCase = true) ||
+                contentEncoding.contains("gzip", ignoreCase = true)
+
+            val buffered = BufferedInputStream(body.byteStream(), 64 * 1024)
+            buffered.mark(2)
+            val magic1 = buffered.read()
+            val magic2 = buffered.read()
+            buffered.reset()
+            val isGzipByMagic = magic1 == 0x1f && magic2 == 0x8b
+            val isGzip = isGzipByUrl || isGzipByHeader || isGzipByMagic
+
+            val stream: InputStream =
+                if (isGzip) GZIPInputStream(buffered, 64 * 1024) else buffered
+
+            stream.use { input -> block(input) }
         }
     }
+}
 
     private suspend fun <T> retryWithBackoff(
         maxAttempts: Int,
