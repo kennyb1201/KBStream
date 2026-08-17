@@ -93,7 +93,7 @@ interface IptvDao {
           AND endUtcMillis > :windowStart
           AND startUtcMillis < :windowEnd
           AND channelId IN (:channelIds)
-        ORDER BY channelId ASC, startUtcMillis ASC
+        ORDER BY startUtcMillis ASC
         LIMIT :limit
         """
     )
