@@ -142,7 +142,7 @@ class IptvRepository(
             .distinct()
             .toList()
 
-        Log.d(
+        Log.w(
             TAG,
             "LINEUP QUERY candidates=${channelIds.size} epgUrl=$normalizedGuideUrl"
         )
@@ -155,7 +155,7 @@ class IptvRepository(
             totalLimit = limit
         )
 
-        Log.d(
+        Log.w(
             TAG,
             "LINEUP QUERY rows=${rows.size} epgUrl=$normalizedGuideUrl"
         )
@@ -365,12 +365,12 @@ class IptvRepository(
             return@withContext null
         }
 
-        Log.d(TAG, "PLAYLIST CACHE READ START source=$normalizedUrl")
+        Log.w(TAG, "PLAYLIST CACHE READ START source=$normalizedUrl")
 
         val channels = dao.getCachedPlaylistChannels(normalizedUrl)
             .map(::cachedRowToChannel)
 
-        Log.d(
+        Log.w(
             TAG,
             "PLAYLIST CACHE READ END channels=${channels.size} source=$normalizedUrl"
         )
