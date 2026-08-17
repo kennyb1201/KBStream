@@ -224,15 +224,7 @@ fun GuideScreen(
                             }
                         )
 
-                        Spacer(modifier = Modifier.height(18.dp))
 
-                        CenterMessage(
-                            title = "Enter a playlist",
-                            message = "Add your M3U URL and optional XMLTV EPG, then load the guide.",
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f)
-                        )
                     } else {
                         if (groups.isNotEmpty()) {
                             LazyRow(
