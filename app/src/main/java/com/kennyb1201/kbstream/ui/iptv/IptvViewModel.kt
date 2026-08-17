@@ -168,9 +168,23 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
                 _selectedGroup.value = ALL_GROUPS
                 _guideRefreshTick.value += 1
 
-                if (epgUrl.isNotBlank()) {
-                    importGuideInternal(epgUrl)
-                }
+                try {
+    importJob?.cancelAndJoin()
+
+    _playlist.value = repository.loadPlaylist(
+        playlistUrl = playlistUrl,
+        playlistName = playlistName
+    )
+
+    _selectedGroup.value = ALL_GROUPS
+    _guideRefreshTick.value += 1
+} catch (t: Throwable) {
+    if (t is CancellationException) throw t
+    _error.value = buildMessage(t)
+    _playlist.value = null
+} finally {
+    _isLoading.value = false
+}
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 _error.value = buildMessage(t)
