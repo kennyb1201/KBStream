@@ -159,32 +159,32 @@ fun GuideScreen(
         }
     }
 
-    LaunchedEffect(selectedChannelIndex, groupedChannels.size) {
-        if (groupedChannels.isNotEmpty() && selectedChannelIndex in groupedChannels.indices) {
-            channelListState.scrollToItem(selectedChannelIndex)
-        }
-    }
-    LaunchedEffect(channelListState, groupedChannels.size) {
+ LaunchedEffect(channelListState, groupedChannels) {
     snapshotFlow {
         val visibleItems = channelListState.layoutInfo.visibleItemsInfo
 
         if (visibleItems.isEmpty()) {
-            null
+            emptyList()
         } else {
-            visibleItems.first().index to visibleItems.last().index
+            val firstIndex = visibleItems.first().index
+            val lastIndex = visibleItems.last().index
+
+            groupedChannels
+                .subList(
+                    firstIndex.coerceIn(0, groupedChannels.size),
+                    (lastIndex + 1).coerceIn(0, groupedChannels.size)
+                )
+                .map { it.channel.id }
         }
     }
         .distinctUntilChanged()
-        .debounce(150)
-        .collect { visibleRange ->
-            visibleRange ?: return@collect
-
-            viewModel.updateGuideWindow(
-                firstVisibleIndex = visibleRange.first,
-                lastVisibleIndex = visibleRange.second
-            )
+        .debounce(250)
+        .collect { visibleChannelIds ->
+            if (visibleChannelIds.isNotEmpty()) {
+                viewModel.updateGuideChannels(visibleChannelIds)
+            }
         }
-    }
+}
 
     Box(
         modifier = modifier
