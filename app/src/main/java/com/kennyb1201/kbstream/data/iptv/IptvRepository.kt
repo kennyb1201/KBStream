@@ -24,8 +24,7 @@ import okhttp3.Protocol
 
 class IptvRepository(
     context: Context,
-    private val client: OkHttpClient = OkHttpClient.Builder()
-    .protocols(listOf(Protocol.HTTP_1_1))
+    private val client: OkHttpClient = IptvHttpClient.create()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(180, TimeUnit.SECONDS)
         .addInterceptor { chain ->
@@ -47,7 +46,9 @@ class IptvRepository(
         playlistUrl: String,
         playlistName: String? = null
     ): IptvPlaylist {
-        val playlistContent = fetchText(playlistUrl).removePrefix("﻿")
+        val playlistContent = IptvHttpClient
+    .fetchTextWithRetry(client, playlistUrl)
+    .removePrefix("﻿")
 
         if (!playlistContent.contains("#EXTM3U", ignoreCase = true) &&
             !playlistContent.contains("#EXTINF", ignoreCase = true)
@@ -87,33 +88,10 @@ class IptvRepository(
 
         try {
             runCatching {
-                val request = Request.Builder().url(normalizedUrl).get().build()
-                client.newCall(request).execute().use { response ->
-                    val body = response.body ?: error("Empty response body from EPG server.")
-                    if (!response.isSuccessful) {
-                        val preview = response.peekBody(4096).string().take(300)
-                        error("Failed to fetch EPG (${response.code} ${response.message}). Preview: $preview")
-                    }
-
-                    val contentType = response.header("Content-Type").orEmpty()
-                    val contentEncoding = response.header("Content-Encoding").orEmpty()
-                    val isGzipByUrl = normalizedUrl.substringAfterLast('/', missingDelimiterValue = "")
-                        .contains(".gz", ignoreCase = true)
-                    val isGzipByHeader = contentType.contains("gzip", ignoreCase = true) ||
-                        contentEncoding.contains("gzip", ignoreCase = true)
-
-                    val buffered = BufferedInputStream(body.byteStream(), 64 * 1024)
-                    buffered.mark(2)
-                    val magic1 = buffered.read()
-                    val magic2 = buffered.read()
-                    buffered.reset()
-                    val isGzipByMagic = magic1 == 0x1f && magic2 == 0x8b
-                    val isGzip = isGzipByUrl || isGzipByHeader || isGzipByMagic
-
-                    val stream: InputStream = if (isGzip) GZIPInputStream(buffered, 64 * 1024) else buffered
-                    Log.d(TAG, "Importing guide url=$normalizedUrl gzip=$isGzip")
-                    stream.use { xmltvImporter.import(normalizedUrl, it) }
-                }
+IptvHttpClient.streamXmltvWithRetry(client, normalizedUrl) { stream ->
+    Log.d(TAG, "Importing guide url=$normalizedUrl")
+    xmltvImporter.import(normalizedUrl, stream)
+} 
             }.also { result ->
                 waiter.complete(result)
                 result.getOrThrow()
