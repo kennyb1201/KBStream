@@ -237,10 +237,10 @@ class IptvRepository(
             }
 
             val upcoming = matchedPrograms.asSequence()
-                .filter { program -> program.endUtcMillis > nowUtcMillis }
-                .take(MAX_UPCOMING_PROGRAMS)
-                .map(::mapProgramRow)
-                .toList()
+    .filter { it.startUtcMillis >= nextStart }
+    .take(MAX_UPCOMING_PROGRAMS)
+    .map(::mapProgramRow)
+    .toList()
 
             IptvChannelWithEpg(
                 channel = channel,
