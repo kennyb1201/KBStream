@@ -21,6 +21,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 class XmltvImporter(
     private val dao: IptvDao
@@ -90,7 +92,7 @@ class XmltvImporter(
 
             var eventType = parser.eventType
             while (eventType != XmlPullParser.END_DOCUMENT) {
-                ensureActive()
+                currentCoroutineContext().ensureActive()
 
                 if (eventType == XmlPullParser.START_TAG) {
                     when (parser.name) {
@@ -157,7 +159,7 @@ class XmltvImporter(
         if (batch.isEmpty()) return
         dao.insertChannels(batch)
         batch.clear()
-        ensureActive()
+        currentCoroutineContext().ensureActive()
         yield()
     }
 
@@ -165,7 +167,7 @@ class XmltvImporter(
         if (batch.isEmpty()) return
         dao.insertPrograms(batch)
         batch.clear()
-        ensureActive()
+        currentCoroutineContext().ensureActive()
         yield()
     }
 
