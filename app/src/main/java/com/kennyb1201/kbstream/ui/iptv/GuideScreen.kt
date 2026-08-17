@@ -59,6 +59,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.debounce
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.iptv.EpgMatchType
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
@@ -159,6 +162,27 @@ fun GuideScreen(
     LaunchedEffect(selectedChannelIndex, groupedChannels.size) {
         if (groupedChannels.isNotEmpty() && selectedChannelIndex in groupedChannels.indices) {
             channelListState.scrollToItem(selectedChannelIndex)
+        }
+    }
+    LaunchedEffect(channelListState, groupedChannels.size) {
+    snapshotFlow {
+        val visibleItems = channelListState.layoutInfo.visibleItemsInfo
+
+        if (visibleItems.isEmpty()) {
+            null
+        } else {
+            visibleItems.first().index to visibleItems.last().index
+        }
+    }
+        .distinctUntilChanged()
+        .debounce(150)
+        .collect { visibleRange ->
+            visibleRange ?: return@collect
+
+            viewModel.updateGuideWindow(
+                firstVisibleIndex = visibleRange.first,
+                lastVisibleIndex = visibleRange.second
+            )
         }
     }
 
