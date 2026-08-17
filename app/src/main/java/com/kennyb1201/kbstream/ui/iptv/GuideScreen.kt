@@ -908,16 +908,7 @@ private fun GuideDetailPanel(
                     }
                 }
 
-                val subline = buildList {
-                    item.channel.groupTitle?.takeIf { it.isNotBlank() }?.let { add(it) }
-                    item.channel.tvgId?.takeIf { it.isNotBlank() }?.let { add(it) }
-                    when (item.epgMatchType) {
-                        EpgMatchType.ID_MATCH -> add("EPG by ID")
-                        EpgMatchType.NAME_MATCH -> add("EPG by Name")
-                        EpgMatchType.NO_MATCH -> Unit
-                    }
-                }.joinToString("  •  ")
-
+                val subline = item.channel.groupTitle?.trim().orEmpty()
                 if (subline.isNotBlank()) {
                     Text(
                         text = subline,
