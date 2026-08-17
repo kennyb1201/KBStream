@@ -158,7 +158,6 @@ class XmltvImporter(
 }
 
     private suspend fun flushChannels(batch: MutableList<EpgChannelEntity>) {
-    private suspend fun flushChannels(batch: MutableList<EpgChannelEntity>) {
     if (batch.isEmpty()) return
     dao.insertChannels(batch)
     batch.clear()
