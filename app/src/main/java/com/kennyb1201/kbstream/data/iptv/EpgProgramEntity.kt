@@ -4,11 +4,18 @@ import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
+
 @Entity(
     tableName = "epg_programs",
     indices = [
-        Index(value = ["sourceUrl", "channelId", "startUtcMillis"]),
-        Index(value = ["sourceUrl", "channelId", "endUtcMillis"])
+        Index(
+            value = [
+                "sourceUrl",
+                "channelId",
+                "startUtcMillis",
+                "endUtcMillis"
+            ]
+        )
     ]
 )
 data class EpgProgramEntity(
