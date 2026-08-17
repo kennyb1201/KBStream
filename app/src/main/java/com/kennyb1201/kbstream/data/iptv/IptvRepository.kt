@@ -284,16 +284,18 @@ class IptvRepository(
     }
 
     private fun collectChannelKeys(channel: IptvChannel): List<String> {
-        val keys = LinkedHashSet<String>()
+    return listOfNotNull(
+        channel.tvgId
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?.let(::normalizeLookupKey),
 
-        addCandidateKeys(keys, channel.tvgId.orEmpty())
-        addCandidateKeys(keys, channel.providerChannelId.orEmpty())
-        addCandidateKeys(keys, channel.tvgName.orEmpty())
-        addCandidateKeys(keys, channel.displayName)
-        addCandidateKeys(keys, channel.name)
-
-        return keys.toList()
-    }
+        channel.providerChannelId
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?.let(::normalizeLookupKey)
+    ).distinct()
+}
 
     private fun addCandidateKeys(
         keys: MutableSet<String>,
@@ -439,7 +441,7 @@ class IptvRepository(
     private companion object {
         const val TAG = "IptvRepository"
 
-        const val CHANNEL_QUERY_BATCH_SIZE = 12
+        const val CHANNEL_QUERY_BATCH_SIZE = 400
         const val ROWS_PER_CHANNEL_TARGET = 4
         const val DEFAULT_PROGRAM_LIMIT = 120
         const val INITIAL_PROGRAM_CAPACITY = 10_000
