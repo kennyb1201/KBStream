@@ -16,6 +16,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import com.kennyb1201.kbstream.data.iptv.db.CachedPlaylistChannelEntity
+import org.json.JSONObject
 
 class IptvRepository(
     context: Context,
@@ -27,31 +29,45 @@ class IptvRepository(
     private val xmltvImporter = XmltvImporter(dao)
 
     suspend fun loadPlaylist(
-        playlistUrl: String,
-        playlistName: String? = null
-    ): IptvPlaylist = withContext(Dispatchers.IO) {
-        val playlistContent = IptvHttpClient
-            .fetchTextWithRetry(client, playlistUrl)
-            .removePrefix("﻿")
+    playlistUrl: String,
+    playlistName: String? = null
+): IptvPlaylist = withContext(Dispatchers.IO) {
+    val normalizedUrl = playlistUrl.trim()
 
-        if (
-            !playlistContent.contains("#EXTM3U", ignoreCase = true) &&
-            !playlistContent.contains("#EXTINF", ignoreCase = true)
-        ) {
-            error(
-                "Playlist response does not look like M3U. " +
-                    "First 200 chars: ${playlistContent.take(200)}"
-            )
-        }
+    val playlistContent = IptvHttpClient
+        .fetchTextWithRetry(client, normalizedUrl)
+        .removePrefix("﻿")
 
-        withContext(Dispatchers.Default) {
-            m3uParser.parse(
-                content = playlistContent,
-                sourceUrl = playlistUrl,
-                playlistName = playlistName
-            )
-        }
+    if (
+        !playlistContent.contains("#EXTM3U", ignoreCase = true) &&
+        !playlistContent.contains("#EXTINF", ignoreCase = true)
+    ) {
+        error(
+            "Playlist response does not look like M3U. " +
+                "First 200 chars: ${playlistContent.take(200)}"
+        )
     }
+
+    val playlist = withContext(Dispatchers.Default) {
+        m3uParser.parse(
+            content = playlistContent,
+            sourceUrl = normalizedUrl,
+            playlistName = playlistName
+        )
+    }
+
+    dao.replaceCachedPlaylistChannels(
+        playlistUrl = normalizedUrl,
+        channels = playlist.channels.mapIndexed { index, channel ->
+            channel.toCachedEntity(
+                playlistUrl = normalizedUrl,
+                position = index
+            )
+        }
+    )
+
+    playlist
+}
 
     suspend fun importGuide(epgUrl: String) = withContext(Dispatchers.IO) {
         val normalizedUrl = epgUrl.trim()
@@ -335,6 +351,81 @@ class IptvRepository(
         val endUtcMillis: Long,
         val title: String
     )
+
+    suspend fun loadCachedPlaylist(
+    playlistUrl: String,
+    playlistName: String? = null
+): IptvPlaylist? = withContext(Dispatchers.IO) {
+    val normalizedUrl = playlistUrl.trim()
+    if (normalizedUrl.isBlank()) return@withContext null
+
+    val channels = dao.getCachedPlaylistChannels(normalizedUrl)
+        .map(::cachedEntityToChannel)
+
+    if (channels.isEmpty()) {
+        null
+    } else {
+        IptvPlaylist(
+            name = playlistName,
+            sourceUrl = normalizedUrl,
+            channels = channels
+        )
+    }
+}
+
+private fun IptvChannel.toCachedEntity(
+    playlistUrl: String,
+    position: Int
+): CachedPlaylistChannelEntity =
+    CachedPlaylistChannelEntity(
+        playlistUrl = playlistUrl,
+        position = position,
+        id = id,
+        name = name,
+        displayName = displayName,
+        streamUrl = streamUrl,
+        groupTitle = groupTitle,
+        logoUrl = logoUrl,
+        tvgId = tvgId,
+        tvgName = tvgName,
+        tvgChno = tvgChno,
+        catchup = catchup,
+        catchupDays = catchupDays,
+        catchupSource = catchupSource,
+        providerChannelId = providerChannelId,
+        headersText = JSONObject(headers).toString()
+    )
+
+private fun cachedEntityToChannel(
+    entity: CachedPlaylistChannelEntity
+): IptvChannel =
+    IptvChannel(
+        id = entity.id,
+        name = entity.name,
+        displayName = entity.displayName,
+        streamUrl = entity.streamUrl,
+        groupTitle = entity.groupTitle,
+        logoUrl = entity.logoUrl,
+        tvgId = entity.tvgId,
+        tvgName = entity.tvgName,
+        tvgChno = entity.tvgChno,
+        catchup = entity.catchup,
+        catchupDays = entity.catchupDays,
+        catchupSource = entity.catchupSource,
+        providerChannelId = entity.providerChannelId,
+        headers = entity.headersText.toHeadersMap()
+    )
+
+private fun String.toHeadersMap(): Map<String, String> = runCatching {
+    val json = JSONObject(this)
+    buildMap {
+        val keys = json.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            put(key, json.optString(key))
+        }
+    }
+}.getOrDefault(emptyMap())
 
     private companion object {
         const val TAG = "IptvRepository"
