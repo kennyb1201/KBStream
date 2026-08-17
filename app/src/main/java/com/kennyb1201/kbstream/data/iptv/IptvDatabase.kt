@@ -11,7 +11,7 @@ import androidx.room.RoomDatabase
         EpgProgramEntity::class,
         CachedPlaylistChannelEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class IptvDatabase : RoomDatabase() {
