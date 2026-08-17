@@ -415,8 +415,8 @@ private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
         const val GZIP_MAGIC_1 = 0x1f
         const val GZIP_MAGIC_2 = 0x8b
 
-        const val DEFAULT_PAST_WINDOW_MS = 24 * 60 * 60 * 1000L
-        const val DEFAULT_FUTURE_WINDOW_MS = 48 * 60 * 60 * 1000L
+const val DEFAULT_PAST_WINDOW_MS = 2 * 60 * 60 * 1000L
+const val DEFAULT_FUTURE_WINDOW_MS = 18 * 60 * 60 * 1000L
 
         val IMPORT_MUTEX = Mutex()
 
