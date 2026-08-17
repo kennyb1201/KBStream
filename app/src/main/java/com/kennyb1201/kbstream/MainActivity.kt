@@ -33,6 +33,8 @@ import com.kennyb1201.kbstream.ui.streams.StreamsViewModel
 import com.kennyb1201.kbstream.ui.studio.StudioScreen
 import com.kennyb1201.kbstream.ui.tag.TagScreen
 import com.kennyb1201.kbstream.ui.theme.KBStreamTheme
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.kennyb1201.kbstream.ui.iptv.IptvViewModel
 
 sealed class Screen {
     object Home : Screen()
@@ -92,7 +94,8 @@ fun AppRoot() {
     var screen by remember { mutableStateOf<Screen>(Screen.Home) }
     val context = LocalContext.current
     val tmdbRepository = remember { TmdbRepository(context) }
-
+    val iptvViewModel: IptvViewModel = viewModel()
+    
     BackHandler(enabled = screen != Screen.Home) {
         screen = when (val current = screen) {
             is Screen.Player -> if (current.parentType == "channel") {
@@ -193,6 +196,7 @@ fun AppRoot() {
         )
 
  is Screen.Guide -> GuideScreen(
+    viewModel = iptvViewModel,
     defaultPlaylistUrl = "",
     defaultEpgUrl = "",
     defaultPlaylistName = "Live TV",
