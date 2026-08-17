@@ -441,7 +441,7 @@ class IptvRepository(
 
         const val CHANNEL_QUERY_BATCH_SIZE = 12
         const val ROWS_PER_CHANNEL_TARGET = 4
-        const val DEFAULT_PROGRAM_LIMIT = 480
+        const val DEFAULT_PROGRAM_LIMIT = 120
         const val INITIAL_PROGRAM_CAPACITY = 10_000
         const val MAX_UPCOMING_PROGRAMS = 12
 
