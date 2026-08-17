@@ -91,7 +91,7 @@ class IptvRepository(
 
         try {
             val result = runCatching {
-                dao.clearGuideBySource(normalizedUrl)
+            
 
                 IptvHttpClient.streamXmltvWithRetry(client, normalizedUrl) { stream ->
                     xmltvImporter.import(normalizedUrl, stream)
