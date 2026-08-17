@@ -134,11 +134,13 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
                     )
 
                     if (boundedChannels.isEmpty()) {
-                        flowOf(emptyList())
-                    } else {
-                        val now = System.currentTimeMillis()
+    flowOf(emptyList())
+} else {
+    markGuideWindowLoaded(request.guideWindow)
 
-                        repository.observeLineupWithGuide(
+    val now = System.currentTimeMillis()
+
+    repository.observeLineupWithGuide(
                             playlist = currentPlaylist.copy(channels = boundedChannels),
                             epgUrl = guideUrl,
                             windowStart = now - GUIDE_PAST_WINDOW_MS,
@@ -200,11 +202,10 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
     init {
         viewModelScope.launch {
             lineupSource.collect { lineup ->
-                if (lineup.isNotEmpty()) {
-                    mergeGuideItems(lineup)
-                    markGuideWindowLoaded(_guideWindow.value)
-                }
-            }
+    if (lineup.isNotEmpty()) {
+        mergeGuideItems(lineup)
+    }
+}
         }
 
         restoreCachedPlaylist()
