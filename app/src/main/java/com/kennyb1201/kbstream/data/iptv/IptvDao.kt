@@ -85,7 +85,7 @@ interface IptvDao {
     )
     suspend fun getChannelsBySource(sourceUrl: String): List<EpgChannelEntity>
 
-    @Query(
+        @Query(
         """
         SELECT channelId, title, description, category, startUtcMillis, endUtcMillis
         FROM epg_programs
@@ -93,7 +93,7 @@ interface IptvDao {
           AND endUtcMillis > :windowStart
           AND startUtcMillis < :windowEnd
           AND channelId IN (:channelIds)
-        ORDER BY startUtcMillis ASC
+        ORDER BY channelId ASC, startUtcMillis ASC
         LIMIT :limit
         """
     )
@@ -104,4 +104,3 @@ interface IptvDao {
         windowEnd: Long,
         limit: Int
     ): List<EpgProgramRow>
-}
