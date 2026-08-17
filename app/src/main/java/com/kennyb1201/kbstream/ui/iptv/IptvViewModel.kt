@@ -158,7 +158,7 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         _isLoading.value = true
-        Log.d(TAG, "CACHE RESTORE START source=$url")
+        Log.w(TAG, "CACHE RESTORE START source=$url")
 
         viewModelScope.launch {
             try {
@@ -171,10 +171,10 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
                     _playlist.value = cachedPlaylist
                     _selectedGroup.value = ALL_GROUPS
                     _guideRefreshTick.value += 1
-                    Log.d(TAG, "CACHE RESTORE HIT channels=${cachedPlaylist.channels.size} source=$url")
+                    Log.w(TAG, "CACHE RESTORE HIT channels=${cachedPlaylist.channels.size} source=$url")
                     refreshIfNeeded()
                 } else {
-                    Log.d(TAG, "CACHE RESTORE MISS source=$url")
+                    Log.w(TAG, "CACHE RESTORE MISS source=$url")
                 }
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
@@ -200,7 +200,7 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
             val hasPlaylist = _playlist.value != null
             _isLoading.value = !hasPlaylist
             _error.value = null
-            Log.d(TAG, "PLAYLIST LOAD REQUEST source=$url cached=$hasPlaylist")
+            Log.w(TAG, "PLAYLIST LOAD REQUEST source=$url cached=$hasPlaylist")
 
             try {
                 val loadedPlaylist = repository.loadPlaylist(
