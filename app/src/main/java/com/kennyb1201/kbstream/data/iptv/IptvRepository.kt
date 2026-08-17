@@ -56,15 +56,25 @@ class IptvRepository(
         )
     }
 
-    dao.replaceCachedPlaylistChannels(
-        playlistUrl = normalizedUrl,
-        channels = playlist.channels.mapIndexed { index, channel ->
-            channel.toCachedEntity(
-                playlistUrl = normalizedUrl,
-                position = index
-            )
-        }
-    )
+    Log.d(
+    TAG,
+    "PLAYLIST CACHE WRITE START channels=${playlist.channels.size} source=$normalizedUrl"
+)
+
+dao.replaceCachedPlaylistChannels(
+    playlistUrl = normalizedUrl,
+    channels = playlist.channels.mapIndexed { index, channel ->
+        channel.toCachedEntity(
+            playlistUrl = normalizedUrl,
+            position = index
+        )
+    }
+)
+
+Log.d(
+    TAG,
+    "PLAYLIST CACHE WRITE END channels=${playlist.channels.size} source=$normalizedUrl"
+)
 
     playlist
 }
@@ -357,10 +367,21 @@ class IptvRepository(
     playlistName: String? = null
 ): IptvPlaylist? = withContext(Dispatchers.IO) {
     val normalizedUrl = playlistUrl.trim()
-    if (normalizedUrl.isBlank()) return@withContext null
+
+    if (normalizedUrl.isBlank()) {
+        Log.d(TAG, "PLAYLIST CACHE READ SKIPPED: blank URL")
+        return@withContext null
+    }
+
+    Log.d(TAG, "PLAYLIST CACHE READ START source=$normalizedUrl")
 
     val channels = dao.getCachedPlaylistChannels(normalizedUrl)
         .map(::cachedEntityToChannel)
+
+    Log.d(
+        TAG,
+        "PLAYLIST CACHE READ END channels=${channels.size} source=$normalizedUrl"
+    )
 
     if (channels.isEmpty()) {
         null
