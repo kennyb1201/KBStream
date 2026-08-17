@@ -50,126 +50,127 @@ class XmltvImporter(
     }
 
     private suspend fun importInternal(
-        sourceUrl: String,
-        input: InputStream,
-        windowStartMs: Long,
-        windowEndMs: Long
-    ) {
-        var xmlInput: InputStream? = null
+    sourceUrl: String,
+    input: InputStream,
+    windowStartMs: Long,
+    windowEndMs: Long
+) {
+    var xmlInput: InputStream? = null
 
-        try {
-            dateParseFailureLogsRemaining = MAX_DATE_PARSE_FAILURE_LOGS
+    try {
+        dateParseFailureLogsRemaining = MAX_DATE_PARSE_FAILURE_LOGS
 
-            val startedAt = System.currentTimeMillis()
-            Log.i(TAG, "IMPORT START source=$sourceUrl")
-            Log.i(TAG, "IMPORT WINDOW start=$windowStartMs end=$windowEndMs")
+        val startedAt = System.currentTimeMillis()
+        Log.i(TAG, "IMPORT START source=$sourceUrl")
+        Log.i(TAG, "IMPORT WINDOW start=$windowStartMs end=$windowEndMs")
 
-            val bufferedInput = if (input is BufferedInputStream) input else BufferedInputStream(input)
-            bufferedInput.mark(2)
-            val b1 = bufferedInput.read()
-            val b2 = bufferedInput.read()
-            bufferedInput.reset()
+        dao.clearGuideBySource(sourceUrl)
 
-            xmlInput = if (b1 == GZIP_MAGIC_1 && b2 == GZIP_MAGIC_2) {
-                GZIPInputStream(bufferedInput)
-            } else {
-                bufferedInput
-            }
+        val bufferedInput = if (input is BufferedInputStream) input else BufferedInputStream(input)
+        bufferedInput.mark(2)
+        val b1 = bufferedInput.read()
+        val b2 = bufferedInput.read()
+        bufferedInput.reset()
 
-            val factory = XmlPullParserFactory.newInstance().apply {
-                isNamespaceAware = false
-            }
-            val parser = factory.newPullParser().apply {
-                setInput(InputStreamReader(xmlInput, Charsets.UTF_8))
-            }
+        xmlInput = if (b1 == GZIP_MAGIC_1 && b2 == GZIP_MAGIC_2) {
+            GZIPInputStream(bufferedInput)
+        } else {
+            bufferedInput
+        }
 
-            val channelBatch = ArrayList<EpgChannelEntity>(CHANNEL_BATCH_SIZE)
-            val programBatch = ArrayList<EpgProgramEntity>(PROGRAM_BATCH_SIZE)
+        val factory = XmlPullParserFactory.newInstance().apply {
+            isNamespaceAware = false
+        }
+        val parser = factory.newPullParser().apply {
+            setInput(InputStreamReader(xmlInput, Charsets.UTF_8))
+        }
 
-            var parsedChannels = 0
-            var parsedPrograms = 0
-            var keptPrograms = 0
+        val channelBatch = ArrayList<EpgChannelEntity>(CHANNEL_BATCH_SIZE)
+        val programBatch = ArrayList<EpgProgramEntity>(PROGRAM_BATCH_SIZE)
 
-            var eventType = parser.eventType
-            while (eventType != XmlPullParser.END_DOCUMENT) {
-                currentCoroutineContext().ensureActive()
+        var parsedChannels = 0
+        var parsedPrograms = 0
+        var keptPrograms = 0
 
-                if (eventType == XmlPullParser.START_TAG) {
-                    when (parser.name) {
-                        "channel" -> {
-                            readChannel(parser, sourceUrl)?.let { channel ->
-                                channelBatch.add(channel)
-                                parsedChannels++
-                            }
+        var eventType = parser.eventType
+        while (eventType != XmlPullParser.END_DOCUMENT) {
+            currentCoroutineContext().ensureActive()
 
-                            if (channelBatch.size >= CHANNEL_BATCH_SIZE) {
-                                flushChannels(channelBatch)
-                            }
+            if (eventType == XmlPullParser.START_TAG) {
+                when (parser.name) {
+                    "channel" -> {
+                        readChannel(parser, sourceUrl)?.let { channel ->
+                            channelBatch.add(channel)
+                            parsedChannels++
+                        }
 
-                            if (parsedChannels > 0 && parsedChannels % CHANNEL_LOG_INTERVAL == 0) {
-                                logProgress(sourceUrl, parsedChannels, parsedPrograms, keptPrograms)
+                        if (channelBatch.size >= CHANNEL_BATCH_SIZE) {
+                            flushChannels(channelBatch)
+                        }
+
+                        if (parsedChannels > 0 && parsedChannels % CHANNEL_LOG_INTERVAL == 0) {
+                            logProgress(sourceUrl, parsedChannels, parsedPrograms, keptPrograms)
+                        }
+                    }
+
+                    "programme" -> {
+                        parsedPrograms++
+
+                        readProgram(
+                            parser = parser,
+                            sourceUrl = sourceUrl,
+                            windowStartMs = windowStartMs,
+                            windowEndMs = windowEndMs
+                        )?.let { program ->
+                            programBatch.add(program)
+                            keptPrograms++
+
+                            if (programBatch.size >= PROGRAM_BATCH_SIZE) {
+                                flushPrograms(programBatch)
                             }
                         }
 
-                        "programme" -> {
-                            parsedPrograms++
-
-                            readProgram(
-                                parser = parser,
-                                sourceUrl = sourceUrl,
-                                windowStartMs = windowStartMs,
-                                windowEndMs = windowEndMs
-                            )?.let { program ->
-                                programBatch.add(program)
-                                keptPrograms++
-
-                                if (programBatch.size >= PROGRAM_BATCH_SIZE) {
-                                    flushPrograms(programBatch)
-                                }
-                            }
-
-                            if (parsedPrograms % PROGRAM_LOG_INTERVAL == 0) {
-                                logProgress(sourceUrl, parsedChannels, parsedPrograms, keptPrograms)
-                            }
+                        if (parsedPrograms % PROGRAM_LOG_INTERVAL == 0) {
+                            logProgress(sourceUrl, parsedChannels, parsedPrograms, keptPrograms)
                         }
                     }
                 }
-
-                eventType = parser.next()
             }
 
-            flushChannels(channelBatch)
-            flushPrograms(programBatch)
-
-            val elapsedMs = System.currentTimeMillis() - startedAt
-            Log.i(
-                TAG,
-                "IMPORT END channels=$parsedChannels parsedPrograms=$parsedPrograms " +
-                    "keptPrograms=$keptPrograms elapsedMs=$elapsedMs source=$sourceUrl"
-            )
-        } catch (error: Throwable) {
-            Log.e(TAG, "IMPORT FAILED source=$sourceUrl", error)
-            throw error
-        } finally {
-            runCatching { xmlInput?.close() ?: input.close() }
+            eventType = parser.next()
         }
+
+        flushChannels(channelBatch)
+        flushPrograms(programBatch)
+
+        val elapsedMs = System.currentTimeMillis() - startedAt
+        Log.i(
+            TAG,
+            "IMPORT END channels=$parsedChannels parsedPrograms=$parsedPrograms " +
+                "keptPrograms=$keptPrograms elapsedMs=$elapsedMs source=$sourceUrl"
+        )
+    } catch (error: Throwable) {
+        Log.e(TAG, "IMPORT FAILED source=$sourceUrl", error)
+        throw error
+    } finally {
+        runCatching { xmlInput?.close() ?: input.close() }
     }
+}
 
     private suspend fun flushChannels(batch: MutableList<EpgChannelEntity>) {
-        if (batch.isEmpty()) return
-        dao.insertChannels(batch)
-        batch.clear()
-        currentCoroutineContext().ensureActive()
-        yield()
-    }
+    private suspend fun flushChannels(batch: MutableList<EpgChannelEntity>) {
+    if (batch.isEmpty()) return
+    dao.insertChannels(batch)
+    batch.clear()
+    currentCoroutineContext().ensureActive()
+}
 
-    private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
-        if (batch.isEmpty()) return
-        dao.insertPrograms(batch)
-        batch.clear()
-        currentCoroutineContext().ensureActive()
-        yield()
-    }
+private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
+    if (batch.isEmpty()) return
+    dao.insertPrograms(batch)
+    batch.clear()
+    currentCoroutineContext().ensureActive()
+}
 
     private fun logProgress(
         sourceUrl: String,
@@ -407,8 +408,8 @@ class XmltvImporter(
 
     private companion object {
         const val TAG = "XmltvImporter"
-        const val CHANNEL_BATCH_SIZE = 500
-        const val PROGRAM_BATCH_SIZE = 1000
+        const val CHANNEL_BATCH_SIZE = 2000
+        const val PROGRAM_BATCH_SIZE = 5000
         const val CHANNEL_LOG_INTERVAL = 5_000
         const val PROGRAM_LOG_INTERVAL = 10_000
         const val MAX_DATE_PARSE_FAILURE_LOGS = 20
