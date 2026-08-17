@@ -144,61 +144,62 @@ class IptvRepository(
         )
     }.flowOn(Dispatchers.Default)
 
-    private suspend fun loadProgramsChunked(
-        sourceUrl: String,
-        channelIds: List<String>,
-        windowStart: Long,
-        windowEnd: Long,
-        totalLimit: Int
-    ): List<EpgProgramRow> {
-        if (sourceUrl.isBlank() || channelIds.isEmpty() || totalLimit <= 0) {
-            return emptyList()
-        }
-
-        val results = ArrayList<EpgProgramRow>(
-            minOf(totalLimit, INITIAL_PROGRAM_CAPACITY)
-        )
-        var remaining = totalLimit
-
-        for (batch in channelIds.chunked(CHANNEL_QUERY_BATCH_SIZE)) {
-            if (remaining <= 0) break
-
-            val batchLimit = minOf(remaining, PROGRAMS_PER_BATCH_LIMIT)
-
-val batchRows = withContext(Dispatchers.IO) {
-    dao.getProgramsForChannelsInWindow(
-        sourceUrl = sourceUrl,
-        channelIds = batch,
-        windowStart = windowStart,
-        windowEnd = windowEnd,
-        limit = batchLimit
-    )
-}
-
-            results.addAll(batchRows)
-            remaining = totalLimit - results.size
-        }
-
-        val seen = HashSet<ProgramKey>(results.size)
-
-        return results.asSequence()
-            .map { row ->
-                row.copy(channelId = normalizeLookupKey(row.channelId))
-            }
-            .filter { row ->
-                seen.add(
-                    ProgramKey(
-                        channelId = row.channelId,
-                        startUtcMillis = row.startUtcMillis,
-                        endUtcMillis = row.endUtcMillis,
-                        title = row.title
-                    )
-                )
-            }
-            .sortedBy { it.startUtcMillis }
-            .take(totalLimit)
-            .toList()
+  private suspend fun loadProgramsChunked(
+    sourceUrl: String,
+    channelIds: List<String>,
+    windowStart: Long,
+    windowEnd: Long,
+    totalLimit: Int
+): List<EpgProgramRow> {
+    if (sourceUrl.isBlank() || channelIds.isEmpty() || totalLimit <= 0) {
+        return emptyList()
     }
+
+    val results = ArrayList<EpgProgramRow>(
+        minOf(totalLimit, INITIAL_PROGRAM_CAPACITY)
+    )
+    var remaining = totalLimit
+
+    for (batch in channelIds.chunked(CHANNEL_QUERY_BATCH_SIZE)) {
+        if (remaining <= 0) break
+
+        val batchLimit = minOf(
+            remaining,
+            batch.size * ROWS_PER_CHANNEL_TARGET
+        )
+
+        val batchRows = withContext(Dispatchers.IO) {
+            dao.getProgramsForChannelsInWindow(
+                sourceUrl = sourceUrl,
+                channelIds = batch,
+                windowStart = windowStart,
+                windowEnd = windowEnd,
+                limit = batchLimit
+            )
+        }
+
+        results.addAll(batchRows)
+        remaining = totalLimit - results.size
+    }
+
+    val seen = HashSet<ProgramKey>(results.size)
+
+    return results.asSequence()
+        .map { row -> row.copy(channelId = normalizeLookupKey(row.channelId)) }
+        .filter { row ->
+            seen.add(
+                ProgramKey(
+                    channelId = row.channelId,
+                    startUtcMillis = row.startUtcMillis,
+                    endUtcMillis = row.endUtcMillis,
+                    title = row.title
+                )
+            )
+        }
+        .sortedBy { it.startUtcMillis }
+        .take(totalLimit)
+        .toList()
+}
 
     private fun mapChannels(
         channelsWithKeys: List<Pair<IptvChannel, List<String>>>,
@@ -338,10 +339,10 @@ val batchRows = withContext(Dispatchers.IO) {
     private companion object {
         const val TAG = "IptvRepository"
 
-        const val CHANNEL_QUERY_BATCH_SIZE = 500
-        const val PROGRAMS_PER_BATCH_LIMIT = 2_000
-        const val DEFAULT_PROGRAM_LIMIT = 20_000
-        const val INITIAL_PROGRAM_CAPACITY = 4_000
+        const val CHANNEL_QUERY_BATCH_SIZE = 50
+        const val ROWS_PER_CHANNEL_TARGET = 20
+        const val DEFAULT_PROGRAM_LIMIT = 200_000
+        const val INITIAL_PROGRAM_CAPACITY = 10_000
         const val MAX_UPCOMING_PROGRAMS = 12
 
 val WHITESPACE = Regex("""\s+""")
