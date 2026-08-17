@@ -24,8 +24,9 @@ import okhttp3.Request
 class IptvRepository(
     context: Context,
     private val client: OkHttpClient = OkHttpClient.Builder()
+    .protocols(listOf(Protocol.HTTP_1_1))
         .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(90, TimeUnit.SECONDS)
+        .readTimeout(180, TimeUnit.SECONDS)
         .addInterceptor { chain ->
             val request = chain.request().newBuilder()
                 .header("User-Agent", "VLC/3.0.20 LibVLC/3.0.20")
