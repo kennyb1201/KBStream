@@ -21,10 +21,11 @@ class M3uParser {
         var pendingName: String? = null
 
         lines.forEachIndexed { index, line ->
-            when {
-                index == 0 && line.startsWith("#EXTM3U", ignoreCase = true) -> {
-                    headerAttrs = parseAttributes(line.removePrefix("#EXTM3U").trim())
-                }
+            when {index == 0 && line.startsWith("#EXTM3U", ignoreCase = true) -> {
+    headerAttrs = parseAttributes(
+        line.substringAfter("#EXTM3U", missingDelimiterValue = "").trim()
+    )
+}
 
                 line.startsWith("#EXTINF", ignoreCase = true) -> {
                     val extinfBody = line.substringAfter(":", "")
