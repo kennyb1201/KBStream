@@ -452,8 +452,8 @@ private fun String.toHeadersMap(): Map<String, String> = runCatching {
         const val TAG = "IptvRepository"
 
         const val CHANNEL_QUERY_BATCH_SIZE = 50
-        const val ROWS_PER_CHANNEL_TARGET = 20
-        const val DEFAULT_PROGRAM_LIMIT = 200_000
+        const val ROWS_PER_CHANNEL_TARGET = 8
+        const val DEFAULT_PROGRAM_LIMIT = 12_000
         const val INITIAL_PROGRAM_CAPACITY = 10_000
         const val MAX_UPCOMING_PROGRAMS = 12
 
