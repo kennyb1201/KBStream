@@ -165,15 +165,15 @@ class IptvRepository(
 
             val batchLimit = minOf(remaining, PROGRAMS_PER_BATCH_LIMIT)
 
-            val batchRows = withContext(Dispatchers.IO) {
-                dao.getProgramsForChannelsInWindow(
-                    sourceUrl = sourceUrl,
-                    channelIds = batch,
-                    windowStart = windowStart,
-                    windowEnd = windowEnd,
-                    limit = batchLimit
-                )
-            }
+val batchRows = withContext(Dispatchers.IO) {
+    dao.getProgramsForChannelsInWindow(
+        sourceUrl = sourceUrl,
+        channelIds = batch,
+        windowStart = windowStart,
+        windowEnd = windowEnd,
+        limit = batchLimit
+    )
+}
 
             results.addAll(batchRows)
             remaining = totalLimit - results.size
