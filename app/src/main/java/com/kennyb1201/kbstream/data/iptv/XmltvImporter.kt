@@ -427,11 +427,11 @@ class XmltvImporter(
 
         val OFFSET_4 = Regex("[+-]\\d{4}")
         val OFFSET_WITH_COLON = Regex("[+-]\\d{2}:\\d{2}")
-        val BRACKETED_TEXT = Regex("""\\[[^\\]]*]""")
-        val PARENTHESIZED_TEXT = Regex("""\\([^)]*\\)""")
-        val CHANNEL_QUALIFIERS = Regex(
-            """\\b(hd|uhd|fhd|sd|4k|1080p|720p|hevc|h265|h264|hdr|aac|fps|usa|us|uk|ca|au)\\b"""
-        )
+        val BRACKETED_TEXT = Regex("""\[[^\]]*]""")
+val PARENTHESIZED_TEXT = Regex("""\([^)]*\)""")
+val CHANNEL_QUALIFIERS = Regex(
+    """\b(hd|uhd|fhd|sd|4k|1080p|720p|hevc|h265|h264|hdr|aac|fps|usa|us|uk|ca|au)\b"""
+)
         val NON_ALPHANUMERIC = Regex("""[^a-z0-9]+""")
 
         var dateParseFailureLogsRemaining = MAX_DATE_PARSE_FAILURE_LOGS
