@@ -996,7 +996,9 @@ private fun GuideDetailPanel(
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding = PaddingValues(bottom = 12.dp),
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier
+    .fillMaxWidth()
+    .weight(1f)
         ) {
             val upcoming = item.upcoming.take(12)
 
@@ -1104,6 +1106,7 @@ private fun ProgramCard(
     modifier: Modifier = Modifier
 ) {
     androidx.tv.material3.Surface(
+        modifier = modifier,
         shape = RoundedCornerShape(14.dp),
         colors = androidx.tv.material3.SurfaceDefaults.colors(
             containerColor = KBSurfaceRaised,
@@ -1111,7 +1114,7 @@ private fun ProgramCard(
         )
     ) {
         Column(
-            modifier = modifier
+            modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 13.dp, vertical = 11.dp)
         ) {
