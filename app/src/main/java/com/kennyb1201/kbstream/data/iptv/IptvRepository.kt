@@ -265,6 +265,7 @@ IptvChannelWithEpg(
     next = next?.let(::mapProgramRow),
     upcoming = upcoming
 )
+        }
     }
 
     private fun collectChannelKeys(channel: IptvChannel): List<String> =
