@@ -243,12 +243,14 @@ val now = matchedPrograms.firstOrNull { program ->
         nowUtcMillis < program.endUtcMillis
 }
 
+val nextStart = now?.endUtcMillis ?: nowUtcMillis
+
 val next = matchedPrograms.firstOrNull { program ->
-    program.startUtcMillis >= nowUtcMillis
+    program.startUtcMillis >= nextStart
 }
 
 val upcoming = matchedPrograms.asSequence()
-    .filter { it.startUtcMillis >= nowUtcMillis }
+    .filter { it.startUtcMillis >= nextStart }
     .take(MAX_UPCOMING_PROGRAMS)
     .map(::mapProgramRow)
     .toList()
