@@ -236,7 +236,7 @@ private suspend fun loadProgramsChunked(
                     )
                 }
                 .sortedBy { it.startUtcMillis }
-                .toList(),
+                .toList()
 
 val now = matchedPrograms.firstOrNull { program ->
     nowUtcMillis >= program.startUtcMillis &&
