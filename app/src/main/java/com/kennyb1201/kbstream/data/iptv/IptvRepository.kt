@@ -236,38 +236,35 @@ private suspend fun loadProgramsChunked(
                     )
                 }
                 .sortedBy { it.startUtcMillis }
-                .toList()
+                .toList(),
 
-            val now = matchedPrograms.firstOrNull { program ->
-                nowUtcMillis >= program.startUtcMillis &&
-                    nowUtcMillis < program.endUtcMillis
-            }
+val now = matchedPrograms.firstOrNull { program ->
+    nowUtcMillis >= program.startUtcMillis &&
+        nowUtcMillis < program.endUtcMillis
+}
 
-            val nextStart = now?.endUtcMillis ?: nowUtcMillis
+val next = matchedPrograms.firstOrNull { program ->
+    program.startUtcMillis >= nowUtcMillis
+}
 
-            val next = matchedPrograms.firstOrNull { program ->
-                program.startUtcMillis >= nextStart
-            }
+val upcoming = matchedPrograms.asSequence()
+    .filter { it.startUtcMillis >= nowUtcMillis }
+    .take(MAX_UPCOMING_PROGRAMS)
+    .map(::mapProgramRow)
+    .toList()
 
-            val upcoming = matchedPrograms.asSequence()
-                .filter { it.startUtcMillis >= nextStart }
-                .take(MAX_UPCOMING_PROGRAMS)
-                .map(::mapProgramRow)
-                .toList()
-
-            IptvChannelWithEpg(
-                channel = channel,
-                epgChannel = null,
-                epgMatchType = if (matchedPrograms.isEmpty()) {
-                    EpgMatchType.NO_MATCH
-                } else {
-                    EpgMatchType.ID_MATCH
-                },
-                now = now?.let(::mapProgramRow),
-                next = next?.let(::mapProgramRow),
-                upcoming = upcoming
-            )
-        }
+IptvChannelWithEpg(
+    channel = channel,
+    epgChannel = null,
+    epgMatchType = if (matchedPrograms.isEmpty()) {
+        EpgMatchType.NO_MATCH
+    } else {
+        EpgMatchType.ID_MATCH
+    },
+    now = now?.let(::mapProgramRow),
+    next = next?.let(::mapProgramRow),
+    upcoming = upcoming
+)
     }
 
     private fun collectChannelKeys(channel: IptvChannel): List<String> =
