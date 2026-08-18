@@ -159,6 +159,12 @@ fun GuideScreen(
         }
     }
 
+    LaunchedEffect(selectedChannel?.channel?.id) {
+    selectedChannel?.channel?.id?.let { channelId ->
+        viewModel.updateGuideChannels(listOf(channelId))
+    }
+    }
+
  LaunchedEffect(channelListState, groupedChannels) {
     snapshotFlow {
         val visibleItems = channelListState.layoutInfo.visibleItemsInfo
