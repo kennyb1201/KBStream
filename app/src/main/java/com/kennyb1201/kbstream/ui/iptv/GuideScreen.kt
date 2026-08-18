@@ -270,10 +270,11 @@ fun GuideScreen(
                             ) {
                                 itemsIndexed(groups, key = { _, item -> item }) { _, group ->
                                     GroupChip(
-                                        name = group,
-                                        selected = group == selectedGroup,
-                                        onClick = { selectedGroup = group }
-                                    )
+    name = group,
+    selected = group == selectedGroup,
+    onClick = { selectedGroup = group },
+    onFocus = { selectedGroup = group }
+)
                                 }
                             }
                         }
@@ -690,17 +691,19 @@ private fun buildSetupDiagnosticsText(
     }.joinToString("  •  ")
 }
 
-@Composable
 private fun GroupChip(
     name: String,
     selected: Boolean,
     onClick: () -> Unit,
+    onFocus: () -> Unit,
     modifier: Modifier = Modifier
-) {
+){
     KBCard(
-        onClick = onClick,
-        modifier = modifier
-    ) {
+    onClick = onClick,
+    modifier = modifier.onFocusChanged {
+        if (it.isFocused) onFocus()
+    }
+) {
         Box(
             contentAlignment = Alignment.Center,
             modifier = Modifier.padding(
