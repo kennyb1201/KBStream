@@ -285,24 +285,25 @@ fun GuideScreen(
                                     .focusGroup()
                             ) {
                                 itemsIndexed(
-                                    items = groupedChannels,
-                                    key = { index, item -> "${index}:${item.channel.id}" }
-                                ) { index, rawItem ->
-                                    val item = withFavoriteFlag(rawItem)
-                                    ChannelRowCard(
-                                        item = item,
-                                        selected = selectedChannel?.channel?.id == item.channel.id,
-                                        onClick = {
-                                            selectedChannelIndex = index
-                                            latestOnPlayChannel?.invoke(item)
-                                        },
-                                        onFocused = {
-                                            if (selectedChannel?.channel?.id != item.channel.id) {
-                                                selectedChannelIndex = index
-                                            }
-                                        }
-                                    )
-                                }
+    items = groupedChannels,
+    key = { index, item ->
+        "${item.channel.id}|${item.channel.streamUrl}|$index"
+    }
+) { index, rawItem ->
+    val item = withFavoriteFlag(rawItem)
+
+    ChannelRowCard(
+        item = item,
+        selected = selectedChannelIndex == index,
+        onClick = {
+            selectedChannelIndex = index
+            latestOnPlayChannel?.invoke(item)
+        },
+        onFocused = {
+            selectedChannelIndex = index
+        }
+    )
+}
                             }
 
                             Spacer(modifier = Modifier.width(16.dp))
