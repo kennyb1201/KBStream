@@ -153,11 +153,16 @@ Log.w(
         Log.d(TAG, "GUIDE CHANNELS QUEUED total=${_guideChannelIds.value.size} added=${newIds.size}")
     }
 
-    private fun requestInitialGuideWindow() {
-        updateGuideChannels(
-            _playlist.value?.channels?.take(INITIAL_GUIDE_WINDOW_SIZE)?.map { it.id }.orEmpty()
-        )
-    }
+private fun requestInitialGuideWindow() {
+    val keys = _playlist.value
+        ?.channels
+        ?.mapIndexed { index, channel -> channelKey(channel, index) }
+        .orEmpty()
+
+    updateGuideChannels(keys)
+}
+    private fun channelKey(channel: IptvChannel, index: Int): String =
+    "${index}|${channel.id}|${channel.streamUrl}"
 
     private fun restoreCachedPlaylist() {
         val url = _playlistUrl.value.trim()
