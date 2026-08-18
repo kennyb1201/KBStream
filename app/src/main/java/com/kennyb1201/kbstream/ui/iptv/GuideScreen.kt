@@ -690,7 +690,7 @@ private fun buildSetupDiagnosticsText(
         if (playlistName.isNotBlank()) add("Name: $playlistName")
     }.joinToString("  •  ")
 }
-
+@Composable
 private fun GroupChip(
     name: String,
     selected: Boolean,
