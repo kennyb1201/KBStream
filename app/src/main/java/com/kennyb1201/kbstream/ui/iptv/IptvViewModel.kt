@@ -215,15 +215,15 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun requestInitialGuideWindow() {
-    val channels = _playlist.value?.channels.orEmpty()
+    guideWarmupJob?.cancel()
 
-    updateGuideChannels(
-        channels
-            .take(INITIAL_GUIDE_WINDOW_SIZE)
-            .map { it.id }
-    )
+    val initialChannelIds = _playlist.value
+        ?.channels
+        ?.take(INITIAL_GUIDE_WINDOW_SIZE)
+        ?.map { it.id }
+        .orEmpty()
 
-    startGuideWarmup(channels)
+    updateGuideChannels(initialChannelIds)
 }
 
 private fun startGuideWarmup(channels: List<IptvChannel>) {
