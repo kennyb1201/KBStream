@@ -48,7 +48,7 @@ fun KBCard(
             if (
                 onLongClick != null &&
                 event.type == KeyEventType.KeyUp &&
-                event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_MENU
+                event.key.nativeKeyCode == android.view.KeyEvent.KEYCODE_MENU
             ) {
                 onLongClick()
                 true
