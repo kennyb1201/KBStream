@@ -106,9 +106,23 @@ fun GuideScreen(
     val guidePreferences = remember(appContext) {
         appContext.getSharedPreferences("iptv_guide_preferences", Context.MODE_PRIVATE)
     }
-    var favorites by remember { mutableStateOf(guidePreferences.stringSet("favorites", emptySet()).orEmpty()) }
-    var hiddenChannels by remember { mutableStateOf(guidePreferences.stringSet("hidden_channels", emptySet()).orEmpty()) }
-    var hiddenGroups by remember { mutableStateOf(guidePreferences.stringSet("hidden_groups", emptySet()).orEmpty()) }
+    var favorites by remember {
+    mutableStateOf(
+        guidePreferences.getStringSet("favorites", emptySet())?.toSet().orEmpty()
+    )
+}
+
+var hiddenChannels by remember {
+    mutableStateOf(
+        guidePreferences.getStringSet("hidden_channels", emptySet())?.toSet().orEmpty()
+    )
+}
+
+var hiddenGroups by remember {
+    mutableStateOf(
+        guidePreferences.getStringSet("hidden_groups", emptySet())?.toSet().orEmpty()
+    )
+}
     var menuItem by remember { mutableStateOf<IptvChannelWithEpg?>(null) }
 
     fun channelKey(item: IptvChannelWithEpg): String =
