@@ -321,8 +321,14 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
         playlist.channels.map(::playlistOnlyItem)
 
     private fun playlistOnlyItem(channel: IptvChannel): IptvChannelWithEpg =
-        IptvChannelWithEpg(channel, null, EpgMatchType.NO_MATCH, null, null, emptyList())
-
+    IptvChannelWithEpg(
+        channel = channel,
+        epgChannel = null,
+        epgMatchType = EpgMatchType.NO_MATCH,
+        now = null,
+        next = null,
+        upcoming = emptyList()
+    )
     private fun buildMessage(t: Throwable): String = buildString {
         append(t::class.java.simpleName)
         t.message?.takeIf { it.isNotBlank() }?.let { append(": "); append(it) }
