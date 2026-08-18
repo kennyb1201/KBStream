@@ -985,12 +985,16 @@ private fun GuideDetailPanel(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = formatTimeRange(program.startUtcMillis, program.endUtcMillis),
-                                color = KBAccent,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.width(104.dp)
-                            )
+    text = formatTimeRange(program.startUtcMillis, program.endUtcMillis),
+    color = KBAccent,
+    style = MaterialTheme.typography.labelMedium,
+    fontWeight = FontWeight.SemiBold,
+    maxLines = 1,
+    softWrap = false,
+    overflow = TextOverflow.Clip,
+    modifier = Modifier.width(132.dp)
+)
+                            
                             Text(
                                 text = program.title,
                                 color = KBTextHi,
