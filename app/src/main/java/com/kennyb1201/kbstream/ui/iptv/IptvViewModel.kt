@@ -75,7 +75,7 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
 
         when {
             currentPlaylist == null -> flowOf(emptyList())
-            guideUrl.isBlank() || request.isImportingGuide -> flowOf(emptyList())
+            guideUrl.isBlank() -> flowOf(emptyList())
             request.channelIds.isEmpty() -> flowOf(emptyList())
             else -> {
                 val sourceKey = buildGuideSourceKey(currentPlaylist, guideUrl, request.refreshTick)
