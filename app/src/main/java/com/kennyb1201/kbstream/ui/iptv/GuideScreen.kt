@@ -52,11 +52,6 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.nativeKeyEvent
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -816,17 +811,6 @@ private fun ChannelRowCard(
     KBCard(
         onClick = onClick,
         modifier = modifier
-            .onPreviewKeyEvent { event ->
-                val isMenuKey =
-                    event.key == Key.Menu ||
-                    event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_MENU
-                if (isMenuKey && event.type == KeyEventType.KeyUp) {
-                    onLongClick()
-                    true
-                } else {
-                    false
-                }
-            }
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
