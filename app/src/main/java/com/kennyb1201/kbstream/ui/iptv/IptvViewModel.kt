@@ -79,11 +79,16 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
             request.channelIds.isEmpty() -> flowOf(emptyList())
             else -> {
                 val sourceKey = buildGuideSourceKey(currentPlaylist, guideUrl, request.refreshTick)
-                if (loadedGuideSourceKey != sourceKey) clearGuideMemory(sourceKey)
+if (loadedGuideSourceKey != sourceKey) clearGuideMemory(sourceKey)
 
- val channelsToLoad = currentPlaylist.channels.filter { channel ->
-    channel.id in request.channelIds
-}
+val channelsByKey = currentPlaylist.channels
+    .mapIndexed { index, channel ->
+        channelKey(channel, index) to channel
+    }
+    .toMap()
+
+val channelsToLoad = request.channelIds
+    .mapNotNull(channelsByKey::get)
 
 Log.w(
     TAG,
