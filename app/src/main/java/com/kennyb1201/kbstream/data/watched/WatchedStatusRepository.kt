@@ -404,6 +404,26 @@ class WatchedStatusRepository(context: Context) {
         simklRepository.forceClearWatchedActivitySync()
     }
 
+    suspend fun clearAllWatchState() {
+    cacheMutex.withLock {
+        cache.clear()
+        completedMovieKeys = emptySet()
+        simklMovieSetFetchedAt = 0L
+    }
+
+    try {
+        watchedStatusDao.clearAll()
+    } catch (e: Exception) {
+        Log.e("WATCHED_REPO", "Failed to clear watched-status cache: ${e.message}", e)
+    }
+
+    simklRepository.clearAuth()
+
+    _watchedStateVersion.value = System.currentTimeMillis()
+
+    Log.e("WATCHED_REPO", "Cleared all local and SIMKL watch state")
+    }
+
     private suspend fun isMovieLocallyWatched(id: String): Boolean {
         val entry = try {
             historyDao.getById(id)
