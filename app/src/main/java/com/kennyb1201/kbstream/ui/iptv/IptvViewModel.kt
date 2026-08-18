@@ -106,11 +106,29 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
     val visibleChannels: StateFlow<List<IptvChannelWithEpg>> = combine(
-        playlistOnlyLineup, _guideItemsByChannelId
-    ) { playlistOnly, guideByChannelId ->
-        playlistOnly.map { item -> guideByChannelId[item.channel.id] ?: item }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+    playlistOnlyLineup,
+    _guideItemsByChannelId
+) { playlistOnly, guideByChannelId ->
+    playlistOnly.map { item ->
+        val guideMatch = guideByChannelId[item.channel.id]
 
+        if (guideMatch == null) {
+            item
+        } else {
+            item.copy(
+                epgChannel = guideMatch.epgChannel,
+                epgMatchType = guideMatch.epgMatchType,
+                now = guideMatch.now,
+                next = guideMatch.next,
+                upcoming = guideMatch.upcoming
+            )
+        }
+    }
+}.stateIn(
+    viewModelScope,
+    SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+    emptyList()
+)
     init {
         viewModelScope.launch {
             lineupSource.collect { lineup ->
