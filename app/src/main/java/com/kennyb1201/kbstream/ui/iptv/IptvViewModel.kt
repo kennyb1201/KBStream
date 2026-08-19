@@ -241,34 +241,36 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateGuideChannels(visibleChannelIds: List<String>) {
-        if (visibleChannelIds.isEmpty()) return
+    if (visibleChannelIds.isEmpty()) return
 
-        val hiddenIds = _hiddenChannelIds.value
+    val hiddenIds = _hiddenChannelIds.value
 
-        val validIds = _playlist.value
-            ?.channels
-            ?.asSequence()
-            ?.map { it.id }
-            ?.filterNot { it in hiddenIds }
-            ?.toHashSet()
-            .orEmpty()
+    val validIds = _playlist.value
+        ?.channels
+        ?.asSequence()
+        ?.map { it.id }
+        ?.filterNot { it in hiddenIds }
+        ?.toHashSet()
+        .orEmpty()
 
-        val newIds = visibleChannelIds
-            .asSequence()
-            .filter { it in validIds }
-            .filterNot { it in _guideChannelIds.value }
-            .toSet()
+    val requestedIds = visibleChannelIds
+        .asSequence()
+        .filter { it in validIds }
+        .distinct()
+        .take(MAX_ACTIVE_GUIDE_CHANNELS)
+        .toSet()
 
-        if (newIds.isEmpty()) return
-
-        _guideChannelIds.value = _guideChannelIds.value + newIds
-
-        Log.d(
-            TAG,
-            "GUIDE CHANNELS QUEUED total=${_guideChannelIds.value.size} " +
-                "added=${newIds.size}"
-        )
+    if (requestedIds.isEmpty() || requestedIds == _guideChannelIds.value) {
+        return
     }
+
+    _guideChannelIds.value = requestedIds
+
+    Log.d(
+        TAG,
+        "GUIDE CHANNELS active=${requestedIds.size}"
+    )
+}
 
     private fun requestInitialGuideWindow() {
         val hiddenIds = _hiddenChannelIds.value
