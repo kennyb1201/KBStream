@@ -590,6 +590,7 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
 
         const val STOP_TIMEOUT_MS = 5_000L
         const val INITIAL_GUIDE_WINDOW_SIZE = 80
+        const val MAX_CACHED_GUIDE_CHANNELS = 250
 const val MAX_ACTIVE_GUIDE_CHANNELS = 120
 const val VISIBLE_GUIDE_PROGRAM_LIMIT = 240
 
