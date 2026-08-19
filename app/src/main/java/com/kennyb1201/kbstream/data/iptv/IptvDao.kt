@@ -1,4 +1,4 @@
-package com.kennyb1201.kbstream.data.iptv.db
+.package com.kennyb1201.kbstream.data.iptv.db
 
 import androidx.room.Dao
 import androidx.room.Insert
@@ -46,7 +46,8 @@ interface IptvDao {
             catchup,
             catchupDays,
             catchupSource,
-            providerChannelId
+            providerChannelId,
+            headersText
         FROM cached_playlist_channels
         WHERE playlistUrl = :playlistUrl
         ORDER BY position ASC
