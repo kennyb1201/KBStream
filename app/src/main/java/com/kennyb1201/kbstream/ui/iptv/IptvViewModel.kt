@@ -78,59 +78,60 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
         )
 
     private val lineupSource: StateFlow<List<IptvChannelWithEpg>> =
-        combine(
-            playlist,
-            epgUrl,
-            guideRefreshTick,
-            isImportingGuide
-        ) { currentPlaylist, guideUrl, refreshTick, importingGuide ->
-            GuideRequest(
-                playlist = currentPlaylist,
-                guideUrl = guideUrl.trim(),
-                refreshTick = refreshTick,
-                isImportingGuide = importingGuide
-            )
-        }
-            .flatMapLatest { request ->
-                val currentPlaylist = request.playlist
-                val guideUrl = request.guideUrl
+    combine(
+        playlist,
+        epgUrl,
+        guideRefreshTick,
+        isImportingGuide
+    ) { currentPlaylist, guideUrl, refreshTick, importingGuide ->
+        GuideRequest(
+            playlist = currentPlaylist,
+            guideUrl = guideUrl.trim(),
+            refreshTick = refreshTick,
+            isImportingGuide = importingGuide
+        )
+    }
+        .flatMapLatest { request: GuideRequest ->
+            val currentPlaylist = request.playlist
+            val guideUrl = request.guideUrl
 
-                when {
-                    currentPlaylist == null -> flowOf(emptyList())
-                    guideUrl.isBlank() -> flowOf(emptyList())
-                    request.isImportingGuide -> flowOf(emptyList())
-                    else -> {
-                        val sourceKey = buildGuideSourceKey(
-                            currentPlaylist,
-                            guideUrl,
-                            request.refreshTick
-                        )
+            when {
+                currentPlaylist == null -> flowOf(emptyList<IptvChannelWithEpg>())
+                guideUrl.isBlank() -> flowOf(emptyList<IptvChannelWithEpg>())
+                request.isImportingGuide -> flowOf(emptyList<IptvChannelWithEpg>())
 
-                        if (loadedGuideSourceKey != sourceKey) {
-                            clearGuideMemory(sourceKey)
-                        }
+                else -> {
+                    val sourceKey = buildGuideSourceKey(
+                        currentPlaylist,
+                        guideUrl,
+                        request.refreshTick
+                    )
 
-                        val now = System.currentTimeMillis()
-
-                        Log.w(
-                            TAG,
-                            "GUIDE QUERY channels=${currentPlaylist.channels.size}"
-                        )
-
-                        repository.observeLineupWithGuide(
-                            playlist = currentPlaylist,
-                            epgUrl = guideUrl,
-                            windowStart = now - GUIDE_PAST_WINDOW_MS,
-                            windowEnd = now + GUIDE_FUTURE_WINDOW_MS
-                        )
+                    if (loadedGuideSourceKey != sourceKey) {
+                        clearGuideMemory(sourceKey)
                     }
+
+                    val now = System.currentTimeMillis()
+
+                    Log.w(
+                        TAG,
+                        "GUIDE QUERY channels=${currentPlaylist.channels.size}"
+                    )
+
+                    repository.observeLineupWithGuide(
+                        playlist = currentPlaylist,
+                        epgUrl = guideUrl,
+                        windowStart = now - GUIDE_PAST_WINDOW_MS,
+                        windowEnd = now + GUIDE_FUTURE_WINDOW_MS
+                    )
                 }
             }
-            .stateIn(
-                viewModelScope,
-                SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
-                emptyList()
-            )
+        }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+            emptyList()
+        )
 
     val allChannels: StateFlow<List<IptvChannelWithEpg>> = combine(
         playlistOnlyLineup,
