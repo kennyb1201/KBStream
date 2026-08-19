@@ -548,98 +548,80 @@ fun PlayerScreen(
         AndroidView(
     factory = { ctx ->
         val attrs = object : AttributeSet {
-            override fun getAttributeCount(): Int = 1
+    override fun getAttributeCount(): Int = 1
 
-            override fun getAttributeName(index: Int): String {
-                return "surface_type"
-            }
+    override fun getAttributeName(index: Int): String {
+        return "surface_type"
+    }
 
-            override fun getAttributeValue(index: Int): String {
-                return "texture_view"
-            }
+    override fun getAttributeValue(index: Int): String {
+        return "texture_view"
+    }
 
-            override fun getAttributeNameResource(index: Int): Int {
-                return 0
-            }
+    override fun getAttributeNameResource(index: Int): Int = 0
 
-            override fun getAttributeValueType(index: Int): Int {
-                return 3 // TYPE_STRING
-            }
+    override fun getAttributeValueType(index: Int): Int = 3 // TYPE_STRING
 
-            override fun getAttributeValueData(index: Int): Int {
-                return 0
-            }
+    override fun getAttributeValueData(index: Int): Int = 0
 
-            override fun getAttributeResourceValue(
-                namespace: String?,
-                attribute: String?,
-                defaultValue: Int
-            ): Int {
-                return defaultValue
-            }
+    override fun getAttributeResourceValue(
+        namespace: String?,
+        attribute: String?,
+        defaultValue: Int
+    ): Int = defaultValue
 
-            override fun getAttributeIntValue(
-                namespace: String?,
-                attribute: String?,
-                defaultValue: Int
-            ): Int {
-                return defaultValue
-            }
+    override fun getAttributeIntValue(
+        namespace: String?,
+        attribute: String?,
+        defaultValue: Int
+    ): Int = defaultValue
 
-            override fun getAttributeUnsignedIntValue(
-                namespace: String?,
-                attribute: String?,
-                defaultValue: Int
-            ): Int {
-                return defaultValue
-            }
+    override fun getAttributeUnsignedIntValue(
+        namespace: String?,
+        attribute: String?,
+        defaultValue: Int
+    ): Int = defaultValue
 
-            override fun getAttributeBooleanValue(
-                namespace: String?,
-                attribute: String?,
-                defaultValue: Boolean
-            ): Boolean {
-                return defaultValue
-            }
+    override fun getAttributeBooleanValue(
+        namespace: String?,
+        attribute: String?,
+        defaultValue: Boolean
+    ): Boolean = defaultValue
 
-            override fun getAttributeFloatValue(
-                namespace: String?,
-                attribute: String?,
-                defaultValue: Float
-            ): Float {
-                return defaultValue
-            }
+    override fun getAttributeFloatValue(
+        namespace: String?,
+        attribute: String?,
+        defaultValue: Float
+    ): Float = defaultValue
 
-            override fun getAttributeListValue(
-                namespace: String?,
-                attribute: String?,
-                options: Array<out String>?,
-                defaultValue: Int
-            ): Int {
-                return defaultValue
-            }
+    override fun getAttributeListValue(
+        namespace: String?,
+        attribute: String?,
+        options: Array<out String>?,
+        defaultValue: Int
+    ): Int = defaultValue
 
-            override fun getAttributeValue(
-                namespace: String?,
-                attribute: String?
-            ): String? {
-                return if (attribute == "surface_type") {
-                    "texture_view"
-                } else {
-                    null
-                }
-            }
-
-            override fun getIdAttribute(): String? = null
-
-            override fun getClassAttribute(): String? = null
-
-            override fun getIdAttributeResourceValue(
-                defaultValue: Int
-            ): Int = defaultValue
-
-            override fun getStyleAttribute(): Int = 0
+    override fun getAttributeValue(
+        namespace: String?,
+        attribute: String?
+    ): String? {
+        return if (attribute == "surface_type") {
+            "texture_view"
+        } else {
+            null
         }
+    }
+
+    override fun getIdAttribute(): String? = null
+
+    override fun getClassAttribute(): String? = null
+
+    override fun getIdAttributeResourceValue(
+        defaultValue: Int
+    ): Int = defaultValue
+
+    override fun getStyleAttribute(): Int = 0
+}
 
         PlayerView(ctx, attrs).apply {
             layoutParams = ViewGroup.LayoutParams(
