@@ -485,23 +485,28 @@ fun PlayerScreen(
             .background(KBVoid)
     ) {
         AndroidView(
-            factory = { ctx ->
-                PlayerView(ctx).apply {
-                    player = exoPlayer
-                    useController = false
-                }
-            },
-            update = { view ->
-                view.player = exoPlayer
-            },
-            modifier = Modifier.fillMaxSize()
-        )
+    factory = { ctx ->
+        PlayerView(ctx).apply {
+            useController = false
+            resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+            setShutterBackgroundColor(android.graphics.Color.BLACK)
 
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Transparent)
-        ) {
+            videoSurfaceView?.let { surfaceView ->
+                surfaceView.setZOrderMediaOverlay(false)
+            }
+
+            player = exoPlayer
+        }
+    },
+    update = { view ->
+        if (view.player !== exoPlayer) {
+            view.player = exoPlayer
+        }
+    },
+    modifier = Modifier.fillMaxSize()
+)
+
+        {
             if (isLiveChannel) {
                 Row(
                     modifier = Modifier
