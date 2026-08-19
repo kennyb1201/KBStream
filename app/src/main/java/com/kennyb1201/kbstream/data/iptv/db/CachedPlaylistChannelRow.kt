@@ -15,5 +15,6 @@ data class CachedPlaylistChannelRow(
     val catchup: String?,
     val catchupDays: String?,
     val catchupSource: String?,
-    val providerChannelId: String?
+    val providerChannelId: String?,
+    val headersText: String?
 )
