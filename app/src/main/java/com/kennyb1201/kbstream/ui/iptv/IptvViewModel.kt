@@ -169,7 +169,17 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
     private fun isStale(key: String, maxAgeMs: Long): Boolean { val updated = prefs.getLong(key, 0L); return updated == 0L || System.currentTimeMillis() - updated >= maxAgeMs }
     private fun markUpdated(key: String) { prefs.edit().putLong(key, System.currentTimeMillis()).apply() }
     private fun buildPlaylistOnlyLineup(playlist: IptvPlaylist) = playlist.channels.map(::playlistOnlyItem)
-    private fun playlistOnlyItem(channel: IptvChannel) = IptvChannelWithEpg(channel, null, EpgMatchType.NO_MATCH, null, null, emptyList())
+    private fun playlistOnlyItem(channel: IptvChannel) =
+    IptvChannelWithEpg(
+        channel = channel,
+        epgChannel = null,
+        epgMatchType = EpgMatchType.NO_MATCH,
+        isFavorite = false,
+        isRecent = false,
+        now = null,
+        next = null,
+        upcoming = emptyList()
+    )
     private fun buildMessage(t: Throwable) = buildString { append(t::class.java.simpleName); t.message?.takeIf { it.isNotBlank() }?.let { append(": "); append(it) } }
     private fun saveInputs() { prefs.edit().putString(KEY_PLAYLIST_URL, _playlistUrl.value).putString(KEY_EPG_URL, _epgUrl.value).putString(KEY_PLAYLIST_NAME, _playlistName.value).apply(); if (_epgUrl.value.isNotBlank()) EpgRefreshScheduler.schedule(getApplication()) }
     private data class GuideRequest(val playlist: IptvPlaylist?, val guideUrl: String, val refreshTick: Int, val isImportingGuide: Boolean, val channelIds: Set<String>)
