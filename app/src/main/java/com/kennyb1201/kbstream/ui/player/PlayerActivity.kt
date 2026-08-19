@@ -86,6 +86,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import android.view.ViewGroup
+import android.view.TextureView
+import android.view.Gravity
+import android.util.AttributeSet
 
 private const val PERIODIC_SAVE_INTERVAL_MS = 5_000L
 private const val MIN_RESUME_POSITION_MS = 10_000L
@@ -544,15 +547,113 @@ fun PlayerScreen(
     ) {
         AndroidView(
     factory = { ctx ->
-        PlayerView(ctx).apply {
+        val attrs = object : AttributeSet {
+            override fun getAttributeCount(): Int = 1
+
+            override fun getAttributeName(index: Int): String {
+                return "surface_type"
+            }
+
+            override fun getAttributeValue(index: Int): String {
+                return "texture_view"
+            }
+
+            override fun getAttributeNameResource(index: Int): Int {
+                return 0
+            }
+
+            override fun getAttributeValueType(index: Int): Int {
+                return 3 // TYPE_STRING
+            }
+
+            override fun getAttributeValueData(index: Int): Int {
+                return 0
+            }
+
+            override fun getAttributeResourceValue(
+                namespace: String?,
+                attribute: String?,
+                defaultValue: Int
+            ): Int {
+                return defaultValue
+            }
+
+            override fun getAttributeIntValue(
+                namespace: String?,
+                attribute: String?,
+                defaultValue: Int
+            ): Int {
+                return defaultValue
+            }
+
+            override fun getAttributeUnsignedIntValue(
+                namespace: String?,
+                attribute: String?,
+                defaultValue: Int
+            ): Int {
+                return defaultValue
+            }
+
+            override fun getAttributeBooleanValue(
+                namespace: String?,
+                attribute: String?,
+                defaultValue: Boolean
+            ): Boolean {
+                return defaultValue
+            }
+
+            override fun getAttributeFloatValue(
+                namespace: String?,
+                attribute: String?,
+                defaultValue: Float
+            ): Float {
+                return defaultValue
+            }
+
+            override fun getAttributeListValue(
+                namespace: String?,
+                attribute: String?,
+                options: Array<out String>?,
+                defaultValue: Int
+            ): Int {
+                return defaultValue
+            }
+
+            override fun getAttributeValue(
+                namespace: String?,
+                attribute: String?
+            ): String? {
+                return if (attribute == "surface_type") {
+                    "texture_view"
+                } else {
+                    null
+                }
+            }
+
+            override fun getIdAttribute(): String? = null
+
+            override fun getClassAttribute(): String? = null
+
+            override fun getIdAttributeResourceValue(
+                defaultValue: Int
+            ): Int = defaultValue
+
+            override fun getStyleAttribute(): Int = 0
+        }
+
+        PlayerView(ctx, attrs).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
+
             useController = false
+
             resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+
             setShutterBackgroundColor(android.graphics.Color.BLACK)
             setKeepContentOnPlayerReset(true)
+
             player = exoPlayer
         }
     },
@@ -562,6 +663,7 @@ fun PlayerScreen(
             2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
             else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
         }
+
         if (playerView.player !== exoPlayer) {
             playerView.player = exoPlayer
         }
