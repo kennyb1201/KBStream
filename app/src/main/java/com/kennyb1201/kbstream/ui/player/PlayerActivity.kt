@@ -931,8 +931,7 @@ private fun PickerRow(
 private fun parseHeaders(raw: String): Map<String, String> {
     if (raw.isBlank()) return emptyMap()
 
-    return raw.split("
-")
+    return raw.split("\n")
         .mapNotNull { line ->
             val trimmed = line.trim()
             if (trimmed.isBlank()) return@mapNotNull null
@@ -949,8 +948,7 @@ private fun parseHeaders(raw: String): Map<String, String> {
 }
 
 fun encodeHeaders(headers: Map<String, String>): String {
-    return headers.entries.joinToString("
-") { (key, value) ->
+    return headers.entries.joinToString("\n") { (key, value) ->
         "${key.trim()}: ${value.trim()}"
     }
 }
