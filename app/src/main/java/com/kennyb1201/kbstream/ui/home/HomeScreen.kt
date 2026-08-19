@@ -140,7 +140,7 @@ fun HomeScreen(
                     onClick = onOpenGuide,
                     modifier = Modifier.padding(end = 10.dp)
                 ) {
-                    Text("GUIDE", modifier = Modifier.padding(10.dp))
+                    Text("TV GUIDE", modifier = Modifier.padding(10.dp))
                 }
 
                 KBCard(
