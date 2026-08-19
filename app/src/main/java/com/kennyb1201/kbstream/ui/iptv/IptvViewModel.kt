@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import com.kennyb1201.kbstream.data.iptv.EpgRefreshScheduler
 
 class IptvViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -493,13 +494,16 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun saveInputs() {
-        prefs.edit()
-            .putString(KEY_PLAYLIST_URL, _playlistUrl.value)
-            .putString(KEY_EPG_URL, _epgUrl.value)
-            .putString(KEY_PLAYLIST_NAME, _playlistName.value)
-            .apply()
-    }
+    prefs.edit()
+        .putString(KEY_PLAYLIST_URL, playlistUrl.value)
+        .putString(KEY_EPG_URL, epgUrl.value)
+        .putString(KEY_PLAYLIST_NAME, playlistName.value)
+        .apply()
 
+    if (epgUrl.value.isNotBlank()) {
+        EpgRefreshScheduler.schedule(getApplication())
+    }
+}
     private data class GuideRequest(
         val playlist: IptvPlaylist?,
         val guideUrl: String,
