@@ -241,6 +241,7 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateGuideChannels(visibleChannelIds: List<String>) {
+    fun updateGuideChannels(visibleChannelIds: List<String>) {
     if (visibleChannelIds.isEmpty()) return
 
     val hiddenIds = _hiddenChannelIds.value
@@ -257,18 +258,25 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
         .asSequence()
         .filter { it in validIds }
         .distinct()
-        .take(MAX_ACTIVE_GUIDE_CHANNELS)
+        .toList()
+
+    if (requestedIds.isEmpty()) return
+
+    val retainedIds = _guideChannelIds.value
+        .filter { it !in requestedIds }
+        .takeLast(MAX_CACHED_GUIDE_CHANNELS - requestedIds.size)
         .toSet()
 
-    if (requestedIds.isEmpty() || requestedIds == _guideChannelIds.value) {
-        return
-    }
+    val updatedIds = retainedIds + requestedIds
 
-    _guideChannelIds.value = requestedIds
+    if (updatedIds == _guideChannelIds.value) return
+
+    _guideChannelIds.value = updatedIds
 
     Log.d(
         TAG,
-        "GUIDE CHANNELS active=${requestedIds.size}"
+        "GUIDE CHANNELS cached=${updatedIds.size} " +
+            "visible=${requestedIds.size}"
     )
 }
 
