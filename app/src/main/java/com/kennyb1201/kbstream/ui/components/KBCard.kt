@@ -14,6 +14,11 @@ import androidx.tv.material3.Border
 import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.Glow
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import kotlinx.coroutines.delay
 import com.kennyb1201.kbstream.ui.theme.CardShape
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -47,17 +52,22 @@ fun KBCard(
             focusedGlow = Glow(elevationColor = KBAccent, elevation = 12.dp)
         ),
         modifier = modifier.onKeyEvent { event ->
-            if (
-                onLongClick != null &&
-                event.type == KeyEventType.KeyUp &&
-                event.key.nativeKeyCode == android.view.KeyEvent.KEYCODE_MENU
-            ) {
-                onLongClick()
-                true
-            } else {
-                false
-            }
-        },
+    val isSelectKey =
+        event.key.nativeKeyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER ||
+        event.key.nativeKeyCode == android.view.KeyEvent.KEYCODE_ENTER
+
+    if (
+        onLongClick != null &&
+        isSelectKey &&
+        event.type == KeyEventType.KeyDown &&
+        event.isLongPress
+    ) {
+        onLongClick()
+        true
+    } else {
+        false
+    }
+},
         content = content
     )
 }
