@@ -86,8 +86,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import android.view.ViewGroup
-import android.view.TextureView
-import android.view.Gravity
 import android.util.AttributeSet
 
 private const val PERIODIC_SAVE_INTERVAL_MS = 5_000L
@@ -550,17 +548,16 @@ fun PlayerScreen(
         val attrs = object : AttributeSet {
     override fun getAttributeCount(): Int = 1
 
-    override fun getAttributeName(index: Int): String {
-        return "surface_type"
-    }
+    override fun getAttributeName(index: Int): String =
+        if (index == 0) "surface_type" else ""
 
-    override fun getAttributeValue(index: Int): String {
-        return "texture_view"
-    }
+    override fun getAttributeValue(index: Int): String =
+        if (index == 0) "texture_view" else ""
 
     override fun getAttributeNameResource(index: Int): Int = 0
 
-    override fun getAttributeValueType(index: Int): Int = 3 // TYPE_STRING
+    override fun getAttributeValueType(index: Int): Int =
+        android.util.TypedValue.TYPE_STRING
 
     override fun getAttributeValueData(index: Int): Int = 0
 
@@ -622,7 +619,6 @@ fun PlayerScreen(
 
     override fun getStyleAttribute(): Int = 0
 }
-
         PlayerView(ctx, attrs).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
