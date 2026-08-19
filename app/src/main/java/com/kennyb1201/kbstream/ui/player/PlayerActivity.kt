@@ -41,7 +41,6 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.extractor.DefaultExtractorsFactory
-import androidx.media3.extractor.ts.TsExtractor
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
@@ -191,7 +190,6 @@ fun PlayerScreen(
         // Tolerant TS extraction: many IPTV panels emit non-standard timestamps
         // or missing PMT/PAT timing. These flags make TsExtractor more forgiving.
         val extractorsFactory = DefaultExtractorsFactory()
-            .setTsExtractorFlags(TsExtractor.FLAG_ALLOW_NON_IDR_KEYFRAMES)
 
         val mediaSourceFactory = DefaultMediaSourceFactory(httpFactory, extractorsFactory)
 
