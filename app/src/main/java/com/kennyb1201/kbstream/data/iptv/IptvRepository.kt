@@ -280,17 +280,22 @@ IptvChannelWithEpg(
     }
 
     private fun collectChannelKeys(channel: IptvChannel): List<String> =
-        listOfNotNull(
-            channel.tvgId
-                ?.trim()
-                ?.takeIf { it.isNotBlank() }
-                ?.let(::normalizeLookupKey),
-
-            channel.providerChannelId
-                ?.trim()
+    listOf(
+        channel.tvgId,
+        channel.providerChannelId,
+        channel.tvgName,
+        channel.displayName,
+        channel.name
+    )
+        .asSequence()
+        .mapNotNull { value ->
+            value?.trim()
                 ?.takeIf { it.isNotBlank() }
                 ?.let(::normalizeLookupKey)
-        ).distinct()
+        }
+        .filter { it.isNotBlank() }
+        .distinct()
+        .toList()
 
     private fun mapProgramRow(row: EpgProgramRow): XmltvProgram =
         XmltvProgram(
@@ -303,13 +308,14 @@ IptvChannelWithEpg(
         )
 
     private fun normalizeLookupKey(value: String): String =
-        value.trim()
-            .lowercase(Locale.US)
-            .replace(BRACKETED_TEXT, " ")
-            .replace(PARENTHESIZED_TEXT, " ")
-            .replace("+", " plus ")
-            .replace(NON_LOOKUP_CHARACTERS, "")
-            .trim()
+    value.trim()
+        .lowercase(Locale.US)
+        .replace(BRACKETED_TEXT, " ")
+        .replace(PARENTHESIZED_TEXT, " ")
+        .replace("&", " and ")
+        .replace("+", " plus ")
+        .replace(NON_LOOKUP_CHARACTERS, "")
+        .trim()
 
     private fun normalizeGuideKey(value: String): String =
         value.trim().lowercase(Locale.US)
