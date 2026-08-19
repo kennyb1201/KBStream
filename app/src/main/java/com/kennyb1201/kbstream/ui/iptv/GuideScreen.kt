@@ -187,28 +187,7 @@ fun GuideScreen(
         }
     }
 
-    LaunchedEffect(selectedChannel?.channel?.id) {
-        selectedChannel?.channel?.id?.let { channelId ->
-            viewModel.updateGuideChannels(listOf(channelId))
-        }
-    }
 
-    LaunchedEffect(channelListState, groupedChannels) {
-        snapshotFlow {
-            channelListState.layoutInfo.visibleItemsInfo
-                .mapNotNull { visibleItem ->
-                    groupedChannels.getOrNull(visibleItem.index)?.channel?.id
-                }
-                .distinct()
-        }
-            .distinctUntilChanged()
-            .debounce(250)
-            .collect { visibleChannelIds ->
-                if (visibleChannelIds.isNotEmpty()) {
-                    viewModel.updateGuideChannels(visibleChannelIds)
-                }
-            }
-    }
 
     Box(
         modifier = modifier
