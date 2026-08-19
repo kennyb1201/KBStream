@@ -96,20 +96,50 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
     fun unhideAllChannels() { if (_hiddenChannelIds.value.isEmpty()) return; _hiddenChannelIds.value = emptySet(); saveHiddenChannelIds() }
 
     fun updateGuideChannels(visibleChannelIds: List<String>) {
-        if (visibleChannelIds.isEmpty()) return
-        val playlistChannels = _playlist.value?.channels.orEmpty()
-        val hiddenIds = _hiddenChannelIds.value
-        val visibleIdSet = visibleChannelIds.toHashSet()
-        val lastVisibleIndex = playlistChannels.indexOfLast { it.id in visibleIdSet }
-        val prefetchIds = if (lastVisibleIndex >= 0) {
-            playlistChannels.asSequence().drop(lastVisibleIndex + 1).filterNot { it.id in hiddenIds }.take(VISIBLE_GUIDE_PREFETCH_COUNT).map { it.id }.toList()
-        } else emptyList()
-        val validIds = playlistChannels.asSequence().map { it.id }.filterNot { it in hiddenIds }.toHashSet()
-        val newIds = (visibleChannelIds + prefetchIds).asSequence().filter { it in validIds }.filterNot { it in _guideChannelIds.value }.toSet()
-        if (newIds.isEmpty()) return
-        _guideChannelIds.value += newIds
-        Log.d(TAG, "GUIDE CHANNELS QUEUED total=${_guideChannelIds.value.size} added=${newIds.size} prefetch=${prefetchIds.size}")
+    if (visibleChannelIds.isEmpty()) return
+
+    val playlistChannels = _playlist.value?.channels.orEmpty()
+    val hiddenIds = _hiddenChannelIds.value
+    val visibleIdSet = visibleChannelIds.toHashSet()
+
+    val lastVisibleIndex = playlistChannels.indexOfLast { channel ->
+        channel.id in visibleIdSet
     }
+
+    val prefetchIds = if (lastVisibleIndex >= 0) {
+        playlistChannels
+            .asSequence()
+            .drop(lastVisibleIndex + 1)
+            .filter { channel -> channel.id !in hiddenIds }
+            .take(VISIBLE_GUIDE_PREFETCH_COUNT)
+            .map { channel -> channel.id }
+            .toList()
+    } else {
+        emptyList()
+    }
+
+    val validIds = playlistChannels
+        .asSequence()
+        .map { channel -> channel.id }
+        .filter { channelId -> channelId !in hiddenIds }
+        .toHashSet()
+
+    val newIds = (visibleChannelIds + prefetchIds)
+        .asSequence()
+        .filter { channelId -> channelId in validIds }
+        .filter { channelId -> channelId !in _guideChannelIds.value }
+        .toSet()
+
+    if (newIds.isEmpty()) return
+
+    _guideChannelIds.value = _guideChannelIds.value + newIds
+
+    Log.d(
+        TAG,
+        "GUIDE CHANNELS QUEUED total=${_guideChannelIds.value.size} " +
+            "added=${newIds.size} prefetch=${prefetchIds.size}"
+    )
+}
 
     private fun requestInitialGuideWindow() {
         val hiddenIds = _hiddenChannelIds.value
