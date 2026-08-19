@@ -809,18 +809,19 @@ private fun ChannelRowCard(
     val rowShape = RoundedCornerShape(12.dp)
 
     KBCard(
-        onClick = onClick,
-        modifier = modifier
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-                this.alpha = alpha
-            }
-            .onFocusChanged {
-                isFocused = it.isFocused
-                if (it.isFocused) onFocused()
-            }
-    ) {
+    onClick = onClick,
+    onLongClick = onLongClick,
+    modifier = modifier
+        .graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+            this.alpha = alpha
+        }
+        .onFocusChanged {
+            isFocused = it.isFocused
+            if (it.isFocused) onFocused()
+        }
+) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
