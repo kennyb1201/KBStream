@@ -936,10 +936,13 @@ private fun parseHeaders(raw: String): Map<String, String> {
         .mapNotNull { line ->
             val trimmed = line.trim()
             if (trimmed.isBlank()) return@mapNotNull null
+
             val separator = trimmed.indexOf(':')
             if (separator <= 0) return@mapNotNull null
+
             val key = trimmed.substring(0, separator).trim()
             val value = trimmed.substring(separator + 1).trim()
+
             if (key.isBlank() || value.isBlank()) null else key to value
         }
         .toMap()
@@ -947,7 +950,9 @@ private fun parseHeaders(raw: String): Map<String, String> {
 
 fun encodeHeaders(headers: Map<String, String>): String {
     return headers.entries.joinToString("
-") { (key, value) -> "${key.trim()}: ${value.trim()}" }
+") { (key, value) ->
+        "${key.trim()}: ${value.trim()}"
+    }
 }
 
 fun appendHeadersToUrl(url: String, headers: Map<String, String>): String {
