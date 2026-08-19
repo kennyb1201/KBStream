@@ -85,6 +85,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import android.view.ViewGroup
 
 private const val PERIODIC_SAVE_INTERVAL_MS = 5_000L
 private const val MIN_RESUME_POSITION_MS = 10_000L
@@ -542,22 +543,32 @@ fun PlayerScreen(
             .background(KBVoid)
     ) {
         AndroidView(
-            factory = { ctx ->
-                PlayerView(ctx).apply {
-                    useController = false
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    setShutterBackgroundColor(android.graphics.Color.BLACK)
-
-                    player = exoPlayer
-                }
-            },
-            update = { playerView ->
-                if (playerView.player !== exoPlayer) {
-                    playerView.player = exoPlayer
-                }
-            },
-            modifier = Modifier.fillMaxSize()
-        )
+    factory = { ctx ->
+        PlayerView(ctx).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            useController = false
+            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+            setShutterBackgroundColor(android.graphics.Color.BLACK)
+            setKeepContentOnPlayerReset(true)
+            setUseTextureView(true)
+            player = exoPlayer
+        }
+    },
+    update = { playerView ->
+        playerView.resizeMode = when (resizeModeIndex) {
+            1 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+            else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+        }
+        if (playerView.player !== exoPlayer) {
+            playerView.player = exoPlayer
+        }
+    },
+    modifier = Modifier.fillMaxSize()
+)
 
         Box(modifier = Modifier.fillMaxSize()) {
             if (isLiveChannel) {
