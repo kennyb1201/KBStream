@@ -548,9 +548,6 @@ fun PlayerScreen(
                     resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                     setShutterBackgroundColor(android.graphics.Color.BLACK)
 
-                    (videoSurfaceView as? android.view.SurfaceView)
-                        ?.setZOrderMediaOverlay(false)
-
                     player = exoPlayer
                 }
             },
