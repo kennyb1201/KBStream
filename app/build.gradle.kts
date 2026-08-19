@@ -117,5 +117,7 @@ dependencies {
     implementation("io.coil-kt.coil3:coil-compose:3.0.0")
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.0.0")
 
+    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.4.1+2")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
