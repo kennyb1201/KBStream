@@ -219,35 +219,37 @@ fun AppRoot() {
         )
 
         is Screen.Guide -> GuideScreen(
-            viewModel = iptvViewModel,
-            defaultPlaylistUrl = "",
-            defaultEpgUrl = "",
-            defaultPlaylistName = "Live TV",
-            onPlayChannel = { channelWithEpg ->
-                val channel = channelWithEpg.channel
-                val channelName = channel.displayName.ifBlank { "Live Channel" }
-                val channelId = channel.id.ifBlank { channel.streamUrl }
-                val poster = channel.logoUrl ?: channelWithEpg.epgChannel?.iconUrl
-                val directSource = Stream(
-                    name = channelName,
-                    title = channelName,
-                    url = channel.streamUrl
-                )
+    viewModel = iptvViewModel,
+    defaultPlaylistUrl = "",
+    defaultEpgUrl = "",
+    defaultPlaylistName = "Live TV",
+    onPlayChannel = { channelWithEpg ->
+        val channel = channelWithEpg.channel
+        val channelName = channel.displayName.ifBlank { "Live Channel" }
+        val channelId = channel.id.ifBlank { channel.streamUrl }
+        val poster = channel.logoUrl ?: channelWithEpg.epgChannel?.iconUrl
 
-                screen = Screen.Player(
-                    url = channel.streamUrl,
-                    parentId = channelId,
-                    parentType = "channel",
-                    season = null,
-                    episode = null,
-                    episodeStreamId = channel.id,
-                    itemName = channelName,
-                    itemPoster = poster,
-                    startPositionMs = 0L,
-                    sources = listOf(directSource)
-                )
-            }
+        val directSource = Stream(
+            name = channelName,
+            title = channelName,
+            url = channel.streamUrl
         )
+
+        screen = Screen.Player(
+            url = channel.streamUrl,
+            parentId = channelId,
+            parentType = "channel",
+            season = null,
+            episode = null,
+            episodeStreamId = channel.id,
+            itemName = channelName,
+            itemPoster = poster,
+            startPositionMs = 0L,
+            sources = listOf(directSource),
+            streamHeaders = channel.headers
+        )
+    }
+)
 
         is Screen.Detail -> DetailScreen(
             type = current.type,
