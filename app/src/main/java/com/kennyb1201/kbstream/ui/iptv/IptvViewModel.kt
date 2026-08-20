@@ -242,6 +242,14 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateGuideChannels(visibleChannelIds: List<String>) {
+    val requestedIds = visibleChannelIds
+        .asSequence()
+        .filter { it.isNotBlank() }
+        .distinct()
+        .toList()
+
+    if (requestedIds.isEmpty()) return
+
     val hiddenIds = _hiddenChannelIds.value
 
     val validIds = _playlist.value
@@ -252,29 +260,18 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
         ?.toHashSet()
         .orEmpty()
 
-    val nextIds = visibleChannelIds
+    val newSet = requestedIds
         .asSequence()
         .filter { it in validIds }
-        .take(MAX_ACTIVE_GUIDE_CHANNELS)
         .toSet()
 
-    if (nextIds.isEmpty()) {
-        if (_guideChannelIds.value.isNotEmpty() || _guideItemsByChannelId.value.isNotEmpty()) {
-            _guideChannelIds.value = emptySet()
-            _guideItemsByChannelId.value = emptyMap()
-        }
-        return
-    }
+    if (newSet.isEmpty() || newSet == _guideChannelIds.value) return
 
-    if (nextIds == _guideChannelIds.value) return
-
-    _guideChannelIds.value = nextIds
-    _guideItemsByChannelId.value = _guideItemsByChannelId.value
-        .filterKeys { it in nextIds }
+    _guideChannelIds.value = newSet
 
     Log.d(
         TAG,
-        "GUIDE CHANNELS ACTIVE total=${_guideChannelIds.value.size}"
+        "GUIDE CHANNELS SET total=${_guideChannelIds.value.size}"
     )
 }
 
