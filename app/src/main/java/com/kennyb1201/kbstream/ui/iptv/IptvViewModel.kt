@@ -134,7 +134,6 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
 
                     repository.observeLineupWithGuide(
                         playlist = currentPlaylist.copy(channels = channelsToLoad),
-                        guideUrl = request.guideUrl,
                         startMillis = now - GUIDE_PAST_WINDOW_MS,
                         endMillis = now + GUIDE_FUTURE_WINDOW_MS,
                         programLimit = VISIBLE_GUIDE_PROGRAM_LIMIT
