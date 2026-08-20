@@ -8,6 +8,7 @@ import android.text.InputType
 import android.text.TextWatcher
 import android.view.Gravity
 import android.widget.EditText
+import kotlinx.coroutines.flow.collectLatest
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
@@ -85,7 +86,7 @@ import kotlinx.coroutines.delay
 
 private const val GUIDE_PREFETCH_BEFORE_COUNT = 12
 private const val GUIDE_PREFETCH_AFTER_COUNT = 36
-private const val MAX_GUIDE_CHANNEL_REQUEST_SIZE = 80
+private const val MAX_GUIDE_CHANNEL_REQUEST_SIZE = 48
 
 @Composable
 fun GuideScreen(
@@ -195,16 +196,15 @@ LaunchedEffect(groupedChannels) {
     }
 }
 
-LaunchedEffect(channelListState, groupedChannels) {
+LaunchedEffect(channelListState, groupedChannelIds) {
     snapshotFlow {
         val visibleItems = channelListState.layoutInfo.visibleItemsInfo
 
         when {
-            groupedChannels.isEmpty() -> emptyList()
+            groupedChannelIds.isEmpty() -> emptyList()
 
-            visibleItems.isEmpty() -> groupedChannels
+            visibleItems.isEmpty() -> groupedChannelIds
                 .take(MAX_GUIDE_CHANNEL_REQUEST_SIZE)
-                .map { it.channel.id }
 
             else -> {
                 val firstVisible = visibleItems.first().index
@@ -214,24 +214,23 @@ LaunchedEffect(channelListState, groupedChannels) {
                     .coerceAtLeast(0)
 
                 val endExclusive = (lastVisible + GUIDE_PREFETCH_AFTER_COUNT + 1)
-                    .coerceAtMost(groupedChannels.size)
+                    .coerceAtMost(groupedChannelIds.size)
 
-                groupedChannels
+                groupedChannelIds
                     .subList(start, endExclusive)
-                    .map { it.channel.id }
                     .distinct()
                     .take(MAX_GUIDE_CHANNEL_REQUEST_SIZE)
             }
         }
     }
         .distinctUntilChanged()
-        .debounce(250)
-        .collect { channelIds ->
+        .debounce(400)
+        .collectLatest { channelIds ->
             if (channelIds.isNotEmpty()) {
                 viewModel.updateGuideChannels(channelIds)
             }
         }
-} 
+}
   LaunchedEffect(selectedGroup) {
     channelListState.scrollToItem(0)
   }
