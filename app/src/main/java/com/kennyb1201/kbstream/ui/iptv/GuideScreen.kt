@@ -195,38 +195,33 @@ LaunchedEffect(groupedChannels) {
     }
 }
 
-LaunchedEffect(selectedGroup, groupedChannels) {
-    if (groupedChannels.isEmpty()) return@LaunchedEffect
-
-    val groupChannelIds = groupedChannels
-        .map { it.channel.id }
-        .distinct()
-        .take(MAX_GUIDE_CHANNEL_REQUEST_SIZE)
-
-    viewModel.updateGuideChannels(groupChannelIds)
-}
-
-LaunchedEffect(channelListState, groupedChannels, selectedGroup) {
+LaunchedEffect(channelListState, groupedChannels) {
     snapshotFlow {
         val visibleItems = channelListState.layoutInfo.visibleItemsInfo
 
-        if (visibleItems.isEmpty() || groupedChannels.isEmpty()) {
-            emptyList()
-        } else {
-            val firstVisible = visibleItems.first().index
-            val lastVisible = visibleItems.last().index
+        when {
+            groupedChannels.isEmpty() -> emptyList()
 
-            val start = (firstVisible - GUIDE_PREFETCH_BEFORE_COUNT)
-                .coerceAtLeast(0)
-
-            val endExclusive = (lastVisible + GUIDE_PREFETCH_AFTER_COUNT + 1)
-                .coerceAtMost(groupedChannels.size)
-
-            groupedChannels
-                .subList(start, endExclusive)
-                .map { it.channel.id }
-                .distinct()
+            visibleItems.isEmpty() -> groupedChannels
                 .take(MAX_GUIDE_CHANNEL_REQUEST_SIZE)
+                .map { it.channel.id }
+
+            else -> {
+                val firstVisible = visibleItems.first().index
+                val lastVisible = visibleItems.last().index
+
+                val start = (firstVisible - GUIDE_PREFETCH_BEFORE_COUNT)
+                    .coerceAtLeast(0)
+
+                val endExclusive = (lastVisible + GUIDE_PREFETCH_AFTER_COUNT + 1)
+                    .coerceAtMost(groupedChannels.size)
+
+                groupedChannels
+                    .subList(start, endExclusive)
+                    .map { it.channel.id }
+                    .distinct()
+                    .take(MAX_GUIDE_CHANNEL_REQUEST_SIZE)
+            }
         }
     }
         .distinctUntilChanged()
@@ -236,7 +231,11 @@ LaunchedEffect(channelListState, groupedChannels, selectedGroup) {
                 viewModel.updateGuideChannels(channelIds)
             }
         }
-}   
+} 
+  LaunchedEffect(selectedGroup) {
+    channelListState.scrollToItem(0)
+  }
+
     Box(
         modifier = modifier
             .fillMaxSize()
