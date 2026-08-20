@@ -191,6 +191,17 @@ LaunchedEffect(groupedChannels) {
         item.channel.id == selectedChannelId
     }
 
+    LaunchedEffect(selectedGroup, groupedChannels) {
+    if (groupedChannels.isEmpty()) return@LaunchedEffect
+
+    val groupChannelIds = groupedChannels
+        .map { it.channel.id }
+        .distinct()
+        .take(MAX_GUIDE_CHANNEL_REQUEST_SIZE)
+
+    viewModel.updateGuideChannels(groupChannelIds)
+    }
+
     if (!currentSelectionStillExists) {
         selectedChannelId = groupedChannels.firstOrNull()?.channel?.id
     }
