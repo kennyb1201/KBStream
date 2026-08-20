@@ -191,7 +191,12 @@ LaunchedEffect(groupedChannels) {
         item.channel.id == selectedChannelId
     }
 
-    LaunchedEffect(selectedGroup, groupedChannels) {
+    if (!currentSelectionStillExists) {
+        selectedChannelId = groupedChannels.firstOrNull()?.channel?.id
+    }
+}
+
+LaunchedEffect(selectedGroup, groupedChannels) {
     if (groupedChannels.isEmpty()) return@LaunchedEffect
 
     val groupChannelIds = groupedChannels
@@ -200,14 +205,7 @@ LaunchedEffect(groupedChannels) {
         .take(MAX_GUIDE_CHANNEL_REQUEST_SIZE)
 
     viewModel.updateGuideChannels(groupChannelIds)
-    }
-
-    if (!currentSelectionStillExists) {
-        selectedChannelId = groupedChannels.firstOrNull()?.channel?.id
-    }
 }
-
-
 
 LaunchedEffect(channelListState, groupedChannels, selectedGroup) {
     snapshotFlow {
@@ -239,7 +237,7 @@ LaunchedEffect(channelListState, groupedChannels, selectedGroup) {
                 viewModel.updateGuideChannels(channelIds)
             }
         }
-}
+}   
     Box(
         modifier = modifier
             .fillMaxSize()
