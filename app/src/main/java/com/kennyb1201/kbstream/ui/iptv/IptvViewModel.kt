@@ -243,7 +243,6 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateGuideChannels(visibleChannelIds: List<String>) {
-    fun updateGuideChannels(visibleChannelIds: List<String>) {
     if (visibleChannelIds.isEmpty()) return
 
     val playlistChannels = _playlist.value?.channels.orEmpty()
