@@ -255,12 +255,22 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
     val nextIds = visibleChannelIds
         .asSequence()
         .filter { it in validIds }
-        .take(INITIAL_GUIDE_WINDOW_SIZE)
+        .take(MAX_ACTIVE_GUIDE_CHANNELS)
         .toSet()
+
+    if (nextIds.isEmpty()) {
+        if (_guideChannelIds.value.isNotEmpty() || _guideItemsByChannelId.value.isNotEmpty()) {
+            _guideChannelIds.value = emptySet()
+            _guideItemsByChannelId.value = emptyMap()
+        }
+        return
+    }
 
     if (nextIds == _guideChannelIds.value) return
 
     _guideChannelIds.value = nextIds
+    _guideItemsByChannelId.value = _guideItemsByChannelId.value
+        .filterKeys { it in nextIds }
 
     Log.d(
         TAG,
@@ -474,11 +484,22 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun mergeGuideItems(lineup: List<IptvChannelWithEpg>) {
-        if (lineup.isEmpty()) return
+    if (lineup.isEmpty()) return
 
-        val updated = _guideItemsByChannelId.value.toMutableMap()
+    val activeIds = _guideChannelIds.value
+    if (activeIds.isEmpty()) {
+        _guideItemsByChannelId.value = emptyMap()
+        return
+    }
 
-        lineup.forEach { incoming ->
+    val updated = _guideItemsByChannelId.value
+        .filterKeys { it in activeIds }
+        .toMutableMap()
+
+    lineup
+        .asSequence()
+        .filter { it.channel.id in activeIds }
+        .forEach { incoming ->
             val key = incoming.channel.id
             val existing = updated[key]
 
@@ -505,8 +526,8 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        _guideItemsByChannelId.value = updated
-    }
+    _guideItemsByChannelId.value = updated
+}
 
     private fun clearGuideMemory(sourceKey: String? = null) {
         _guideItemsByChannelId.value = emptyMap()
