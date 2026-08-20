@@ -398,11 +398,12 @@ class IptvRepository(
 
             val batchRows = withContext(Dispatchers.IO) {
                 dao.getProgramsForChannelsInWindowLite(
-                    sourceUrl = sourceUrl,
-                    channelIds = batch,
-                    windowStart = windowStart,
-                    windowEnd = windowEnd
-                )
+    sourceUrl = sourceUrl,
+    channelIds = batch,
+    windowStart = windowStart,
+    windowEnd = windowEnd,
+    limit = batchLimit
+)
             }
                 .sortedBy { it.startUtcMillis }
                 .take(batchLimit)
