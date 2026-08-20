@@ -293,14 +293,18 @@ LaunchedEffect(channelListState, groupedChannels) {
                             ) {
                                 itemsIndexed(groups, key = { _, item -> item }) { _, group ->
                                     GroupChip(
-                                        name = group,
-                                        selected = group == selectedGroup,
-                                        onClick = { selectedGroup = group },
-                                        onFocus = { selectedGroup = group },
-                                        modifier = Modifier.focusProperties {
-                                            down = firstChannelFocusRequester
-                                        }
-                                    )
+    name = group,
+    selected = group == selectedGroup,
+    onClick = { selectedGroup = group },
+    onFocus = { selectedGroup = group },
+    modifier = if (groupedChannels.isNotEmpty()) {
+        Modifier.focusProperties {
+            down = firstChannelFocusRequester
+        }
+    } else {
+        Modifier
+    }
+)
                                 }
                             }
 
@@ -336,11 +340,11 @@ LaunchedEffect(channelListState, groupedChannels) {
     selectedChannelId = item.channel.id
     menuItem = item
 },
-                                            modifier = if (index == 0) {
-                                                Modifier.focusRequester(firstChannelFocusRequester)
-                                            } else {
-                                                Modifier
-                                            }
+                                            modifier = if (index == selectedChannelIndex) {
+    Modifier.focusRequester(firstChannelFocusRequester)
+} else {
+    Modifier
+}
                                         )
                                     }
                                 }
