@@ -207,28 +207,24 @@ LaunchedEffect(channelListState, groupedChannels) {
             val firstVisible = visibleItems.first().index
             val lastVisible = visibleItems.last().index
 
-            val start = (firstVisible - GUIDE_PREFETCH_BEFORE_COUNT)
-                .coerceAtLeast(0)
-
+            val start = (firstVisible - GUIDE_PREFETCH_BEFORE_COUNT).coerceAtLeast(0)
             val endExclusive = (lastVisible + GUIDE_PREFETCH_AFTER_COUNT + 1)
                 .coerceAtMost(groupedChannels.size)
 
             groupedChannels
                 .subList(start, endExclusive)
                 .map { it.channel.id }
+                .take(MAX_GUIDE_CHANNEL_REQUEST_SIZE)
         }
     }
         .distinctUntilChanged()
         .debounce(120)
         .collect { channelIds ->
             if (channelIds.isNotEmpty()) {
-                viewModel.updateGuideChannels(
-                    channelIds.take(MAX_GUIDE_CHANNEL_REQUEST_SIZE)
-                )
+                viewModel.updateGuideChannels(channelIds)
             }
         }
 }
-
     Box(
         modifier = modifier
             .fillMaxSize()
