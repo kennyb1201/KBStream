@@ -116,9 +116,7 @@ fun GuideScreen(
     var favorites by remember {
         mutableStateOf(guidePreferences.getStringSet("favorites", emptySet())?.toSet().orEmpty())
     }
-    var hiddenChannels by remember {
-        mutableStateOf(guidePreferences.getStringSet("hidden_channels", emptySet())?.toSet().orEmpty())
-    }
+    
     var hiddenGroups by remember {
         mutableStateOf(guidePreferences.getStringSet("hidden_groups", emptySet())?.toSet().orEmpty())
     }
@@ -133,12 +131,13 @@ fun GuideScreen(
     fun withFavoriteFlag(item: IptvChannelWithEpg): IptvChannelWithEpg =
         item.copy(isFavorite = favoriteKey(item) in favorites)
 
-    val unhiddenChannels = remember(visibleChannels, hiddenChannels, hiddenGroups) {
-        visibleChannels.filter { item ->
-            val group = item.channel.groupTitle?.trim().orEmpty()
-            channelKey(item) !in hiddenChannels && group !in hiddenGroups
-        }
+    val unhiddenChannels = remember(visibleChannels, hiddenGroups) {
+    visibleChannels.filter { item ->
+        val group = item.channel.groupTitle?.trim().orEmpty()
+        group !in hiddenGroups
     }
+}
+    val hiddenChannelIds by viewModel.hiddenChannelIds.collectAsState()
     val groups = remember(unhiddenChannels, favorites) {
         buildList {
             add("All")
@@ -451,10 +450,9 @@ LaunchedEffect(channelListState, groupedChannels, selectedGroup) {
                             menuItem = null
                         },
                         onHideChannel = {
-                            hiddenChannels = hiddenChannels + channelKey(item)
-                            saveSet("hidden_channels", hiddenChannels)
-                            menuItem = null
-                        },
+    viewModel.hideChannel(channelKey(item))
+    menuItem = null
+},
                         onHideGroup = {
                             item.channel.groupTitle?.trim()?.takeIf { it.isNotBlank() }?.let { group ->
                                 hiddenGroups = hiddenGroups + group
@@ -467,9 +465,10 @@ LaunchedEffect(channelListState, groupedChannels, selectedGroup) {
 
                 if (showHiddenManager) {
                     HiddenItemsDialog(
-                        playlist = playlist,
-                        hiddenChannels = hiddenChannels,
-                        hiddenGroups = hiddenGroups,
+    playlist = playlist,
+    hiddenChannels = hiddenChannelIds,
+    hiddenGroups = hiddenGroups,
+),
                         channelKey = ::channelKey,
                         onDismiss = { showHiddenManager = false },
                         onHideGroup = { group ->
@@ -485,15 +484,13 @@ LaunchedEffect(channelListState, groupedChannels, selectedGroup) {
                             saveSet("hidden_groups", hiddenGroups)
                         },
                         onUnhideChannel = { channelId ->
-                            hiddenChannels = hiddenChannels - channelId
-                            saveSet("hidden_channels", hiddenChannels)
-                        },
+    viewModel.unhideChannel(channelId)
+},
                         onUnhideAll = {
-                            hiddenChannels = emptySet()
-                            hiddenGroups = emptySet()
-                            saveSet("hidden_channels", hiddenChannels)
-                            saveSet("hidden_groups", hiddenGroups)
-                        }
+    viewModel.unhideAllChannels()
+    hiddenGroups = emptySet()
+    saveSet("hidden_groups", hiddenGroups)
+}
                     )
                 }
 
