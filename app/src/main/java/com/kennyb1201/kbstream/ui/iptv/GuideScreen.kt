@@ -199,17 +199,32 @@ fun GuideScreen(
 
 LaunchedEffect(channelListState, groupedChannels) {
     snapshotFlow {
-        channelListState.layoutInfo.visibleItemsInfo
-            .mapNotNull { visibleItem ->
-                groupedChannels.getOrNull(visibleItem.index)?.channel?.id
-            }
-            .distinct()
+        val visibleItems = channelListState.layoutInfo.visibleItemsInfo
+
+        if (visibleItems.isEmpty() || groupedChannels.isEmpty()) {
+            emptyList()
+        } else {
+            val firstVisible = visibleItems.first().index
+            val lastVisible = visibleItems.last().index
+
+            val start = (firstVisible - GUIDE_PREFETCH_BEFORE_COUNT)
+                .coerceAtLeast(0)
+
+            val endExclusive = (lastVisible + GUIDE_PREFETCH_AFTER_COUNT + 1)
+                .coerceAtMost(groupedChannels.size)
+
+            groupedChannels
+                .subList(start, endExclusive)
+                .map { it.channel.id }
+        }
     }
         .distinctUntilChanged()
-        .debounce(250)
-        .collect { visibleChannelIds ->
-            if (visibleChannelIds.isNotEmpty()) {
-                viewModel.updateGuideChannels(visibleChannelIds)
+        .debounce(120)
+        .collect { channelIds ->
+            if (channelIds.isNotEmpty()) {
+                viewModel.updateGuideChannels(
+                    channelIds.take(MAX_GUIDE_CHANNEL_REQUEST_SIZE)
+                )
             }
         }
 }
