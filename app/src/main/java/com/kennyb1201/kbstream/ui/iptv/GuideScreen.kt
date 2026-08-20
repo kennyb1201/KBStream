@@ -168,40 +168,33 @@ fun GuideScreen(
     var showSetup by remember { mutableStateOf(playlist == null) }
     var showHiddenManager by remember { mutableStateOf(false) }
 
-    LaunchedEffect(defaultPlaylistUrl, defaultEpgUrl, defaultPlaylistName) {
-        if (
-            playlist == null &&
-            !isLoading &&
-            playlistUrl.isBlank() &&
-            defaultPlaylistUrl.isNotBlank()
-        ) {
-            viewModel.onPlaylistUrlChanged(defaultPlaylistUrl)
-            if (defaultEpgUrl.isNotBlank()) viewModel.onEpgUrlChanged(defaultEpgUrl)
-            if (defaultPlaylistName.isNotBlank()) viewModel.onPlaylistNameChanged(defaultPlaylistName)
-            viewModel.load()
-            showSetup = false
-        }
-    }
-
-    LaunchedEffect(playlist) {
-        if (playlist != null) showSetup = false
-    }
-
-    LaunchedEffect(groupedChannels) {
-        val currentSelectionStillExists = groupedChannels.any { item ->
-            item.channel.id == selectedChannelId
-        }
-        if (!currentSelectionStillExists) {
-            selectedChannelId = groupedChannels.firstOrNull()?.channel?.id
-        }
-    }
-
- LaunchedEffect(selectedGroup, groupedChannels) {
-    val allIds = groupedChannels.map { it.channel.id }
-    if (allIds.size <= 200) {
-        viewModel.updateGuideChannels(allIds)
+LaunchedEffect(defaultPlaylistUrl, defaultEpgUrl, defaultPlaylistName) {
+    if (
+        playlist == null &&
+        !isLoading &&
+        playlistUrl.isBlank() &&
+        defaultPlaylistUrl.isNotBlank()
+    ) {
+        viewModel.onPlaylistUrlChanged(defaultPlaylistUrl)
+        if (defaultEpgUrl.isNotBlank()) viewModel.onEpgUrlChanged(defaultEpgUrl)
+        if (defaultPlaylistName.isNotBlank()) viewModel.onPlaylistNameChanged(defaultPlaylistName)
+        viewModel.load()
+        showSetup = false
     }
 }
+
+LaunchedEffect(playlist) {
+    if (playlist != null) showSetup = false
+}
+
+LaunchedEffect(groupedChannels) {
+    val currentSelectionStillExists = groupedChannels.any { item ->
+        item.channel.id == selectedChannelId
+    }
+
+    if (!currentSelectionStillExists) {
+        selectedChannelId = groupedChannels.firstOrNull()?.channel?.id
+    }
 }
 
 LaunchedEffect(selectedChannel?.channel?.id) {
@@ -210,37 +203,50 @@ LaunchedEffect(selectedChannel?.channel?.id) {
     }
 }
 
-LaunchedEffect(channelListState, groupedChannels) {
+LaunchedEffect(selectedGroup, groupedChannels) {
+    if (groupedChannels.isEmpty()) return@LaunchedEffect
+
+    val groupChannelIds = groupedChannels
+        .map { it.channel.id }
+        .distinct()
+
+    if (groupChannelIds.size <= GUIDE_GROUP_EAGER_LOAD_SIZE) {
+        viewModel.updateGuideChannels(
+            groupChannelIds.take(MAX_GUIDE_CHANNEL_REQUEST_SIZE)
+        )
+    }
+}
+
+LaunchedEffect(channelListState, groupedChannels, selectedGroup) {
     snapshotFlow {
         val visibleItems = channelListState.layoutInfo.visibleItemsInfo
-        val size = groupedChannels.size
 
-        if (visibleItems.isEmpty() || size == 0) {
+        if (visibleItems.isEmpty() || groupedChannels.isEmpty()) {
             emptyList()
         } else {
-            val firstVisible = visibleItems.first().index.coerceIn(0, size - 1)
-            val lastVisible = visibleItems.last().index.coerceIn(0, size - 1)
-            val safeFirst = minOf(firstVisible, lastVisible)
-            val safeLast = maxOf(firstVisible, lastVisible)
+            val firstVisible = visibleItems.first().index
+            val lastVisible = visibleItems.last().index
 
-            val start = (safeFirst - GUIDE_PREFETCH_BEFORE_COUNT).coerceAtLeast(0)
-            val endExclusive = (safeLast + GUIDE_PREFETCH_AFTER_COUNT + 1)
-                .coerceAtMost(size)
+            val start = (firstVisible - GUIDE_PREFETCH_BEFORE_COUNT)
+                .coerceAtLeast(0)
 
-            if (start >= endExclusive) {
-                emptyList()
-            } else {
-                groupedChannels
-                    .subList(start, endExclusive)
-                    .map { it.channel.id }
-                    .take(MAX_GUIDE_CHANNEL_REQUEST_SIZE)
-            }
+            val endExclusive = (lastVisible + GUIDE_PREFETCH_AFTER_COUNT + 1)
+                .coerceAtMost(groupedChannels.size)
+
+            groupedChannels
+                .subList(start, endExclusive)
+                .map { it.channel.id }
+                .distinct()
+                .take(MAX_GUIDE_CHANNEL_REQUEST_SIZE)
         }
     }
         .distinctUntilChanged()
         .debounce(120)
         .collect { channelIds ->
-            if (channelIds.isNotEmpty()) {
+            if (
+                channelIds.isNotEmpty() &&
+                groupedChannels.size > GUIDE_GROUP_EAGER_LOAD_SIZE
+            ) {
                 viewModel.updateGuideChannels(channelIds)
             }
         }
