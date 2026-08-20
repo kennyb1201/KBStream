@@ -460,22 +460,17 @@ class IptvRepository(
                     nowUtcMillis < program.endUtcMillis
             }
 
-            val nextStart = now?.endUtcMillis ?: nowUtcMillis
-
             val next = matchedPrograms.firstOrNull { program ->
-                program.startUtcMillis >= nextStart
-            }
+    program.startUtcMillis >= nowUtcMillis
+}
 
-            val upcoming = matchedPrograms.asSequence()
-                .filter { it.startUtcMillis >= nextStart }
-                .take(MAX_UPCOMING_PROGRAMS)
-                .map(::mapProgramRow)
-                .toList()
-
-            Log.w(
-                TAG,
-                "EPG MAP channel=${channel.displayName} match=${match.matchType} matched=${matchedPrograms.size} now=${now?.title} next=${next?.title} upcoming=${upcoming.size}"
-            )
+val upcoming = matchedPrograms.asSequence()
+    .filter { program ->
+        next != null && program.startUtcMillis > next.startUtcMillis
+    }
+    .take(MAX_UPCOMING_PROGRAMS)
+    .map(::mapProgramRow)
+    .toList()
 
             IptvChannelWithEpg(
                 channel = channel,
