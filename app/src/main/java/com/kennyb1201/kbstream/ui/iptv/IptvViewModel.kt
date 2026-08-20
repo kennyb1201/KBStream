@@ -242,62 +242,34 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
         saveHiddenChannelIds()
     }
 
-    fun updateGuideChannels(visibleChannelIds: List<String>) {
-        if (visibleChannelIds.isEmpty()) return
+fun updateGuideChannels(channelIds: List<String>) {
+    if (channelIds.isEmpty()) return
 
-        val hiddenIds = _hiddenChannelIds.value
-        val playlistChannelOrder = _playlist.value
-            ?.channels
-            ?.asSequence()
-            ?.map { it.id }
-            ?.filterNot { it in hiddenIds }
-            ?.toList()
-            .orEmpty()
+    val hiddenIds = hiddenChannelIds.value
+    val validIds = playlist.value
+        ?.channels
+        ?.asSequence()
+        ?.map { it.id }
+        ?.filterNot { it in hiddenIds }
+        ?.toHashSet()
+        .orEmpty()
 
-        if (playlistChannelOrder.isEmpty()) return
+    val requestedIds = channelIds
+        .asSequence()
+        .filter { it in validIds }
+        .distinct()
+        .take(MAX_ACTIVE_GUIDE_CHANNELS)
+        .toSet()
 
-        val validIds = playlistChannelOrder.toHashSet()
-        val requestedIds = visibleChannelIds
-            .asSequence()
-            .filter { it in validIds }
-            .distinct()
-            .toList()
+    if (requestedIds.isEmpty() || requestedIds == guideChannelIds.value) return
 
-        if (requestedIds.isEmpty()) return
+    guideChannelIds.value = requestedIds
 
-        val requestAnchorSet = requestedIds.toHashSet()
-        val centerId = requestedIds[requestedIds.size / 2]
-        val centerIndex = playlistChannelOrder.indexOf(centerId).takeIf { it >= 0 } ?: 0
-        val halfWindow = MAX_GUIDE_CHANNEL_REQUEST_SIZE / 2
-        val start = (centerIndex - halfWindow).coerceAtLeast(0)
-        val endExclusive = (start + MAX_GUIDE_CHANNEL_REQUEST_SIZE)
-            .coerceAtMost(playlistChannelOrder.size)
-        val anchoredWindow = playlistChannelOrder.subList(start, endExclusive)
-            .filter { it in requestAnchorSet || it !in _hiddenChannelIds.value }
-            .take(MAX_GUIDE_CHANNEL_REQUEST_SIZE)
-            .toSet()
-
-        val trimmedIds = if (anchoredWindow.isNotEmpty()) {
-            anchoredWindow
-        } else {
-            requestedIds.take(MAX_GUIDE_CHANNEL_REQUEST_SIZE).toSet()
-        }
-
-        if (trimmedIds == _guideChannelIds.value) return
-
-        _guideChannelIds.value = trimmedIds
-
-        val droppedIds = _guideItemsByChannelId.value.keys - trimmedIds
-        if (droppedIds.isNotEmpty()) {
-            _guideItemsByChannelId.value = _guideItemsByChannelId.value - droppedIds
-        }
-
-        Log.d(
-            TAG,
-            "GUIDE CHANNELS WINDOW total=${_guideChannelIds.value.size} " +
-                "requested=${requestedIds.size} centerIndex=$centerIndex"
-        )
-    }
+    Log.d(
+        TAG,
+        "GUIDE WINDOW updated=${requestedIds.size}"
+    )
+}
 
     private fun requestInitialGuideWindow() {
         val hiddenIds = _hiddenChannelIds.value
@@ -505,9 +477,11 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun mergeGuideItems(lineup: List<IptvChannelWithEpg>) {
-        _guideItemsByChannelId.value = _guideItemsByChannelId.value +
-            lineup.associateBy { it.channel.id }
-    }
+    if (lineup.isEmpty()) return
+
+    guideItemsByChannelId.value =
+        guideItemsByChannelId.value + lineup.associateBy { it.channel.id }
+}
 
     private fun clearGuideMemory(sourceKey: String? = null) {
         _guideItemsByChannelId.value = emptyMap()
@@ -609,6 +583,7 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
         const val INITIAL_GUIDE_WINDOW_SIZE = 48
         const val MAX_GUIDE_CHANNEL_REQUEST_SIZE = 32
         const val VISIBLE_GUIDE_PROGRAM_LIMIT = 120
+        private const val MAX_ACTIVE_GUIDE_CHANNELS = 80
         const val GUIDE_PAST_WINDOW_MS = 15 * 60 * 1000L
         const val GUIDE_FUTURE_WINDOW_MS = 12 * 60 * 60 * 1000L
 
