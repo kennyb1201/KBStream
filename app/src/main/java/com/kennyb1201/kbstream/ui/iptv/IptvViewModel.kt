@@ -133,11 +133,12 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
                     val now = System.currentTimeMillis()
 
                     repository.observeLineupWithGuide(
-                        playlist = currentPlaylist.copy(channels = channelsToLoad),
-                        startMillis = now - GUIDE_PAST_WINDOW_MS,
-                        endMillis = now + GUIDE_FUTURE_WINDOW_MS,
-                        programLimit = VISIBLE_GUIDE_PROGRAM_LIMIT
-                    )
+    playlist = currentPlaylist.copy(channels = channelsToLoad),
+    epgUrl = request.guideUrl,
+    windowStart = now - GUIDE_PAST_WINDOW_MS,
+    windowEnd = now + GUIDE_FUTURE_WINDOW_MS,
+    limit = VISIBLE_GUIDE_PROGRAM_LIMIT
+)
                 }
             }
         }
