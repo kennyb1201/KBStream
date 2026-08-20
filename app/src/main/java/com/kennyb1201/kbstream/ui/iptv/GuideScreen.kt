@@ -158,6 +158,9 @@ fun GuideScreen(
             else -> unhiddenChannels.filter { it.channel.groupTitle?.trim() == selectedGroup }
         }
     }
+    val groupedChannelIds = remember(groupedChannels) {
+    groupedChannels.map { it.channel.id }
+    }
     var selectedChannelId by remember { mutableStateOf<String?>(null) }
     val selectedChannelIndex = groupedChannels.indexOfFirst { item ->
         item.channel.id == selectedChannelId
