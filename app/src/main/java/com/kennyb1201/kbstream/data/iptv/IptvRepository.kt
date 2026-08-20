@@ -460,7 +460,8 @@ class IptvRepository(
             add(primaryDisplayName)
             allDisplayNames
                 .split("
-", "", "|")
+", "
+", "|")
                 .map(String::trim)
                 .filter(String::isNotBlank)
                 .forEach(::add)
