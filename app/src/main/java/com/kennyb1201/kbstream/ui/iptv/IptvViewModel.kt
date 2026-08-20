@@ -601,7 +601,7 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
         const val MAX_GUIDE_CHANNEL_REQUEST_SIZE = 24
         const val VISIBLE_GUIDE_PROGRAM_LIMIT = 96
         const val GUIDE_PAST_WINDOW_MS = 15 * 60 * 1000L
-        const val GUIDE_FUTURE_WINDOW_MS = 90 * 60 * 1000L
+        const val GUIDE_FUTURE_WINDOW_MS = 12 * 60 * 60 * 1000L
 
         const val PLAYLIST_REFRESH_MS = 6 * 60 * 60 * 1000L
         const val EPG_REFRESH_MS = 12 * 60 * 60 * 1000L
