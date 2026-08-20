@@ -1087,7 +1087,7 @@ private fun GuideDetailPanel(
             style = MaterialTheme.typography.titleSmall,
             modifier = Modifier.padding(bottom = 8.dp)
         )
-        val upcoming = item.upcoming.take(3)
+        val upcoming = item.upcoming.take(5)
         Column(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth()
