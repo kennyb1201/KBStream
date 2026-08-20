@@ -83,6 +83,10 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.delay
 
+private const val GUIDE_PREFETCH_BEFORE_COUNT = 12
+private const val GUIDE_PREFETCH_AFTER_COUNT = 36
+private const val MAX_GUIDE_CHANNEL_REQUEST_SIZE = 64
+
 @Composable
 fun GuideScreen(
     viewModel: IptvViewModel = viewModel(),
