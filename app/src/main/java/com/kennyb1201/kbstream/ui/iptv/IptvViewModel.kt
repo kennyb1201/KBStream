@@ -99,35 +99,47 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
     if (visibleChannelIds.isEmpty()) return
 
     val playlistChannels = _playlist.value?.channels.orEmpty()
+    if (playlistChannels.isEmpty()) return
+
     val hiddenIds = _hiddenChannelIds.value
-    val visibleIdSet = visibleChannelIds.toHashSet()
+    val validIds = playlistChannels
+        .asSequence()
+        .map { it.id }
+        .filter { it !in hiddenIds }
+        .toHashSet()
 
-    val lastVisibleIndex = playlistChannels.indexOfLast { channel ->
-        channel.id in visibleIdSet
-    }
+    val visibleIds = visibleChannelIds
+        .asSequence()
+        .filter { it in validIds }
+        .toList()
 
-    val prefetchIds = if (lastVisibleIndex >= 0) {
+    if (visibleIds.isEmpty()) return
+
+    val visibleIdSet = visibleIds.toHashSet()
+
+    /*
+     * Load the rows currently shown in the guide plus a larger nearby
+     * playlist window. This reduces missing program titles after switching
+     * between groups, even though the ViewModel does not know group names.
+     */
+    val firstVisibleIndex = playlistChannels.indexOfFirst { it.id in visibleIdSet }
+    val lastVisibleIndex = playlistChannels.indexOfLast { it.id in visibleIdSet }
+
+    val nearbyIds = if (firstVisibleIndex >= 0 && lastVisibleIndex >= 0) {
         playlistChannels
             .asSequence()
-            .drop(lastVisibleIndex + 1)
-            .filter { channel -> channel.id !in hiddenIds }
-            .take(VISIBLE_GUIDE_PREFETCH_COUNT)
-            .map { channel -> channel.id }
+            .drop(firstVisibleIndex)
+            .take((lastVisibleIndex - firstVisibleIndex + 1) + GROUP_GUIDE_PREFETCH_COUNT)
+            .filter { it.id !in hiddenIds }
+            .map { it.id }
             .toList()
     } else {
         emptyList()
     }
 
-    val validIds = playlistChannels
+    val newIds = (visibleIds + nearbyIds)
         .asSequence()
-        .map { channel -> channel.id }
-        .filter { channelId -> channelId !in hiddenIds }
-        .toHashSet()
-
-    val newIds = (visibleChannelIds + prefetchIds)
-        .asSequence()
-        .filter { channelId -> channelId in validIds }
-        .filter { channelId -> channelId !in _guideChannelIds.value }
+        .filter { it !in _guideChannelIds.value }
         .toSet()
 
     if (newIds.isEmpty()) return
@@ -137,10 +149,9 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
     Log.d(
         TAG,
         "GUIDE CHANNELS QUEUED total=${_guideChannelIds.value.size} " +
-            "added=${newIds.size} prefetch=${prefetchIds.size}"
+            "visible=${visibleIds.size} added=${newIds.size} nearby=${nearbyIds.size}"
     )
 }
-
     private fun requestInitialGuideWindow() {
         val hiddenIds = _hiddenChannelIds.value
         updateGuideChannels(_playlist.value?.channels?.asSequence()?.filterNot { it.id in hiddenIds }?.take(INITIAL_GUIDE_WINDOW_SIZE)?.map { it.id }?.toList().orEmpty())
@@ -183,5 +194,5 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
     private fun buildMessage(t: Throwable) = buildString { append(t::class.java.simpleName); t.message?.takeIf { it.isNotBlank() }?.let { append(": "); append(it) } }
     private fun saveInputs() { prefs.edit().putString(KEY_PLAYLIST_URL, _playlistUrl.value).putString(KEY_EPG_URL, _epgUrl.value).putString(KEY_PLAYLIST_NAME, _playlistName.value).apply(); if (_epgUrl.value.isNotBlank()) EpgRefreshScheduler.schedule(getApplication()) }
     private data class GuideRequest(val playlist: IptvPlaylist?, val guideUrl: String, val refreshTick: Int, val isImportingGuide: Boolean, val channelIds: Set<String>)
-    private companion object { const val TAG = "IptvViewModel"; const val PREFS_NAME = "iptv_prefs"; const val KEY_PLAYLIST_URL = "playlist_url"; const val KEY_EPG_URL = "epg_url"; const val KEY_PLAYLIST_NAME = "playlist_name"; const val KEY_HIDDEN_CHANNEL_IDS = "hidden_channel_ids"; const val KEY_PLAYLIST_UPDATED_AT = "playlist_updated_at"; const val KEY_EPG_UPDATED_AT = "epg_updated_at"; const val STOP_TIMEOUT_MS = 5_000L; const val INITIAL_GUIDE_WINDOW_SIZE = 150; const val VISIBLE_GUIDE_PREFETCH_COUNT = 30; const val VISIBLE_GUIDE_PROGRAM_LIMIT = 240; const val GUIDE_PAST_WINDOW_MS = 30 * 60 * 1000L; const val GUIDE_FUTURE_WINDOW_MS = 2 * 60 * 60 * 1000L; const val PLAYLIST_REFRESH_MS = 6 * 60 * 60 * 1000L; const val EPG_REFRESH_MS = 12 * 60 * 60 * 1000L }
+    private companion object { const val TAG = "IptvViewModel"; const val PREFS_NAME = "iptv_prefs"; const val KEY_PLAYLIST_URL = "playlist_url"; const val GROUP_GUIDE_PREFETCH_COUNT = 150; <const val KEY_EPG_URL = "epg_url"; const val KEY_PLAYLIST_NAME = "playlist_name"; const val KEY_HIDDEN_CHANNEL_IDS = "hidden_channel_ids"; const val KEY_PLAYLIST_UPDATED_AT = "playlist_updated_at"; const val KEY_EPG_UPDATED_AT = "epg_updated_at"; const val STOP_TIMEOUT_MS = 5_000L; const val INITIAL_GUIDE_WINDOW_SIZE = 150; const val VISIBLE_GUIDE_PREFETCH_COUNT = 30; const val VISIBLE_GUIDE_PROGRAM_LIMIT = 240; const val GUIDE_PAST_WINDOW_MS = 30 * 60 * 1000L; const val GUIDE_FUTURE_WINDOW_MS = 2 * 60 * 60 * 1000L; const val PLAYLIST_REFRESH_MS = 6 * 60 * 60 * 1000L;          const val EPG_REFRESH_MS = 12 * 60 * 60 * 1000L }
 }
