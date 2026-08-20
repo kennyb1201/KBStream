@@ -196,11 +196,7 @@ LaunchedEffect(groupedChannels) {
     }
 }
 
-LaunchedEffect(selectedChannel?.channel?.id) {
-    selectedChannel?.channel?.id?.let { channelId ->
-        viewModel.updateGuideChannels(listOf(channelId))
-    }
-}
+
 
 LaunchedEffect(channelListState, groupedChannels, selectedGroup) {
     snapshotFlow {
