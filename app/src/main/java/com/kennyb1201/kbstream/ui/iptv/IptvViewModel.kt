@@ -243,61 +243,72 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateGuideChannels(visibleChannelIds: List<String>) {
-        if (visibleChannelIds.isEmpty()) return
+    fun updateGuideChannels(visibleChannelIds: List<String>) {
+    if (visibleChannelIds.isEmpty()) return
 
-        val playlistChannels = _playlist.value?.channels.orEmpty()
-        if (playlistChannels.isEmpty()) return
+    val playlistChannels = _playlist.value?.channels.orEmpty()
+    if (playlistChannels.isEmpty()) return
 
-        val hiddenIds = _hiddenChannelIds.value
-        val validIds = playlistChannels
+    val hiddenIds = _hiddenChannelIds.value
+
+    val validIds = playlistChannels
+        .asSequence()
+        .map { it.id }
+        .filterNot { it in hiddenIds }
+        .toHashSet()
+
+    val visibleIds = visibleChannelIds
+        .asSequence()
+        .filter { it in validIds }
+        .distinct()
+        .toList()
+
+    if (visibleIds.isEmpty()) return
+
+    val visibleIdSet = visibleIds.toHashSet()
+
+    val firstVisibleIndex = playlistChannels.indexOfFirst {
+        it.id in visibleIdSet
+    }
+    val lastVisibleIndex = playlistChannels.indexOfLast {
+        it.id in visibleIdSet
+    }
+
+    val nearbyIds = if (firstVisibleIndex >= 0 && lastVisibleIndex >= 0) {
+        val startIndex = (firstVisibleIndex - GUIDE_PREFETCH_BEFORE_COUNT)
+            .coerceAtLeast(0)
+
+        val endExclusive = (
+            lastVisibleIndex + 1 + GUIDE_PREFETCH_AFTER_COUNT
+        ).coerceAtMost(playlistChannels.size)
+
+        playlistChannels
+            .subList(startIndex, endExclusive)
             .asSequence()
+            .filterNot { it.id in hiddenIds }
             .map { it.id }
-            .filter { it !in hiddenIds }
-            .toHashSet()
-
-        val visibleIds = visibleChannelIds
-            .asSequence()
-            .filter { it in validIds }
             .distinct()
-            .toList()
-
-        if (visibleIds.isEmpty()) return
-
-        val visibleIdSet = visibleIds.toHashSet()
-        val firstVisibleIndex = playlistChannels.indexOfFirst { it.id in visibleIdSet }
-        val lastVisibleIndex = playlistChannels.indexOfLast { it.id in visibleIdSet }
-
-        val nearbyIds = if (firstVisibleIndex >= 0 && lastVisibleIndex >= 0) {
-            val startIndex = (firstVisibleIndex - GUIDE_PREFETCH_BEFORE_COUNT).coerceAtLeast(0)
-            val endExclusive = (lastVisibleIndex + 1 + GUIDE_PREFETCH_AFTER_COUNT)
-                .coerceAtMost(playlistChannels.size)
-
-            playlistChannels
-                .subList(startIndex, endExclusive)
-                .asSequence()
-                .filter { it.id !in hiddenIds }
-                .map { it.id }
-                .distinct()
-                .toList()
-        } else {
-            visibleIds
-        }
-
-        val requestedIds = nearbyIds
             .take(MAX_GUIDE_CHANNEL_REQUEST_SIZE)
             .toSet()
-
-        if (requestedIds == _guideChannelIds.value) return
-
-        _guideChannelIds.value = requestedIds
-
-        Log.d(
-            TAG,
-            "GUIDE CHANNELS WINDOW size=${requestedIds.size} " +
-                "visible=${visibleIds.size} firstIndex=$firstVisibleIndex " +
-                "lastIndex=$lastVisibleIndex"
-        )
+    } else {
+        visibleIds
+            .asSequence()
+            .take(MAX_GUIDE_CHANNEL_REQUEST_SIZE)
+            .toSet()
     }
+
+    val newIds = nearbyIds - _guideChannelIds.value
+    if (newIds.isEmpty()) return
+
+    _guideChannelIds.value = _guideChannelIds.value + newIds
+
+    Log.d(
+        TAG,
+        "GUIDE CHANNELS QUEUED total=${_guideChannelIds.value.size} " +
+            "added=${newIds.size} visible=${visibleIds.size} " +
+            "firstIndex=$firstVisibleIndex lastIndex=$lastVisibleIndex"
+    )
+}
 
     private fun requestInitialGuideWindow() {
         val hiddenIds = _hiddenChannelIds.value
