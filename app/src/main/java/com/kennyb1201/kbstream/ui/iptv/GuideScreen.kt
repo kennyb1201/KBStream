@@ -1626,3 +1626,7 @@ private fun HiddenManagerRow(
         }
     }
 }
+
+private const val GUIDE_PREFETCH_BEFORE_COUNT = 12
+private const val GUIDE_PREFETCH_AFTER_COUNT = 36
+private const val MAX_GUIDE_CHANNEL_REQUEST_SIZE = 64
