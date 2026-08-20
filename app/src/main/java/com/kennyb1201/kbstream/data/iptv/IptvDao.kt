@@ -1,4 +1,4 @@
-.package com.kennyb1201.kbstream.data.iptv.db
+package com.kennyb1201.kbstream.data.iptv.db
 
 import androidx.room.Dao
 import androidx.room.Insert
