@@ -226,7 +226,7 @@ LaunchedEffect(channelListState, groupedChannels, selectedGroup) {
         }
     }
         .distinctUntilChanged()
-        .debounce(120)
+        .debounce(250)
         .collect { channelIds ->
             if (channelIds.isNotEmpty()) {
                 viewModel.updateGuideChannels(channelIds)
