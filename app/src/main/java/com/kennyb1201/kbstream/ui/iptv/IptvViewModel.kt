@@ -475,9 +475,8 @@ fun updateGuideChannels(channelIds: List<String>) {
 
     private fun mergeGuideItems(lineup: List<IptvChannelWithEpg>) {
     if (lineup.isEmpty()) return
-
-    guideItemsByChannelId.value =
-        guideItemsByChannelId.value + lineup.associateBy { it.channel.id }
+    _guideItemsByChannelId.value =
+        _guideItemsByChannelId.value + lineup.associateBy { it.channel.id }
 }
 
     private fun clearGuideMemory(sourceKey: String? = null) {
