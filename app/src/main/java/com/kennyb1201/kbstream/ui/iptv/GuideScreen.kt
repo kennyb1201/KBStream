@@ -468,7 +468,6 @@ LaunchedEffect(channelListState, groupedChannels, selectedGroup) {
     playlist = playlist,
     hiddenChannels = hiddenChannelIds,
     hiddenGroups = hiddenGroups,
-),
                         channelKey = ::channelKey,
                         onDismiss = { showHiddenManager = false },
                         onHideGroup = { group ->
