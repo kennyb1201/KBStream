@@ -245,8 +245,8 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
 fun updateGuideChannels(channelIds: List<String>) {
     if (channelIds.isEmpty()) return
 
-    val hiddenIds = hiddenChannelIds.value
-    val validIds = playlist.value
+    val hiddenIds = _hiddenChannelIds.value
+    val validIds = _playlist.value
         ?.channels
         ?.asSequence()
         ?.map { it.id }
@@ -261,14 +261,11 @@ fun updateGuideChannels(channelIds: List<String>) {
         .take(MAX_ACTIVE_GUIDE_CHANNELS)
         .toSet()
 
-    if (requestedIds.isEmpty() || requestedIds == guideChannelIds.value) return
+    if (requestedIds.isEmpty() || requestedIds == _guideChannelIds.value) return
 
-    guideChannelIds.value = requestedIds
+    _guideChannelIds.value = requestedIds
 
-    Log.d(
-        TAG,
-        "GUIDE WINDOW updated=${requestedIds.size}"
-    )
+    Log.d(TAG, "GUIDE WINDOW updated=${requestedIds.size}")
 }
 
     private fun requestInitialGuideWindow() {
