@@ -83,9 +83,10 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.delay
 
+private const val GUIDE_GROUP_EAGER_LOAD_SIZE = 200
 private const val GUIDE_PREFETCH_BEFORE_COUNT = 12
 private const val GUIDE_PREFETCH_AFTER_COUNT = 36
-private const val MAX_GUIDE_CHANNEL_REQUEST_SIZE = 64
+private const val MAX_GUIDE_CHANNEL_REQUEST_SIZE = 200
 
 @Composable
 fun GuideScreen(
@@ -196,15 +197,11 @@ fun GuideScreen(
     }
 
  LaunchedEffect(selectedGroup, groupedChannels) {
-    if (groupedChannels.isNotEmpty()) {
-        selectedChannelId = groupedChannels.firstOrNull()?.channel?.id
-        channelListState.scrollToItem(0)
-        viewModel.updateGuideChannels(
-            groupedChannels
-                .take(MAX_GUIDE_CHANNEL_REQUEST_SIZE)
-                .map { it.channel.id }
-        )
+    val allIds = groupedChannels.map { it.channel.id }
+    if (allIds.size <= 200) {
+        viewModel.updateGuideChannels(allIds)
     }
+}
 }
 
 LaunchedEffect(selectedChannel?.channel?.id) {
