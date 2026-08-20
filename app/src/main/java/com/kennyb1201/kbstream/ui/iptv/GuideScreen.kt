@@ -58,6 +58,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
@@ -100,6 +102,7 @@ fun GuideScreen(
     val playlistName by viewModel.playlistName.collectAsState()
 
     val channelListState = rememberLazyListState()
+    val firstChannelFocusRequester = remember { FocusRequester() }
     val latestOnPlayChannel by rememberUpdatedState(onPlayChannel)
     val appContext = androidx.compose.ui.platform.LocalContext.current.applicationContext
     val guidePreferences = remember(appContext) {
@@ -288,15 +291,15 @@ LaunchedEffect(channelListState, groupedChannels) {
                                 modifier = Modifier.focusGroup()
                             ) {
                                 itemsIndexed(groups, key = { _, item -> item }) { _, group ->
-                                    GroupChip(
+GroupChip(
     name = group,
     selected = group == selectedGroup,
     onClick = { selectedGroup = group },
-    onFocus = { selectedGroup = group }
+    onFocus = { selectedGroup = group },
+    modifier = Modifier.focusProperties {
+        down = firstChannelFocusRequester
+    }
 )
-                                }
-                            }
-                        }
 
                         Spacer(modifier = Modifier.height(14.dp))
 
@@ -310,31 +313,29 @@ LaunchedEffect(channelListState, groupedChannels) {
                                     .fillMaxHeight()
                                     .focusGroup()
                             ) {
-                                itemsIndexed(
-                                    items = groupedChannels,
-                                    key = { _, item ->
-                                        "${item.channel.id}|${item.channel.streamUrl}"
-                                    }
-                                ) { index, rawItem ->
-                                    val item = withFavoriteFlag(rawItem)
+itemsIndexed(
+    items = groupedChannels,
+    key = { _, item -> item.channel.id + item.channel.streamUrl }
+) { index, rawItem ->
+    val item = withFavoriteFlag(rawItem)
 
-                                    ChannelRowCard(
-                                        item = item,
-                                        selected = selectedChannelIndex == index,
-                                        onClick = {
-                                            selectedChannelId = item.channel.id
-                                            latestOnPlayChannel?.invoke(item)
-                                        },
-                                        onFocused = {
-                                            selectedChannelId = item.channel.id
-                                        },
-                                        onLongClick = {
-                                            selectedChannelId = item.channel.id
-                                            menuItem = item
-                                        }
-                                    )
-                                }
-                            }
+    ChannelRowCard(
+        item = item,
+        selected = selectedChannelIndex == index,
+        onClick = {
+            selectedChannelId = item.channel.id
+            latestOnPlayChannel?.invoke(item)
+        },
+        onFocused = {
+            selectedChannelId = item.channel.id
+        },
+        modifier = if (index == 0) {
+            Modifier.focusRequester(firstChannelFocusRequester)
+        } else {
+            Modifier
+        }
+    )
+}
 
                             Spacer(modifier = Modifier.width(16.dp))
 
