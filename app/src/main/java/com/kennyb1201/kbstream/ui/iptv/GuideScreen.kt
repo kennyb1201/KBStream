@@ -332,6 +332,10 @@ LaunchedEffect(channelListState, groupedChannels) {
                                             onFocused = {
                                                 selectedChannelId = item.channel.id
                                             },
+                                            onLongClick = {
+    selectedChannelId = item.channel.id
+    menuItem = item
+},
                                             modifier = if (index == 0) {
                                                 Modifier.focusRequester(firstChannelFocusRequester)
                                             } else {
