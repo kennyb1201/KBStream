@@ -343,11 +343,10 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                                         .width(348.dp)
                                         .fillMaxHeight()
                                         .focusGroup()
-                                ) {
-                                    itemsIndexed(
-                                        items = groupedChannels,
-                                        key = { _, item -> item.channel.id + item.channel.streamUrl }
-                                    ) { index, rawItem ->
+                                ) {itemsIndexed(
+    items = groupedChannels,
+    key = { index, item -> "${channelKey(item)}#$index" }
+) { index, rawItem ->
                                         val item = withFavoriteFlag(rawItem)
 
                                         ChannelRowCard(
@@ -1577,7 +1576,10 @@ private fun HiddenChannelsTab(
             contentPadding = PaddingValues(bottom = 10.dp),
             modifier = Modifier.fillMaxSize().focusGroup()
         ) {
-            itemsIndexed(hiddenChannelItems, key = { _, item -> "channel-${channelKey(item)}" }) { _, item ->
+            itemsIndexed(
+    hiddenChannelItems,
+    key = { index, item -> "channel-${channelKey(item)}#$index" }
+) { _, item ->
                 HiddenManagerRow(
                     title = item.channel.displayName,
                     subtitle = item.channel.groupTitle?.trim()?.takeIf { it.isNotBlank() } ?: "Channel",
