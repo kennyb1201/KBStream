@@ -1,0 +1,448 @@
+package com.kennyb1201.kbstream.ui.addons
+
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.kennyb1201.kbstream.data.addon.AddonManager
+import com.kennyb1201.kbstream.data.addon.AddonRepository
+import com.kennyb1201.kbstream.data.addon.InstalledAddon
+import com.kennyb1201.kbstream.data.addon.ManifestCatalog
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+
+class AddonsViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val addonManager = AddonManager(application)
+    private val repository = AddonRepository()
+
+    private val _addons = MutableStateFlow<List<InstalledAddon>>(emptyList())
+    val addons: StateFlow<List<InstalledAddon>> = _addons.asStateFlow()
+
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
+    private val _refreshing = MutableStateFlow(false)
+    val refreshing: StateFlow<Boolean> = _refreshing.asStateFlow()
+
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error.asStateFlow()
+
+    private val _status = MutableStateFlow<String?>(null)
+    val status: StateFlow<String?> = _status.asStateFlow()
+
+    init {
+        refresh()
+    }
+
+    fun refresh() {
+        _addons.value = addonManager.getInstalledAddons()
+    }
+
+    fun clearError() {
+        _error.value = null
+    }
+
+    fun clearStatus() {
+        _status.value = null
+    }
+
+    fun addAddon(manifestUrl: String) {
+        val cleanUrl = manifestUrl.trim()
+
+        if (cleanUrl.isEmpty()) {
+            _error.value = "Enter a manifest URL."
+            return
+        }
+
+        viewModelScope.launch {
+            _isLoading.value = true
+            _error.value = null
+            _status.value = null
+
+            try {
+                val manifest = repository.fetchManifest(cleanUrl)
+                val current = addonManager.getInstalledAddons()
+                val existing = current.firstOrNull { it.id == manifest.id }
+
+                val catalogs = mergeCatalogSettings(
+                    oldCatalogs = existing?.catalogs.orEmpty(),
+                    newCatalogs = manifest.catalogs
+                )
+
+                val installed = InstalledAddon(
+                    manifestUrl = cleanUrl,
+                    id = manifest.id,
+                    name = manifest.name,
+                    resources = manifest.resources,
+                    catalogs = catalogs,
+                    customName = existing?.customName,
+                    version = manifest.version,
+                    description = manifest.description,
+                    types = manifest.types
+                )
+
+                val updated = if (existing == null) {
+                    current + installed
+                } else {
+                    current.map {
+                        if (it.id == manifest.id) {
+                            installed
+                        } else {
+                            it
+                        }
+                    }
+                }
+
+                addonManager.saveInstalledAddons(updated)
+                refresh()
+
+                _status.value = if (existing == null) {
+                    "Added ${installed.displayName}"
+                } else {
+                    "Updated ${installed.displayName}"
+                }
+            } catch (e: Exception) {
+                _error.value =
+                    "Failed to add add-on: ${e.message ?: "Unknown error"}"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun removeAddon(id: String) {
+        addonManager.removeAddon(id)
+        refresh()
+        _status.value = "Add-on removed"
+    }
+
+    fun renameAddon(id: String, newName: String) {
+        addonManager.renameAddon(id, newName)
+        refresh()
+        _status.value = "Name saved"
+    }
+
+    fun resetAddonName(id: String) {
+        addonManager.renameAddon(id, null)
+        refresh()
+        _status.value = "Manifest name restored"
+    }
+
+    fun moveAddonUp(id: String) {
+        addonManager.moveAddon(id, -1)
+        refresh()
+    }
+
+    fun moveAddonDown(id: String) {
+        addonManager.moveAddon(id, 1)
+        refresh()
+    }
+
+    /**
+     * Enable/disable a catalog on the KBStream home screen.
+     */
+    fun setCatalogShowOnHome(
+        addonId: String,
+        catalogId: String,
+        showOnHome: Boolean
+    ) {
+        updateAddonCatalogs(addonId) { catalogs ->
+            catalogs.map {
+                if (it.id == catalogId) {
+                    it.copy(showOnHome = showOnHome)
+                } else {
+                    it
+                }
+            }
+        }
+
+        _status.value = "Catalog setting saved"
+    }
+
+    /**
+     * Move a catalog up within its addon.
+     */
+    fun moveCatalogUp(
+        addonId: String,
+        catalogId: String
+    ) {
+        moveCatalog(addonId, catalogId, -1)
+    }
+
+    /**
+     * Move a catalog down within its addon.
+     */
+    fun moveCatalogDown(
+        addonId: String,
+        catalogId: String
+    ) {
+        moveCatalog(addonId, catalogId, 1)
+    }
+
+    /**
+     * Reset the catalog order to the order supplied by the manifest.
+     */
+    fun resetCatalogOrder(addonId: String) {
+        val addon = _addons.value.firstOrNull { it.id == addonId }
+            ?: return
+
+        val reordered = addon.catalogs.mapIndexed { index, catalog ->
+            catalog.copy(
+                order = index
+            )
+        }
+
+        saveCatalogs(
+            addonId = addonId,
+            catalogs = reordered
+        )
+
+        _status.value = "Catalog order restored"
+    }
+
+    private fun moveCatalog(
+        addonId: String,
+        catalogId: String,
+        direction: Int
+    ) {
+        val addon = _addons.value.firstOrNull { it.id == addonId }
+            ?: return
+
+        val sorted = addon.catalogs
+            .sortedBy { it.order }
+            .toMutableList()
+
+        val index = sorted.indexOfFirst { it.id == catalogId }
+
+        if (index == -1) return
+
+        val targetIndex = index + direction
+
+        if (targetIndex !in sorted.indices) return
+
+        val current = sorted[index]
+        val target = sorted[targetIndex]
+
+        sorted[index] = target
+        sorted[targetIndex] = current
+
+        val reordered = sorted.mapIndexed { newIndex, catalog ->
+            catalog.copy(order = newIndex)
+        }
+
+        saveCatalogs(
+            addonId = addonId,
+            catalogs = reordered
+        )
+    }
+
+    private fun updateAddonCatalogs(
+        addonId: String,
+        transform: (List<ManifestCatalog>) -> List<ManifestCatalog>
+    ) {
+        val addon = _addons.value.firstOrNull { it.id == addonId }
+            ?: return
+
+        val updatedCatalogs = transform(addon.catalogs)
+
+        saveCatalogs(
+            addonId = addonId,
+            catalogs = updatedCatalogs
+        )
+    }
+
+    private fun saveCatalogs(
+        addonId: String,
+        catalogs: List<ManifestCatalog>
+    ) {
+        val updated = _addons.value.map { addon ->
+            if (addon.id == addonId) {
+                addon.copy(
+                    catalogs = catalogs
+                        .sortedBy { it.order }
+                        .mapIndexed { index, catalog ->
+                            catalog.copy(order = index)
+                        }
+                )
+            } else {
+                addon
+            }
+        }
+
+        addonManager.saveInstalledAddons(updated)
+        _addons.value = updated
+    }
+
+    /**
+     * Merge a newly downloaded manifest with the user's local
+     * catalog configuration.
+     *
+     * Existing catalogs retain:
+     * - showOnHome
+     * - local order
+     *
+     * New catalogs default to visible and are placed after
+     * the existing catalogs.
+     */
+    private fun mergeCatalogSettings(
+        oldCatalogs: List<ManifestCatalog>,
+        newCatalogs: List<ManifestCatalog>
+    ): List<ManifestCatalog> {
+
+        val oldByKey = oldCatalogs.associateBy {
+            catalogKey(it.type, it.id)
+        }
+
+        val oldOrder = oldCatalogs
+            .sortedBy { it.order }
+            .map { catalogKey(it.type, it.id) }
+
+        val newByKey = newCatalogs.associateBy {
+            catalogKey(it.type, it.id)
+        }
+
+        val result = mutableListOf<ManifestCatalog>()
+
+        // Preserve the user's existing order first.
+        oldOrder.forEach { key ->
+            val newCatalog = newByKey[key] ?: return@forEach
+            val oldCatalog = oldByKey[key]
+
+            result += newCatalog.copy(
+                showOnHome = oldCatalog?.showOnHome ?: true
+            )
+        }
+
+        // Append catalogs that are new in the refreshed manifest.
+        newCatalogs.forEach { catalog ->
+            val key = catalogKey(catalog.type, catalog.id)
+
+            if (oldByKey[key] == null) {
+                result += catalog.copy(
+                    showOnHome = true
+                )
+            }
+        }
+
+        return result.mapIndexed { index, catalog ->
+            catalog.copy(order = index)
+        }
+    }
+
+    private fun catalogKey(
+        type: String,
+        id: String
+    ): String {
+        return "${type.trim().lowercase()}::${id.trim().lowercase()}"
+    }
+
+    fun refreshAllManifests() {
+        if (_refreshing.value) return
+
+        viewModelScope.launch {
+            _refreshing.value = true
+            _error.value = null
+            _status.value = null
+
+            try {
+                val current = addonManager.getInstalledAddons()
+
+                var successCount = 0
+                var failureCount = 0
+
+                val refreshed = current.map { old ->
+                    try {
+                        val manifest = repository.fetchManifest(old.manifestUrl)
+
+                        successCount++
+
+                        old.copy(
+                            name = manifest.name,
+                            resources = manifest.resources,
+                            catalogs = mergeCatalogSettings(
+                                oldCatalogs = old.catalogs,
+                                newCatalogs = manifest.catalogs
+                            ),
+                            version = manifest.version,
+                            description = manifest.description,
+                            types = manifest.types
+                        )
+                    } catch (_: Exception) {
+                        failureCount++
+                        old
+                    }
+                }
+
+                addonManager.saveInstalledAddons(refreshed)
+                refresh()
+
+                _status.value = when {
+                    failureCount == 0 ->
+                        "Refreshed $successCount add-on${if (successCount == 1) "" else "s"}"
+
+                    successCount == 0 ->
+                        "Could not refresh any add-ons"
+
+                    else ->
+                        "Refreshed $successCount; $failureCount failed"
+                }
+            } catch (e: Exception) {
+                _error.value =
+                    "Refresh failed: ${e.message ?: "Unknown error"}"
+            } finally {
+                _refreshing.value = false
+            }
+        }
+    }
+
+    fun refreshManifest(id: String) {
+        if (_refreshing.value) return
+
+        val addon = addonManager
+            .getInstalledAddons()
+            .firstOrNull { it.id == id }
+            ?: return
+
+        viewModelScope.launch {
+            _refreshing.value = true
+            _error.value = null
+            _status.value = null
+
+            try {
+                val manifest = repository.fetchManifest(addon.manifestUrl)
+
+                addonManager.saveInstalledAddons(
+                    addonManager.getInstalledAddons().map { old ->
+                        if (old.id == id) {
+                            old.copy(
+                                name = manifest.name,
+                                catalogs = mergeCatalogSettings(
+                                    oldCatalogs = old.catalogs,
+                                    newCatalogs = manifest.catalogs
+                                ),
+                                resources = manifest.resources,
+                                version = manifest.version,
+                                description = manifest.description,
+                                types = manifest.types
+                            )
+                        } else {
+                            old
+                        }
+                    }
+                )
+
+                refresh()
+
+                _status.value =
+                    "Refreshed ${addon.displayName}"
+            } catch (e: Exception) {
+                _error.value =
+                    "Refresh failed: ${e.message ?: "Unknown error"}"
+            } finally {
+                _refreshing.value = false
+            }
+        }
+    }
+}
