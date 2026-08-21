@@ -520,7 +520,7 @@ private fun ActionButton(
     modifier: Modifier = Modifier,
     horizontalPadding: androidx.compose.ui.unit.Dp = 13.dp,
     verticalPadding: androidx.compose.ui.unit.Dp = 9.dp,
-    textStyle: androidx.tv.material3.TextStyle = MaterialTheme.typography.labelLarge
+    textStyle: androidx.compose.ui.text.TextStyle = MaterialTheme.typography.labelLarge
 ) {
     if (enabled) {
         KBCard(
