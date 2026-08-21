@@ -710,7 +710,7 @@ class AddonManager private constructor(
      * Writes a CatalogConfiguration list back
      * into the nested addon structure.
      */
-    private fun saveGlobalCatalogOrder(
+
     private fun saveGlobalCatalogOrder(
     configurations: List<CatalogConfiguration>
 ) {
