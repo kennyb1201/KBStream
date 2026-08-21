@@ -164,7 +164,7 @@ fun DetailScreen(
     onNavigateActor: (Int) -> Unit,
     onNavigateStudio: (Int, String, Boolean) -> Unit,
     onNavigateTag: (Int, String, Boolean, String) -> Unit,
-    onNavigateStreams: (StreamsTarget, String, String, String?) -> Unit,
+    onNavigateStreams: (StreamsTarget, String, String, String?, String?, String?) -> Unit,
     initialTarget: StreamsTarget? = null,
     initialPoster: String? = null,
     viewModel: DetailViewModel = viewModel()
@@ -522,7 +522,14 @@ fun DetailScreen(
                             .focusRestorer()
                     ) {
                         KBCard(
-                            onClick = { onNavigateStreams(playTarget, id, type, m.poster) },
+                            onClick = { onNavigateStreams(
+    playTarget,
+    id,
+    type,
+    m.poster,
+    backdropUrl,
+    clearLogoUrl
+) },
                             modifier = Modifier
                                 .padding(end = 10.dp)
                                 .focusRequester(playButtonFocusRequester)
@@ -538,7 +545,14 @@ fun DetailScreen(
                             KBCard(
                                 onClick = {
                                     val resumeTarget = playTarget.copy(resumePositionMs = resumeInfo?.positionMs ?: 0L)
-                                    onNavigateStreams(resumeTarget, id, type, m.poster)
+                                    onNavigateStreams(
+    resumeTarget,
+    id,
+    type,
+    m.poster,
+    backdropUrl,
+    clearLogoUrl
+)
                                 },
                                 modifier = Modifier.padding(end = 10.dp)
                             ) {
@@ -818,7 +832,14 @@ fun DetailScreen(
                                                                 episode = ep.episodeNumber,
                                                                 resumePositionMs = if (hasResumeHere) resumeInfo?.positionMs ?: 0L else 0L
                                                             )
-                                                            onNavigateStreams(target, id, type, m.poster)
+                                                            onNavigateStreams(
+    target,
+    id,
+    type,
+    m.poster,
+    backdropUrl,
+    clearLogoUrl
+)
                                                         },
                                                         modifier = Modifier
                                                             .focusRequester(focusRequester)
