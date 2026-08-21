@@ -1,7 +1,6 @@
 package com.kennyb1201.kbstream.ui.iptv
 
 import android.content.Context
-import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Color as AndroidColor
 import android.text.Editable
