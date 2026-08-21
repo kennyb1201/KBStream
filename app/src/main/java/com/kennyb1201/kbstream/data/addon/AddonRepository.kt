@@ -126,14 +126,14 @@ class AddonRepository {
         ).streams
     }
 
-    private fun normalizeBaseUrl(
-        url: String
-    ): String {
+    private fun normalizeBaseUrl(url: String): String {
+    val cleanUrl = url.trim().removeSuffix("/")
 
-        return url
-            .trim()
-            .removeSuffix("/")
-            .removeSuffix("/manifest.json")
-            .removeSuffix("/")
+    val manifestIndex = cleanUrl.indexOf("/manifest.json")
+
+    return if (manifestIndex >= 0) {
+        cleanUrl.substring(0, manifestIndex)
+    } else {
+        cleanUrl.substringBefore("?")
     }
 }
