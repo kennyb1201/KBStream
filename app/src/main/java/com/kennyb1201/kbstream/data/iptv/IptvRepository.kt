@@ -677,7 +677,7 @@ class IptvRepository(
         const val CACHE_PAGE_SIZE = 500
         const val CHANNEL_QUERY_BATCH_SIZE = 400
         const val PROGRAM_QUERY_BATCH_SIZE = 8
-        const val PROGRAMS_PER_CHANNEL_TARGET = 24
+        const val PROGRAMS_PER_CHANNEL_TARGET = 12
         const val MAX_PROGRAM_ROWS_PER_BATCH = 192
         const val MAX_UPCOMING_PROGRAMS = 12
 
