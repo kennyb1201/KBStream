@@ -1,0 +1,144 @@
+package com.kennyb1201.kbstream.data.addon
+
+import android.content.Context
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.Types
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+
+class AddonManager(context: Context) {
+    private val prefs = context.applicationContext
+        .getSharedPreferences("kbstream_addons", Context.MODE_PRIVATE)
+
+    private val moshi = Moshi.Builder()
+        .add(KotlinJsonAdapterFactory())
+        .build()
+
+    private val listType =
+        Types.newParameterizedType(List::class.java, InstalledAddon::class.java)
+
+    private val adapter = moshi.adapter<List<InstalledAddon>>(listType)
+
+    private val _installedAddons = MutableStateFlow<List<InstalledAddon>>(emptyList())
+    val installedAddons: StateFlow<List<InstalledAddon>> = _installedAddons.asStateFlow()
+
+    private val addonScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+
+    val streamAddons: StateFlow<List<InstalledAddon>> = _installedAddons
+        .map { list -> list.filter { "stream" in it.resources } }
+        .stateIn(
+            scope = addonScope,
+            started = SharingStarted.Eagerly,
+            initialValue = _installedAddons.value.filter { "stream" in it.resources }
+        )
+
+    val catalogAddons: StateFlow<List<InstalledAddon>> = _installedAddons
+        .map { list -> list.filter { "catalog" in it.resources } }
+        .stateIn(
+            scope = addonScope,
+            started = SharingStarted.Eagerly,
+            initialValue = _installedAddons.value.filter { "catalog" in it.resources }
+        )
+
+    init {
+        _installedAddons.value = loadFromPreferencesOrDefaults()
+    }
+
+    fun hasAddon(id: String): StateFlow<Boolean> = _installedAddons
+        .map { list -> list.any { it.id == id } }
+        .stateIn(
+            scope = addonScope,
+            started = SharingStarted.Eagerly,
+            initialValue = _installedAddons.value.any { it.id == id }
+        )
+
+    private fun loadFromPreferencesOrDefaults(): List<InstalledAddon> {
+        val json = prefs.getString(KEY, null)
+        if (json.isNullOrBlank()) {
+            return defaultAddons().also { saveToPrefs(it) }
+        }
+        return adapter.fromJson(json) ?: emptyList()
+    }
+
+    private fun saveToPrefs(addons: List<InstalledAddon>) {
+        prefs.edit()
+            .putString(KEY, adapter.toJson(addons))
+            .apply()
+    }
+
+    fun getInstalledAddons(): List<InstalledAddon> {
+        return _installedAddons.value.ifEmpty {
+            loadFromPreferencesOrDefaults().also { _installedAddons.value = it }
+        }
+    }
+
+    fun saveInstalledAddons(addons: List<InstalledAddon>) {
+        saveToPrefs(addons)
+        _installedAddons.value = addons
+    }
+
+    fun removeAddon(id: String) {
+        saveInstalledAddons(getInstalledAddons().filterNot { it.id == id })
+    }
+
+    fun renameAddon(id: String, newName: String?) {
+        val cleaned = newName?.trim().orEmpty()
+        val updated = getInstalledAddons().map { addon ->
+            if (addon.id == id) {
+                addon.copy(customName = cleaned.takeIf { it.isNotBlank() })
+            } else {
+                addon
+            }
+        }
+        saveInstalledAddons(updated)
+    }
+
+    fun moveAddon(id: String, direction: Int) {
+        val current = getInstalledAddons().toMutableList()
+        val index = current.indexOfFirst { it.id == id }
+        if (index < 0) return
+
+        val target = index + direction
+        if (target !in current.indices) return
+
+        val item = current.removeAt(index)
+        current.add(target, item)
+        saveInstalledAddons(current)
+    }
+
+    fun refreshAddons() {
+        _installedAddons.value = loadFromPreferencesOrDefaults()
+    }
+
+    private fun defaultAddons(): List<InstalledAddon> = listOf(
+        InstalledAddon(
+            manifestUrl = "https://v3-cinemeta.strem.io/manifest.json",
+            id = "com.linvo.cinemeta",
+            name = "Cinemeta",
+            resources = listOf("catalog", "meta"),
+            catalogs = listOf(
+                ManifestCatalog(type = "movie", id = "top", name = "Top Movies"),
+                ManifestCatalog(type = "series", id = "top", name = "Top Series")
+            )
+        ),
+        InstalledAddon(
+            manifestUrl = "http://132.145.137.148:8080/stremio/67f82e67-ed57-4cef-bf0b-32b7386fae01/eyJpIjoiamlEcExKUGljdnpZUkRHUEcxWTRuUT09IiwiZSI6Ik9FeEFFY0QxYlpXMktzVkV3UGo4YUY4MUdtY2w4ZEVwT2hEWlo3enNBQ3M9IiwidCI6ImEifQ/manifest.json",
+            id = "aiostreams",
+            name = "AIOStreams",
+            resources = listOf("stream"),
+            catalogs = emptyList()
+        )
+    )
+
+    companion object {
+        private const val KEY = "installed_addons_json"
+    }
+}
