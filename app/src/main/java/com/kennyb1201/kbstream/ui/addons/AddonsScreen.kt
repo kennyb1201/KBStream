@@ -572,40 +572,65 @@ private fun AddonDetails(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        Card(
-            onClick = onRemove,
-            colors = CardDefaults.colors(
-                containerColor = KBSurfaceRaised,
-                contentColor = KBTextHi,
-                focusedContainerColor = KBSurfaceRaised,
-                focusedContentColor = KBTextHi
-            ),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 11.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Delete,
-                    contentDescription = null,
-                    tint = KBAccent,
-                    modifier = Modifier.size(18.dp)
-                )
+var removeFocused by remember { mutableStateOf(false) }
 
-                Text(
-                    text = "REMOVE ADD-ON",
-                    color = KBTextHi,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(start = 8.dp)
-                )
+Surface(
+    onClick = onRemove,
+    shape = RoundedCornerShape(12.dp),
+    colors = SurfaceDefaults.colors(
+        containerColor =
+            if (removeFocused) {
+                KBAccent
+            } else {
+                KBSurfaceRaised
+            },
+        contentColor =
+            if (removeFocused) {
+                KBVoid
+            } else {
+                KBTextHi
             }
+    ),
+    border = SurfaceDefaults.border(
+        border =
+            if (removeFocused) {
+                Border(
+                    BorderStroke(
+                        width = 2.dp,
+                        color = KBAccent
+                    )
+                )
+            } else {
+                Border.None
+            }
+    ),
+    modifier = Modifier
+        .fillMaxWidth()
+        .onFocusChanged {
+            removeFocused = it.isFocused
         }
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                horizontal = 14.dp,
+                vertical = 11.dp
+            )
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Delete,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp)
+        )
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "REMOVE ADD-ON",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(start = 8.dp)
+        )
     }
 }
 
@@ -724,27 +749,57 @@ private fun ActionButton(
 @Composable
 private fun SmallAction(
     label: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     enabled: Boolean = true,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Card(
-        onClick = { if (enabled) onClick() },
-        colors = CardDefaults.colors(
-            containerColor = if (enabled) KBSurfaceRaised else KBSurface.copy(alpha = 0.5f),
-            contentColor = if (enabled) KBTextHi else KBTextLo,
-            focusedContainerColor = if (enabled) KBSurfaceRaised else KBSurface.copy(alpha = 0.5f),
-            focusedContentColor = if (enabled) KBTextHi else KBTextLo
+    var focused by remember { mutableStateOf(false) }
+
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        shape = RoundedCornerShape(12.dp),
+        colors = SurfaceDefaults.colors(
+            containerColor =
+                when {
+                    !enabled -> KBSurface.copy(alpha = 0.50f)
+                    focused -> KBAccent
+                    else -> KBSurfaceRaised
+                },
+            contentColor =
+                when {
+                    !enabled -> KBTextLo.copy(alpha = 0.50f)
+                    focused -> KBVoid
+                    else -> KBTextHi
+                }
         ),
-        modifier = modifier
+        border = SurfaceDefaults.border(
+            border =
+                if (focused && enabled) {
+                    Border(
+                        BorderStroke(
+                            width = 2.dp,
+                            color = KBAccent
+                        )
+                    )
+                } else {
+                    Border.None
+                }
+        ),
+        modifier = modifier.onFocusChanged {
+            focused = it.isFocused
+        }
     ) {
         Row(
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 9.dp)
+                .padding(
+                    horizontal = 8.dp,
+                    vertical = 9.dp
+                )
         ) {
             Icon(
                 imageVector = icon,
@@ -761,7 +816,6 @@ private fun SmallAction(
         }
     }
 }
-
 // =====================================================================
 // STATUS
 // =====================================================================
