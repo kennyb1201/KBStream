@@ -97,18 +97,20 @@ class AddonRepository {
     }
 
     suspend fun getMeta(
-        baseUrl: String,
-        type: String,
-        id: String
-    ): Meta? {
+    baseUrl: String,
+    type: String,
+    id: String
+): Meta? {
+    val base = normalizeBaseUrl(baseUrl)
+    val url = "$base/meta/$type/$id.json"
 
-        val base =
-            normalizeBaseUrl(baseUrl)
+    android.util.Log.e(
+        "KBStream",
+        "BingeCat meta URL: $url"
+    )
 
-        return api.getMeta(
-            "$base/meta/$type/$id.json"
-        ).meta
-    }
+    return api.getMeta(url).meta
+}
 
     suspend fun getStreams(
         baseUrl: String,
