@@ -203,15 +203,18 @@ private fun CatalogRow(
             contentColor = KBTextHi
         ),
         border = SurfaceDefaults.border(
-            border = Border(
-                border = BorderStroke(
-                    1.dp,
-                    if (catalog.showOnHome) KBAccent.copy(alpha = 0.25f)
-                    else KBTextLo.copy(alpha = 0.14f)
-                ),
-                shape = shape
-            )
+    Border(
+        border = BorderStroke(
+            1.dp,
+            if (catalog.showOnHome) {
+                KBAccent.copy(alpha = 0.25f)
+            } else {
+                KBTextLo.copy(alpha = 0.14f)
+            }
         ),
+        shape = shape
+    )
+),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
