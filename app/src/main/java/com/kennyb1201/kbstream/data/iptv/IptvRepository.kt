@@ -472,6 +472,18 @@ val upcoming = matchedPrograms.asSequence()
     .map(::mapProgramRow)
     .toList()
 
+    Log.w(
+    TAG,
+    "EPG RESULT " +
+        "name=${channel.displayName} " +
+        "tvgId=${channel.tvgId} " +
+        "matchedId=${epgChannel?.id} " +
+        "matchType=$matchType " +
+        "now=${now?.title} " +
+        "next=${next?.title} " +
+        "upcoming=${upcoming.size}"
+)
+
             IptvChannelWithEpg(
                 channel = channel,
                 epgChannel = match.epgChannel,
