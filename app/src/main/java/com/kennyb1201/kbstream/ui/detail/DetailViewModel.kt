@@ -272,14 +272,59 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
 
                 // 4. Handle Meta addon loading asynchronously in background
                 val addons = addonsDeferred.await()
-                addons.firstOrNull { it.resources.contains("meta") }?.let { metaAddon ->
-                    runCatching {
-                        val baseUrl = metaAddon.manifestUrl.removeSuffix("/manifest.json")
-                        repository.getMeta(baseUrl, normalizedType, id)
-                    }.onSuccess { meta ->
-                        _meta.value = meta
-                    }
-                }
+
+val metaAddons = addons.filter { addon ->
+    addon.resources.any { it.equals("meta", ignoreCase = true) }
+}
+
+Log.e(
+    "KBStream",
+    "detail meta: type=$normalizedType id=$id candidates=${metaAddons.map { it.name }}"
+)
+
+var resolvedMeta: Meta? = null
+var lastMetaError: Throwable? = null
+
+for (metaAddon in metaAddons) {
+    val result = runCatching {
+        val baseUrl = metaAddon.manifestUrl.substringBeforeLast("/manifest.json")
+        repository.getMeta(baseUrl, normalizedType, id)
+    }
+
+    result.onSuccess { response ->
+        if (response != null) {
+            resolvedMeta = response
+            Log.e(
+                "KBStream",
+                "detail meta resolved addon=${metaAddon.name} id=$id"
+            )
+        } else {
+            Log.e(
+                "KBStream",
+                "detail meta empty addon=${metaAddon.name} id=$id"
+            )
+        }
+    }.onFailure { error ->
+        lastMetaError = error
+        Log.e(
+            "KBStream",
+            "detail meta failed addon=${metaAddon.name} id=$id",
+            error
+        )
+    }
+
+    if (resolvedMeta != null) break
+}
+
+_meta.value = resolvedMeta
+
+if (resolvedMeta == null) {
+    Log.e(
+        "KBStream",
+        "detail meta unresolved type=$normalizedType id=$id",
+        lastMetaError
+    )
+}
 
                 tmdbDetailResult.onSuccess { detail ->
                     _tmdbDetail.value = detail
