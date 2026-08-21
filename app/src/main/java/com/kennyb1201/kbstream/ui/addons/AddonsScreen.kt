@@ -442,30 +442,53 @@ private fun AddonDetails(
         )
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SmallAction("UP", Icons.Filled.ArrowUpward, onMoveUp)
-            SmallAction("DOWN", Icons.Filled.ArrowDownward, onMoveDown)
-        }
+    SmallAction(
+        label = "UP",
+        icon = Icons.Filled.ArrowUpward,
+        onClick = onMoveUp
+    )
 
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.padding(top = 8.dp)
-        ) {
-            SmallAction("RENAME", Icons.Filled.Edit, onRename)
-            SmallAction("RESET", Icons.Filled.Restore, onResetName)
-        }
+    SmallAction(
+        label = "DOWN",
+        icon = Icons.Filled.ArrowDownward,
+        onClick = onMoveDown
+    )
+}
 
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.padding(top = 8.dp)
-        ) {
-            SmallAction("MANIFEST", Icons.Filled.OpenInNew, onOpenManifest)
-            SmallAction(
-                label = if (refreshing) "REFRESHING" else "REFRESH",
-                icon = Icons.Filled.Refresh,
-                enabled = !refreshing,
-                onClick = onRefresh
-            )
-        }
+Row(
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+    modifier = Modifier.padding(top = 8.dp)
+) {
+    SmallAction(
+        label = "RENAME",
+        icon = Icons.Filled.Edit,
+        onClick = onRename
+    )
+
+    SmallAction(
+        label = "RESET",
+        icon = Icons.Filled.Restore,
+        onClick = onResetName
+    )
+}
+
+Row(
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+    modifier = Modifier.padding(top = 8.dp)
+) {
+    SmallAction(
+        label = "MANIFEST",
+        icon = Icons.Filled.OpenInNew,
+        onClick = onOpenManifest
+    )
+
+    SmallAction(
+        label = if (refreshing) "REFRESHING" else "REFRESH",
+        icon = Icons.Filled.Refresh,
+        enabled = !refreshing,
+        onClick = onRefresh
+    )
+}
 
         Spacer(modifier = Modifier.weight(1f))
 
