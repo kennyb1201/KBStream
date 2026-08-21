@@ -648,22 +648,53 @@ private fun DetailLine(
 @Composable
 private fun ActionButton(
     label: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    icon: ImageVector? = null,
     enabled: Boolean = true,
     onClick: () -> Unit
 ) {
-    Card(
-        onClick = { if (enabled) onClick() },
-        colors = CardDefaults.colors(
-            containerColor = if (enabled) KBSurfaceRaised else KBSurface.copy(alpha = 0.5f),
-            contentColor = if (enabled) KBTextHi else KBTextLo,
-            focusedContainerColor = if (enabled) KBSurfaceRaised else KBSurface.copy(alpha = 0.5f),
-            focusedContentColor = if (enabled) KBTextHi else KBTextLo
-        )
+    var focused by remember { mutableStateOf(false) }
+
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        shape = RoundedCornerShape(12.dp),
+        colors = SurfaceDefaults.colors(
+            containerColor =
+                when {
+                    !enabled -> KBSurface.copy(alpha = 0.50f)
+                    focused -> KBAccent
+                    else -> KBSurfaceRaised
+                },
+            contentColor =
+                when {
+                    !enabled -> KBTextLo.copy(alpha = 0.50f)
+                    focused -> KBVoid
+                    else -> KBTextHi
+                }
+        ),
+        border = SurfaceDefaults.border(
+            border =
+                if (focused && enabled) {
+                    Border(
+                        border = BorderStroke(
+                            width = 2.dp,
+                            color = KBAccent
+                        )
+                    )
+                } else {
+                    Border.None
+                }
+        ),
+        modifier = Modifier.onFocusChanged {
+            focused = it.isFocused
+        }
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 13.dp, vertical = 9.dp)
+            modifier = Modifier.padding(
+                horizontal = 13.dp,
+                vertical = 9.dp
+            )
         ) {
             icon?.let {
                 Icon(
@@ -671,6 +702,7 @@ private fun ActionButton(
                     contentDescription = null,
                     modifier = Modifier.size(17.dp)
                 )
+
                 Spacer(modifier = Modifier.width(5.dp))
             }
 
