@@ -209,11 +209,9 @@ LaunchedEffect(playlist) {
 }
 
 LaunchedEffect(groupedChannels) {
-    val currentSelectionStillExists = groupedChannels.any { item ->
-        item.channel.id == selectedChannelId
-    }
+    val currentStillExists = groupedChannels.any { it.channel.id == selectedChannelId }
 
-    if (!currentSelectionStillExists) {
+    if (!currentStillExists) {
         selectedChannelId = groupedChannels.firstOrNull()?.channel?.id
     }
 }
@@ -258,13 +256,15 @@ LaunchedEffect(channelListState, groupedChannelIds) {
     channelListState.scrollToItem(0)
 }
 
-  LaunchedEffect(moveFocusToChannelList, groupedChannels, selectedChannelIndex) {
-    if (moveFocusToChannelList && groupedChannels.isNotEmpty() && selectedChannelIndex >= 0) {
+  LaunchedEffect(moveFocusToChannelList, groupedChannels) {
+    if (moveFocusToChannelList && groupedChannels.isNotEmpty()) {
+        selectedChannelId = groupedChannels.first().channel.id
+        channelListState.scrollToItem(0)
         awaitFrame()
         firstChannelFocusRequester.requestFocus()
         moveFocusToChannelList = false
     }
-  }
+}
     Box(
         modifier = modifier
             .fillMaxSize()
