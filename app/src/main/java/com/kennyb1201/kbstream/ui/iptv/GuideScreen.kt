@@ -122,7 +122,7 @@ fun GuideScreen(
     val channelListState = rememberLazyListState()
     val firstChannelFocusRequester = remember { FocusRequester() }
     val latestOnPlayChannel by rememberUpdatedState(onPlayChannel)
-    val appContext = LocalContext.current.applicationContext
+    val appContext = androidx.compose.ui.platform.LocalContext.current.applicationContext
     val guidePreferences = remember(appContext) {
         appContext.getSharedPreferences("iptv_guide_preferences", Context.MODE_PRIVATE)
     }
