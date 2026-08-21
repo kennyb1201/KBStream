@@ -477,23 +477,21 @@ val upcoming = matchedPrograms.asSequence()
     "EPG RESULT " +
         "name=${channel.displayName} " +
         "tvgId=${channel.tvgId} " +
-        "matchedId=${epgChannel?.id} " +
-        "matchType=$matchType " +
+        "matchedId=${match.epgChannel?.id} " +
+        "matchType=${match.matchType} " +
         "now=${now?.title} " +
         "next=${next?.title} " +
         "upcoming=${upcoming.size}"
 )
 
-            IptvChannelWithEpg(
-                channel = channel,
-                epgChannel = match.epgChannel,
-                epgMatchType = match.matchType,
-                now = now?.let(::mapProgramRow),
-                next = next?.let(::mapProgramRow),
-                upcoming = upcoming
-            )
-        }
-    }
+IptvChannelWithEpg(
+    channel = channel,
+    epgChannel = match.epgChannel,
+    epgMatchType = match.matchType,
+    now = now?.let(::mapProgramRow),
+    next = next?.let(::mapProgramRow),
+    upcoming = upcoming
+)
 
     private fun unmatchedItem(channel: IptvChannel): IptvChannelWithEpg =
         IptvChannelWithEpg(
