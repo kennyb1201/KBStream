@@ -90,9 +90,9 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import kotlinx.coroutines.android.awaitFrame
 
-private const val GUIDE_PREFETCH_BEFORE_COUNT = 12
-private const val GUIDE_PREFETCH_AFTER_COUNT = 36
-private const val MAX_GUIDE_CHANNEL_REQUEST_SIZE = 48
+private const val GUIDE_PREFETCH_BEFORE_COUNT = 6
+private const val GUIDE_PREFETCH_AFTER_COUNT = 18
+private const val MAX_GUIDE_CHANNEL_REQUEST_SIZE = 32
 
 @Composable
 fun GuideScreen(
