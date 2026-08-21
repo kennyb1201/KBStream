@@ -83,6 +83,12 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.delay
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import kotlinx.coroutines.android.awaitFrame
 
 private const val GUIDE_PREFETCH_BEFORE_COUNT = 12
 private const val GUIDE_PREFETCH_AFTER_COUNT = 36
@@ -122,6 +128,8 @@ fun GuideScreen(
         mutableStateOf(guidePreferences.getStringSet("hidden_groups", emptySet())?.toSet().orEmpty())
     }
     var menuItem by remember { mutableStateOf<IptvChannelWithEpg?>(null) }
+    
+    var moveFocusToChannelList by remember { mutableStateOf(false) }
 
     fun channelKey(item: IptvChannelWithEpg): String =
         item.channel.id.ifBlank { item.channel.streamUrl }
@@ -158,6 +166,17 @@ fun GuideScreen(
             else -> unhiddenChannels.filter { it.channel.groupTitle?.trim() == selectedGroup }
         }
     }
+    fun moveSelectedGroup(direction: Int) {
+    if (groups.isEmpty()) return
+
+    val currentIndex = groups.indexOf(selectedGroup).takeIf { it >= 0 } ?: 0
+    val newIndex = (currentIndex + direction).coerceIn(0, groups.lastIndex)
+
+    if (newIndex != currentIndex) {
+        selectedGroup = groups[newIndex]
+    }
+    }
+    
     val groupedChannelIds = remember(groupedChannels) {
     groupedChannels.map { it.channel.id }
     }
@@ -234,10 +253,18 @@ LaunchedEffect(channelListState, groupedChannelIds) {
             }
         }
 }
-  LaunchedEffect(selectedGroup) {
+  LaunchedEffect(selectedGroup, groupedChannels) {
+    selectedChannelId = groupedChannels.firstOrNull()?.channel?.id
     channelListState.scrollToItem(0)
-  }
+}
 
+  LaunchedEffect(moveFocusToChannelList, groupedChannels, selectedChannelIndex) {
+    if (moveFocusToChannelList && groupedChannels.isNotEmpty() && selectedChannelIndex >= 0) {
+        awaitFrame()
+        firstChannelFocusRequester.requestFocus()
+        moveFocusToChannelList = false
+    }
+  }
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -311,28 +338,34 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                     } else {
                         if (groups.isNotEmpty()) {
                             LazyRow(
-                                contentPadding = PaddingValues(end = 8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                modifier = Modifier.focusGroup()
-                            ) {
-                                itemsIndexed(groups, key = { _, item -> item }) { _, group ->
-                                    GroupChip(
-    name = group,
-    selected = group == selectedGroup,
-    onClick = { selectedGroup = group },
-    onFocus = { selectedGroup = group },
-    modifier = if (groupedChannels.isNotEmpty()) {
-        Modifier.focusProperties {
-            down = firstChannelFocusRequester
-        }
-    } else {
-        Modifier
-    }
-)
-                                }
-                            }
+    contentPadding = PaddingValues(end = 8.dp),
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+    modifier = Modifier
+        .focusGroup()
+        .onPreviewKeyEvent { event ->
+            if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
 
-                            Spacer(modifier = Modifier.height(14.dp))
+            when (event.key) {
+                Key.DirectionDown -> {
+                    moveFocusToChannelList = true
+                    true
+                }
+                else -> false
+            }
+        }
+) {
+    itemsIndexed(groups, key = { _, item -> item }) { _, group ->
+        GroupChip(
+            name = group,
+            selected = group == selectedGroup,
+            onClick = { selectedGroup = group },
+            onFocus = { selectedGroup = group },
+            modifier = Modifier
+        )
+    }
+}
+
+Spacer(modifier = Modifier.height(14.dp))
 
                             Row(modifier = Modifier.fillMaxSize()) {
                                 LazyColumn(
@@ -362,11 +395,28 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                                             onLongClick = {
     selectedChannelId = item.channel.id
     menuItem = item
-},
-                                            modifier = if (index == selectedChannelIndex) {
-    Modifier.focusRequester(firstChannelFocusRequester)
-} else {
-    Modifier
+},modifier = (
+    if (index == selectedChannelIndex) {
+        Modifier.focusRequester(firstChannelFocusRequester)
+    } else {
+        Modifier
+    }
+).onPreviewKeyEvent { event ->
+    if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+
+    when (event.key) {
+        Key.DirectionLeft -> {
+            moveSelectedGroup(-1)
+            moveFocusToChannelList = true
+            true
+        }
+        Key.DirectionRight -> {
+            moveSelectedGroup(1)
+            moveFocusToChannelList = true
+            true
+        }
+        else -> false
+    }
 }
                                         )
                                     }
