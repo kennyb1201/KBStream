@@ -711,51 +711,47 @@ class AddonManager private constructor(
      * into the nested addon structure.
      */
     private fun saveGlobalCatalogOrder(
-        configurations:
-            List<CatalogConfiguration>
-    ) {
+    private fun saveGlobalCatalogOrder(
+    configurations: List<CatalogConfiguration>
+) {
 
-        val orderByKey =
-            configurations
-                .mapIndexed { index, configuration ->
+    val orderByKey =
+        configurations
+            .mapIndexed { index, configuration ->
 
-                    catalogKey(
-                        configuration.catalog.type,
-                        configuration.catalog.id
-                    ) to index
+                catalogKey(
+                    configuration.catalog.type,
+                    configuration.catalog.id
+                ) to index
 
-                }
-                .toMap()
+            }
+            .toMap()
 
-        val updated =
-            getInstalledAddons()
-                .map { addon ->
+    val updated =
+        getInstalledAddons()
+            .map { addon ->
 
-                    addon.copy(
-                        catalogs =
-                            addon.catalogs
-                                .map { catalog ->
+                addon.copy(
+                    catalogs =
+                        addon.catalogs.map { catalog ->
 
-                                    val key =
-                                        catalogKey(
-                                            catalog.type,
-                                            catalog.id
-                                        )
+                            val key =
+                                catalogKey(
+                                    catalog.type,
+                                    catalog.id
+                                )
 
-                                    catalog.copy(
-                                        order =
-                                            orderByKey[
-                                                key
-                                            ]
-                                                ?: catalog.order
-                                    )
-                                }
-                        )
-                    )
-                }
+                            catalog.copy(
+                                order =
+                                    orderByKey[key]
+                                        ?: catalog.order
+                            )
+                        }
+                )
+            }
 
-        saveInstalledAddons(updated)
-    }
+    saveInstalledAddons(updated)
+}
 
     private fun catalogKey(
         type: String,
