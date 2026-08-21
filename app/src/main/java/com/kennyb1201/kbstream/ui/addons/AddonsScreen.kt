@@ -7,7 +7,6 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
-import androidx.compose.foundation.focus.onFocusChanged
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -572,52 +571,51 @@ private fun AddonDetails(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-var removeFocused by remember { mutableStateOf(false) }
+val removeShape = RoundedCornerShape(12.dp)
 
 Surface(
     onClick = onRemove,
-    shape = RoundedCornerShape(12.dp),
-    colors = SurfaceDefaults.colors(
-        containerColor =
-            if (removeFocused) {
+    shape = ClickableSurfaceDefaults.shape(shape = removeShape),
+    colors = ClickableSurfaceDefaults.colors(
+        containerColor = KBSurfaceRaised,
+        contentColor = KBTextHi,
+        focusedContainerColor = KBAccent,
+        focusedContentColor = KBVoid,
+        pressedContainerColor = KBAccent,
+        pressedContentColor = KBVoid
+    ),
+    scale = ClickableSurfaceDefaults.scale(
+        focusedScale = 1.04f
+    ),
+    border = ClickableSurfaceDefaults.border(
+        border = Border(
+            border = BorderStroke(
+                1.dp,
+                KBTextLo.copy(alpha = 0.18f)
+            ),
+            shape = removeShape
+        ),
+        focusedBorder = Border(
+            border = BorderStroke(
+                2.dp,
                 KBAccent
-            } else {
-                KBSurfaceRaised
-            },
-        contentColor =
-            if (removeFocused) {
-                KBVoid
-            } else {
-                KBTextHi
-            }
+            ),
+            shape = removeShape
+        )
     ),
-    border = SurfaceDefaults.border(
-        border =
-            if (removeFocused) {
-                Border(
-                    BorderStroke(
-                        width = 2.dp,
-                        color = KBAccent
-                    )
-                )
-            } else {
-                Border.None
-            }
+    glow = ClickableSurfaceDefaults.glow(
+        focusedGlow = Glow(
+            elevationColor = KBAccent,
+            elevation = 6.dp
+        )
     ),
-    modifier = Modifier
-        .fillMaxWidth()
-        .onFocusChanged {
-            removeFocused = it.isFocused
-        }
+    modifier = Modifier.fillMaxWidth()
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(
-                horizontal = 14.dp,
-                vertical = 11.dp
-            )
+            .padding(horizontal = 14.dp, vertical = 11.dp)
     ) {
         Icon(
             imageVector = Icons.Filled.Delete,
@@ -631,9 +629,6 @@ Surface(
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(start = 8.dp)
         )
-    }
-}
-Spacer(modifier = Modifier.height(8.dp))
     }
 }
 // =====================================================================
@@ -681,42 +676,51 @@ private fun ActionButton(
     enabled: Boolean = true,
     onClick: () -> Unit
 ) {
-    var focused by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(12.dp)
 
     Surface(
         onClick = onClick,
         enabled = enabled,
-        shape = RoundedCornerShape(12.dp),
-        colors = SurfaceDefaults.colors(
+        shape = ClickableSurfaceDefaults.shape(shape = shape),
+        colors = ClickableSurfaceDefaults.colors(
             containerColor =
-                when {
-                    !enabled -> KBSurface.copy(alpha = 0.50f)
-                    focused -> KBAccent
-                    else -> KBSurfaceRaised
-                },
+                if (enabled) KBSurfaceRaised else KBSurface.copy(alpha = 0.50f),
             contentColor =
-                when {
-                    !enabled -> KBTextLo.copy(alpha = 0.50f)
-                    focused -> KBVoid
-                    else -> KBTextHi
-                }
+                if (enabled) KBTextHi else KBTextLo.copy(alpha = 0.50f),
+            focusedContainerColor =
+                if (enabled) KBAccent else KBSurface.copy(alpha = 0.50f),
+            focusedContentColor =
+                if (enabled) KBVoid else KBTextLo.copy(alpha = 0.50f),
+            pressedContainerColor =
+                if (enabled) KBAccent else KBSurface.copy(alpha = 0.50f),
+            pressedContentColor =
+                if (enabled) KBVoid else KBTextLo.copy(alpha = 0.50f)
         ),
-        border = SurfaceDefaults.border(
-            border =
-                if (focused && enabled) {
-                    Border(
-                        border = BorderStroke(
-                            width = 2.dp,
-                            color = KBAccent
-                        )
-                    )
-                } else {
-                    Border.None
-                }
+        scale = ClickableSurfaceDefaults.scale(
+            focusedScale = 1.04f
         ),
-        modifier = Modifier.onFocusChanged {
-            focused = it.isFocused
-        }
+        border = ClickableSurfaceDefaults.border(
+            border = Border(
+                border = BorderStroke(
+                    1.dp,
+                    KBTextLo.copy(alpha = 0.18f)
+                ),
+                shape = shape
+            ),
+            focusedBorder = Border(
+                border = BorderStroke(
+                    2.dp,
+                    KBAccent
+                ),
+                shape = shape
+            )
+        ),
+        glow = ClickableSurfaceDefaults.glow(
+            focusedGlow = Glow(
+                elevationColor = KBAccent,
+                elevation = 7.dp
+            )
+        )
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -744,6 +748,7 @@ private fun ActionButton(
     }
 }
 
+
 // =====================================================================
 // SMALL ACTION
 // =====================================================================
@@ -756,42 +761,52 @@ private fun SmallAction(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var focused by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(12.dp)
 
     Surface(
         onClick = onClick,
         enabled = enabled,
-        shape = RoundedCornerShape(12.dp),
-        colors = SurfaceDefaults.colors(
+        shape = ClickableSurfaceDefaults.shape(shape = shape),
+        colors = ClickableSurfaceDefaults.colors(
             containerColor =
-                when {
-                    !enabled -> KBSurface.copy(alpha = 0.50f)
-                    focused -> KBAccent
-                    else -> KBSurfaceRaised
-                },
+                if (enabled) KBSurfaceRaised else KBSurface.copy(alpha = 0.50f),
             contentColor =
-                when {
-                    !enabled -> KBTextLo.copy(alpha = 0.50f)
-                    focused -> KBVoid
-                    else -> KBTextHi
-                }
+                if (enabled) KBTextHi else KBTextLo.copy(alpha = 0.50f),
+            focusedContainerColor =
+                if (enabled) KBAccent else KBSurface.copy(alpha = 0.50f),
+            focusedContentColor =
+                if (enabled) KBVoid else KBTextLo.copy(alpha = 0.50f),
+            pressedContainerColor =
+                if (enabled) KBAccent else KBSurface.copy(alpha = 0.50f),
+            pressedContentColor =
+                if (enabled) KBVoid else KBTextLo.copy(alpha = 0.50f)
         ),
-        border = SurfaceDefaults.border(
-            border =
-                if (focused && enabled) {
-                    Border(
-                        BorderStroke(
-                            width = 2.dp,
-                            color = KBAccent
-                        )
-                    )
-                } else {
-                    Border.None
-                }
+        scale = ClickableSurfaceDefaults.scale(
+            focusedScale = 1.04f
         ),
-        modifier = modifier.onFocusChanged {
-            focused = it.isFocused
-        }
+        border = ClickableSurfaceDefaults.border(
+            border = Border(
+                border = BorderStroke(
+                    1.dp,
+                    KBTextLo.copy(alpha = 0.18f)
+                ),
+                shape = shape
+            ),
+            focusedBorder = Border(
+                border = BorderStroke(
+                    2.dp,
+                    KBAccent
+                ),
+                shape = shape
+            )
+        ),
+        glow = ClickableSurfaceDefaults.glow(
+            focusedGlow = Glow(
+                elevationColor = KBAccent,
+                elevation = 6.dp
+            )
+        ),
+        modifier = modifier
     ) {
         Row(
             horizontalArrangement = Arrangement.Center,
