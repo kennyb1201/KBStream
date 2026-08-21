@@ -482,17 +482,7 @@ class IptvRepository(
                 upcoming = upcoming
             )
 
-            Log.w(
-                TAG,
-                "EPG RESULT " +
-                    "name=${item.channel.displayName} " +
-                    "tvgId=${item.channel.tvgId} " +
-                    "matchedId=${item.epgChannel?.id} " +
-                    "matchType=${item.epgMatchType} " +
-                    "now=${item.now?.title} " +
-                    "next=${item.next?.title} " +
-                    "upcoming=${item.upcoming.size}"
-            )
+            
 
             item
         }
