@@ -18,6 +18,9 @@ class AddonManager private constructor(
     context: Context
 ) {
 
+    class AddonManager(
+    context: Context
+) {
     private val prefs =
         context.applicationContext.getSharedPreferences(
             "kbstream_addons",
