@@ -1922,7 +1922,7 @@ val pendingCatalogs =
 
             if (
                 "catalog" !in addon.resources ||
-                addon.manifestUrl == TOPTODAYMANIFESTURL
+                addon.manifestUrl == TOP_TODAY_MANIFEST_URL
             ) {
                 return@mapNotNull null
             }
