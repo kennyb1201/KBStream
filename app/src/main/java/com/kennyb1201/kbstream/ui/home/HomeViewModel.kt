@@ -494,46 +494,56 @@ class HomeViewModel(
         }
     }
 
-    private suspend fun loadSimklUpNextItems():
-            List<UpNextItem> {
+private suspend fun loadSimklUpNextItems():
+        List<UpNextItem> {
 
-        if (
-            !simklRepository.isConfigured() ||
-            !simklRepository.hasToken()
-        ) {
-            return emptyList()
-        }
+    if (
+        !simklRepository.isConfigured() ||
+        !simklRepository.hasToken()
+    ) {
+        return emptyList()
+    }
 
-        return try {
+    return try {
+        val raw =
+            simklRepository
+                .getContinueWatching()
+                .take(MAX_SIMKL_UP_NEXT_ITEMS)
 
-            val raw =
-                simklRepository.getContinueWatching()
+        val lookupSemaphore =
+            Semaphore(
+                MAX_CONCURRENT_SIMKL_UP_NEXT_LOOKUPS
+            )
 
-            coroutineScope {
-
-                raw.map { item ->
-
-                    async {
+        coroutineScope {
+            raw.map { item ->
+                async {
+                    lookupSemaphore.withPermit {
                         buildSimklUpNextItem(
                             item
                         )
                     }
-
-                }.awaitAll()
-                    .filterNotNull()
+                }
             }
-
-        } catch (e: Exception) {
-
-            Log.e(
-                "HOME_UPNEXT",
-                "simkl load failed: ${e.message}",
-                e
-            )
-
-            emptyList()
+                .awaitAll()
+                .filterNotNull()
         }
+
+    } catch (
+        e: kotlinx.coroutines.CancellationException
+    ) {
+        throw e
+
+    } catch (e: Exception) {
+        Log.e(
+            "HOME_UPNEXT",
+            "simkl load failed: ${e.message}",
+            e
+        )
+
+        emptyList()
     }
+}
 
     private suspend fun buildSimklUpNextItem(
         item: SimklContinueWatchingItem
@@ -2073,6 +2083,12 @@ class HomeViewModel(
         private const val MAX_WATCHED_STATUS_PRELOAD_ITEMS =
             100
 
+        private const val MAX_SIMKL_UP_NEXT_ITEMS =
+    30
+
+private const val MAX_CONCURRENT_SIMKL_UP_NEXT_LOOKUPS =
+    3
+        
         private const val PERIODIC_SIMKL_REFRESH_MS =
             15 * 60 * 1000L
 
