@@ -168,13 +168,7 @@ val heroMeta: StateFlow<Meta?> =
         )
 
     val rails: StateFlow<List<Rail>> =
-        _rails.asStateFlow()
-
-    private val _heroMeta =
-        MutableStateFlow<Meta?>(null)
-
-    val heroMeta: StateFlow<Meta?> =
-        _heroMeta.asStateFlow()
+        _rails.asStateFlow()   
 
     private var heroRequestKey: String? = null
 
