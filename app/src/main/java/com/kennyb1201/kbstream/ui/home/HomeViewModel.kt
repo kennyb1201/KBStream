@@ -1892,62 +1892,42 @@ class HomeViewModel(
                     pinned
                 )
 
-                val addons =
-                    addonManager
-                        .installedAddons
-                        .value
+val addonsById =
+    addonManager
+        .installedAddons
+        .value
+        .associateBy { it.id }
 
-                /*
-                 * Build the complete catalog list in Home order.
-                 */
-                val pendingCatalogs =
-                    addons
-                        .asSequence()
-                        .filter {
-                            it.resources.contains(
-                                "catalog"
-                            )
-                        }
-                        .filter {
-                            it.manifestUrl !=
-                                TOP_TODAY_MANIFEST_URL
-                        }
-                        .flatMap { addon ->
+val pendingCatalogs =
+    addonManager
+        .getHomeCatalogConfigurations()
+        .asSequence()
+        .mapNotNull { configuration ->
+            val addon =
+                addonsById[configuration.addonId]
+                    ?: return@mapNotNull null
 
-                            val baseUrl =
-                                addon.manifestUrl
-                                    .removeSuffix(
-                                        "/manifest.json"
-                                    )
-                                    .removeSuffix("/")
+            if (
+                "catalog" !in addon.resources ||
+                addon.manifestUrl == TOP_TODAY_MANIFEST_URL
+            ) {
+                return@mapNotNull null
+            }
 
-                            addonManager.getCatalogConfigurations()
-    .asSequence()
-    .filter { configuration -> configuration.addonId == addon.id }
-    .map { configuration -> configuration.catalog }
-    .filter { catalog -> catalog.showOnHome }
-    .map { catalog ->
+            val baseUrl =
+                addon.manifestUrl
+                    .removeSuffix("manifest.json")
+                    .removeSuffix("/")
 
-                                    PendingCatalogLoad(
-
-                                        addonName =
-                                            addon.displayName,
-
-                                        baseUrl =
-                                            baseUrl,
-
-                                        catalogId =
-                                            catalog.id,
-
-                                        catalogType =
-                                            catalog.type,
-
-                                        catalogRawName =
-                                            catalog.name
-                                    )
-                                }
-                        }
-                        .toList()
+            PendingCatalogLoad(
+                addonName = addon.displayName,
+                baseUrl = baseUrl,
+                catalogId = configuration.catalog.id,
+                catalogType = configuration.catalog.type,
+                catalogRawName = configuration.catalog.name
+            )
+        }
+        .toList()
 
                 /*
                  * Load all addon catalogs concurrently.
