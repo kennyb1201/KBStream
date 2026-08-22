@@ -431,6 +431,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
             configurations
         )
           refreshAddons()
+    }
 
     /**
      * Replace an addon manifest while preserving
