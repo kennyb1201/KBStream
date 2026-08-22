@@ -372,6 +372,8 @@ class AddonManager(
         saveGlobalCatalogOrder(
             configurations
         )
+
+        loadFromPreferencesOrDefaults()
     }
 
     /**
