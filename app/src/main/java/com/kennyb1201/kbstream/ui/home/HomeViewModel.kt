@@ -2166,6 +2166,171 @@ private suspend fun loadRailsInternal(
              * collection has been published.
              */
             refreshWatchedStatus(
+private suspend fun loadRailsInternal(
+    forceRefresh: Boolean
+) {
+
+    if (
+        !forceRefresh &&
+        _rails.value.isNotEmpty()
+    ) {
+        return
+    }
+
+    _isLoading.value =
+        _rails.value.isEmpty()
+
+    _error.value =
+        null
+
+    if (forceRefresh) {
+        repository.clearCatalogCache()
+    }
+
+    try {
+
+        railsRefreshMutex.withLock {
+
+            val pinned =
+                mutableListOf<Rail>()
+
+            /*
+             * Load pinned rails first.
+             *
+             * These always remain at the top of Home.
+             */
+            loadPinnedTopTodayRails(
+                pinned
+            )
+
+            val addons =
+                addonManager
+                    .installedAddons
+                    .value
+
+            /*
+             * Build the complete catalog list in the exact order
+             * that the rails should appear on Home.
+             */
+            val pendingCatalogs =
+                addons
+                    .asSequence()
+                    .filter {
+                        it.resources.contains(
+                            "catalog"
+                        )
+                    }
+                    .filter {
+                        it.manifestUrl !=
+                            TOP_TODAY_MANIFEST_URL
+                    }
+                    .flatMap { addon ->
+
+                        val baseUrl =
+                            addon.manifestUrl
+                                .removeSuffix(
+                                    "/manifest.json"
+                                )
+                                .removeSuffix("/")
+
+                        addon.catalogs
+                            .sortedBy {
+                                it.order
+                            }
+                            .filter {
+                                it.showOnHome
+                            }
+                            .map { catalog ->
+
+                                PendingCatalogLoad(
+
+                                    addonName =
+                                        addon.displayName,
+
+                                    baseUrl =
+                                        baseUrl,
+
+                                    catalogId =
+                                        catalog.id,
+
+                                    catalogType =
+                                        catalog.type,
+
+                                    catalogRawName =
+                                        catalog.name
+                                )
+                            }
+                    }
+                    .toList()
+
+            /*
+             * Load ALL addon catalogs concurrently.
+             *
+             * loadCatalogRail() uses fetchCatalogThrottled(),
+             * which applies catalogRequestSemaphore so the actual
+             * network requests remain limited.
+             *
+             * IMPORTANT:
+             *
+             * No _rails.value assignment occurs inside these async
+             * blocks.
+             */
+            val loadedRails =
+                coroutineScope {
+
+                    pendingCatalogs
+                        .map { pending ->
+
+                            async {
+
+                                loadCatalogRail(
+                                    pending
+                                )
+                            }
+                        }
+                        .awaitAll()
+                        .filterNotNull()
+                }
+
+            /*
+             * awaitAll() returns results in the same order as the
+             * Deferred list, regardless of which network request
+             * finishes first.
+             *
+             * Therefore loadedRails still follows the catalog
+             * ordering from pendingCatalogs.
+             */
+            val finalRails =
+                pinned + loadedRails
+
+            /*
+             * SINGLE RAIL EMISSION.
+             *
+             * This is the important part:
+             *
+             * The UI receives the complete rail collection once.
+             *
+             * There are no:
+             *
+             *     _rails.value += ...
+             *
+             * or:
+             *
+             *     _rails.value = ...
+             *
+             * calls while individual catalogs are loading.
+             */
+            _rails.value =
+                finalRails
+
+            _isLoading.value =
+                false
+
+            /*
+             * Watched markers are refreshed only after the complete
+             * rail collection has been published.
+             */
+            refreshWatchedStatus(
                 finalRails
             )
 
