@@ -1903,13 +1903,14 @@ val pendingCatalogs =
         .getHomeCatalogConfigurations()
         .asSequence()
         .mapNotNull { configuration ->
+
             val addon =
                 addonsById[configuration.addonId]
                     ?: return@mapNotNull null
 
             if (
                 "catalog" !in addon.resources ||
-                addon.manifestUrl == TOP_TODAY_MANIFEST_URL
+                addon.manifestUrl == TOPTODAYMANIFESTURL
             ) {
                 return@mapNotNull null
             }
