@@ -1921,14 +1921,12 @@ class HomeViewModel(
                                     )
                                     .removeSuffix("/")
 
-                            addon.catalogs
-                                .sortedBy {
-                                    it.order
-                                }
-                                .filter {
-                                    it.showOnHome
-                                }
-                                .map { catalog ->
+                            addonManager.getCatalogConfigurations()
+    .asSequence()
+    .filter { configuration -> configuration.addonId == addon.id }
+    .map { configuration -> configuration.catalog }
+    .filter { catalog -> catalog.showOnHome }
+    .map { catalog ->
 
                                     PendingCatalogLoad(
 
