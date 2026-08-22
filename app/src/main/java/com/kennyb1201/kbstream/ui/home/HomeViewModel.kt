@@ -1934,109 +1934,79 @@ private suspend fun loadSimklUpNextItems():
             }
     }
 
-    private fun refreshWatchedStatus(
-        rails: List<Rail>
-    ) {
+private fun refreshWatchedStatus(
+    rails: List<Rail>
+) {
+    viewModelScope.launch {
+        try {
+            val preloadItems =
+                rails
+                    .asSequence()
+                    .flatMap { rail ->
+                        rail.items.asSequence()
+                    }
+                    .mapNotNull { meta ->
 
-        viewModelScope.launch {
-
-            try {
-
-                val metas =
-                    rails
-                        .flatMap {
-                            it.items
-                        }
-                        .filter {
-                            it.id.isNotBlank()
-                        }
-
-                if (
-                    metas.isEmpty()
-                ) {
-
-                    _watchedKeys.value =
-                        emptySet()
-
-                    return@launch
-                }
-
-                val preloadItems =
-                    metas
-                        .mapNotNull { meta ->
-
-                            val normalizedType =
-                                normalizeMediaType(
-                                    meta.type
-                                )
-                                    ?: return@mapNotNull null
-
-                            val imdbId =
-                                meta.id.takeIf {
-                                    it.isNotBlank()
+                        val imdbId =
+                            meta.id
+                                .trim()
+                                .takeIf {
+                                    it.startsWith("tt")
                                 }
-                                    ?: return@mapNotNull null
+                                ?: return@mapNotNull null
 
-                            imdbId to
-                                normalizedType
-                        }
-                        .distinct()
-                        .take(
-                            MAX_WATCHED_STATUS_PRELOAD_ITEMS
-                        )
+                        val mediaType =
+                            normalizeMediaType(
+                                meta.type
+                            )
+                                ?: return@mapNotNull null
 
-                if (
-                    preloadItems.isEmpty()
-                ) {
+                        imdbId to mediaType
+                    }
+                    .distinct()
+                    .toList()
 
-                    _watchedKeys.value =
-                        emptySet()
+            if (
+                preloadItems.isEmpty()
+            ) {
+                watchedKeys.value =
+                    emptySet()
 
-                    return@launch
-                }
+                return@launch
+            }
 
+            val watched =
                 watchedStatusRepository
-                    .preload(
+                    .preloadAndGetWatchedKeys(
                         preloadItems
                     )
 
-                val watched =
-                    preloadItems
-                        .filter {
-                                (
-                                    imdbId,
-                                    mediaType
-                                ) ->
+            watchedKeys.value =
+                watched
 
-                            watchedStatusRepository
-                                .isWatchedCached(
-                                    imdbId,
-                                    mediaType
-                                )
-                        }
-                        .map {
-                                (
-                                    imdbId,
-                                    mediaType
-                                ) ->
+            Log.d(
+                "HOME_WATCHED",
+                "marker refresh complete: " +
+                    "input=${preloadItems.size}, " +
+                    "watched=${watched.size}, " +
+                    "rails=${rails.size}"
+            )
 
-                            watchedKey(
-                                imdbId,
-                                mediaType
-                            )
-                        }
-                        .toSet()
+        } catch (
+            e: kotlinx.coroutines.CancellationException
+        ) {
+            throw e
 
-                _watchedKeys.value =
-                    watched
-
-            } catch (_: Exception) {
-
-                _watchedKeys.value =
-                    emptySet()
-            }
+        } catch (e: Exception) {
+            Log.e(
+                "HOME_WATCHED",
+                "marker refresh failed: " +
+                    e.message,
+                e
+            )
         }
     }
+}
 
     private fun normalizeMediaType(
         type: String?
@@ -2080,8 +2050,6 @@ private suspend fun loadSimklUpNextItems():
         private const val MAX_FORWARD_SEASON_LOOKAHEAD =
             8
 
-        private const val MAX_WATCHED_STATUS_PRELOAD_ITEMS =
-            100
 
         private const val MAX_SIMKL_UP_NEXT_ITEMS =
     30
