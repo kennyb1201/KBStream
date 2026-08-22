@@ -232,14 +232,11 @@ class HomeViewModel(
 
     private fun observeAddonChanges() {
     viewModelScope.launch {
-        combine(
-            addonManager.installedAddons,
-            addonManager.catalogOrderVersion
-        ) { _, _ -> Unit }
-            .collectLatest {
-                loadRailsInternal(forceRefresh = true)
-            }
+        addonManager.installedAddons.collectLatest {
+            loadRailsInternal(forceRefresh = true)
+        }
     }
+}
 }
 
     fun refreshUpNext() {
