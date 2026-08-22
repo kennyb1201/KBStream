@@ -1970,21 +1970,22 @@ private fun refreshWatchedStatus(
                 return@launch
             }
 
-            val watched =
-                watchedStatusRepository
-                    .preloadAndGetWatchedKeys(
-                        preloadItems
-                    )
+            val resolvedWatchedKeys =
+    watchedStatusRepository
+        .preloadAndGetWatchedKeys(
+            preloadItems
+        )
 
-            watchedKeys.value = watched
+watchedKeys.value =
+    resolvedWatchedKeys
 
-            Log.d(
-                "HOME_WATCHED",
-                "marker refresh complete: " +
-                    "input=${preloadItems.size}, " +
-                    "watched=${watched.size}, " +
-                    "rails=${rails.size}"
-            )
+Log.d(
+    "HOME_WATCHED",
+    "marker refresh complete: " +
+        "input=${preloadItems.size}, " +
+        "watched=${resolvedWatchedKeys.size}, " +
+        "rails=${rails.size}"
+)
         } catch (
             e: kotlinx.coroutines.CancellationException
         ) {
