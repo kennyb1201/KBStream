@@ -1915,46 +1915,7 @@ private suspend fun loadRailsInternal(
 }
     }
 
-    private fun shouldLoadOnHome(
-    catalogId: String
-): Boolean {
-    val id =
-        catalogId
-            .trim()
-            .lowercase()
-
-    val isBingeCatGeneratedPersonRail =
-        id.startsWith(
-            "aicat_because_watched_seed_role_"
-        ) ||
-            id.startsWith(
-                "aicat_director_writer_person_"
-            ) ||
-            id.contains(
-                "_person_"
-            )
-
-    val isBingeCatGeneratedSeedRail =
-        id.contains(
-            "_seed_role_"
-        ) ||
-            id.contains(
-            "_seed_actor_"
-        ) ||
-            id.contains(
-            "_seed_director_"
-        ) ||
-            id.contains(
-            "_seed_writer_"
-        ) ||
-            id.contains(
-            "_seed_creator_"
-        )
-
-    return !isBingeCatGeneratedPersonRail &&
-        !isBingeCatGeneratedSeedRail
-    }
-
+    
     private fun formatCatalogName(
         name: String
     ): String {
