@@ -115,6 +115,11 @@ class HomeViewModel(
     private val railsRefreshMutex =
         Mutex()
 
+        private val catalogRequestSemaphore =
+    Semaphore(
+        MAX_CONCURRENT_CATALOG_REQUESTS
+    )
+
     private val simklWatchedEpisodesByShow =
         mutableMapOf<String, Set<Pair<Int, Int>>>()
 
@@ -1772,16 +1777,113 @@ class HomeViewModel(
                             )
 
                         } catch (e: Exception) {
+private suspend fun loadRailsInternal(
+    forceRefresh: Boolean
+) {
+    if (
+        !forceRefresh &&
+        _rails.value.isNotEmpty()
+    ) {
+        return
+    }
 
-                            Log.e(
-                                "HOME_RAILS",
-                                "catalog load failed " +
-                                    "addon=${addon.displayName}, " +
-                                    "catalog=${catalog.id}: " +
-                                    e.message,
-                                e
+    _isLoading.value =
+        _rails.value.isEmpty()
+
+    _error.value = null
+
+    val result =
+        mutableListOf<Rail>()
+
+    try {
+        railsRefreshMutex.withLock {
+            loadPinnedTopTodayRails(
+                result
+            )
+
+            val addons =
+                addonManager
+                    .installedAddons
+                    .value
+
+            for (addon in addons) {
+                if (
+                    !addon.resources
+                        .contains("catalog")
+                ) {
+                    continue
+                }
+
+                if (
+                    addon.manifestUrl ==
+                    TOP_TODAY_MANIFEST_URL
+                ) {
+                    continue
+                }
+
+                val baseUrl =
+                    addon.manifestUrl
+                        .removeSuffix(
+                            "/manifest.json"
+                        )
+                        .removeSuffix("/")
+
+                val catalogs =
+                    addon.catalogs
+                        .sortedBy {
+                            it.order
+                        }
+                        .filter {
+                            it.showOnHome
+                        }
+                        .filter {
+                            shouldLoadOnHome(
+                                catalogId = it.id
                             )
                         }
+
+                for (catalog in catalogs) {
+                    try {
+                        val metas =
+                            catalogRequestSemaphore
+                                .withPermit {
+                                    repository.getCatalog(
+                                        baseUrl = baseUrl,
+                                        type = catalog.type,
+                                        catalogId = catalog.id
+                                    )
+                                }
+
+                        if (
+                            metas.isEmpty()
+                        ) {
+                            continue
+                        }
+
+                        result += Rail(
+                            addonName =
+                                addon.displayName,
+
+                            catalogName =
+                                formatCatalogName(
+                                    catalog.name
+                                ),
+
+                            type =
+                                catalog.type,
+
+                            items =
+                                metas
+                        )
+                    } catch (e: Exception) {
+                        Log.e(
+                            "HOME_RAILS",
+                            "catalog load failed " +
+                                "addon=${addon.displayName}, " +
+                                "catalog=${catalog.id}: " +
+                                e.message,
+                            e
+                        )
                     }
                 }
             }
@@ -1792,27 +1894,65 @@ class HomeViewModel(
             refreshWatchedStatus(
                 result
             )
+        }
+    } catch (e: Exception) {
+        Log.e(
+            "HOME_RAILS",
+            "loadRails failed: ${e.message}",
+            e
+        )
 
-        } catch (e: Exception) {
+        if (
+            _rails.value.isEmpty()
+        ) {
+            _error.value =
+                "Failed to load: ${e.message}"
+        }
+    } finally {
+        _isLoading.value =
+            false
+    }
+}
+    }
 
-            Log.e(
-                "HOME_RAILS",
-                "loadRails failed: ${e.message}",
-                e
+    private fun shouldLoadOnHome(
+    catalogId: String
+): Boolean {
+    val id =
+        catalogId
+            .trim()
+            .lowercase()
+
+    val isBingeCatGeneratedPersonRail =
+        id.startsWith(
+            "aicat_because_watched_seed_role_"
+        ) ||
+            id.startsWith(
+                "aicat_director_writer_person_"
+            ) ||
+            id.contains(
+                "_person_"
             )
 
-            if (
-                _rails.value.isEmpty()
-            ) {
-                _error.value =
-                    "Failed to load: ${e.message}"
-            }
+    val isBingeCatGeneratedSeedRail =
+        id.contains(
+            "_seed_role_"
+        ) ||
+            id.contains(
+            "_seed_actor_"
+        ) ||
+            id.contains(
+            "_seed_director_"
+        ) ||
+            id.contains(
+            "_seed_writer_"
+        ) ||
+            id.contains(
+            "_seed_creator_"
+        )
 
-        } finally {
-
-            _isLoading.value =
-                false
-        }
+    return !isBingeCatGeneratedPersonRail &&
+        !isBingeCatGeneratedSeedRail
     }
 
     private fun formatCatalogName(
@@ -2035,6 +2175,9 @@ class HomeViewModel(
         private const val TMDB_MAX_CONCURRENT_LOOKUPS =
             5
 
+       private const val MAX_CONCURRENT_CATALOG_REQUESTS =
+    2
+        
         private const val MAX_FORWARD_SEASON_LOOKAHEAD =
             8
 
