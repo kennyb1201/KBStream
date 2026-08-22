@@ -137,3 +137,4 @@ class AddonRepository {
         cleanUrl.substringBefore("?")
     }
 }
+}
