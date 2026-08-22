@@ -230,18 +230,16 @@ class HomeViewModel(
     }
 
     private fun observeAddonChanges() {
-
-        viewModelScope.launch {
-
-            addonManager.installedAddons
-                .collect {
-
-                    loadRailsInternal(
-                        forceRefresh = true
-                    )
-                }
-        }
+    viewModelScope.launch {
+        combine(
+            addonManager.installedAddons,
+            addonManager.catalogOrderVersion
+        ) { _, _ -> Unit }
+            .collectLatest {
+                loadRailsInternal(forceRefresh = true)
+            }
     }
+}
 
     fun refreshUpNext() {
 
