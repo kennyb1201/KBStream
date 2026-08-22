@@ -376,7 +376,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
             configurations
         )
 
-        loadFromPreferencesOrDefaults()
+        refreshAddons()
     }
 
     /**
@@ -430,7 +430,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         saveGlobalCatalogOrder(
             configurations
         )
-    }
+          refreshAddons()
 
     /**
      * Replace an addon manifest while preserving
@@ -638,11 +638,9 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
     }
 
     fun refreshAddons() {
-
-        _installedAddons.value =
-            loadFromPreferencesOrDefaults()
-            _catalogOrderVersion.value += 1
-    }
+    _installedAddons.value = loadFromPreferencesOrDefaults()
+    _catalogOrderVersion.value += 1
+}
 
     /**
      * Rebuild one global sequence:
