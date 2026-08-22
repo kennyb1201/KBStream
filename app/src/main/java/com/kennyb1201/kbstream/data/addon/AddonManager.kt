@@ -43,6 +43,9 @@ class AddonManager(
             emptyList()
         )
 
+        private val _catalogOrderVersion = MutableStateFlow(0)
+val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
+
     val installedAddons: StateFlow<List<InstalledAddon>> =
         _installedAddons.asStateFlow()
 
@@ -638,6 +641,7 @@ class AddonManager(
 
         _installedAddons.value =
             loadFromPreferencesOrDefaults()
+            _catalogOrderVersion.value += 1
     }
 
     /**
