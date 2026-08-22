@@ -155,6 +155,12 @@ class HomeViewModel(
 
     private var periodicRefreshJob: Job? = null
 
+    private val _heroMeta =
+    MutableStateFlow<Meta?>(null)
+
+    val heroMeta: StateFlow<Meta?> =
+    _heroMeta.asStateFlow()
+
     private val _rails =
         MutableStateFlow<List<Rail>>(
             emptyList()
@@ -1756,6 +1762,8 @@ class HomeViewModel(
             )
     }
 
+     
+    
     private fun showDedupeKey(
         item: UpNextItem
     ): String {
@@ -2172,6 +2180,41 @@ val pendingCatalogs =
                         it.uppercase()
                     }
             }
+    }
+
+    fun resolveHeroMeta(
+    source: MetaPreview?,
+    baseUrl: String?
+) {
+    viewModelScope.launch {
+
+        if (
+            source == null ||
+            baseUrl.isNullOrBlank()
+        ) {
+            _heroMeta.value = null
+            return@launch
+        }
+
+        _heroMeta.value =
+            try {
+                repository.getMeta(
+                    baseUrl = baseUrl,
+                    type = source.type,
+                    id = source.id
+                )
+            } catch (
+                e: Exception
+            ) {
+                Log.e(
+                    "HOME_HERO",
+                    "Failed to resolve hero meta: ${source.id}",
+                    e
+                )
+
+                null
+            }
+    }
     }
 
     private suspend fun loadPinnedTopTodayRails(
