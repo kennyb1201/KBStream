@@ -2023,65 +2023,189 @@ class HomeViewModel(
                                     async {
 
                                         loadCatalogRail(
-                                            pending
-                                        )
-                                    }
-                                }
+private suspend fun loadRailsInternal(
+    forceRefresh: Boolean
+) {
 
-                                .awaitAll()
-                                .filterNotNull()
-                        }
+    if (
+        !forceRefresh &&
+        _rails.value.isNotEmpty()
+    ) {
+        return
+    }
 
-                    /*
-                     * ONE final emission.
-                     */
-                    if (
-                        remainingRails.isNotEmpty()
-                    ) {
+    _isLoading.value =
+        _rails.value.isEmpty()
 
-                        _rails.value =
-                            _rails.value +
-                                remainingRails
-                    }
+    _error.value = null
 
-                    /*
-                     * Refresh watched markers after the complete
-                     * rail set has arrived.
-                     */
-                    refreshWatchedStatus(
-                        _rails.value
-                    )
-                }
-            }
+    if (forceRefresh) {
+        repository.clearCatalogCache()
+    }
 
-        } catch (
-            e: kotlinx.coroutines.CancellationException
-        ) {
+    try {
 
-            throw e
+        railsRefreshMutex.withLock {
 
-        } catch (e: Exception) {
+            val pinned =
+                mutableListOf<Rail>()
 
-            Log.e(
-                "HOME_RAILS",
-                "loadRails failed: ${e.message}",
-                e
+            /*
+             * Load pinned rails first.
+             * These remain at the top of the final list.
+             */
+            loadPinnedTopTodayRails(
+                pinned
             )
 
-            if (
-                _rails.value.isEmpty()
-            ) {
+            val addons =
+                addonManager
+                    .installedAddons
+                    .value
 
-                _error.value =
-                    "Failed to load: ${e.message}"
-            }
+            val pendingCatalogs =
+                addons
+                    .asSequence()
+                    .filter {
+                        it.resources.contains("catalog")
+                    }
+                    .filter {
+                        it.manifestUrl !=
+                            TOP_TODAY_MANIFEST_URL
+                    }
+                    .flatMap { addon ->
 
-        } finally {
+                        val baseUrl =
+                            addon.manifestUrl
+                                .removeSuffix(
+                                    "/manifest.json"
+                                )
+                                .removeSuffix("/")
 
-            _isLoading.value =
-                false
+                        addon.catalogs
+                            .sortedBy {
+                                it.order
+                            }
+                            .filter {
+                                it.showOnHome
+                            }
+                            .map { catalog ->
+
+                                PendingCatalogLoad(
+
+                                    addonName =
+                                        addon.displayName,
+
+                                    baseUrl =
+                                        baseUrl,
+
+                                    catalogId =
+                                        catalog.id,
+
+                                    catalogType =
+                                        catalog.type,
+
+                                    catalogRawName =
+                                        catalog.name
+                                )
+                            }
+                    }
+                    .toList()
+
+            /*
+             * Load ALL catalogs concurrently, but respect the
+             * catalogRequestSemaphore inside fetchCatalogThrottled().
+             *
+             * awaitAll() guarantees that nothing is emitted until
+             * every catalog request has finished.
+             */
+            val loadedRails =
+                coroutineScope {
+
+                    pendingCatalogs
+                        .map { pending ->
+
+                            async {
+
+                                loadCatalogRail(
+                                    pending
+                                )
+                            }
+                        }
+                        .awaitAll()
+                        .filterNotNull()
+                }
+
+            /*
+             * IMPORTANT:
+             *
+             * pendingCatalogs was created in the exact order the
+             * catalogs should appear on Home.
+             *
+             * awaitAll() preserves the order of the Deferred list,
+             * even though the individual network requests finish
+             * at different times.
+             *
+             * Therefore loadedRails is still in catalog order.
+             */
+            val finalRails =
+                pinned + loadedRails
+
+            /*
+             * SINGLE StateFlow emission.
+             *
+             * The UI never sees a partial rail list.
+             */
+            _rails.value =
+                finalRails
+
+            _isLoading.value = false
+
+            /*
+             * Refresh watched markers only after the complete rail
+             * collection has been published.
+             */
+            refreshWatchedStatus(
+                finalRails
+            )
+
+            Log.d(
+                "HOME_RAILS",
+                "rail load complete: " +
+                    "pinned=${pinned.size}, " +
+                    "catalogs=${pendingCatalogs.size}, " +
+                    "rails=${finalRails.size}"
+            )
         }
+
+    } catch (
+        e: kotlinx.coroutines.CancellationException
+    ) {
+
+        throw e
+
+    } catch (e: Exception) {
+
+        Log.e(
+            "HOME_RAILS",
+            "loadRails failed: ${e.message}",
+            e
+        )
+
+        if (
+            _rails.value.isEmpty()
+        ) {
+
+            _error.value =
+                "Failed to load: ${e.message}"
+        }
+
+    } finally {
+
+        _isLoading.value =
+            false
     }
+}
 
     private suspend fun loadCatalogRail(
         pending: PendingCatalogLoad
@@ -2434,8 +2558,6 @@ class HomeViewModel(
         private const val MAX_CONCURRENT_CATALOG_REQUESTS =
             2
 
-        private const val INITIAL_RAIL_BATCH_SIZE =
-            6
 
         private const val UP_NEXT_DEBOUNCE_MS =
             100L
