@@ -1582,48 +1582,55 @@ class HomeViewModel(
     }
 
     private fun parseEpisodeKey(
-        key: String
-    ): Triple<String, Int, Int>? {
+    key: String
+): Triple<String, Int, Int>? {
 
-        val parts =
-            key.split(":")
-
-        if (
-            parts.size < 3
-        ) {
-            return null
-        }
-
-        val season =
-            parts[
-                parts.size - 2
-            ].toIntOrNull()
-                ?: return null
-
-        val episode =
-            parts[
-                parts.size - 1
-            ].toIntOrNull()
-                ?: return null
-
-        val showId =
-            parts
-                .dropLast(2)
-                .joinToString(":")
-
-        if (
-            showId.isBlank()
-        ) {
-            return null
-        }
-
-        return Triple(
-            showId,
-            season,
-            episode
+    /*
+     * Supports both of these formats:
+     *
+     *   showId:1:2
+     *   showId:S1:E2
+     *   showId:s1:e2
+     *   showId:S01:E02
+     *
+     * The show ID is allowed to contain ':' characters.
+     */
+    val match =
+        Regex(
+            """^(.+?)(?::[sS]?(\d+))(?::[eE]?(\d+))$"""
+        ).find(
+            key.trim()
         )
+            ?: return null
+
+    val showId =
+        match.groupValues[1]
+            .trim()
+
+    val season =
+        match.groupValues[2]
+            .toIntOrNull()
+            ?: return null
+
+    val episode =
+        match.groupValues[3]
+            .toIntOrNull()
+            ?: return null
+
+    if (
+        showId.isBlank() ||
+        season < 0 ||
+        episode < 0
+    ) {
+        return null
     }
 
+    return Triple(
+        showId,
+        season,
+        episode
+    )
+}
     private fun normalizeIdentifier(
         rawId: String?
     ): String? {
