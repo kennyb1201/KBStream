@@ -1946,7 +1946,6 @@ private fun refreshWatchedStatus(
                         rail.items.asSequence()
                     }
                     .mapNotNull { meta ->
-
                         val imdbId =
                             meta.id
                                 .trim()
@@ -1966,12 +1965,8 @@ private fun refreshWatchedStatus(
                     .distinct()
                     .toList()
 
-            if (
-                preloadItems.isEmpty()
-            ) {
-                watchedKeys.value =
-                    emptySet()
-
+            if (preloadItems.isEmpty()) {
+                watchedKeys.value = emptySet()
                 return@launch
             }
 
@@ -1981,8 +1976,7 @@ private fun refreshWatchedStatus(
                         preloadItems
                     )
 
-            watchedKeys.value =
-                watched
+            watchedKeys.value = watched
 
             Log.d(
                 "HOME_WATCHED",
@@ -1991,17 +1985,14 @@ private fun refreshWatchedStatus(
                     "watched=${watched.size}, " +
                     "rails=${rails.size}"
             )
-
         } catch (
             e: kotlinx.coroutines.CancellationException
         ) {
             throw e
-
         } catch (e: Exception) {
             Log.e(
                 "HOME_WATCHED",
-                "marker refresh failed: " +
-                    e.message,
+                "marker refresh failed: ${e.message}",
                 e
             )
         }
