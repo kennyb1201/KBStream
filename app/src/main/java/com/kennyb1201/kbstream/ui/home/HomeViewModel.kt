@@ -157,7 +157,7 @@ class HomeViewModel(
     private var periodicRefreshJob: Job? = null
 
     private val _heroMeta: MutableStateFlow<Meta?> =
-    MutableStateFlow(null)
+    MutableStateFlow<Meta?>(null)
 
 val heroMeta: StateFlow<Meta?> =
     _heroMeta.asStateFlow()
@@ -253,46 +253,7 @@ val heroMeta: StateFlow<Meta?> =
         }
     }
 
-    fun resolveHeroMeta(meta: MetaPreview?, baseUrl: String?) {
-        if (meta == null || baseUrl.isNullOrBlank()) {
-            _heroMeta.value = null
-            heroRequestKey = null
-            return
-        }
-
-        val key = "${baseUrl.trim()}|${meta.type}|${meta.id}"
-        if (heroRequestKey == key) return
-        heroRequestKey = key
-
-        viewModelScope.launch {
-            val resolved = try {
-                repository.getMeta(
-                    baseUrl = baseUrl,
-                    type = meta.type,
-                    id = meta.id
-                )
-            } catch (throwable: Throwable) {
-                Log.w(
-                    "HOME_VM",
-                    "Hero meta lookup failed for ${meta.name}",
-                    throwable
-                )
-                null
-            }
-
-            if (heroRequestKey == key) {
-                _heroMeta.value = resolved ?: Meta(
-                    id = meta.id,
-                    type = meta.type,
-                    name = meta.name,
-                    poster = meta.poster,
-                    background = meta.background,
-                    logo = meta.logo,
-                    description = meta.description
-                )
-            }
-        }
-    }
+    
 
     fun refreshUpNext() {
 
@@ -2184,9 +2145,11 @@ val pendingCatalogs =
     }
 
     fun resolveHeroMeta(
+    fun resolveHeroMeta(
     source: MetaPreview?,
     baseUrl: String?
 ) {
+
     viewModelScope.launch {
 
         if (
@@ -2209,14 +2172,14 @@ val pendingCatalogs =
             ) {
                 Log.e(
                     "HOME_HERO",
-                    "Failed to resolve hero meta: ${source.id}",
+                    "Failed to load hero metadata for ${source.id}",
                     e
                 )
 
                 null
             }
     }
-    }
+}
 
     private suspend fun loadPinnedTopTodayRails(
         result: MutableList<Rail>
