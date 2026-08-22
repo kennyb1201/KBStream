@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
 import com.kennyb1201.kbstream.data.simkl.SimklContinueWatchingItem
@@ -155,10 +156,10 @@ class HomeViewModel(
 
     private var periodicRefreshJob: Job? = null
 
-    private val _heroMeta =
-    MutableStateFlow<Meta?>(null)
+    private val _heroMeta: MutableStateFlow<Meta?> =
+    MutableStateFlow(null)
 
-    val heroMeta: StateFlow<Meta?> =
+val heroMeta: StateFlow<Meta?> =
     _heroMeta.asStateFlow()
 
     private val _rails =
