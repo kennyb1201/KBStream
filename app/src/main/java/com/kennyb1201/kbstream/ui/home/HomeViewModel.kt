@@ -2145,7 +2145,6 @@ val pendingCatalogs =
     }
 
     fun resolveHeroMeta(
-    fun resolveHeroMeta(
     source: MetaPreview?,
     baseUrl: String?
 ) {
