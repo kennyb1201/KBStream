@@ -777,8 +777,9 @@ HomeHero(
 
                     else -> {
                         items(
+    items(
     items = rails,
-    key = { rail: Rail ->
+    key = { rail ->
         "${rail.addonName}:${rail.catalogName}:${rail.type}"
     }
 ) { rail ->
@@ -805,8 +806,9 @@ HomeHero(
 
                                 LazyRow {
                                    items(
+    items(
     items = rail.items,
-    key = { meta: MetaPreview ->
+    key = { meta ->
         "${meta.type}:${meta.id}"
     }
 ) { meta ->
