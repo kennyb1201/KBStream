@@ -323,21 +323,29 @@ class HomeViewModel(
                             else -> resolvedTmdbDetail?.id
                         }
 
-                    val heroArtwork =
-                        resolvedTmdbId?.takeIf { it > 0 }?.let { tmdbId ->
-                            runCatching {
-                                tmdbHeroArtworkRepository.resolve(
-                                    id = requestedId,
-                                    type = requestedType,
-                                    tmdbId = tmdbId
-                                )
-                            }.getOrNull()
-                        }
+                    val heroArtwork = resolvedTmdbId
+    ?.takeIf { it > 0 }
+    ?.let { tmdbId ->
+        runCatching {
+            tmdbHeroArtworkRepository.resolve(
+                id = "tmdb:$tmdbId",
+                type = requestedType,
+                tmdbId = tmdbId
+            )
+        }.getOrNull()
+    }
 
                     val resolvedLogo =
                         heroArtwork?.logoUrl?.takeIf { it.isNotBlank() }
                             ?: resolvedAddonMeta?.logo?.takeIf { it.isNotBlank() }
                             ?: item.logo?.takeIf { it.isNotBlank() }
+
+                            Log.d(
+    "HOME_HERO",
+    "Artwork title=${item.name}, rawId=$requestedId, " +
+        "tmdbId=$resolvedTmdbId, artworkLogo=${heroArtwork?.logoUrl}, " +
+        "finalLogo=$resolvedLogo"
+)
 
                     val resolvedBackdrop =
                         heroArtwork?.backdropUrl?.takeIf { it.isNotBlank() }
