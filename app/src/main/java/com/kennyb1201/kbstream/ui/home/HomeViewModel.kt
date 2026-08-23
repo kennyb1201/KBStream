@@ -1768,7 +1768,7 @@ class HomeViewModel(
 
         val match =
             Regex(
-            """^(.+?)(?::[sS]?(\d+))(?::[eE]?(\d+))$
+            """^(.+?)(?::[sS]?(\d+))(?::[eE]?(\d+))$"""
             ).find(
                 key.trim()
             )
