@@ -238,9 +238,143 @@ private fun HomeHero(
             } else {
                 Text(
                     text = title,
-                    fontSize = 28.sp,
+@Composable
+private fun HomeHero(
+    preview: MetaPreview,
+    meta: Meta?,
+    trailerKey: String?,
+    autoPlayTrailer: Boolean,
+    onOpenDetail: () -> Unit
+) {
+    val context = LocalContext.current
+    val title = meta?.name ?: preview.name
+
+    /*
+     * The ViewModel enriches meta.background with the TMDB backdrop selected
+     * by TmdbHeroArtworkRepository. Prefer it over catalog-provided artwork.
+     *
+     * Poster remains a last-resort fallback only — a portrait poster is not
+     * ideal as a hero, but it keeps the hero from becoming empty.
+     */
+    val backdrop = meta?.background
+        ?: preview.background
+        ?: meta?.poster
+        ?: preview.poster
+
+    /*
+     * This is the TMDB clearlogo where available. It is the visible title
+     * in the hero; plain text is used only when TMDB/addon has no logo.
+     */
+    val clearLogo = meta?.logo
+        ?: preview.logo
+
+    var manualTrailer by remember(preview.id) {
+        mutableStateOf(false)
+    }
+
+    val trailerPlaying =
+        !trailerKey.isNullOrBlank() &&
+            (autoPlayTrailer || manualTrailer)
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(330.dp)
+            .background(Color.Black)
+    ) {
+        /*
+         * Trailer replaces the backdrop behind the same gradients, so the
+         * title and action buttons remain readable exactly as before.
+         */
+        if (trailerPlaying) {
+            YouTubeTrailerPlayer(
+                videoId = trailerKey,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(backdrop)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+
+        /*
+         * Strong left-to-right black fade: clear logo and metadata live on
+         * the left; the clean backdrop is prominent on the right.
+         */
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.horizontalGradient(
+                        colorStops = arrayOf(
+                            0.00f to Color.Black.copy(alpha = 0.98f),
+                            0.22f to Color.Black.copy(alpha = 0.92f),
+                            0.46f to Color.Black.copy(alpha = 0.62f),
+                            0.72f to Color.Black.copy(alpha = 0.14f),
+                            1.00f to Color.Transparent
+                        )
+                    )
+                )
+        )
+
+        /*
+         * Subtle lower fade joins the hero to the rail background. It is
+         * intentionally less heavy than the old version, so the backdrop
+         * retains more visual presence.
+         */
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colorStops = arrayOf(
+                            0.00f to Color.Transparent,
+                            0.58f to Color.Transparent,
+                            1.00f to Color.Black.copy(alpha = 0.88f)
+                        )
+                    )
+                )
+        )
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .width(480.dp)
+                .padding(
+                    start = 32.dp,
+                    bottom = 24.dp
+                )
+        ) {
+            if (!clearLogo.isNullOrBlank()) {
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(clearLogo)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = title,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .width(290.dp)
+                        .height(86.dp)
+                )
+            } else {
+                /*
+                 * Only used if no clearlogo was returned from TMDB or the
+                 * catalog. Do not remove this fallback: it prevents unnamed
+                 * hero content when a title has no logo asset.
+                 */
+                Text(
+                    text = title,
+                    color = Color.White,
+                    fontSize = 30.sp,
                     fontWeight = FontWeight.Bold,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
             }
@@ -261,61 +395,49 @@ private fun HomeHero(
                     typeLabel,
                     meta?.releaseInfo,
                     meta?.runtime,
-                    meta?.imdbRating?.let {
-                        "IMDb $it"
+                    meta?.imdbRating?.let { rating ->
+                        "IMDb $rating"
                     }
                 ).joinToString("  •  ")
 
             if (info.isNotBlank()) {
                 Text(
                     text = info,
-                    color = Color.White.copy(alpha = .92f),
+                    color = Color.White.copy(alpha = .90f),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 2.dp)
+                    modifier = Modifier.padding(top = 4.dp)
                 )
             }
-
-            meta?.genres
-                ?.takeIf { it.isNotEmpty() }
-                ?.joinToString("  •  ")
-                ?.let { genres ->
-                    Text(
-                        text = genres,
-                        color = Color.White.copy(alpha = .72f),
-                        fontSize = 11.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 2.dp)
-                    )
-                }
 
             (meta?.description ?: preview.description)
                 ?.takeIf { it.isNotBlank() }
                 ?.let { description ->
                     Text(
                         text = description,
-                        color = Color.White.copy(alpha = .88f),
+                        color = Color.White.copy(alpha = .80f),
                         fontSize = 12.sp,
-                        lineHeight = 16.sp,
+                        lineHeight = 17.sp,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 5.dp)
+                        modifier = Modifier.padding(top = 6.dp)
                     )
                 }
 
             Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(top = 9.dp)
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.padding(top = 12.dp)
             ) {
-                KBCard(onClick = onOpenDetail) {
+                KBCard(
+                    onClick = onOpenDetail
+                ) {
                     Text(
-                        "▶  PLAY",
+                        text = "▶  PLAY",
                         modifier = Modifier.padding(
-                            horizontal = 13.dp,
-                            vertical = 6.dp
+                            horizontal = 15.dp,
+                            vertical = 7.dp
                         ),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
@@ -329,14 +451,15 @@ private fun HomeHero(
                         }
                     ) {
                         Text(
-                            text = if (trailerPlaying) {
-                                "PLAYING"
-                            } else {
-                                "TRAILER"
-                            },
+                            text =
+                                if (trailerPlaying) {
+                                    "PLAYING"
+                                } else {
+                                    "TRAILER"
+                                },
                             modifier = Modifier.padding(
-                                horizontal = 13.dp,
-                                vertical = 6.dp
+                                horizontal = 15.dp,
+                                vertical = 7.dp
                             ),
                             fontSize = 12.sp
                         )
