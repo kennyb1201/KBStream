@@ -394,15 +394,16 @@ Log.d(
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.w(
-                    "HOME_HERO",
-                    "Hero enrichment failed for ${item.name}: ${e.message}",
-                    e
-                )
-                _heroMeta.value = null
-                _heroBackdropUrl.value = null
-                _heroTrailerKey.value = null
-            }
+    Log.w(
+        "HOME_HERO",
+        "Hero enrichment failed for ${item.name}: ${e.message}",
+        e
+    )
+    heroMeta.value = null
+    heroBackdropUrl.value = null
+    heroLogoUrl.value = null
+    heroTrailerKey.value = null
+}
         }
     }
 
