@@ -194,7 +194,7 @@ private fun HomeHero(
                 )
             }
 
-            val typeLabel = when (meta?.type ?: preview.type).lowercase() {
+            val typeLabel = when ((meta?.type ?: preview.type).lowercase()) {
                 "series", "show", "tv" -> "Series"
                 "movie" -> "Movie"
                 else -> meta?.type ?: preview.type
