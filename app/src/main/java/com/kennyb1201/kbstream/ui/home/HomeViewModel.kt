@@ -2296,12 +2296,9 @@ class HomeViewModel(
         result: MutableList<Rail>
     ) {
 
-        val baseUrl =
-            TOP_TODAY_MANIFEST_URL
-                .removeSuffix(
-                    "/manifest.json"
-                )
-                .removeSuffix("/")
+        val baseUrl = TOP_TODAY_MANIFEST_URL
+    .substringBefore("/manifest.json")
+    .removeSuffix("/")
 
         TOP_TODAY_CATALOGS
             .forEach {
@@ -2540,7 +2537,7 @@ class HomeViewModel(
             "TMDB Top Today"
 
         private const val TOP_TODAY_MANIFEST_URL =
-            "https://toptoday.llamayu.com/landscapeTags=true|landscapeLogos=false|landscapeRanked=false|portraitTags=true|portraitLogos=false|portraitRanked=true|posterLang=en|digitalOnly=true|listLang=en/manifest.json"
+            "https://toptoday.llamayu.com/landscapeTags=true|landscapeLogos=true|landscapeRanked=false|portraitTags=true|portraitLogos=false|portraitRanked=true|posterLang=en|digitalOnly=true|listLang=en/manifest.json"
 
         private val TOP_TODAY_CATALOGS =
             listOf(
