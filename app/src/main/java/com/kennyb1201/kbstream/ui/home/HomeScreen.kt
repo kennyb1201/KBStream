@@ -651,22 +651,16 @@ fun HomeScreen(
             modifier = Modifier.fillMaxSize()
         ) {
             focusedItem?.let { item ->
-                val activeMeta =
-    heroMeta?.takeIf { resolvedMeta ->
-        resolvedMeta.id == item.id
-    }
+                val activeMeta = heroMeta
 
-val activeTrailerKey =
-    heroTrailerKey?.takeIf {
-        activeMeta != null
-    }
+val activeTrailerKey = heroTrailerKey
 
-                HomeHero(
-                    preview = item,
-                    meta = activeMeta,
-                    trailerKey = activeTrailerKey,
-                    autoPlayTrailer = heroTrailerReady
-                )
+HomeHero(
+    preview = item,
+    meta = activeMeta,
+    trailerKey = activeTrailerKey,
+    autoPlayTrailer = heroTrailerReady
+)
             }
 
             LazyColumn(
