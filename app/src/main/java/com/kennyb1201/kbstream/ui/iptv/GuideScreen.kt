@@ -394,7 +394,7 @@ Spacer(modifier = Modifier.height(14.dp))
                                         .focusGroup()
                                 ) {itemsIndexed(
     items = groupedChannels,
-    key = { index, item -> "${channelKey(item)}#$index" }
+    key = { _, item -> channelKey(item) }
 ) { index, rawItem ->
                                         val item = withFavoriteFlag(rawItem)
 
