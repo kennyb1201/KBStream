@@ -227,47 +227,56 @@ private fun HomeHero(
                 modifier = Modifier.fillMaxSize()
             )
         } else {
-            AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(backdrop)
-                    .crossfade(true)
-                    .build(),
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop,
-                alignment = Alignment.TopCenter
+            Box(
+    modifier = Modifier
+        .fillMaxSize()
+        .background(Color.Black)
+) {
+    AsyncImage(
+        model = ImageRequest.Builder(context)
+            .data(backdrop)
+            .crossfade(true)
+            .build(),
+        contentDescription = null,
+        modifier = Modifier
+            .fillMaxHeight()
+            .fillMaxWidth(.60f)
+            .align(Alignment.CenterEnd),
+        contentScale = ContentScale.Crop,
+        alignment = Alignment.Center
+    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.horizontalGradient(
+                    colorStops = arrayOf(
+                        0f to Color.Black,
+                        .30f to Color.Black,
+                        .45f to Color.Black.copy(alpha = .95f),
+                        .62f to Color.Black.copy(alpha = .55f),
+                        .82f to Color.Black.copy(alpha = .10f),
+                        1f to Color.Transparent
+                    )
+                )
             )
-        }
+    )
 
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.horizontalGradient(
-                        colorStops = arrayOf(
-                            0f to Color.Black.copy(.98f),
-                            .22f to Color.Black.copy(.92f),
-                            .46f to Color.Black.copy(.62f),
-                            .72f to Color.Black.copy(.14f),
-                            1f to Color.Transparent
-                        )
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    colorStops = arrayOf(
+                        0f to Color.Transparent,
+                        .65f to Color.Transparent,
+                        1f to Color.Black.copy(alpha = .92f)
                     )
                 )
-        )
-
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        colorStops = arrayOf(
-                            0f to Color.Transparent,
-                            .58f to Color.Transparent,
-                            1f to Color.Black.copy(.88f)
-                        )
-                    )
-                )
-        )
+            )
+    )
+}
 
         Column(
             modifier = Modifier
@@ -283,8 +292,8 @@ private fun HomeHero(
                         .build(),
                     contentDescription = title,
                     modifier = Modifier
-                        .width(270.dp)
-                        .height(74.dp),
+                        .width(250.dp)
+                        .height(68.dp),
                     contentScale = ContentScale.Fit
                 )
             } else {
