@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -246,43 +247,129 @@ private fun HomeHero(
         alignment = Alignment.Center
     )
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.horizontalGradient(
-                    colorStops = arrayOf(
-                        0f to Color.Black,
-                        .30f to Color.Black,
-                        .45f to Color.Black.copy(alpha = .95f),
-                        .62f to Color.Black.copy(alpha = .55f),
-                        .82f to Color.Black.copy(alpha = .10f),
-                        1f to Color.Transparent
-                    )
-                )
-            )
-    )
+@Composable
+private fun HomeHero(
+    preview: MetaPreview,
+    meta: Meta?,
+    heroBackdropUrl: String?,
+    heroLogoUrl: String?,
+    trailerKey: String?,
+    autoPlayTrailer: Boolean
+) {
+    val context = LocalContext.current
+    val title = meta?.name ?: preview.name
+
+    val backdrop = heroBackdropUrl
+        ?: meta?.background
+        ?: preview.background
+        ?: meta?.poster
+        ?: preview.poster
+
+    val clearLogo = heroLogoUrl ?: meta?.logo ?: preview.logo
+    val trailerPlaying = !trailerKey.isNullOrBlank() && autoPlayTrailer
+
+    val year = meta?.releaseInfo
+        ?.let { Regex("""\b(?:19|20)d{2}\b""").find(it)?.value }
+
+    val rating = meta?.releaseInfo
+        ?.let {
+            Regex(
+                """\b(?:G|PG|PG-13|R|NC-17|TV-Y7|TV-Y|TV-G|TV-PG|TV-14|TV-MA)\b"""
+            ).find(it.uppercase())?.value
+        }
+
+    val imdb = meta?.imdbRating
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+        ?.let { "IMDb $it" }
+
+    val runtime = meta?.runtime
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+
+    val genre = meta?.genres
+        ?.firstOrNull()
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+
+    val heroInfo = listOfNotNull(
+        imdb,
+        year,
+        rating,
+        runtime,
+        genre
+    ).joinToString("  •  ")
 
     Box(
         modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colorStops = arrayOf(
-                        0f to Color.Transparent,
-                        .65f to Color.Transparent,
-                        1f to Color.Black.copy(alpha = .92f)
+            .fillMaxWidth()
+            .height(HomeHeroHeight)
+            .background(Color.Black)
+    ) {
+        if (trailerPlaying) {
+            YouTubeTrailerPlayer(
+                videoId = trailerKey,
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(.60f)
+                    .align(Alignment.CenterEnd)
+            )
+        } else {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(backdrop)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = null,
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(.60f)
+                    .align(Alignment.CenterEnd),
+                contentScale = ContentScale.Crop,
+                alignment = Alignment.Center
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.horizontalGradient(
+                        colorStops = arrayOf(
+                            0f to Color.Black,
+                            .30f to Color.Black,
+                            .45f to Color.Black.copy(alpha = .96f),
+                            .62f to Color.Black.copy(alpha = .58f),
+                            .82f to Color.Black.copy(alpha = .12f),
+                            1f to Color.Transparent
+                        )
                     )
                 )
-            )
-    )
-}
+        )
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colorStops = arrayOf(
+                            0f to Color.Transparent,
+                            .65f to Color.Transparent,
+                            1f to Color.Black.copy(alpha = .92f)
+                        )
+                    )
+                )
+        )
 
         Column(
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .width(480.dp)
-                .padding(start = 32.dp, bottom = 20.dp)
+                .padding(
+                    start = 32.dp,
+                    end = 20.dp,
+                    bottom = 20.dp
+                )
         ) {
             if (!clearLogo.isNullOrBlank()) {
                 AsyncImage(
@@ -310,7 +397,7 @@ private fun HomeHero(
             if (heroInfo.isNotBlank()) {
                 Text(
                     text = heroInfo,
-                    color = Color.White.copy(.94f),
+                    color = Color.White.copy(alpha = .94f),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
@@ -321,10 +408,10 @@ private fun HomeHero(
 
             (meta?.description ?: preview.description)
                 ?.takeIf { it.isNotBlank() }
-                ?.let {
+                ?.let { description ->
                     Text(
-                        text = it,
-                        color = Color.White.copy(.8f),
+                        text = description,
+                        color = Color.White.copy(alpha = .80f),
                         fontSize = 12.sp,
                         lineHeight = 17.sp,
                         maxLines = 2,
