@@ -632,6 +632,7 @@ class TmdbRepository(context: Context) {
         const val PROFILE_BASE = "https://image.tmdb.org/t/p/w185"
         const val BACKDROP_BASE = "https://image.tmdb.org/t/p/original"
         const val POSTER_BASE = "https://image.tmdb.org/t/p/w342"
+        const val LOGO_BASE = "https://image.tmdb.org/t/p/w500"
         private const val MAX_IMDB_DISK_AGE_MS = 90L * 24L * 60L * 60L * 1000L
     }
 }
