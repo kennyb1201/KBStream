@@ -777,13 +777,11 @@ HomeHero(
 
                     else -> {
                         items(
-                            items = rails,
-                            key = { rail ->
-                                "${rail.addonName}:" +
-                                    "${rail.catalogName}:" +
-                                    rail.type
-                            }
-                        ) { rail ->
+    items = rails,
+    key = { rail: Rail ->
+        "${rail.addonName}:${rail.catalogName}:${rail.type}"
+    }
+) { rail ->
                             Column(
                                 modifier = Modifier.padding(
                                     start = 24.dp,
@@ -806,12 +804,12 @@ HomeHero(
                                 )
 
                                 LazyRow {
-                                    items(
-                                        items = rail.items,
-                                        key = { meta ->
-                                            "${meta.type}:${meta.id}"
-                                        }
-                                    ) { meta ->
+                                   items(
+    items = rail.items,
+    key = { meta: MetaPreview ->
+        "${meta.type}:${meta.id}"
+    }
+) { meta ->
                                         val watched =
                                             viewModel.watchedKey(
                                                 meta.id,
