@@ -413,16 +413,16 @@ private fun CompactUpNextCard(
             .scale(scale)
             .padding(end = HomeRailGap)
             .onPreviewKeyEvent { event ->
-                if (
-                    event.type == KeyEventType.KeyDown &&
-                    event.key == Key.DirectionUp
-                ) {
-                    onUpPressed()
-                    true
-                } else {
-                    false
-                }
-            }
+    if (
+        event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN &&
+        event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP
+    ) {
+        onUpPressed()
+        true
+    } else {
+        false
+    }
+}
     ) {
         Column {
             Box(
@@ -831,18 +831,16 @@ HomeHero(
                                                 .height(HomePosterHeight)
                                                 .padding(end = HomeRailGap)
                                                 .onPreviewKeyEvent { event ->
-                                                    if (
-                                                        event.type ==
-                                                            KeyEventType.KeyDown &&
-                                                        event.key ==
-                                                            Key.DirectionUp
-                                                    ) {
-                                                        showTopBar = true
-                                                        true
-                                                    } else {
-                                                        false
-                                                    }
-                                                }
+    if (
+        event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN &&
+        event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP
+    ) {
+        showTopBar = true
+        true
+    } else {
+        false
+    }
+}
                                                 .onFocusChanged { state ->
                                                     if (state.isFocused) {
                                                         selectHero(meta)
