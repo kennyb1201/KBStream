@@ -323,7 +323,7 @@ class HomeViewModel(
                             else -> resolvedTmdbDetail?.id
                         }
 
-                    val heroArtwork = resolvedTmdbId
+                  val heroArtwork = resolvedTmdbId
     ?.takeIf { it > 0 }
     ?.let { tmdbId ->
         runCatching {
@@ -332,19 +332,25 @@ class HomeViewModel(
                 type = requestedType,
                 tmdbId = tmdbId
             )
+        }.onFailure { throwable ->
+            Log.w(
+                "HOME_HERO",
+                "Artwork lookup failed: title=${item.name}, tmdbId=$tmdbId",
+                throwable
+            )
         }.getOrNull()
     }
 
-                    val resolvedLogo =
-                        heroArtwork?.logoUrl?.takeIf { it.isNotBlank() }
-                            ?: resolvedAddonMeta?.logo?.takeIf { it.isNotBlank() }
-                            ?: item.logo?.takeIf { it.isNotBlank() }
+val resolvedLogo = heroArtwork?.logoUrl
+    ?.takeIf { it.isNotBlank() }
+    ?: resolvedAddonMeta?.logo?.takeIf { it.isNotBlank() }
+    ?: item.logo?.takeIf { it.isNotBlank() }
 
-                            Log.d(
+Log.d(
     "HOME_HERO",
-    "Artwork title=${item.name}, rawId=$requestedId, " +
-        "tmdbId=$resolvedTmdbId, artworkLogo=${heroArtwork?.logoUrl}, " +
-        "finalLogo=$resolvedLogo"
+    "Hero artwork: title=${item.name}, rawId=$requestedId, " +
+        "tmdbId=$resolvedTmdbId, logo=${resolvedLogo != null}, " +
+        "artworkLogo=${heroArtwork?.logoUrl}"
 )
 
                     val resolvedBackdrop =
