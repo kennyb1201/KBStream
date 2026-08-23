@@ -179,7 +179,7 @@ private fun HomeHero(
     val year =
         meta?.releaseInfo
             ?.let { releaseInfo ->
-                Regex("""\b(?:19|20)d{2}\b""")
+                Regex("""\b(?:19|20)\d{2}\b""")
                     .find(releaseInfo)
                     ?.value
             }
