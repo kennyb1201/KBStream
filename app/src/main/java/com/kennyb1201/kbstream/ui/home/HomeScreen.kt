@@ -652,15 +652,14 @@ fun HomeScreen(
         ) {
             focusedItem?.let { item ->
                 val activeMeta =
-                    heroMeta?.takeIf { resolvedMeta ->
-                        resolvedMeta.id == item.id &&
-                            resolvedMeta.type == item.type
-                    }
+    heroMeta?.takeIf { resolvedMeta ->
+        resolvedMeta.id == item.id
+    }
 
-                val activeTrailerKey =
-                    heroTrailerKey?.takeIf {
-                        activeMeta != null
-                    }
+val activeTrailerKey =
+    heroTrailerKey?.takeIf {
+        activeMeta != null
+    }
 
                 HomeHero(
                     preview = item,
