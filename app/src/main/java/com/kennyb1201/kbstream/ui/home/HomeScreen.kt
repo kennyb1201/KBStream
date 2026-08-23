@@ -71,7 +71,7 @@ private val HomePosterHeight = 180.dp
 private val HomeRailGap = 12.dp
 private const val HeroTrailerDwellMs = 4_000L
 
-private val HomeHeroHeight = 270.dp
+private val HomeHeroHeight = 286.dp
 private val RailTopContentPadding = 22.dp
 private val RailBottomContentPadding = 42.dp
 private val RailHorizontalStartPadding = 20.dp
