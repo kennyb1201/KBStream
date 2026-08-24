@@ -1539,7 +1539,7 @@ episodeDescription =
 
     episodeDescription =
         matchedResumeEpisode
-            .description
+            .overview
 )
                 
             }
@@ -1644,7 +1644,7 @@ episodeDescription =
 
     episodeDescription =
         nextUnwatchedInSeason
-            .description
+            .overview
 )
         }
 
@@ -1770,7 +1770,7 @@ episodeDescription =
 
     episodeDescription =
         firstUnwatchedAired
-            .description
+            .overview
 )
             }
         }
