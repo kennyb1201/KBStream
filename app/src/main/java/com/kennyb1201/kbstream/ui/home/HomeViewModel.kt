@@ -76,7 +76,12 @@ data class UpNextItem(
     val episode: Int? = null,
     val episodeStreamId: String? = null,
     val startPositionMs: Long = 0L,
-    val recencyTimestamp: Long = 0L
+    val recencyTimestamp: Long = 0L,
+
+    val showTitle: String? = null,
+    val episodeTitle: String? = null,
+    val episodeDescription: String? = null,
+    val durationMs: Long? = null
 )
 
 private data class ResolvedHomeSeriesTarget(
