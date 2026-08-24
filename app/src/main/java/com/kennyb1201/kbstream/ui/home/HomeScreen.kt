@@ -674,6 +674,10 @@ fun HomeScreen(
 
             LazyColumn(
                 modifier = Modifier.weight(1f),
+                 contentPadding = PaddingValues(
+        top = 4.dp,
+        bottom = 8.dp
+    ),
                 verticalArrangement = Arrangement.spacedBy(
                     RailSectionGap
                 )
