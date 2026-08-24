@@ -95,7 +95,9 @@ private data class ResolvedHomeSeriesTarget(
     val streamId: String? = null,
     val startPositionMs: Long = 0L,
     val isResume: Boolean = false,
-    val airDate: String? = null
+    val airDate: String? = null,
+    val episodeTitle: String? = null,
+    val episodeDescription: String? = null
 )
 
 private sealed interface SimklUpNextResult {
@@ -1141,6 +1143,12 @@ Log.d(
                     resolvedStartPositionMs =
                         resolvedTarget.startPositionMs
 
+                    episodeTitle =
+    resolvedTarget.episodeTitle
+
+episodeDescription =
+    resolvedTarget.episodeDescription
+
                     val airedRecently =
                         resolvedTarget.airDate
                             ?.let {
@@ -1521,10 +1529,19 @@ Log.d(
                     isResume =
                         true,
 
-                    airDate =
-                        matchedResumeEpisode
-                            .airDate
-                )
+                        airDate =
+        matchedResumeEpisode
+            .airDate,
+
+    episodeTitle =
+        matchedResumeEpisode
+            .name,
+
+    episodeDescription =
+        matchedResumeEpisode
+            .description
+)
+                
             }
         }
 
@@ -1606,22 +1623,29 @@ Log.d(
         ) {
 
             return ResolvedHomeSeriesTarget(
+    season =
+        startingSeason,
 
-                season =
-                    startingSeason,
+    episode =
+        nextUnwatchedInSeason
+            .episodeNumber,
 
-                episode =
-                    nextUnwatchedInSeason
-                        .episodeNumber,
+    streamId =
+        nextUnwatchedInSeason
+            .streamId,
 
-                streamId =
-                    nextUnwatchedInSeason
-                        .streamId,
+    airDate =
+        nextUnwatchedInSeason
+            .airDate,
 
-                airDate =
-                    nextUnwatchedInSeason
-                        .airDate
-            )
+    episodeTitle =
+        nextUnwatchedInSeason
+            .name,
+
+    episodeDescription =
+        nextUnwatchedInSeason
+            .description
+)
         }
 
         val knownWatchedSeasons =
@@ -1725,22 +1749,29 @@ Log.d(
             ) {
 
                 return ResolvedHomeSeriesTarget(
+    season =
+        season,
 
-                    season =
-                        season,
+    episode =
+        firstUnwatchedAired
+            .episodeNumber,
 
-                    episode =
-                        firstUnwatchedAired
-                            .episodeNumber,
+    streamId =
+        firstUnwatchedAired
+            .streamId,
 
-                    streamId =
-                        firstUnwatchedAired
-                            .streamId,
+    airDate =
+        firstUnwatchedAired
+            .airDate,
 
-                    airDate =
-                        firstUnwatchedAired
-                            .airDate
-                )
+    episodeTitle =
+        firstUnwatchedAired
+            .name,
+
+    episodeDescription =
+        firstUnwatchedAired
+            .description
+)
             }
         }
 
