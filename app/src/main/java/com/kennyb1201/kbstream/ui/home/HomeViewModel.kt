@@ -1193,7 +1193,7 @@ Log.d(
                                         resolvedSeason,
                                         resolvedEpisode
                                     )
-                                }
+                                }"
                             }
                         }
                 }
