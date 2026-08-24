@@ -94,9 +94,25 @@ private fun TopActionItem(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    KBCard(
-        onClick = onClick,
+    var focused by remember { mutableStateOf(false) }
+
+    Text(
+        text = label,
+        color = if (focused) Color.White else Color.White.copy(alpha = .76f),
+        fontSize = 13.sp,
+        fontWeight = if (focused) FontWeight.Bold else FontWeight.Medium,
         modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(
+                if (focused) {
+                    KBAccent.copy(alpha = .28f)
+                } else {
+                    Color.Transparent
+                }
+            )
+            .onFocusChanged {
+                focused = it.isFocused
+            }
             .onPreviewKeyEvent { event ->
                 if (
                     event.type == KeyEventType.KeyDown &&
@@ -108,17 +124,13 @@ private fun TopActionItem(
                     false
                 }
             }
-    ) {
-        Text(
-            text = label,
-            color = KBTextHi,
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(
-                horizontal = 16.dp,
-                vertical = 11.dp
+            .focusable()
+            .clickable(onClick = onClick)
+            .padding(
+                horizontal = 12.dp,
+                vertical = 8.dp
             )
-        )
-    }
+    )
 }
 
 @Composable
