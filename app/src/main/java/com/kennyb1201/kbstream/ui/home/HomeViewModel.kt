@@ -1193,13 +1193,19 @@ Log.d(
                                         resolvedSeason,
                                         resolvedEpisode
                                     )
-                                }"
+                                }
                             }
                         }
                 }
             }
         }
 
+                var showTitle: String? = null
+        var episodeTitle: String? = null
+        var episodeDescription: String? = null
+        var tmdbRating: Double? = null
+        var runtimeMinutes: Int? = null
+        
         if (
             posterUrl?.isBlank() == true
         ) {
@@ -1219,6 +1225,29 @@ Log.d(
 
             badge =
                 badge,
+
+            // Display metadata
+            showTitle =
+                if (item.mediaType == "series") {
+                    item.title
+                } else {
+                    null
+                },
+
+            episodeTitle =
+                null,
+
+            episodeDescription =
+                null,
+
+            tmdbRating =
+                null,
+
+            runtimeMinutes =
+                null,
+
+            remainingMinutes =
+                null,
 
             subtitle =
                 subtitle,
@@ -1266,7 +1295,6 @@ Log.d(
             recencyTimestamp =
                 recencyTimestamp
         )
-    }
 
     private suspend fun preloadWatchedEpisodeStateForShow(
         parentId: String,
