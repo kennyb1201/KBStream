@@ -358,7 +358,7 @@ private fun HomeHero(
                     color = Color.White,
                     fontSize = 28.sp,
                     fontWeight = FontWeight.Bold,
-                    maxLines = 5,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
             }
@@ -383,7 +383,7 @@ private fun HomeHero(
                         color = Color.White.copy(alpha = .80f),
                         fontSize = 12.sp,
                         lineHeight = 17.sp,
-                        maxLines = 2,
+                        maxLines = 5,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(top = 5.dp)
                     )
