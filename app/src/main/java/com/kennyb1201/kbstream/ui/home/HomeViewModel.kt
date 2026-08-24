@@ -63,7 +63,6 @@ enum class UpNextBadge {
 }
 
 data class UpNextItem(
-data class UpNextItem(
     val id: String,
     val title: String,
     val poster: String?,
@@ -701,6 +700,22 @@ Log.d(
             }
     }
 
+    private fun calculateRemainingMinutes(
+    positionMs: Long,
+    durationMs: Long
+): Int? {
+    if (durationMs <= 0L || positionMs <= 0L) {
+        return null
+    }
+
+    val remainingMs =
+        (durationMs - positionMs).coerceAtLeast(0L)
+
+    return ((remainingMs + 30_000L) / 60_000L)
+        .toInt()
+        .coerceAtLeast(1)
+    }
+
     private suspend fun clearWatchedStateCaches() {
 
         watchedStateMutex.withLock {
@@ -792,33 +807,82 @@ Log.d(
                                         ),
 
                                     streamUrl =
-                                        entry.streamUrl,
+UpNextItem(
+    id = buildString {
+        append("history:")
+        append(entry.id)
 
-                                    parentId =
-                                        entry.parentId
-                                            .ifBlank {
-                                                entry.id
-                                            },
+        entry.season?.let {
+            append(":s$it")
+        }
 
-                                    parentType =
-                                        entry.type,
+        entry.episode?.let {
+            append(":e$it")
+        }
+    },
 
-                                    season =
-                                        entry.season,
+    title = entry.name,
 
-                                    episode =
-                                        entry.episode,
+    poster = entry.poster,
 
-                                    episodeStreamId =
-                                        entry.episodeStreamId,
+    badge = UpNextBadge.CONTINUE_WATCHING,
 
-                                    startPositionMs =
-                                        entry.positionMs,
+    showTitle = if (
+        isEpisodePlayback
+    ) {
+        entry.name
+    } else {
+        null
+    },
 
-                                    recencyTimestamp =
-                                        entry.updatedAt
-                                )
-                            }
+    episodeTitle = null,
+
+    episodeDescription = null,
+
+    tmdbRating = null,
+
+    runtimeMinutes =
+        if (entry.durationMs > 0L) {
+            ((entry.durationMs + 30_000L) / 60_000L)
+                .toInt()
+                .coerceAtLeast(1)
+        } else {
+            null
+        },
+
+    remainingMinutes =
+        calculateRemainingMinutes(
+            positionMs = entry.positionMs,
+            durationMs = entry.durationMs
+        ),
+
+    subtitle = null,
+
+    progressPercent =
+        progressFromHistory(
+            positionMs = entry.positionMs,
+            durationMs = entry.durationMs
+        ),
+
+    streamUrl = entry.streamUrl,
+
+    parentId =
+        entry.parentId.ifBlank {
+            entry.id
+        },
+
+    parentType = entry.type,
+
+    season = entry.season,
+
+    episode = entry.episode,
+
+    episodeStreamId = entry.episodeStreamId,
+
+    startPositionMs = entry.positionMs,
+
+    recencyTimestamp = entry.updatedAt
+)
 
                         val simklResult =
                             loadSimklUpNextItems()
