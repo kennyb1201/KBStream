@@ -487,7 +487,7 @@ private fun CompactUpNextCard(
         mutableStateOf(false)
     }
 
-        val episodeLabel = when {
+    val episodeLabel = when {
         item.season != null && item.episode != null ->
             "S%02d · E%02d".format(
                 item.season,
@@ -503,8 +503,16 @@ private fun CompactUpNextCard(
         else -> null
     }
 
-    // Keep the actual status badge visible.
-    // The episode number is displayed separately below it.
+    /*
+     * The badge is the actual state:
+     *
+     * CONTINUE_WATCHING -> CONTINUE
+     * NEXT_UP           -> NEXT UP
+     * NEW_EPISODE       -> NEW EPISODE
+     * NEW_SEASON        -> NEW SEASON
+     *
+     * Episode information is shown separately in the top-right.
+     */
     val displayBadge = when (item.badge) {
         UpNextBadge.CONTINUE_WATCHING ->
             "CONTINUE"
@@ -532,8 +540,6 @@ private fun CompactUpNextCard(
     val progress = item.progressPercent
         ?.coerceIn(0f, 1f)
 
-    // Landscape, episode-style card. Smaller than the supplied 260 x 170
-    // version, while retaining a consistent 1.53:1 home-screen proportion.
     PosterCard(
         posterUrl = item.poster ?: "",
         contentDescription = item.title,
@@ -572,6 +578,10 @@ private fun CompactUpNextCard(
         Box(
             modifier = Modifier.fillMaxSize()
         ) {
+
+            /*
+             * Bottom image gradient.
+             */
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -587,69 +597,60 @@ private fun CompactUpNextCard(
                     )
             )
 
+            /*
+             * STATUS BADGE
+             *
+             * This is deliberately larger than the old tiny "NEW"
+             * badge so NEXT UP / NEW EPISODE / NEW SEASON are clearly
+             * readable from the couch.
+             */
             Text(
                 text = displayBadge,
                 color = Color.White,
                 style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .padding(8.dp)
                     .background(
-                        color = Color.Black.copy(alpha = 0.72f),
-                        shape = RoundedCornerShape(4.dp)
+                        color = badgeColor,
+                        shape = RoundedCornerShape(5.dp)
                     )
                     .padding(
-                        horizontal = 6.dp,
-                        vertical = 3.dp
+                        horizontal = 9.dp,
+                        vertical = 5.dp
                     )
             )
 
-            
-                Text(
-    text = displayBadge,
-    color = Color.White,
-    style = MaterialTheme.typography.labelSmall,
-    fontWeight = FontWeight.Bold,
-    maxLines = 1,
-    overflow = TextOverflow.Ellipsis,
-    modifier = Modifier
-        .align(Alignment.TopStart)
-        .padding(8.dp)
-        .background(
-            color = badgeColor,
-            shape = RoundedCornerShape(4.dp)
-        )
-        .padding(
-            horizontal = 8.dp,
-            vertical = 5.dp
-        )
-)
-               }
-
+            /*
+             * EPISODE NUMBER
+             */
             episodeLabel?.let { label ->
-    Text(
-        text = label,
-        color = Color.White,
-        style = MaterialTheme.typography.labelSmall,
-        fontWeight = FontWeight.Bold,
-        maxLines = 1,
-        modifier = Modifier
-            .align(Alignment.TopEnd)
-            .padding(8.dp)
-            .background(
-                color = Color.Black.copy(alpha = 0.72f),
-                shape = RoundedCornerShape(4.dp)
-            )
-            .padding(
-                horizontal = 7.dp,
-                vertical = 4.dp
-            )
-    )
+                Text(
+                    text = label,
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
+                        .background(
+                            color = Color.Black.copy(alpha = 0.72f),
+                            shape = RoundedCornerShape(4.dp)
+                        )
+                        .padding(
+                            horizontal = 7.dp,
+                            vertical = 4.dp
+                        )
+                )
             }
 
+            /*
+             * TITLE / EPISODE INFORMATION
+             */
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -661,7 +662,11 @@ private fun CompactUpNextCard(
                             item.badge == UpNextBadge.CONTINUE_WATCHING &&
                             progress != null &&
                             progress > 0f
-                        ) 15.dp else 9.dp
+                        ) {
+                            15.dp
+                        } else {
+                            9.dp
+                        }
                     )
             ) {
                 Text(
@@ -689,6 +694,9 @@ private fun CompactUpNextCard(
                 }
             }
 
+            /*
+             * RESUME PROGRESS
+             */
             if (
                 item.badge == UpNextBadge.CONTINUE_WATCHING &&
                 progress != null &&
