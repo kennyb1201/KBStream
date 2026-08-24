@@ -1200,11 +1200,20 @@ Log.d(
             }
         }
 
-                var showTitle: String? = null
-        var episodeTitle: String? = null
-        var episodeDescription: String? = null
-        var tmdbRating: Double? = null
-        var runtimeMinutes: Int? = null
+                            showTitle =
+                showTitle,
+
+            episodeTitle =
+                episodeTitle,
+
+            episodeDescription =
+                episodeDescription,
+
+            tmdbRating =
+                tmdbRating,
+
+            runtimeMinutes =
+                runtimeMinutes,
         
         if (
             posterUrl?.isBlank() == true
