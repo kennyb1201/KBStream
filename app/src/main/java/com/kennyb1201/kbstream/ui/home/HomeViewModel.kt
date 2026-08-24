@@ -1294,9 +1294,10 @@ Log.d(
 
             recencyTimestamp =
                 recencyTimestamp
-        )
+        ) 
+}
 
-    private suspend fun preloadWatchedEpisodeStateForShow(
+  private suspend fun preloadWatchedEpisodeStateForShow(
         parentId: String,
         tmdbShowId: Int
     ) {
