@@ -440,21 +440,54 @@ private fun HomeHero(
                 }
             }
 
-            if (continueWatchingItem == null) {
-                (meta?.description ?: preview.description)
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let { description ->
-                        Text(
-                            text = description,
-                            color = Color.White.copy(alpha = .80f),
-                            fontSize = 12.sp,
-                            lineHeight = 17.sp,
-                            maxLines = 5,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(top = 12.dp)
-                        )
-                    }
-            }
+            if (continueWatchingItem != null) {
+
+    continueWatchingItem.episodeTitle
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+        ?.let { episodeTitle ->
+            Text(
+                text = episodeTitle,
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 10.dp)
+            )
+        }
+
+    continueWatchingItem.episodeDescription
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+        ?.let { description ->
+            Text(
+                text = description,
+                color = Color.White.copy(alpha = .80f),
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 7.dp)
+            )
+        }
+
+} else {
+
+    (meta?.description ?: preview.description)
+        ?.takeIf { it.isNotBlank() }
+        ?.let { description ->
+            Text(
+                text = description,
+                color = Color.White.copy(alpha = .80f),
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+                maxLines = 5,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 12.dp)
+            )
+        }
+}
         }
     }
 }
@@ -658,16 +691,24 @@ private fun CompactUpNextCard(
                     overflow = TextOverflow.Ellipsis
                 )
 
-                subtitle?.let {
-                    Text(
-                        text = it,
-                        color = KBTextLo,
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 2.dp)
-                    )
-                }
+                item.episodeTitle
+    ?.trim()
+    ?.takeIf { it.isNotBlank() }
+    ?.let { episodeTitle ->
+        Text(
+            text = episodeTitle,
+            color = if (focused) {
+                Color.White.copy(alpha = .88f)
+            } else {
+                KBTextLo
+            },
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 2.dp)
+        )
+    }
             }
 
             /*
