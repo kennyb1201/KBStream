@@ -53,12 +53,14 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
+import androidx.tv.material3.MaterialTheme
+import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.MetaPreview
-import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.YouTubeTrailerPlayer
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
@@ -85,25 +87,9 @@ private fun TopActionItem(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var focused by remember { mutableStateOf(false) }
-
-    Text(
-        text = label,
-        color = if (focused) Color.White else Color.White.copy(alpha = .76f),
-        fontSize = 13.sp,
-        fontWeight = if (focused) FontWeight.Bold else FontWeight.Medium,
+    KBCard(
+        onClick = onClick,
         modifier = modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(
-                if (focused) {
-                    Color.White.copy(alpha = .16f)
-                } else {
-                    Color.Transparent
-                }
-            )
-            .onFocusChanged {
-                focused = it.isFocused
-            }
             .onPreviewKeyEvent { event ->
                 if (
                     event.type == KeyEventType.KeyDown &&
@@ -115,13 +101,17 @@ private fun TopActionItem(
                     false
                 }
             }
-            .focusable()
-            .clickable(onClick = onClick)
-            .padding(
-                horizontal = 12.dp,
-                vertical = 8.dp
+    ) {
+        Text(
+            text = label,
+            color = KBTextHi,
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(
+                horizontal = 16.dp,
+                vertical = 11.dp
             )
-    )
+        )
+    }
 }
 
 @Composable
