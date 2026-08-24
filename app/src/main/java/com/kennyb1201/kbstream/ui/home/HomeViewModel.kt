@@ -1196,9 +1196,9 @@ Log.d(
                                 }"
                             }
                         }
-                }
-            }
-        }
+                
+            
+        
 
                             showTitle =
                 showTitle,
