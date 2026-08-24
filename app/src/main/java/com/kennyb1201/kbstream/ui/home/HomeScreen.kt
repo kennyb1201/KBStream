@@ -473,6 +473,7 @@ private fun SectionTitle(text: String) {
     )
 }
 
+
 @Composable
 private fun CompactUpNextCard(
     item: UpNextItem,
@@ -483,179 +484,220 @@ private fun CompactUpNextCard(
     badgeColor: Color,
     badgeText: String
 ) {
-    var focused by remember { mutableStateOf(false) }
+    var focused by remember {
+        mutableStateOf(false)
+    }
 
-    Box(
-        modifier = Modifier
-            .width(ContinueWatchingCardWidth)
-            .height(
-                ContinueWatchingCardImageHeight +
-                    96.dp +
-                    PosterFocusHeadroom
+    val episodeLabel = when {
+        item.season != null && item.episode != null ->
+            "S%02d · E%02d".format(
+                item.season,
+                item.episode
             )
-            .padding(end = HomeRailGap),
-        contentAlignment = Alignment.Center
+
+        item.season != null ->
+            "S%02d".format(item.season)
+
+        item.episode != null ->
+            "E%02d".format(item.episode)
+
+        else -> null
+    }
+
+    val displayBadge = when {
+        item.badge == UpNextBadge.CONTINUEWATCHING &&
+            episodeLabel != null -> episodeLabel
+
+        item.badge == UpNextBadge.NEXTUP &&
+            episodeLabel != null -> episodeLabel
+
+        else -> badgeText
+    }
+
+    val subtitle = item.subtitle
+        ?.removePrefix("Resume - ")
+        ?.removePrefix("Up Next - ")
+        ?.trim()
+        ?.takeIf {
+            it.isNotBlank() &&
+                it != episodeLabel &&
+                it != item.title
+        }
+
+    val progress = item.progressPercent
+        ?.coerceIn(0f, 1f)
+
+    // Landscape, episode-style card. Smaller than the supplied 260 x 170
+    // version, while retaining a consistent 1.53:1 home-screen proportion.
+    PosterCard(
+        posterUrl = item.poster ?: "",
+        contentDescription = item.title,
+        isWatched = false,
+        onClick = onClick,
+        modifier = Modifier
+            .width(224.dp)
+            .height(146.dp)
+            .padding(end = HomeRailGap)
+            .then(
+                if (focusRequester != null) {
+                    Modifier.focusRequester(focusRequester)
+                } else {
+                    Modifier
+                }
+            )
+            .onFocusChanged {
+                focused = it.isFocused
+
+                if (it.isFocused) {
+                    onFocus()
+                }
+            }
+            .onPreviewKeyEvent { event ->
+                if (
+                    event.type == KeyEventType.KeyDown &&
+                    event.key == Key.DirectionUp
+                ) {
+                    onUpPressed()
+                    true
+                } else {
+                    false
+                }
+            }
     ) {
-        KBCard(
-            onClick = onClick,
-            modifier = Modifier
-                .offset(y = (-3).dp)
-                .then(
-                    if (focusRequester != null) {
-                        Modifier.focusRequester(focusRequester)
-                    } else {
-                        Modifier
-                    }
-                )
-                .onFocusChanged {
-                    focused = it.isFocused
-                    if (it.isFocused) {
-                        onFocus()
-                    }
-                }
-                .onPreviewKeyEvent {
-                    if (
-                        it.type == KeyEventType.KeyDown &&
-                        it.key == Key.DirectionUp
-                    ) {
-                        onUpPressed()
-                        true
-                    } else {
-                        false
-                    }
-                }
+        Box(
+            modifier = Modifier.fillMaxSize()
         ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color.Black.copy(alpha = 0.08f),
+                                Color.Black.copy(alpha = 0.34f),
+                                Color.Black.copy(alpha = 0.80f),
+                                Color.Black.copy(alpha = 0.97f)
+                            )
+                        )
+                    )
+            )
+
+            Text(
+                text = displayBadge,
+                color = Color.White,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(8.dp)
+                    .background(
+                        color = Color.Black.copy(alpha = 0.72f),
+                        shape = RoundedCornerShape(4.dp)
+                    )
+                    .padding(
+                        horizontal = 6.dp,
+                        vertical = 3.dp
+                    )
+            )
+
+            if (
+                item.badge != UpNextBadge.CONTINUEWATCHING &&
+                item.badge != UpNextBadge.NEXTUP &&
+                episodeLabel != null
+            ) {
+                Text(
+                    text = badgeText,
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
+                        .background(
+                            color = badgeColor,
+                            shape = RoundedCornerShape(4.dp)
+                        )
+                        .padding(
+                            horizontal = 6.dp,
+                            vertical = 3.dp
+                        )
+                )
+            }
+
             Column(
-                modifier = Modifier.width(ContinueWatchingCardWidth)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomStart)
+                    .padding(
+                        start = 10.dp,
+                        end = 10.dp,
+                        bottom = if (
+                            item.badge ==
+                                UpNextBadge.CONTINUEWATCHING &&
+                            progress != null &&
+                            progress > 0f
+                        ) {
+                            15.dp
+                        } else {
+                            9.dp
+                        }
+                    )
+            ) {
+                Text(
+                    text = item.title,
+                    color = if (focused) {
+                        Color.White
+                    } else {
+                        KBTextHi
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                subtitle?.let {
+                    Text(
+                        text = it,
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+            }
+
+            if (
+                item.badge == UpNextBadge.CONTINUEWATCHING &&
+                progress != null &&
+                progress > 0f
             ) {
                 Box(
                     modifier = Modifier
+                        .align(Alignment.BottomStart)
                         .fillMaxWidth()
-                        .height(ContinueWatchingCardImageHeight)
-                        .clip(RoundedCornerShape(8.dp))
-                        .focusable()
-                        .clickable(onClick = onClick)
-                ) {
-                    AsyncImage(
-                        model = ImageRequest.Builder(LocalContext.current)
-                            .data(item.poster)
-                            .crossfade(true)
-                            .build(),
-                        contentDescription = item.title,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
-
-                    if (
-                        item.badge != UpNextBadge.NEXT_UP &&
-                        item.badge != UpNextBadge.CONTINUE_WATCHING
-                    ) {
-                        Text(
-                            text = badgeText,
-                            color = Color.White,
-                            fontSize = 8.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier
-                                .align(Alignment.TopStart)
-                                .background(badgeColor)
-                                .padding(
-                                    horizontal = 5.dp,
-                                    vertical = 3.dp
-                                )
+                        .height(4.dp)
+                        .background(
+                            Color.White.copy(alpha = 0.28f)
                         )
-                    }
-
-                    item.progressPercent
-                        ?.takeIf {
-                            item.badge == UpNextBadge.CONTINUE_WATCHING &&
-                                it > 0f
-                        }
-                        ?.let { progress ->
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.BottomStart)
-                                    .fillMaxWidth()
-                                    .padding(
-                                        horizontal = 7.dp,
-                                        vertical = 7.dp
-                                    )
-                                    .height(4.dp)
-                                    .background(
-                                        Color.White.copy(alpha = .28f)
-                                    )
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth(
-                                            progress.coerceIn(0f, 1f)
-                                        )
-                                        .height(4.dp)
-                                        .background(KBAccent)
-                                )
-                            }
-                        }
-                }
-
-                Column(
-                    modifier = Modifier.padding(
-                        horizontal = 12.dp,
-                        vertical = 10.dp
-                    )
                 ) {
-                    val episodeLabel = when {
-                        item.season != null && item.episode != null ->
-                            "S%02d · E%02d".format(
-                                item.season,
-                                item.episode
-                            )
-
-                        item.season != null ->
-                            "S%02d".format(item.season)
-
-                        item.episode != null ->
-                            "E%02d".format(item.episode)
-
-                        else ->
-                            null
-                    }
-
-                    Text(
-                        text = episodeLabel ?: badgeText,
-                        color = if (focused) Color.White else KBTextHi,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(progress)
+                            .height(4.dp)
+                            .background(KBAccent)
                     )
-
-                    Text(
-                        text = item.title,
-                        color = KBTextHi,
-                        style = MaterialTheme.typography.titleSmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-
-                    item.subtitle
-                        ?.removePrefix("Resume - ")
-                        ?.removePrefix("Up Next - ")
-                        ?.takeIf { it.isNotBlank() && it != episodeLabel }
-                        ?.let { subtitle ->
-                            Text(
-                                text = subtitle,
-                                color = KBTextLo,
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.padding(top = 2.dp)
-                            )
-                        }
                 }
             }
         }
     }
 }
+                    
 
 @Composable
 fun HomeScreen(
@@ -871,11 +913,11 @@ fun HomeScreen(
 
                             LazyRow(
                                 contentPadding = PaddingValues(
-                                    start = RailHorizontalStartPadding,
-                                    end = TvSafeAreaHorizontal,
-                                    top = RailTopContentPadding,
-                                    bottom = RailBottomContentPadding
-                                ),
+    start = RailHorizontalStartPadding,
+    end = TvSafeAreaHorizontal,
+    top = 10.dp,
+    bottom = 12.dp
+)
                                 horizontalArrangement =
                                     Arrangement.spacedBy(0.dp)
                             ) {
