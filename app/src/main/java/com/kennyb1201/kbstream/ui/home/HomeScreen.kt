@@ -629,24 +629,19 @@ private fun CompactUpNextCard(
             }
 
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.BottomStart)
-                    .padding(
-                        start = 10.dp,
-                        end = 10.dp,
-                        bottom = if (
-                            item.badge ==
-                                UpNextBadge.CONTINUEWATCHING &&
-                            progress != null &&
-                            progress > 0f
-                        ) {
-                            15.dp
-                        } else {
-                            9.dp
-                        }
-                    )
-            ) {
+    modifier = Modifier
+        .fillMaxWidth()
+        .align(Alignment.BottomStart)
+        .padding(
+            start = 10.dp,
+            end = 10.dp,
+            bottom = if (
+                item.badge == UpNextBadge.CONTINUEWATCHING &&
+                progress != null &&
+                progress > 0f
+            ) 15.dp else 9.dp
+        )
+) {
                 Text(
                     text = item.title,
                     color = if (focused) {
