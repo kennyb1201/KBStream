@@ -78,6 +78,7 @@ data class UpNextItem(
     val startPositionMs: Long = 0L,
     val recencyTimestamp: Long = 0L,
 
+    // Resolved episode/show information for the Home UI.
     val showTitle: String? = null,
     val episodeTitle: String? = null,
     val episodeDescription: String? = null,
