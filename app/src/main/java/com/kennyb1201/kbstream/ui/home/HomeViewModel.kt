@@ -1060,6 +1060,29 @@ Log.d(
                         }
             }
 
+                        // Populate display metadata from TMDB.
+            if (detail != null) {
+
+                showTitle =
+                    if (item.mediaType == "series") {
+                        detail.name
+                    } else {
+                        null
+                    }
+
+                tmdbRating =
+                    detail.voteAverage
+                        ?.takeIf {
+                            it > 0.0
+                        }
+
+                runtimeMinutes =
+                    detail.runtime
+                        ?.takeIf {
+                            it > 0
+                        }
+            }
+
             if (
                 item.mediaType == "series" &&
                 (
