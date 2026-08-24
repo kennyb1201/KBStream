@@ -358,7 +358,7 @@ private fun HomeHero(
                     color = Color.White,
                     fontSize = 28.sp,
                     fontWeight = FontWeight.Bold,
-                    maxLines = 2,
+                    maxLines = 5,
                     overflow = TextOverflow.Ellipsis
                 )
             }
