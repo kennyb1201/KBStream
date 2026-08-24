@@ -452,18 +452,16 @@ Log.d(
                         "Hero resolved: title=${item.name}, id=$requestedId, type=$requestedType, tmdbId=$resolvedTmdbId, logo=${resolvedLogo != null}, backdrop=${resolvedBackdrop != null}, trailer=${_heroTrailerKey.value != null}"
                     )
                 }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
             } catch (e: Exception) {
     Log.w(
         "HOME_HERO",
         "Hero enrichment failed for ${item.name}: ${e.message}",
         e
     )
-    heroMeta.value = null
-    heroBackdropUrl.value = null
-    heroLogoUrl.value = null
-    heroTrailerKey.value = null
+    _heroMeta.value = null
+    _heroBackdropUrl.value = null
+    _heroLogoUrl.value = null
+    _heroTrailerKey.value = null
 }
         }
     }
