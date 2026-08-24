@@ -625,30 +625,6 @@ private fun CompactUpNextCard(
             )
 
             /*
-             * EPISODE NUMBER
-             */
-            episodeLabel?.let { label ->
-                Text(
-                    text = label,
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(8.dp)
-                        .background(
-                            color = Color.Black.copy(alpha = 0.72f),
-                            shape = RoundedCornerShape(4.dp)
-                        )
-                        .padding(
-                            horizontal = 7.dp,
-                            vertical = 4.dp
-                        )
-                )
-            }
-
-            /*
              * TITLE / EPISODE INFORMATION
              */
             Column(
