@@ -78,14 +78,14 @@ private val HomeHeroHeight = 350.dp
 
 // Extra room allows a focused KBCard to draw below its normal bounds
 // without clipping its lower outline, scale, or poster badge.
-private val RailTopContentPadding = 28.dp
-private val RailBottomContentPadding = 40.dp
+private val RailTopContentPadding = 36.dp
+private val RailBottomContentPadding = 52.dp
 
 private val RailHorizontalStartPadding = 20.dp
-private val RailSectionGap = 28.dp
+private val RailSectionGap = 34.dp
 
 // Keep the section heading directly against the hero's bottom fade.
-private val HeroToFirstRailGap = 0.dp
+private val HeroToFirstRailGap = 8.dp
 
 @Composable
 private fun TopActionItem(
@@ -379,8 +379,8 @@ private fun SectionTitle(text: String) {
         fontSize = 16.sp,
         fontWeight = FontWeight.SemiBold,
         modifier = Modifier.padding(
-            top = 8.dp,
-            bottom = 10.dp
+            top = 4.dp,
+            bottom = 6.dp
         )
     )
 }
