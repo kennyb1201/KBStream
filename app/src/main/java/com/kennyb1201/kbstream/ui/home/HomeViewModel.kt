@@ -277,22 +277,22 @@ class HomeViewModel(
             try {
                 coroutineScope {
                     val addonMetaDeferred = async {
-                        val resolvedBaseUrl =
-                            baseUrl?.takeIf { it.isNotBlank() }
-                                ?: findBaseUrlForMeta(item)
+    val resolvedBaseUrl =
+        baseUrl?.takeIf { it.isNotBlank() }
+            ?: findBaseUrlForMeta(item)
 
-                        if (resolvedBaseUrl.isNullOrBlank()) {
-                            null
-                        } else {
-                            safeSuspend {
-                                repository.getMeta(
-                                    baseUrl = resolvedBaseUrl,
-                                    type = requestedType,
-                                    id = requestedId
-                                )
-                            }
-                        }
-                    }
+    if (resolvedBaseUrl.isNullOrBlank()) {
+        probeInstalledAddonsForMeta(requestedId, requestedType)
+    } else {
+        safeSuspend {
+            repository.getMeta(
+                baseUrl = resolvedBaseUrl,
+                type = requestedType,
+                id = requestedId
+            )
+        } ?: probeInstalledAddonsForMeta(requestedId, requestedType)
+    }
+}
 
                     val tmdbDetailDeferred = async {
                         safeSuspend {
@@ -2617,6 +2617,33 @@ Log.d(
         periodicRefreshJob?.cancel()
 
         super.onCleared()
+    }
+
+    private suspend fun probeInstalledAddonsForMeta(
+    id: String,
+    type: String
+): Meta? {
+    val candidates =
+        addonManager.installedAddons.value
+            .filter { "meta" in it.resources }
+
+    for (addon in candidates) {
+        val baseUrl =
+            addon.manifestUrl
+                .removeSuffix("manifest.json")
+                .removeSuffix("/")
+
+        val meta = safeSuspend {
+            repository.getMeta(
+                baseUrl = baseUrl,
+                type = type,
+                id = id
+            )
+        }
+
+        if (meta != null) return meta
+    }
+    return null
     }
 
     companion object {
