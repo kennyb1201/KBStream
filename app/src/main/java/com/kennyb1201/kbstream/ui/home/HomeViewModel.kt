@@ -63,10 +63,20 @@ enum class UpNextBadge {
 }
 
 data class UpNextItem(
+data class UpNextItem(
     val id: String,
     val title: String,
     val poster: String?,
     val badge: UpNextBadge,
+
+    // Display metadata
+    val showTitle: String? = null,
+    val episodeTitle: String? = null,
+    val episodeDescription: String? = null,
+    val tmdbRating: Double? = null,
+    val runtimeMinutes: Int? = null,
+    val remainingMinutes: Int? = null,
+
     val subtitle: String? = null,
     val progressPercent: Float? = null,
     val streamUrl: String? = null,
@@ -76,13 +86,7 @@ data class UpNextItem(
     val episode: Int? = null,
     val episodeStreamId: String? = null,
     val startPositionMs: Long = 0L,
-    val recencyTimestamp: Long = 0L,
-
-    // Resolved episode/show information for the Home UI.
-    val showTitle: String? = null,
-    val episodeTitle: String? = null,
-    val episodeDescription: String? = null,
-    val durationMs: Long? = null
+    val recencyTimestamp: Long = 0L
 )
 
 private data class ResolvedHomeSeriesTarget(
