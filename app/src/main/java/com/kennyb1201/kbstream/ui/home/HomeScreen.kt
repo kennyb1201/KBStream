@@ -80,7 +80,7 @@ private val HomeHeroHeight = 300.dp
 // Reduced padding gives the catalog rails more usable screen space
 // while still leaving enough room for focused cards to draw cleanly.
 private val RailTopContentPadding = 18.dp
-private val RailBottomContentPadding = 28.dp
+private val RailBottomContentPadding = 52.dp
 
 private val RailHorizontalStartPadding = 20.dp
 private val RailSectionGap = 20.dp
