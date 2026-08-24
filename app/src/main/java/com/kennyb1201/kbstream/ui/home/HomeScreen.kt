@@ -912,7 +912,7 @@ fun HomeScreen(
     end = TvSafeAreaHorizontal,
     top = 10.dp,
     bottom = 12.dp
-)
+),
                                 horizontalArrangement =
                                     Arrangement.spacedBy(0.dp)
                             ) {
