@@ -836,54 +836,65 @@ UpNextItem(
     },
 
     episodeTitle = null,
+val localItems =
+    history.map { entry ->
 
-    episodeDescription = null,
+        val isEpisodePlayback =
+            entry.season != null && entry.episode != null
 
-    tmdbRating = null,
+        UpNextItem(
+            id = buildString {
+                append("history:")
+                append(entry.id)
+                entry.season?.let { append(":s$it") }
+                entry.episode?.let { append(":e$it") }
+            },
 
-    runtimeMinutes =
-        if (entry.durationMs > 0L) {
-            ((entry.durationMs + 30_000L) / 60_000L)
-                .toInt()
-                .coerceAtLeast(1)
-        } else {
-            null
-        },
+            title = entry.name,
+            poster = entry.poster,
+            badge = UpNextBadge.CONTINUE_WATCHING,
 
-    remainingMinutes =
-        calculateRemainingMinutes(
-            positionMs = entry.positionMs,
-            durationMs = entry.durationMs
-        ),
+            showTitle = if (isEpisodePlayback) entry.name else null,
+            episodeTitle = null,
+            episodeDescription = null,
+            tmdbRating = null,
 
-    subtitle = null,
+            runtimeMinutes =
+                if (entry.durationMs > 0L) {
+                    ((entry.durationMs + 30_000L) / 60_000L)
+                        .toInt()
+                        .coerceAtLeast(1)
+                } else {
+                    null
+                },
 
-    progressPercent =
-        progressFromHistory(
-            positionMs = entry.positionMs,
-            durationMs = entry.durationMs
-        ),
+            remainingMinutes =
+                calculateRemainingMinutes(
+                    positionMs = entry.positionMs,
+                    durationMs = entry.durationMs
+                ),
 
-    streamUrl = entry.streamUrl,
+            subtitle = null,
 
-    parentId =
-        entry.parentId.ifBlank {
-            entry.id
-        },
+            progressPercent =
+                progressFromHistory(
+                    positionMs = entry.positionMs,
+                    durationMs = entry.durationMs
+                ),
 
-    parentType = entry.type,
+            streamUrl = entry.streamUrl,
 
-    season = entry.season,
+            parentId = entry.parentId.ifBlank { entry.id },
+            parentType = entry.type,
 
-    episode = entry.episode,
+            season = entry.season,
+            episode = entry.episode,
+            episodeStreamId = entry.episodeStreamId,
 
-    episodeStreamId = entry.episodeStreamId,
-
-    startPositionMs = entry.positionMs,
-
-    recencyTimestamp = entry.updatedAt
-)
-                                    }
+            startPositionMs = entry.positionMs,
+            recencyTimestamp = entry.updatedAt
+        )
+    }
 
                         val simklResult =
                             loadSimklUpNextItems()
