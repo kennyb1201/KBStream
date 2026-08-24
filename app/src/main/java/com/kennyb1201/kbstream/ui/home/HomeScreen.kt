@@ -78,8 +78,8 @@ private val HomeHeroHeight = 350.dp
 
 // Extra room allows a focused KBCard to draw below its normal bounds
 // without clipping its lower outline, scale, or poster badge.
-private val RailTopContentPadding = 18.dp
-private val RailBottomContentPadding = 58.dp
+private val RailTopContentPadding = 28.dp
+private val RailBottomContentPadding = 40.dp
 
 private val RailHorizontalStartPadding = 20.dp
 private val RailSectionGap = 28.dp
@@ -312,12 +312,11 @@ private fun HomeHero(
 
         Column(
             modifier = Modifier
-                .align(Alignment.BottomStart)
+                .align(Alignment.CenterStart)
                 .width(480.dp)
                 .padding(
                     start = 32.dp,
                     end = 20.dp,
-                    bottom = 20.dp
                 )
         ) {
             if (!clearLogo.isNullOrBlank()) {
