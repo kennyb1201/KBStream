@@ -883,6 +883,7 @@ UpNextItem(
 
     recencyTimestamp = entry.updatedAt
 )
+                                    }
 
                         val simklResult =
                             loadSimklUpNextItems()
