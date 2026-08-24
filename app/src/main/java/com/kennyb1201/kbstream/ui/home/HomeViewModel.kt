@@ -16,6 +16,13 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbHeroArtworkRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.watched.WatchStateBus
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
+import com.kennyb1201.kbstream.data.tmdb.director
+import com.kennyb1201.kbstream.data.tmdb.displayCountry
+import com.kennyb1201.kbstream.data.tmdb.displayDescription
+import com.kennyb1201.kbstream.data.tmdb.displayLanguage
+import com.kennyb1201.kbstream.data.tmdb.displayRating
+import com.kennyb1201.kbstream.data.tmdb.displayRuntime
+import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -364,9 +371,63 @@ Log.d(
                             ?: item.poster?.takeIf { it.isNotBlank() }
 
                     val finalMeta = resolvedAddonMeta?.copy(
-                        logo = resolvedLogo ?: resolvedAddonMeta.logo,
-                        background = resolvedBackdrop ?: resolvedAddonMeta.background
-                    )
+    logo = resolvedLogo ?: resolvedAddonMeta.logo,
+    background = resolvedBackdrop ?: resolvedAddonMeta.background
+) ?: resolvedTmdbDetail?.let { tmdb ->
+    Meta(
+        id = requestedId,
+        type = requestedType,
+
+        name = tmdb.name
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: tmdb.title
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+            ?: item.name,
+
+        poster = tmdb.posterPath
+            ?.takeIf { it.isNotBlank() }
+            ?.let(TmdbRepository.POSTER_BASE::plus)
+            ?: item.poster,
+
+        background = resolvedBackdrop,
+        logo = resolvedLogo,
+
+        description = tmdb.displayDescription(),
+        releaseInfo = tmdb.releaseYear(),
+        imdbRating = tmdb.displayRating(),
+        runtime = tmdb.displayRuntime(),
+        language = tmdb.displayLanguage(),
+        country = tmdb.displayCountry(),
+
+        genres = tmdb.genres
+            .map { it.name.trim() }
+            .filter { it.isNotEmpty() }
+            .takeIf { it.isNotEmpty() },
+
+        cast = tmdb.credits?.cast
+            ?.map { it.name.trim() }
+            ?.filter { it.isNotEmpty() }
+            ?.distinct()
+            ?.take(12)
+            ?.takeIf { it.isNotEmpty() },
+
+        director = tmdb.credits?.director()
+            ?.name
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let(::listOf)
+    )
+} ?: Meta(
+    id = requestedId,
+    type = requestedType,
+    name = item.name,
+    poster = item.poster,
+    background = resolvedBackdrop ?: item.background,
+    logo = resolvedLogo,
+    description = item.description
+)
 
                     _heroMeta.value = finalMeta
                     // NOTE: finalMeta is null whenever resolvedAddonMeta is null (addon has
