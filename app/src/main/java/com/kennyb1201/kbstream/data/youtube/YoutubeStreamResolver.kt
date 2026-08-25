@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.youtube
 
 import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.schabi.newpipe.extractor.ServiceList
@@ -23,11 +24,17 @@ object YoutubeStreamResolver {
                 extractor.videoStreams
 
             videoStreams
-                .filter { it.isVideoOnly.not() }
+                .filter { !it.isVideoOnly }
                 .maxByOrNull { it.height }
                 ?.url
-        } catch (e: Exception) {
-            Log.e("YoutubeStreamResolver", "Extraction failed for $videoId", e)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Log.e(
+                "YoutubeStreamResolver",
+                "Extraction failed for $videoId",
+                t
+            )
             null
         }
     }
