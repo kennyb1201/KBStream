@@ -216,13 +216,53 @@ private fun HomeHero(
     val trailerPlaying =
         !trailerKey.isNullOrBlank() && autoPlayTrailer
 
-    val year = tmdbDetail?.releaseYear()
+    val year = if (preview.type == "movie") {
+    tmdbDetail?.releaseYear()
         ?: meta?.releaseInfo
             ?.let {
                 Regex("""\b(?:19|20)\d{2}\b""")
                     .find(it)
                     ?.value
             }
+} else {
+    val startYear =
+        tmdbDetail?.firstAirDate
+            ?.take(4)
+            ?.takeIf { it.length == 4 && it.all(Char::isDigit) }
+            ?: tmdbDetail?.releaseYear()
+
+    val endYear =
+        tmdbDetail?.lastEpisodeToAir
+            ?.airDate
+            ?.take(4)
+            ?.takeIf { it.length == 4 && it.all(Char::isDigit) }
+
+    val isStillRunning =
+        when (tmdbDetail?.status?.trim()?.lowercase()) {
+            "returning series",
+            "in production",
+            "planned" -> true
+
+            else -> false
+        }
+
+    when {
+        startYear == null -> null
+
+        isStillRunning -> "$startYear–"
+
+        !endYear.isNullOrBlank() &&
+            endYear != startYear ->
+            "$startYear–$endYear"
+
+        tmdbDetail?.status
+            ?.trim()
+            ?.equals("ended", ignoreCase = true) == true ->
+            startYear
+
+        else -> startYear
+    }
+}
 
     val rating = tmdbDetail?.certification(preview.type == "movie")
         ?.takeIf { it.isNotBlank() }
