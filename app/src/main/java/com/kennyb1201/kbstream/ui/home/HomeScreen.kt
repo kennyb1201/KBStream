@@ -401,7 +401,7 @@ private fun HomeHero(
                 )
             )
     )
-    }
+    
 
         /*
  * SOFT LEFT EDGE BLEND
