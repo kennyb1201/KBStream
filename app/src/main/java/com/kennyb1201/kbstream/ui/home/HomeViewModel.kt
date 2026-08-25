@@ -750,65 +750,148 @@ Log.d(
 
                     try {
 
-                        val localItems =
-                            history.map { entry ->
+val localItems =
+    history.map { entry ->
 
-                                val isEpisodePlayback =
-                                    entry.season != null && entry.episode != null
+        val isEpisodePlayback =
+            entry.season != null && entry.episode != null
 
-                                UpNextItem(
-                                    id = buildString {
-                                        append("history:")
-                                        append(entry.id)
-                                        entry.season?.let { append(":s$it") }
-                                        entry.episode?.let { append(":e$it") }
-                                    },
+        var episodeRating: Double? = null
 
-                                    title = entry.name,
-                                    poster = entry.poster,
-                                    badge = UpNextBadge.CONTINUE_WATCHING,
+        if (
+            isEpisodePlayback &&
+            entry.season != null &&
+            entry.episode != null
+        ) {
+            try {
+                val parentId =
+                    entry.parentId
+                        .trim()
+                        .ifBlank { entry.id.trim() }
 
-                                    showTitle = if (isEpisodePlayback) entry.name else null,
-                                    episodeTitle = null,
-                                    episodeDescription = null,
-                                    tmdbRating = null,
+                val tmdbDetail =
+                    when {
+                        parentId.startsWith("tmdb:", ignoreCase = true) -> {
+                            parentId
+                                .substringAfter(":")
+                                .toIntOrNull()
+                                ?.let { tmdbId ->
+                                    tmdbRepository.getDetailByTmdbId(
+                                        tmdbId,
+                                        entry.type
+                                    )
+                                }
+                        }
 
-                                    runtimeMinutes =
-                                        if (entry.durationMs > 0L) {
-                                            ((entry.durationMs + 30_000L) / 60_000L)
-                                                .toInt()
-                                                .coerceAtLeast(1)
-                                        } else {
-                                            null
-                                        },
+                        parentId.startsWith("tt", ignoreCase = true) -> {
+                            tmdbRepository.fetchEnrichedMetaCached(
+                                parentId,
+                                entry.type
+                            )
+                        }
 
-                                    remainingMinutes =
-                                        calculateRemainingMinutes(
-                                            positionMs = entry.positionMs,
-                                            durationMs = entry.durationMs
-                                        ),
+                        parentId.toIntOrNull() != null -> {
+                            tmdbRepository.getDetailByTmdbId(
+                                parentId.toInt(),
+                                entry.type
+                            )
+                        }
 
-                                    subtitle = null,
+                        else -> {
+                            null
+                        }
+                    }
 
-                                    progressPercent =
-                                        progressFromHistory(
-                                            positionMs = entry.positionMs,
-                                            durationMs = entry.durationMs
-                                        ),
+                val tmdbId = tmdbDetail?.id
 
-                                    streamUrl = entry.streamUrl,
+                if (tmdbId != null && tmdbId > 0) {
+                    episodeRating =
+                        tmdbRepository.getEpisodeRating(
+                            tmdbId = tmdbId,
+                            season = entry.season,
+                            episode = entry.episode
+                        )
+                }
 
-                                    parentId = entry.parentId.ifBlank { entry.id },
-                                    parentType = entry.type,
+                Log.d(
+                    "HOME_UPNEXT",
+                    "Episode rating: ${entry.name} " +
+                        "S${entry.season}E${entry.episode} " +
+                        "tmdbId=$tmdbId rating=$episodeRating"
+                )
 
-                                    season = entry.season,
-                                    episode = entry.episode,
-                                    episodeStreamId = entry.episodeStreamId,
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(
+                    "HOME_UPNEXT",
+                    "Failed to resolve episode rating for ${entry.name}",
+                    e
+                )
+            }
+        }
 
-                                    startPositionMs = entry.positionMs,
-                                    recencyTimestamp = entry.updatedAt
-                                )
-                            }
+        UpNextItem(
+            id = buildString {
+                append("history:")
+                append(entry.id)
+                entry.season?.let { append(":s$it") }
+                entry.episode?.let { append(":e$it") }
+            },
+
+            title = entry.name,
+            poster = entry.poster,
+            badge = UpNextBadge.CONTINUE_WATCHING,
+
+            showTitle =
+                if (isEpisodePlayback) entry.name else null,
+
+            episodeTitle = null,
+            episodeDescription = null,
+
+            // Episode-specific TMDB rating.
+            // Your UI currently calls this field imdbRating.
+            tmdbRating = null,
+            imdbRating = episodeRating,
+
+            runtimeMinutes =
+                if (entry.durationMs > 0L) {
+                    ((entry.durationMs + 30_000L) / 60_000L)
+                        .toInt()
+                        .coerceAtLeast(1)
+                } else {
+                    null
+                },
+
+            remainingMinutes =
+                calculateRemainingMinutes(
+                    positionMs = entry.positionMs,
+                    durationMs = entry.durationMs
+                ),
+
+            subtitle = null,
+
+            progressPercent =
+                progressFromHistory(
+                    positionMs = entry.positionMs,
+                    durationMs = entry.durationMs
+                ),
+
+            streamUrl = entry.streamUrl,
+
+            parentId =
+                entry.parentId.ifBlank { entry.id },
+
+            parentType = entry.type,
+
+            season = entry.season,
+            episode = entry.episode,
+            episodeStreamId = entry.episodeStreamId,
+
+            startPositionMs = entry.positionMs,
+            recencyTimestamp = entry.updatedAt
+        )
+    }
 
                         val simklResult =
                             loadSimklUpNextItems()
