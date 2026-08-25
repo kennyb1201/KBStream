@@ -988,17 +988,18 @@ fun HomeScreen(
             modifier = Modifier.fillMaxSize()
         ) {
             focusedItem?.let {
-                HomeHero(
-                    preview = it,
-                    meta = heroMeta,
-                    tmdbDetail = heroTmdbDetail,
-                    heroBackdropUrl = heroBackdropUrl,
-                    heroLogoUrl = heroLogoUrl,
-                    trailerKey = heroTrailerKey,
-                    autoPlayTrailer = heroTrailerReady,
-                    continueWatchingItem = focusedContinueWatchingItem
-                )
-            }
+    HomeHero(
+        preview = it,
+        meta = heroMeta,
+        tmdbDetail = heroTmdbDetail,
+        heroBackdropUrl = heroBackdropUrl,
+        heroLogoUrl = heroLogoUrl,
+        trailerKey = heroTrailerKey,
+        autoPlayTrailer = heroTrailerReady &&
+            focusedContinueWatchingItem == null,
+        continueWatchingItem = focusedContinueWatchingItem
+    )
+}
 
             LazyColumn(
                 modifier = Modifier.weight(1f),
