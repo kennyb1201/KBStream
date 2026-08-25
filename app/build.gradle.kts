@@ -2,10 +2,10 @@ import java.util.Properties
 
 plugins {
     id("com.android.application")
+    id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
 }
-
 val localProps = Properties()
 val localPropsFile = rootProject.file("local.properties")
 if (localPropsFile.exists()) {
@@ -73,11 +73,9 @@ buildConfigField("String", "SIMKL_CLIENT_SECRET", "\"${simklClientSecret}\"")
         }
     }
 
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-        isCoreLibraryDesugaringEnabled = true
-    }
+    kotlinOptions {
+    jvmTarget = "17"
+}
 
     kotlin {
     compilerOptions {
@@ -89,7 +87,7 @@ buildConfigField("String", "SIMKL_CLIENT_SECRET", "\"${simklClientSecret}\"")
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 
-    implementation("androidx.core:core-ktx:1.19.0")
+    implementation("androidx.core:core-ktx:1.17.0")
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.4")
@@ -116,9 +114,9 @@ dependencies {
     implementation("androidx.media3:media3-ui:1.9.0")
     implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.9.0+1")
 
-    ksp("androidx.room:room-compiler:2.8.3")
-implementation("androidx.room:room-runtime:2.8.3")
-implementation("androidx.room:room-ktx:2.8.3")
+    implementation("androidx.room:room-runtime:2.7.1")
+ksp("androidx.room:room-compiler:2.7.1")
+implementation("androidx.room:room-ktx:2.7.1")
 
     implementation("androidx.work:work-runtime-ktx:2.10.1")
 
