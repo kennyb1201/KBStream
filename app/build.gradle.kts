@@ -41,10 +41,11 @@ android {
         versionCode = 1
         versionName = "0.1.0"
 
-        buildConfigField("String", "TMDB_API_KEY", "\"$tmdbApiKey\"")
-        buildConfigField("String", "SIMKL_CLIENT_ID", "\"$simklClientId\"")
-        buildConfigField("String", "SIMKL_CLIENT_SECRET", "\"$simklClientSecret\"")
+        buildConfigField("String", "TMDB_API_KEY", ""$tmdbApiKey"")
+        buildConfigField("String", "SIMKL_CLIENT_ID", ""$simklClientId"")
+        buildConfigField("String", "SIMKL_CLIENT_SECRET", ""$simklClientSecret"")
     }
+
     buildFeatures {
         compose = true
         buildConfig = true
@@ -76,6 +77,7 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        isCoreLibraryDesugaringEnabled = true
     }
 
     kotlinOptions {
@@ -84,6 +86,8 @@ android {
 }
 
 dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
+
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")
@@ -98,6 +102,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
+
     implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.26.3")
     implementation("com.squareup.retrofit2:retrofit:2.11.0")
     implementation("com.squareup.retrofit2:converter-moshi:2.11.0")
@@ -106,9 +111,9 @@ dependencies {
     implementation("com.squareup.moshi:moshi-kotlin:1.15.2")
 
     implementation("androidx.media3:media3-exoplayer:1.9.0")
-implementation("androidx.media3:media3-exoplayer-hls:1.9.0")
-implementation("androidx.media3:media3-ui:1.9.0")
-implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.9.0+1")
+    implementation("androidx.media3:media3-exoplayer-hls:1.9.0")
+    implementation("androidx.media3:media3-ui:1.9.0")
+    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.9.0+1")
 
     implementation("androidx.room:room-runtime:2.7.1")
     ksp("androidx.room:room-compiler:2.7.1")
@@ -118,7 +123,6 @@ implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.9.0+1")
 
     implementation("io.coil-kt.coil3:coil-compose:3.5.0")
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.5.0")
-
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
