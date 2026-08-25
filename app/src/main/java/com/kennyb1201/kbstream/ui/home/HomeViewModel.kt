@@ -74,6 +74,7 @@ data class UpNextItem(
     val episodeTitle: String? = null,
     val episodeDescription: String? = null,
     val tmdbRating: Double? = null,
+    val imdbRating: Double? = null,
     val runtimeMinutes: Int? = null,
     val remainingMinutes: Int? = null,
 
