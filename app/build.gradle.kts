@@ -32,7 +32,7 @@ val releaseKeyPassword = System.getenv("KBSTREAM_KEY_PASSWORD")
 
 android {
     namespace = "com.kennyb1201.kbstream"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.kennyb1201.kbstream"
