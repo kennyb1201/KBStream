@@ -235,6 +235,20 @@ private fun HomeHero(
                     ?.value
             }
 
+                val statusTag = if (preview.type != "movie") {
+        when (tmdbDetail?.status?.trim()?.lowercase()) {
+            "returning series" -> "Ongoing"
+            "ended" -> "Ended"
+            "canceled",
+            "cancelled" -> "Cancelled"
+            "in production" -> "In Production"
+            "planned" -> "Planned"
+            else -> null
+        }
+    } else {
+        null
+                }
+
     val imdb = if (continueWatchingItem != null) {
     continueWatchingItem.imdbRating
         ?.let { "IMDb %.1f".format(it) }
@@ -414,7 +428,7 @@ private fun HomeHero(
                 )
             }
 
-            if (heroInfo.isNotBlank()) {
+                       if (heroInfo.isNotBlank()) {
                 Text(
                     text = heroInfo,
                     color = Color.White.copy(alpha = .94f),
@@ -423,6 +437,17 @@ private fun HomeHero(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 14.dp)
+                )
+            }
+
+            statusTag?.let { status ->
+                Text(
+                    text = status,
+                    color = KBAccent,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    modifier = Modifier.padding(top = 8.dp)
                 )
             }
 
