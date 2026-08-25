@@ -387,6 +387,22 @@ private fun HomeHero(
             )
         }
 
+        Box(
+        modifier = Modifier
+            .fillMaxHeight()
+            .fillMaxWidth(0.35f)
+            .align(Alignment.CenterStart)
+            .background(
+                Brush.horizontalGradient(
+                    colors = listOf(
+                        Color.Black,
+                        Color.Black.copy(alpha = 0f)
+                    )
+                )
+            )
+    )
+    }
+
         /*
  * SOFT LEFT EDGE BLEND
  *
