@@ -235,10 +235,19 @@ private fun HomeHero(
                     ?.value
             }
 
-    val imdb = meta?.imdbRating
+    val imdb = if (continueWatchingItem != null) {
+    continueWatchingItem.imdbRating
+        ?.let { "IMDb %.1f".format(it) }
+        ?: meta?.imdbRating
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { "IMDb $it" }
+} else {
+    meta?.imdbRating
         ?.trim()
         ?.takeIf { it.isNotBlank() }
         ?.let { "IMDb $it" }
+}
 
     val runtime = meta?.runtime
         ?.trim()
