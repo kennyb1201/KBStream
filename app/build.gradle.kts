@@ -79,9 +79,11 @@ buildConfigField("String", "SIMKL_CLIENT_SECRET", "\"${simklClientSecret}\"")
         isCoreLibraryDesugaringEnabled = true
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
+    kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
+}
 }
 
 dependencies {
