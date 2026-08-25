@@ -358,19 +358,22 @@ private fun HomeHero(
             modifier = Modifier
                 .fillMaxSize()
                 .background(
-                    Brush.horizontalGradient(
-                        colorStops = arrayOf(
-                            0f to Color.Black.copy(alpha = .78f),
-                            .08f to Color.Black.copy(alpha = .48f),
-                            .18f to Color.Black.copy(alpha = .18f),
-                            .28f to Color.Transparent,
-                            .72f to Color.Transparent,
-                            .84f to Color.Black.copy(alpha = .08f),
-                            .94f to Color.Black.copy(alpha = .28f),
-                            1f to Color.Black.copy(alpha = .58f)
-                        )
-                    )
-                )
+    Brush.horizontalGradient(
+        colorStops = arrayOf(
+            0f to Color.Black.copy(alpha = .92f),
+            .06f to Color.Black.copy(alpha = .78f),
+            .14f to Color.Black.copy(alpha = .55f),
+            .22f to Color.Black.copy(alpha = .30f),
+            .30f to Color.Black.copy(alpha = .10f),
+            .38f to Color.Transparent,
+            .68f to Color.Transparent,
+            .76f to Color.Black.copy(alpha = .08f),
+            .84f to Color.Black.copy(alpha = .20f),
+            .92f to Color.Black.copy(alpha = .42f),
+            1f to Color.Black.copy(alpha = .68f)
+        )
+    )
+)
         )
 
         /*
@@ -384,16 +387,18 @@ private fun HomeHero(
             modifier = Modifier
                 .fillMaxSize()
                 .background(
-                    Brush.verticalGradient(
-                        colorStops = arrayOf(
-                            0f to Color.Transparent,
-                            .58f to Color.Transparent,
-                            .76f to Color.Black.copy(alpha = .10f),
-                            .88f to Color.Black.copy(alpha = .38f),
-                            1f to Color.Black.copy(alpha = .92f)
-                        )
-                    )
-                )
+    Brush.verticalGradient(
+        colorStops = arrayOf(
+            0f to Color.Transparent,
+            .45f to Color.Transparent,
+            .62f to Color.Black.copy(alpha = .08f),
+            .72f to Color.Black.copy(alpha = .22f),
+            .82f to Color.Black.copy(alpha = .48f),
+            .91f to Color.Black.copy(alpha = .72f),
+            1f to Color.Black.copy(alpha = .96f)
+        )
+    )
+)
         )
 
         Column(
