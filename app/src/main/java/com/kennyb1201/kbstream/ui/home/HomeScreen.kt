@@ -368,7 +368,8 @@ private fun HomeHero(
                 modifier = Modifier
                     .fillMaxHeight()
                     .fillMaxWidth(.60f)
-                    .align(Alignment.CenterEnd)
+                    .offset(x = (-18).dp)
+.align(Alignment.CenterEnd)
             )
         } else {
             AsyncImage(
@@ -387,34 +388,38 @@ private fun HomeHero(
         }
 
         /*
-         * HERO EDGE BLEND
-         *
-         * The center of the backdrop/trailer is intentionally transparent.
-         * The gradient only becomes visible toward the left/right edges,
-         * allowing the Hero to blend naturally into the surrounding UI
-         * without putting a heavy black layer over the trailer.
-         */
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-    Brush.horizontalGradient(
-        colorStops = arrayOf(
-            0f to Color.Black.copy(alpha = .92f),
-            .06f to Color.Black.copy(alpha = .78f),
-            .14f to Color.Black.copy(alpha = .55f),
-            .22f to Color.Black.copy(alpha = .30f),
-            .30f to Color.Black.copy(alpha = .10f),
-            .38f to Color.Transparent,
-            .68f to Color.Transparent,
-            .76f to Color.Black.copy(alpha = .08f),
-            .84f to Color.Black.copy(alpha = .20f),
-            .92f to Color.Black.copy(alpha = .42f),
-            1f to Color.Black.copy(alpha = .68f)
+ * SOFT LEFT EDGE BLEND
+ *
+ * Keeps the trailer at 60% width, but feathers the
+ * left edge so there's no visible vertical seam.
+ */
+Box(
+    modifier = Modifier
+        .fillMaxSize()
+        .background(
+            Brush.horizontalGradient(
+                colorStops = arrayOf(
+                    0.00f to Color.Black.copy(alpha = 1.00f),
+                    0.12f to Color.Black.copy(alpha = 0.96f),
+                    0.22f to Color.Black.copy(alpha = 0.88f),
+                    0.30f to Color.Black.copy(alpha = 0.72f),
+                    0.36f to Color.Black.copy(alpha = 0.55f),
+
+                    // Trailer starts around 40%
+                    0.42f to Color.Black.copy(alpha = 0.38f),
+                    0.48f to Color.Black.copy(alpha = 0.20f),
+                    0.56f to Color.Black.copy(alpha = 0.06f),
+
+                    // Fully reveal trailer
+                    0.64f to Color.Transparent,
+                    0.82f to Color.Transparent,
+
+                    // Slight darkening on far right
+                    1.00f to Color.Black.copy(alpha = 0.18f)
+                )
+            )
         )
-    )
 )
-        )
 
         /*
          * HERO BOTTOM FADE
