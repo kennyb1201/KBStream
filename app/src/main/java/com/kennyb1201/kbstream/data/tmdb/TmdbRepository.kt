@@ -221,6 +221,26 @@ class TmdbRepository(context: Context) {
         }
     }
 
+    suspend fun getEpisodeRating(
+    tmdbId: Int,
+    season: Int,
+    episode: Int
+): Double? {
+    if (apiKey.isBlank()) return null
+
+    return runCatching {
+        api.getSeasonDetail(
+            id = tmdbId,
+            seasonNumber = season,
+            apiKey = apiKey
+        )
+            .episodes
+            .firstOrNull { it.episodeNumber == episode }
+            ?.voteAverage
+            ?.takeIf { it > 0.0 }
+    }.getOrNull()
+    }
+
     suspend fun getDetailByTmdbId(tmdbId: Int, type: String): TmdbDetail? {
         if (apiKey.isBlank()) return null
 
