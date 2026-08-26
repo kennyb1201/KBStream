@@ -1,5 +1,5 @@
 stages:
-  - buil
+  - build
 
 variables:
   ANDROID_SDK_ROOT: "/sdk"
