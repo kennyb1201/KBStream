@@ -109,7 +109,7 @@ dependencies {
 implementation("androidx.media3:media3-exoplayer-hls:1.9.0")
 implementation("androidx.media3:media3-ui:1.9.0")
 implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.9.0+1")
-implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.25.2")
+implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.26.2")
 
     implementation("androidx.room:room-runtime:2.7.1")
     ksp("androidx.room:room-compiler:2.7.1")
