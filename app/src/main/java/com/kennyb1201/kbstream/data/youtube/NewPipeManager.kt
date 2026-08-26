@@ -37,8 +37,8 @@ object NewPipeManager {
      * Media3/ExoPlayer.
      */
     private val pipedInstances = listOf(
-        "http://10.0.0.46:8082"
-    )
+    "http://132.145.137.148:8082"
+)
 
     @Synchronized
     private fun ensureInitialized() {
