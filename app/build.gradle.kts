@@ -84,17 +84,7 @@ android {
     }
 }
 
-// NewPipeExtractor pulls in a jsoup version that calls the
-// URLDecoder.decode(String, Charset) overload, which only exists on
-// API 33+. minSdk here is 23, so on lower-API devices that call
-// throws NoSuchMethodError at runtime. Force jsoup back to the last
-// version before that overload was introduced so link/URL parsing
-// (and therefore trailer resolution) works below API 33.
-configurations.all {
-    resolutionStrategy {
-        force("org.jsoup:jsoup:1.15.4")
-    }
-}
+
 
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
@@ -122,7 +112,7 @@ implementation("androidx.media3:media3-exoplayer-hls:1.9.0")
 implementation("androidx.media3:media3-ui:1.9.0")
 implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.9.0+1")
 implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.25.2")
-implementation("org.jsoup:jsoup:1.15.4")
+
 
     implementation("androidx.room:room-runtime:2.7.1")
     ksp("androidx.room:room-compiler:2.7.1")
