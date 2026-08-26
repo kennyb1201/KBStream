@@ -2,70 +2,79 @@ package com.kennyb1201.kbstream.data.youtube
 
 import android.content.Context
 import android.content.Intent
-import android.util.Log
+import android.net.Uri
 import com.kennyb1201.kbstream.ui.player.PlayerActivity
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 object TrailerPlayerLauncher {
 
-    private const val TAG = "TrailerPlayerLauncher"
-
-    fun launch(
+    suspend fun playTrailer(
         context: Context,
-        trailerUrlOrId: String,
-        title: String,
-        posterUrl: String? = null
+        trailerUrlOrId: String
     ) {
-        val appContext = context.applicationContext
         val videoId = extractVideoId(trailerUrlOrId)
+            ?: return
 
-        if (videoId.isNullOrBlank()) {
-            Log.w(TAG, "Unable to extract YouTube video ID from: $trailerUrlOrId")
-            return
+        val playableUrl = NewPipeManager
+            .getPlayableUrl(videoId)
+            .getOrNull()
+            ?: return
+
+        val intent = Intent(
+            context,
+            PlayerActivity::class.java
+        ).apply {
+            putExtra("stream_url", playableUrl)
         }
 
-        CoroutineScope(Dispatchers.Main).launch {
-            runCatching {
-                val playableUrl = withContext(Dispatchers.IO) {
-                    NewPipeManager.getPlayableUrl(videoId)
+        context.startActivity(intent)
+    }
+
+    private fun extractVideoId(
+        value: String
+    ): String? {
+        val input = value.trim()
+
+        if (input.isBlank()) {
+            return null
+        }
+
+        // Already a YouTube video ID
+        if (
+            !input.contains("/") &&
+            !input.contains("?") &&
+            !input.contains("&") &&
+            !input.contains("=") &&
+            input.length in 8..20
+        ) {
+            return input
+        }
+
+        return runCatching {
+            val uri = Uri.parse(input)
+            val host = uri.host?.lowercase().orEmpty()
+
+            when {
+                host == "youtu.be" ||
+                    host.endsWith(".youtu.be") -> {
+                    uri.pathSegments.firstOrNull()
                 }
 
-                val intent = Intent(appContext, PlayerActivity::class.java).apply {
-                    putExtra("streamurl", playableUrl)
-                    putExtra("itemname", title)
-                    putExtra("itemposter", posterUrl)
-                    putExtra("parentid", videoId)
-                    putExtra("parenttype", "trailer")
+                host == "youtube.com" ||
+                    host.endsWith(".youtube.com") -> {
+                    uri.getQueryParameter("v")
+                        ?: when {
+                            uri.pathSegments.firstOrNull() == "embed" ->
+                                uri.pathSegments.getOrNull(1)
+
+                            uri.pathSegments.firstOrNull() == "shorts" ->
+                                uri.pathSegments.getOrNull(1)
+
+                            else -> null
+                        }
                 }
 
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                appContext.startActivity(intent)
-            }.onFailure { error ->
-                Log.e(TAG, "Failed to launch trailer for videoId=$videoId", error)
+                else -> null
             }
-        }
+        }.getOrNull()
     }
-
-    fun extractVideoId(input: String?): String? {
-        val value = input?.trim().orEmpty()
-        if (value.isBlank()) return null
-
-        if (YOUTUBE_ID_REGEX.matches(value)) {
-            return value
-        }
-
-        val match = YOUTUBE_URL_REGEX.find(value)
-        return match?.groupValues?.getOrNull(1)
-    }
-
-    private val YOUTUBE_ID_REGEX = Regex("^[a-zA-Z0-9_-]{11}$")
-
-    private val YOUTUBE_URL_REGEX = Regex(
-        pattern = """(?:youtube(?:-nocookie)?.com/(?:[^/
-s]+/S+/|(?:v|e(?:mbed)?|shorts)/|S*?[?&]v=)|youtu.be/)([a-zA-Z0-9_-]{11})""",
-        option = RegexOption.IGNORE_CASE
-    )
 }
