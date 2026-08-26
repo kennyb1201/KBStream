@@ -37,12 +37,7 @@ object NewPipeManager {
      * Media3/ExoPlayer.
      */
     private val pipedInstances = listOf(
-        "https://pipedapi.kavin.rocks",
-        "https://pipedapi.tokhmi.xyz",
-        "https://pipedapi.syncpundit.io",
-        "https://pipedapi.mha.fi",
-        "https://piped-api.garudalinux.org",
-        "https://pipedapi.adminforge.de"
+        "http://10.0.0.46:8082",
     )
 
     @Synchronized
