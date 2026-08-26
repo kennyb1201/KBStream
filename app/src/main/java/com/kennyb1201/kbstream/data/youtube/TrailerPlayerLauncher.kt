@@ -10,15 +10,14 @@ object TrailerPlayerLauncher {
 
     private const val TAG = "TrailerLauncher"
 
-    suspend fun playTrailer(
-        context: Context,
+    /**
+     * Resolves a YouTube URL/ID down to a directly-playable stream URL,
+     * without launching any UI. Used by both the inline hero trailer
+     * player (HomeScreen) and [playTrailer] (fullscreen details player).
+     */
+    suspend fun resolvePlayableUrl(
         trailerUrlOrId: String
-    ) {
-        Log.d(
-            TAG,
-            "playTrailer called: $trailerUrlOrId"
-        )
-
+    ): Result<String> {
         val videoId =
             extractVideoId(trailerUrlOrId)
 
@@ -28,7 +27,11 @@ object TrailerPlayerLauncher {
                 "Could not extract YouTube video ID: " +
                     trailerUrlOrId
             )
-            return
+            return Result.failure(
+                IllegalArgumentException(
+                    "Could not extract YouTube video ID"
+                )
+            )
         }
 
         Log.d(
@@ -36,20 +39,28 @@ object TrailerPlayerLauncher {
             "Extracted YouTube video ID: $videoId"
         )
 
-        val result =
-            NewPipeManager.getPlayableUrl(
-                videoId
-            )
+        return NewPipeManager.getPlayableUrl(videoId)
+    }
+
+    suspend fun playTrailer(
+        context: Context,
+        trailerUrlOrId: String
+    ) {
+        Log.d(
+            TAG,
+            "playTrailer called: $trailerUrlOrId"
+        )
 
         val playableUrl =
-            result.getOrElse { error ->
-                Log.e(
-                    TAG,
-                    "Failed to resolve playable trailer URL",
-                    error
-                )
-                return
-            }
+            resolvePlayableUrl(trailerUrlOrId)
+                .getOrElse { error ->
+                    Log.e(
+                        TAG,
+                        "Failed to resolve playable trailer URL",
+                        error
+                    )
+                    return
+                }
 
         Log.d(
             TAG,
