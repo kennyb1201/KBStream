@@ -530,13 +530,17 @@ private fun HomeHero(
             label = "hero_backdrop_crossfade"
         ) { trailerUrl ->
             if (trailerUrl != null) {
-                HeroInlineTrailerPlayer(
-                    playableUrl = trailerUrl,
-                    modifier = Modifier.fillMaxSize(),
-                    onEnded = {
-                        resolvedTrailerUrl = null
-                    }
-                )
+    HeroInlineTrailerPlayer(
+        playableUrl = trailerUrl,
+        modifier = Modifier
+            .fillMaxHeight()
+            .fillMaxWidth(.60f)
+            .align(Alignment.CenterEnd),
+        onEnded = {
+            resolvedTrailerUrl = null
+        }
+    )
+}
             } else {
                 AsyncImage(
                     model = ImageRequest.Builder(context)
