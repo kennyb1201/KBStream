@@ -273,6 +273,7 @@ private fun HeroInlineTrailerPlayer(
     )
 }
 
+
 @Composable
 private fun HomeHero(
     preview: MetaPreview,
@@ -327,7 +328,7 @@ private fun HomeHero(
         tmdbDetail?.releaseYear()
             ?: meta?.releaseInfo
                 ?.let {
-                    Regex("""\b(?:19|20)\d{2}\b""")
+                    Regex("""\b(?:19|20)d{2}\b""")
                         .find(it)
                         ?.value
                 }
@@ -522,55 +523,65 @@ private fun HomeHero(
             .height(HomeHeroHeight)
             .background(Color.Black)
     ) {
-        Crossfade(
-            targetState = resolvedTrailerUrl,
-            label = "hero_backdrop_crossfade"
-        ) { trailerUrl ->
+        Row(
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .weight(0.4f)
+                    .background(Color.Black)
+            )
 
             Box(
                 modifier = Modifier
                     .fillMaxHeight()
-                    .fillMaxWidth(.60f)
-                    .align(Alignment.CenterEnd)
+                    .weight(0.6f)
             ) {
-                if (trailerUrl != null) {
-                    HeroInlineTrailerPlayer(
-                        playableUrl = trailerUrl,
-                        modifier = Modifier.fillMaxSize(),
-                        onEnded = {
-                            resolvedTrailerUrl = null
-                        }
-                    )
-                } else {
-                    AsyncImage(
-                        model = ImageRequest.Builder(context)
-                            .data(backdrop)
-                            .build(),
-                        contentDescription = null,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop,
-                        alignment = Alignment.Center
-                    )
+                Crossfade(
+                    targetState = resolvedTrailerUrl,
+                    label = "hero_backdrop_crossfade"
+                ) { trailerUrl ->
+                    if (trailerUrl != null) {
+                        HeroInlineTrailerPlayer(
+                            playableUrl = trailerUrl,
+                            modifier = Modifier.fillMaxSize(),
+                            onEnded = {
+                                resolvedTrailerUrl = null
+                            }
+                        )
+                    } else {
+                        AsyncImage(
+                            model = ImageRequest.Builder(context)
+                                .data(backdrop)
+                                .build(),
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop,
+                            alignment = Alignment.Center
+                        )
+                    }
                 }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.horizontalGradient(
+                                colorStops = arrayOf(
+                                    0.00f to Color.Black.copy(alpha = 1.00f),
+                                    0.12f to Color.Black.copy(alpha = 0.96f),
+                                    0.24f to Color.Black.copy(alpha = 0.82f),
+                                    0.36f to Color.Black.copy(alpha = 0.58f),
+                                    0.50f to Color.Black.copy(alpha = 0.26f),
+                                    0.66f to Color.Black.copy(alpha = 0.10f),
+                                    1.00f to Color.Transparent
+                                )
+                            )
+                        )
+                )
             }
         }
-
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.horizontalGradient(
-                        colorStops = arrayOf(
-                            0.00f to Color.Black.copy(alpha = 1.00f),
-                            0.38f to Color.Black.copy(alpha = 1.00f),
-                            0.46f to Color.Black.copy(alpha = 0.55f),
-                            0.54f to Color.Black.copy(alpha = 0.15f),
-                            0.60f to Color.Transparent,
-                            1.00f to Color.Transparent
-                        )
-                    )
-                )
-        )
 
         Box(
             modifier = Modifier
@@ -592,12 +603,13 @@ private fun HomeHero(
 
         Column(
             modifier = Modifier
-                .align(Alignment.CenterStart)
-                .width(480.dp)
+                .fillMaxHeight()
+                .fillMaxWidth(0.4f)
                 .padding(
                     start = 32.dp,
                     end = 20.dp
-                )
+                ),
+            verticalArrangement = Arrangement.Center
         ) {
             if (!clearLogo.isNullOrBlank()) {
                 AsyncImage(
@@ -733,6 +745,7 @@ private fun HomeHero(
         }
     }
 }
+                    
 
 @Composable
 private fun SectionTitle(text: String) {
