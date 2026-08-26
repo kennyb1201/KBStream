@@ -541,7 +541,7 @@ private fun HomeHero(
         }
     )
 }
-            } else {
+             else {
                 AsyncImage(
                     model = ImageRequest.Builder(context)
                         .data(backdrop)
