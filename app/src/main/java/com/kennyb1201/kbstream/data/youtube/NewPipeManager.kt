@@ -49,12 +49,14 @@ object NewPipeManager {
                         stream.isVideoOnly.not()
                     }
                     .filter { stream ->
-                        val format =
-                            stream.format.name.lowercase()
+    val format =
+        stream.format?.name
+            ?.lowercase()
+            .orEmpty()
 
-                        format.contains("mp4") ||
-                            format.contains("webm")
-                    }
+    format.contains("mp4") ||
+        format.contains("webm")
+}
                     .sortedByDescending { stream ->
                         stream.height
                     }
