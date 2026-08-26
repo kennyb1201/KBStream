@@ -3,8 +3,8 @@ package com.kennyb1201.kbstream.data.youtube
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.schabi.newpipe.extractor.NewPipe
-import org.schabi.newpipe.extractor.StreamingService
 import org.schabi.newpipe.extractor.stream.StreamInfo
+import org.schabi.newpipe.extractor.services.youtube.YoutubeService
 
 object NewPipeManager {
 
@@ -28,8 +28,9 @@ object NewPipeManager {
         runCatching {
             ensureInitialized()
 
-            val service: StreamingService =
-                NewPipe.getServiceByName("YouTube")
+            val service = YoutubeService(
+                NewPipe.getDownloader()
+            )
 
             val url =
                 "https://www.youtube.com/watch?v=$videoId"
