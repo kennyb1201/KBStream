@@ -920,8 +920,11 @@ private fun CompactUpNextCard(
     val progress = item.progressPercent
         ?.coerceIn(0f, 1f)
 
-    val timeLeft = remember(item.remainingMinutes) {
+    val timeLeft =
+    if (item.badge == UpNextBadge.CONTINUE_WATCHING) {
         formatTimeLeft(item.remainingMinutes)
+    } else {
+        null
     }
 
     PosterCard(
