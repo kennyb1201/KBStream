@@ -1115,6 +1115,8 @@ val localItems =
         var episodeDescription: String? = null
         var tmdbRating: Double? = null
         var runtimeMinutes: Int? = null
+        var episodesWatched: Int? = null
+var episodesTotal: Int? = null
         var episodesRemaining: Int? = null
 
         var resolvedSeason =
@@ -1252,6 +1254,12 @@ val localItems =
 episodeDescription =
     resolvedTarget.episodeDescription
 
+episodesWatched =
+    resolvedTarget.episodesWatched
+
+episodesTotal =
+    resolvedTarget.episodesTotal
+
                     val airedRecently =
                         resolvedTarget.airDate
                             ?.let {
@@ -1381,6 +1389,12 @@ episodeDescription =
 
             episodesRemaining =
     episodesRemaining,
+
+            episodesWatched =
+    episodesWatched,
+
+episodesTotal =
+    episodesTotal,
 
             // Only meaningful for items with an actual watched position
             // (source == "playback"); "Next Up" items haven't been
