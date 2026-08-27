@@ -3092,39 +3092,15 @@ private fun formatSeriesYearRange(
 }
 
 private fun seriesStatusTag(
-    status: String?
-): String? {
-    val normalizedStatus =
-        status?.trim().orEmpty()
-
+private fun seriesStatusTag(status: String?): String? {
+    val normalizedStatus = status?.trim().orEmpty()
     return when {
-        normalizedStatus.equals(
-            "Returning Series",
-            ignoreCase = true
-        ) ||
-            normalizedStatus.equals(
-                "In Production",
-                ignoreCase = true
-            ) ->
-            "ONGOING"
-
-        normalizedStatus.equals(
-            "Canceled",
-            ignoreCase = true
-        ) ||
-            normalizedStatus.equals(
-                "Cancelled",
-                ignoreCase = true
-            ) ->
-            "CANCELLED"
-
-        normalizedStatus.equals(
-            "Ended",
-            ignoreCase = true
-        ) ->
-            "ENDED"
-
-        else ->
-            null
+        normalizedStatus.equals("Returning Series", ignoreCase = true) -> "ONGOING"
+        normalizedStatus.equals("In Production", ignoreCase = true) -> "IN PRODUCTION"
+        normalizedStatus.equals("Planned", ignoreCase = true) -> "PLANNED"
+        normalizedStatus.equals("Canceled", ignoreCase = true),
+        normalizedStatus.equals("Cancelled", ignoreCase = true) -> "CANCELLED"
+        normalizedStatus.equals("Ended", ignoreCase = true) -> "ENDED"
+        else -> null
     }
 }
