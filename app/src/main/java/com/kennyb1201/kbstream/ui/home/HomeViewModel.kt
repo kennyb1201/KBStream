@@ -102,6 +102,8 @@ private data class ResolvedHomeSeriesTarget(
     val episodeTitle: String? = null,
     val episodeDescription: String? = null,
     val runtimeMinutes: Int? = null,
+    val episodesWatched: Int? = null,
+    val episodesTotal: Int? = null,
     val episodesRemaining: Int? = null
 )
 
@@ -1645,361 +1647,238 @@ private suspend fun calculateEpisodesRemaining(
     return remaining
 }
     
-    private suspend fun resolveSeriesTargetFromSharedWatchedState(
-        parentId: String,
-        tmdbId: Int,
-        simklSeason: Int?,
-        simklEpisode: Int?
-    ): ResolvedHomeSeriesTarget? {
 
-        val resume =
-            try {
+private suspend fun resolveSeriesTargetFromSharedWatchedState(
+    parentId: String,
+    tmdbId: Int,
+    simklSeason: Int?,
+    simklEpisode: Int?
+): ResolvedHomeSeriesTarget? {
 
-                historyDao
-                    .getResumeForParent(
-                        parentId
-                    )
-
-            } catch (_: Exception) {
-                null
-            }
-
-        if (
-            resume != null &&
-            resume.season != null &&
-            resume.episode != null &&
-            resume.positionMs > 0L
-        ) {
-
-            val resumeEpisodes =
-                try {
-
-                    tmdbLookupSemaphore
-                        .withPermit {
-
-                            tmdbRepository
-                                .getSeasonEpisodes(
-                                    tmdbId,
-                                    resume.season,
-                                    parentId
-                                )
-                        }
-
-                } catch (_: Exception) {
-                    emptyList()
-                }
-
-            val matchedResumeEpisode =
-                resumeEpisodes.firstOrNull {
-                    it.episodeNumber ==
-                        resume.episode
-                }
-
-            if (
-                matchedResumeEpisode != null
-            ) {
-
-                return ResolvedHomeSeriesTarget(
-
-                    season =
-                        resume.season,
-
-                    episode =
-                        matchedResumeEpisode
-                            .episodeNumber,
-
-                    streamId =
-                        resume.episodeStreamId
-                            ?: matchedResumeEpisode
-                                .streamId,
-
-                    startPositionMs =
-                        resume.positionMs,
-
-                    isResume =
-                        true,
-
-                        airDate =
-        matchedResumeEpisode
-            .airDate,
-
-    episodeTitle =
-        matchedResumeEpisode
-            .name,
-
-    episodeDescription =
-        matchedResumeEpisode
-            .overview,
-
- runtimeMinutes =
-    matchedResumeEpisode
-        .runtimeMinutes,
-
-                    episodesRemaining =
-    calculateEpisodesRemaining(
-        parentId = parentId,
-        tmdbId = tmdbId,
-        startingSeason = resume.season,
-        startingEpisode = resume.episode
-    )
-)
-                
-            }
+    val (
+        simklWatchedEpisodes,
+        watchedEpisodeKeys
+    ) =
+        watchedStateMutex.withLock {
+            Pair(
+                simklWatchedEpisodesByShow[parentId].orEmpty(),
+                watchedEpisodeKeysByShow[parentId].orEmpty()
+            )
         }
 
-        val (
-            simklWatchedEpisodes,
-            watchedEpisodeKeys
-        ) =
-            watchedStateMutex.withLock {
+    var totalAiredEpisodes = 0
+    var watchedAiredEpisodes = 0
 
-                Pair(
-                    simklWatchedEpisodesByShow[
-                        parentId
-                    ].orEmpty(),
+    /*
+     * Calculate the full watched/total episode count for the show.
+     *
+     * This intentionally starts at season 1 rather than using
+     * MAX_FORWARD_SEASON_LOOKAHEAD, because this is for the hero's
+     * "X of Y episodes watched" display.
+     */
+    var season = 1
 
-                    watchedEpisodeKeysByShow[
-                        parentId
-                    ].orEmpty()
-                )
-            }
+    while (season <= 50) {
 
-        val startingSeason =
-            simklSeason ?: 1
-
-        val startingEpisode =
-            simklEpisode ?: 1
-
-        val currentSeasonEpisodes =
+        val seasonEpisodes =
             try {
-
-                tmdbLookupSemaphore
-                    .withPermit {
-
-                        tmdbRepository
-                            .getSeasonEpisodes(
-                                tmdbId,
-                                startingSeason,
-                                parentId
-                            )
-                    }
-
+                tmdbLookupSemaphore.withPermit {
+                    tmdbRepository.getSeasonEpisodes(
+                        tmdbId,
+                        season,
+                        parentId
+                    )
+                }
             } catch (_: Exception) {
                 emptyList()
             }
 
-        val watchedEpisodesForCurrentSeason =
+        if (seasonEpisodes.isEmpty()) {
+            break
+        }
+
+        val watchedEpisodesForSeason =
             WatchedEpisodeState
                 .effectiveWatchedEpisodesForSeason(
-
-                    parentId =
-                        parentId,
-
-                    season =
-                        startingSeason,
-
+                    parentId = parentId,
+                    season = season,
                     simklWatchedEpisodes =
                         simklWatchedEpisodes,
-
                     watchedEpisodeKeys =
                         watchedEpisodeKeys
                 )
 
-        val nextUnwatchedInSeason =
-            currentSeasonEpisodes
-                .firstOrNull { episode ->
+        for (episode in seasonEpisodes) {
 
-                    episode.episodeNumber >=
-                        startingEpisode &&
-
-                        episode.episodeNumber !in
-                            watchedEpisodesForCurrentSeason &&
-
-                        isAiredOrUnknown(
-                            episode.airDate
-                        )
-                }
-
-        if (
-            nextUnwatchedInSeason != null
-        ) {
-
-            return ResolvedHomeSeriesTarget(
-    season =
-        startingSeason,
-
-    episode =
-        nextUnwatchedInSeason
-            .episodeNumber,
-
-    streamId =
-        nextUnwatchedInSeason
-            .streamId,
-
-    airDate =
-        nextUnwatchedInSeason
-            .airDate,
-
-    episodeTitle =
-        nextUnwatchedInSeason
-            .name,
-
-    episodeDescription =
-        nextUnwatchedInSeason
-            .overview,
-
- runtimeMinutes =
-    nextUnwatchedInSeason
-        .runtimeMinutes,
-
-                episodesRemaining =
-    calculateEpisodesRemaining(
-        parentId = parentId,
-        tmdbId = tmdbId,
-        startingSeason = startingSeason,
-        startingEpisode = nextUnwatchedInSeason.episodeNumber
-    )
-)
-        }
-
-        val knownWatchedSeasons =
-            watchedEpisodeKeys
-                .mapNotNull(
-                    ::parseEpisodeKey
-                )
-                .map {
-                    (_, season, _) ->
-                    season
-                }
-
-        val highestKnownSeason =
-            maxOf(
-
-                startingSeason,
-
-                simklWatchedEpisodes
-                    .maxOfOrNull {
-                        (season, _) ->
-                        season
-                    }
-                    ?: startingSeason,
-
-                knownWatchedSeasons
-                    .maxOfOrNull {
-                        it
-                    }
-                    ?: startingSeason
-            )
-
-        val lastSeasonToCheck =
-            maxOf(
-
-                highestKnownSeason + 2,
-
-                startingSeason +
-                    MAX_FORWARD_SEASON_LOOKAHEAD
-            )
-
-        for (
-            season in
-            (startingSeason + 1)..lastSeasonToCheck
-        ) {
-
-            val seasonEpisodes =
-                try {
-
-                    tmdbLookupSemaphore
-                        .withPermit {
-
-                            tmdbRepository
-                                .getSeasonEpisodes(
-                                    tmdbId,
-                                    season,
-                                    parentId
-                                )
-                        }
-
-                } catch (_: Exception) {
-                    emptyList()
-                }
-
-            if (
-                seasonEpisodes.isEmpty()
-            ) {
+            if (!isAiredOrUnknown(episode.airDate)) {
                 continue
             }
 
-            val watchedEpisodesForSeason =
-                WatchedEpisodeState
-                    .effectiveWatchedEpisodesForSeason(
-
-                        parentId =
-                            parentId,
-
-                        season =
-                            season,
-
-                        simklWatchedEpisodes =
-                            simklWatchedEpisodes,
-
-                        watchedEpisodeKeys =
-                            watchedEpisodeKeys
-                    )
-
-            val firstUnwatchedAired =
-                seasonEpisodes.firstOrNull {
-                    episode ->
-
-                    episode.episodeNumber !in
-                        watchedEpisodesForSeason &&
-
-                        isAiredOrUnknown(
-                            episode.airDate
-                        )
-                }
+            totalAiredEpisodes++
 
             if (
-                firstUnwatchedAired != null
+                episode.episodeNumber in
+                    watchedEpisodesForSeason
             ) {
-
-                return ResolvedHomeSeriesTarget(
-    season =
-        season,
-
-    episode =
-        firstUnwatchedAired
-            .episodeNumber,
-
-    streamId =
-        firstUnwatchedAired
-            .streamId,
-
-    airDate =
-        firstUnwatchedAired
-            .airDate,
-
-    episodeTitle =
-        firstUnwatchedAired
-            .name,
-
-    episodeDescription =
-        firstUnwatchedAired
-            .overview,
-
- runtimeMinutes =
-    firstUnwatchedAired
-        .runtimeMinutes,
-
-                    episodesRemaining =
-    calculateEpisodesRemaining(
-        parentId = parentId,
-        tmdbId = tmdbId,
-        startingSeason = season,
-        startingEpisode = firstUnwatchedAired.episodeNumber
-    )
-)
+                watchedAiredEpisodes++
             }
         }
+
+        season++
+    }
+
+    val episodesTotal =
+        totalAiredEpisodes
+            .takeIf { it > 0 }
+
+    val episodesWatched =
+        watchedAiredEpisodes
+            .coerceAtMost(
+                totalAiredEpisodes
+            )
+            .takeIf {
+                episodesTotal != null
+            }
+
+    /*
+     * First preference:
+     * an actual local playback resume.
+     */
+    val resume =
+        try {
+            historyDao.getResumeForParent(parentId)
+        } catch (_: Exception) {
+            null
+        }
+
+    if (
+        resume != null &&
+        resume.season != null &&
+        resume.episode != null &&
+        resume.positionMs > 0L
+    ) {
+
+        val resumeEpisodes =
+            try {
+                tmdbLookupSemaphore.withPermit {
+                    tmdbRepository.getSeasonEpisodes(
+                        tmdbId,
+                        resume.season,
+                        parentId
+                    )
+                }
+            } catch (_: Exception) {
+                emptyList()
+            }
+
+        val matchedResumeEpisode =
+            resumeEpisodes.firstOrNull {
+                it.episodeNumber ==
+                    resume.episode
+            }
+
+        if (matchedResumeEpisode != null) {
+
+            return ResolvedHomeSeriesTarget(
+
+                season =
+                    resume.season,
+
+                episode =
+                    matchedResumeEpisode
+                        .episodeNumber,
+
+                streamId =
+                    resume.episodeStreamId
+                        ?: matchedResumeEpisode
+                            .streamId,
+
+                startPositionMs =
+                    resume.positionMs,
+
+                isResume =
+                    true,
+
+                airDate =
+                    matchedResumeEpisode.airDate,
+
+                episodeTitle =
+                    matchedResumeEpisode.name,
+
+                episodeDescription =
+                    matchedResumeEpisode.overview,
+
+                runtimeMinutes =
+                    matchedResumeEpisode.runtimeMinutes,
+
+                episodesWatched =
+                    episodesWatched,
+
+                episodesTotal =
+                    episodesTotal,
+
+                episodesRemaining =
+                    calculateEpisodesRemaining(
+                        parentId = parentId,
+                        tmdbId = tmdbId,
+                        startingSeason =
+                            resume.season,
+                        startingEpisode =
+                            resume.episode
+                    )
+            )
+        }
+    }
+
+    /*
+     * Find the next unwatched episode in the current season.
+     */
+    val startingSeason =
+        simklSeason ?: 1
+
+    val startingEpisode =
+        simklEpisode ?: 1
+
+    val currentSeasonEpisodes =
+        try {
+            tmdbLookupSemaphore.withPermit {
+                tmdbRepository.getSeasonEpisodes(
+                    tmdbId,
+                    startingSeason,
+                    parentId
+                )
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+
+    val watchedEpisodesForCurrentSeason =
+        WatchedEpisodeState
+            .effectiveWatchedEpisodesForSeason(
+                parentId = parentId,
+                season = startingSeason,
+                simklWatchedEpisodes =
+                    simklWatchedEpisodes,
+                watchedEpisodeKeys =
+                    watchedEpisodeKeys
+            )
+
+    val nextUnwatchedInSeason =
+        currentSeasonEpisodes
+            .firstOrNull { episode ->
+
+                episode.episodeNumber >=
+                    startingEpisode &&
+
+                    episode.episodeNumber !in
+                        watchedEpisodesForCurrentSeason &&
+
+                    isAiredOrUnknown(
+                        episode.airDate
+                    )
+            }
+
+    if (nextUnwatchedInSeason != null) {
 
         return ResolvedHomeSeriesTarget(
 
@@ -2007,14 +1886,201 @@ private suspend fun calculateEpisodesRemaining(
                 startingSeason,
 
             episode =
-                startingEpisode,
+                nextUnwatchedInSeason
+                    .episodeNumber,
+
+            streamId =
+                nextUnwatchedInSeason
+                    .streamId,
 
             airDate =
-                null
+                nextUnwatchedInSeason
+                    .airDate,
+
+            episodeTitle =
+                nextUnwatchedInSeason
+                    .name,
+
+            episodeDescription =
+                nextUnwatchedInSeason
+                    .overview,
+
+            runtimeMinutes =
+                nextUnwatchedInSeason
+                    .runtimeMinutes,
+
+            episodesWatched =
+                episodesWatched,
+
+            episodesTotal =
+                episodesTotal,
+
+            episodesRemaining =
+                calculateEpisodesRemaining(
+                    parentId = parentId,
+                    tmdbId = tmdbId,
+                    startingSeason =
+                        startingSeason,
+                    startingEpisode =
+                        nextUnwatchedInSeason
+                            .episodeNumber
+                )
         )
     }
 
-    private fun buildSimklSubtitle(
+    /*
+     * Search future seasons for the next unwatched aired episode.
+     */
+    val knownWatchedSeasons =
+        watchedEpisodeKeys
+            .mapNotNull(::parseEpisodeKey)
+            .map {
+                (_, season, _) ->
+                season
+            }
+
+    val highestKnownSeason =
+        maxOf(
+            startingSeason,
+
+            simklWatchedEpisodes
+                .maxOfOrNull {
+                    (season, _) ->
+                    season
+                }
+                ?: startingSeason,
+
+            knownWatchedSeasons
+                .maxOfOrNull {
+                    it
+                }
+                ?: startingSeason
+        )
+
+    val lastSeasonToCheck =
+        maxOf(
+            highestKnownSeason + 2,
+            startingSeason +
+                MAX_FORWARD_SEASON_LOOKAHEAD
+        )
+
+    for (
+        futureSeason in
+        (startingSeason + 1)..lastSeasonToCheck
+    ) {
+
+        val seasonEpisodes =
+            try {
+                tmdbLookupSemaphore.withPermit {
+                    tmdbRepository.getSeasonEpisodes(
+                        tmdbId,
+                        futureSeason,
+                        parentId
+                    )
+                }
+            } catch (_: Exception) {
+                emptyList()
+            }
+
+        if (seasonEpisodes.isEmpty()) {
+            continue
+        }
+
+        val watchedEpisodesForSeason =
+            WatchedEpisodeState
+                .effectiveWatchedEpisodesForSeason(
+                    parentId = parentId,
+                    season = futureSeason,
+                    simklWatchedEpisodes =
+                        simklWatchedEpisodes,
+                    watchedEpisodeKeys =
+                        watchedEpisodeKeys
+                )
+
+        val firstUnwatchedAired =
+            seasonEpisodes.firstOrNull {
+                episode ->
+
+                episode.episodeNumber !in
+                    watchedEpisodesForSeason &&
+
+                    isAiredOrUnknown(
+                        episode.airDate
+                    )
+            }
+
+        if (firstUnwatchedAired != null) {
+
+            return ResolvedHomeSeriesTarget(
+
+                season =
+                    futureSeason,
+
+                episode =
+                    firstUnwatchedAired
+                        .episodeNumber,
+
+                streamId =
+                    firstUnwatchedAired
+                        .streamId,
+
+                airDate =
+                    firstUnwatchedAired
+                        .airDate,
+
+                episodeTitle =
+                    firstUnwatchedAired
+                        .name,
+
+                episodeDescription =
+                    firstUnwatchedAired
+                        .overview,
+
+                runtimeMinutes =
+                    firstUnwatchedAired
+                        .runtimeMinutes,
+
+                episodesWatched =
+                    episodesWatched,
+
+                episodesTotal =
+                    episodesTotal,
+
+                episodesRemaining =
+                    calculateEpisodesRemaining(
+                        parentId = parentId,
+                        tmdbId = tmdbId,
+                        startingSeason =
+                            futureSeason,
+                        startingEpisode =
+                            firstUnwatchedAired
+                                .episodeNumber
+                    )
+            )
+        }
+    }
+
+    return ResolvedHomeSeriesTarget(
+
+        season =
+            startingSeason,
+
+        episode =
+            startingEpisode,
+
+        episodesWatched =
+            episodesWatched,
+
+        episodesTotal =
+            episodesTotal,
+
+        episodesRemaining =
+            0
+    )
+}
+
+
+  private fun buildSimklSubtitle(
         item: SimklContinueWatchingItem,
         isExplicitResume: Boolean
     ): String {
