@@ -466,6 +466,7 @@ fun PlayerScreen(
         playWhenReady = true
         prepare()
     }
+    }
     LaunchedEffect(
         exoPlayer,
         errorMessage,
