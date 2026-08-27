@@ -92,6 +92,7 @@ sealed class Screen {
 
     data class Player(
         val url: String,
+        val audioUrl: String? = null,
         val parentId: String,
         val parentType: String,
         val season: Int?,
@@ -346,6 +347,7 @@ fun AppRoot() {
 
                     screen = Screen.Player(
                         url = channel.streamUrl,
+                        audioUrl = stream.audioUrl,
                         parentId = channelId,
                         parentType = "channel",
                         season = null,
@@ -576,6 +578,7 @@ fun AppRoot() {
 
             PlayerScreen(
                 url = current.url,
+                audioUrl = current.audioUrl,
                 parentId = current.parentId,
                 parentType = current.parentType,
                 season = current.season,
