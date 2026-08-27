@@ -10,6 +10,11 @@ import org.schabi.newpipe.extractor.NewPipe
 import org.schabi.newpipe.extractor.stream.StreamInfo
 import java.util.concurrent.TimeUnit
 
+sealed class PlayableSource {
+    data class Muxed(val url: String) : PlayableSource()
+    data class Adaptive(val videoUrl: String, val audioUrl: String) : PlayableSource()
+}
+
 object NewPipeManager {
 
     private const val TAG = "NewPipeManager"
@@ -80,7 +85,7 @@ object NewPipeManager {
      */
     suspend fun getPlayableUrl(
         videoId: String
-    ): Result<String> = withContext(Dispatchers.IO) {
+    ): Result<PlayableSource> = withContext(Dispatchers.IO) {
 
         var newPipeError: Throwable? = null
 
@@ -127,8 +132,8 @@ object NewPipeManager {
                 )
 
                 return@withContext Result.success(
-                    progressive.content
-                )
+    PlayableSource.Muxed(progressive.content)
+)
             }
 
             newPipeError =
@@ -150,6 +155,45 @@ object NewPipeManager {
                 error
             )
         }
+
+        /*
+ * ---------------------------------------------------------
+ * SECONDARY: NewPipe adaptive (video-only + audio-only merge)
+ * ---------------------------------------------------------
+ */
+try {
+    val info = getStreamInfo(videoId).getOrThrow()
+
+    val bestVideo = info.videoOnlyStreams
+        .filter { stream ->
+            val format = stream.format?.name?.lowercase().orEmpty()
+            format.contains("mp4") || format.contains("webm")
+        }
+        .maxByOrNull { it.height }
+
+    val bestAudio = info.audioStreams
+        .maxByOrNull { it.averageBitrate }
+
+    if (bestVideo != null && bestAudio != null) {
+        Log.d(
+            TAG,
+            "NewPipe resolved adaptive streams: " +
+                "${bestVideo.height}p video + " +
+                "${bestAudio.averageBitrate}bps audio"
+        )
+
+        return@withContext Result.success(
+            PlayableSource.Adaptive(
+                videoUrl = bestVideo.content,
+                audioUrl = bestAudio.content
+            )
+        )
+    }
+
+    Log.w(TAG, "NewPipe adaptive resolution found no usable pair; trying Piped fallback")
+} catch (error: Throwable) {
+    Log.w(TAG, "NewPipe adaptive resolution failed; trying Piped fallback", error)
+}
 
         /*
          * ---------------------------------------------------------
@@ -188,7 +232,7 @@ object NewPipeManager {
      */
     private suspend fun getPlayableUrlFromPiped(
         videoId: String
-    ): Result<String> = withContext(Dispatchers.IO) {
+    ): Result<PlayableSource> = withContext(Dispatchers.IO) {
 
         var lastError: Throwable? = null
 
@@ -353,8 +397,8 @@ object NewPipeManager {
                             )
 
                             return@withContext Result.success(
-                                best.url
-                            )
+    PlayableSource.Muxed(best.url)
+)
                         }
 
                         throw IllegalStateException(
