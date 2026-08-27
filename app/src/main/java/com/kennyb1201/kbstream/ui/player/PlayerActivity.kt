@@ -438,36 +438,6 @@ fun PlayerScreen(
                 )
                 .setEnableDecoderFallback(true)
 
-        ExoPlayer.Builder(
-            context,
-            renderersFactory
-        )
-            .setMediaSourceFactory(
-                mediaSourceFactory
-            )
-            .build()
-            .apply {
-                setMediaItem(
-                    mediaItemBuilder.build()
-                )
-
-                if (
-                    !isLiveChannel &&
-                    carryPositionMs > 0L
-                ) {
-                    seekTo(carryPositionMs)
-                }
-
-                setPlaybackSpeed(
-                    playbackSpeed
-                )
-
-                playWhenReady = true
-
-                prepare()
-            }
-    }
-
          ExoPlayer.Builder(context, renderersFactory)
     .setMediaSourceFactory(mediaSourceFactory)
     .build()
