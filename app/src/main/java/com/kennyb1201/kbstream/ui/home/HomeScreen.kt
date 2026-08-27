@@ -348,10 +348,7 @@ private fun HomeHero(
     mutableStateOf<PlayableSource?>(null)
 }
 
-    LaunchedEffect(trailerPlaying, trailerKey) {
-        resolvedTrailerUrl = null
-
-        LaunchedEffect(trailerPlaying, trailerKey) {
+LaunchedEffect(trailerPlaying, trailerKey) {
     resolvedTrailerSource = null
 
     if (trailerPlaying && !trailerKey.isNullOrBlank()) {
