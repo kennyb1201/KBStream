@@ -26,6 +26,7 @@ import com.kennyb1201.kbstream.data.tmdb.displayRuntime
 import com.kennyb1201.kbstream.data.tmdb.displayRuntimeMinutes
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
+import kotlin.math.round
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -98,7 +99,8 @@ private data class ResolvedHomeSeriesTarget(
     val isResume: Boolean = false,
     val airDate: String? = null,
     val episodeTitle: String? = null,
-    val episodeDescription: String? = null
+    val episodeDescription: String? = null,
+    val runtimeMinutes: Int? = null
 )
 
 private sealed interface SimklUpNextResult {
@@ -1118,6 +1120,8 @@ val localItems =
         var resolvedStartPositionMs =
             0L
 
+        
+
         val needsTmdbLookup =
             posterUrl.isNullOrBlank() ||
                 item.mediaType == "series"
@@ -1227,6 +1231,9 @@ val localItems =
                     resolvedStartPositionMs =
                         resolvedTarget.startPositionMs
 
+         runtimeMinutes =
+    resolvedTarget.runtimeMinutes
+                    
                     episodeTitle =
     resolvedTarget.episodeTitle
 
@@ -1364,20 +1371,21 @@ episodeDescription =
             // (source == "playback"); "Next Up" items haven't been
             // started yet so there's no remaining time to show.
             remainingMinutes =
-                if (item.source == "playback") {
-                    runtimeMinutes?.let { total ->
-                        val progressFraction =
-                            (item.progress?.coerceIn(0f, 100f) ?: 0f) / 100f
+    if (item.source == "playback") {
+        runtimeMinutes?.let { total ->
+            val progressFraction =
+                (item.progress?.coerceIn(0f, 100f) ?: 0f) / 100f
 
-                        (total * (1f - progressFraction))
-                            .toInt()
-                            .coerceAtLeast(0)
-                            .takeIf { it > 0 }
-                    }
-                } else {
-                    null
-                },
-
+            kotlin.math.round(
+                total * (1f - progressFraction)
+            )
+                .toInt()
+                .coerceAtLeast(0)
+                .takeIf { it > 0 }
+        }
+    } else {
+        null
+    },
             subtitle =
                 subtitle,
 
@@ -1638,7 +1646,11 @@ episodeDescription =
 
     episodeDescription =
         matchedResumeEpisode
-            .overview
+            .overview,
+
+ runtimeMinutes =
+    matchedResumeEpisode
+        .runtime
 )
                 
             }
@@ -1743,7 +1755,11 @@ episodeDescription =
 
     episodeDescription =
         nextUnwatchedInSeason
-            .overview
+            .overview,
+
+ runtimeMinutes =
+    nextUnwatchedInSeason
+        .runtime
 )
         }
 
@@ -1869,7 +1885,11 @@ episodeDescription =
 
     episodeDescription =
         firstUnwatchedAired
-            .overview
+            .overview,
+
+ runtimeMinutes =
+    firstUnwatchedAired
+        .runtime
 )
             }
         }
