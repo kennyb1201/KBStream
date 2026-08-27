@@ -1109,6 +1109,7 @@ val localItems =
         var episodeDescription: String? = null
         var tmdbRating: Double? = null
         var runtimeMinutes: Int? = null
+        var episodesRemaining: Int? = null
 
         var resolvedSeason =
             item.season
