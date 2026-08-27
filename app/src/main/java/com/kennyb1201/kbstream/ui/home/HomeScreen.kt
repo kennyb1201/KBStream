@@ -156,7 +156,7 @@ private fun TopActionItem(
             ),
             focusedBorder = androidx.tv.material3.Border(
                 border = androidx.compose.foundation.BorderStroke(
-                    3.dp,
+                    2.dp,
                     KBAccent
                 ),
                 shape = RoundedCornerShape(6.dp)
