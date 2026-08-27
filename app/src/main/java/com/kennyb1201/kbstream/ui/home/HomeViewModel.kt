@@ -107,8 +107,6 @@ private data class ResolvedHomeSeriesTarget(
     val episodesWatched: Int? = null,
     val episodesTotal: Int? = null,
     val episodesRemaining: Int? = null,
-    val episodesWatched: Int? = null,
-    val episodesTotal: Int? = null
 )
 
 private sealed interface SimklUpNextResult {
@@ -2165,6 +2163,95 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     )
 }
 
+private suspend fun calculateEpisodesRemaining(
+    parentId: String,
+    tmdbId: Int,
+    startingSeason: Int,
+    startingEpisode: Int
+): Int? {
+
+    if (tmdbId <= 0) {
+        return null
+    }
+
+    val (
+        simklWatchedEpisodes,
+        watchedEpisodeKeys
+    ) = watchedStateMutex.withLock {
+        Pair(
+            simklWatchedEpisodesByShow[parentId].orEmpty(),
+            watchedEpisodeKeysByShow[parentId].orEmpty()
+        )
+    }
+
+    var remaining = 0
+
+    val lastSeasonToCheck =
+        startingSeason +
+            MAX_FORWARD_SEASON_LOOKAHEAD
+
+    for (
+        season in
+        startingSeason..lastSeasonToCheck
+    ) {
+
+        val seasonEpisodes =
+            try {
+                tmdbLookupSemaphore.withPermit {
+                    tmdbRepository.getSeasonEpisodes(
+                        tmdbId,
+                        season,
+                        parentId
+                    )
+                }
+            } catch (_: Exception) {
+                emptyList()
+            }
+
+        if (seasonEpisodes.isEmpty()) {
+            continue
+        }
+
+        val watchedEpisodesForSeason =
+            WatchedEpisodeState
+                .effectiveWatchedEpisodesForSeason(
+                    parentId = parentId,
+                    season = season,
+                    simklWatchedEpisodes =
+                        simklWatchedEpisodes,
+                    watchedEpisodeKeys =
+                        watchedEpisodeKeys
+                )
+
+        for (episode in seasonEpisodes) {
+
+            if (
+                !isAiredOrUnknown(
+                    episode.airDate
+                )
+            ) {
+                continue
+            }
+
+            if (
+                season == startingSeason &&
+                episode.episodeNumber <
+                    startingEpisode
+            ) {
+                continue
+            }
+
+            if (
+                episode.episodeNumber !in
+                    watchedEpisodesForSeason
+            ) {
+                remaining++
+            }
+        }
+    }
+
+    return remaining
+}
 
   private fun buildSimklSubtitle(
         item: SimklContinueWatchingItem,
