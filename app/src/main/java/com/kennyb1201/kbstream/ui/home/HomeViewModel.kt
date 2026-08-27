@@ -1578,6 +1578,7 @@ episodeDescription =
         
     }
 
+
 private data class EpisodeProgressCounts(
     val watched: Int,
     val total: Int,
@@ -1717,7 +1718,7 @@ private suspend fun calculateEpisodeProgressCounts(
         remaining = remaining
     )
 }
-    
+
 
 private suspend fun resolveSeriesTargetFromSharedWatchedState(
     parentId: String,
