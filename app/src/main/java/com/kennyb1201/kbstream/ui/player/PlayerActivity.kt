@@ -255,6 +255,10 @@ fun PlayerScreen(
         mutableStateOf(url)
     }
 
+    var currentAudioUrl by remember(url, audioUrl) {
+    mutableStateOf(audioUrl)
+    }
+
     var currentSourceLabel by remember(
         url,
         sources
@@ -366,7 +370,7 @@ fun PlayerScreen(
 
     val exoPlayer = remember(
         currentUrl,
-        audioUrl,
+        currentAudioUrl,
         streamHeaders,
         manualRetryToken,
         forceSoftwareDecoder
@@ -442,14 +446,16 @@ fun PlayerScreen(
     .setMediaSourceFactory(mediaSourceFactory)
     .build()
     .apply {
-        if (audioUrl != null) {
+        if (currentAudioUrl != null) {
             val videoSource =
                 ProgressiveMediaSource.Factory(httpFactory)
                     .createMediaSource(mediaItemBuilder.build())
 
             val audioSource =
                 ProgressiveMediaSource.Factory(httpFactory)
-                    .createMediaSource(MediaItem.fromUri(audioUrl))
+                   .createMediaSource(
+    MediaItem.fromUri(currentAudioUrl)
+)
 
             setMediaSource(
                 MergingMediaSource(videoSource, audioSource)
@@ -849,7 +855,8 @@ fun PlayerScreen(
             stream.label()
 
         currentUrl = newUrl
-        retryAttempt = 0
+currentAudioUrl = stream.audioUrl
+retryAttempt = 0
         retryExhausted = false
         errorMessage = null
         forceSoftwareDecoder = false
