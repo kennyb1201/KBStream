@@ -65,6 +65,9 @@ data class Stream(
     val description: String? = null,
     val url: String? = null,
 
+    @Json(name = "audioUrl")
+    val audioUrl: String? = null,
+
     @Json(name = "infoHash")
     val infoHash: String? = null,
 
