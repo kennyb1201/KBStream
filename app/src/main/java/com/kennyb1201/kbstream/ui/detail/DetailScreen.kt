@@ -3097,7 +3097,7 @@ private fun seriesStatusTag(status: String?): String? {
         normalizedStatus.equals("Returning Series", ignoreCase = true) -> "ONGOING"
         normalizedStatus.equals("In Production", ignoreCase = true) -> "IN PRODUCTION"
         normalizedStatus.equals("Planned", ignoreCase = true) -> "PLANNED"
-        normalizedStatus.equals("Canceled", ignoreCase = true),
+        normalizedStatus.equals("Canceled", ignoreCase = true), ||
         normalizedStatus.equals("Cancelled", ignoreCase = true) -> "CANCELLED"
         normalizedStatus.equals("Ended", ignoreCase = true) -> "ENDED"
         else -> null
