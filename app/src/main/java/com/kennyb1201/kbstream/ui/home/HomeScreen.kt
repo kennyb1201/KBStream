@@ -1069,6 +1069,23 @@ private fun CompactUpNextCard(
                     }
             }
 
+            item.episodesRemaining
+    ?.takeIf { it > 0 }
+    ?.let { remaining ->
+        Text(
+            text = "$remaining episodes left",
+            color = if (focused) {
+                Color.White.copy(alpha = .78f)
+            } else {
+                KBTextLo
+            },
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            modifier = Modifier.padding(top = 2.dp)
+        )
+    }
+        
             timeLeft?.let { label ->
                 Text(
                     text = label,
