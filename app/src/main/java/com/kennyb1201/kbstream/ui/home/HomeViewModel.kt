@@ -1726,7 +1726,7 @@ private suspend fun calculateEpisodesRemaining(
 
  runtimeMinutes =
     matchedResumeEpisode
-        .runtime
+        .runtime,
 
                     episodesRemaining =
     calculateEpisodesRemaining(
