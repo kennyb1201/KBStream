@@ -78,6 +78,7 @@ data class UpNextItem(
     val imdbRating: Double? = null,
     val runtimeMinutes: Int? = null,
     val remainingMinutes: Int? = null,
+    val episodesRemaining: Int? = null,
 
     val subtitle: String? = null,
     val progressPercent: Float? = null,
@@ -100,7 +101,8 @@ private data class ResolvedHomeSeriesTarget(
     val airDate: String? = null,
     val episodeTitle: String? = null,
     val episodeDescription: String? = null,
-    val runtimeMinutes: Int? = null
+    val runtimeMinutes: Int? = null,
+    val episodesRemaining: Int? = null
 )
 
 private sealed interface SimklUpNextResult {
@@ -1560,8 +1562,82 @@ episodeDescription =
                     .remove(parentId)
             }
         }
+        
     }
 
+private suspend fun calculateEpisodesRemaining(
+    parentId: String,
+    tmdbId: Int,
+    startingSeason: Int,
+    startingEpisode: Int
+): Int? {
+    if (tmdbId <= 0) {
+        return null
+    }
+
+    val (
+        simklWatchedEpisodes,
+        watchedEpisodeKeys
+    ) = watchedStateMutex.withLock {
+        Pair(
+            simklWatchedEpisodesByShow[parentId].orEmpty(),
+            watchedEpisodeKeysByShow[parentId].orEmpty()
+        )
+    }
+
+    var remaining = 0
+
+    val lastSeasonToCheck =
+        startingSeason + MAX_FORWARD_SEASON_LOOKAHEAD
+
+    for (season in startingSeason..lastSeasonToCheck) {
+
+        val seasonEpisodes =
+            try {
+                tmdbLookupSemaphore.withPermit {
+                    tmdbRepository.getSeasonEpisodes(
+                        tmdbId,
+                        season,
+                        parentId
+                    )
+                }
+            } catch (e: Exception) {
+                emptyList()
+            }
+
+        if (seasonEpisodes.isEmpty()) {
+            continue
+        }
+
+        val watchedEpisodesForSeason =
+            WatchedEpisodeState.effectiveWatchedEpisodesForSeason(
+                parentId = parentId,
+                season = season,
+                simklWatchedEpisodes = simklWatchedEpisodes,
+                watchedEpisodeKeys = watchedEpisodeKeys
+            )
+
+        for (episode in seasonEpisodes) {
+
+            if (!isAiredOrUnknown(episode.airDate)) {
+                continue
+            }
+
+            if (season == startingSeason &&
+                episode.episodeNumber < startingEpisode
+            ) {
+                continue
+            }
+
+            if (episode.episodeNumber !in watchedEpisodesForSeason) {
+                remaining++
+            }
+        }
+    }
+
+    return remaining
+}
+    
     private suspend fun resolveSeriesTargetFromSharedWatchedState(
         parentId: String,
         tmdbId: Int,
@@ -1651,6 +1727,14 @@ episodeDescription =
  runtimeMinutes =
     matchedResumeEpisode
         .runtime
+
+                    episodesRemaining =
+    calculateEpisodesRemaining(
+        parentId = parentId,
+        tmdbId = tmdbId,
+        startingSeason = resume.season,
+        startingEpisode = resume.episode
+    )
 )
                 
             }
@@ -1760,6 +1844,14 @@ episodeDescription =
  runtimeMinutes =
     nextUnwatchedInSeason
         .runtime
+
+                episodesRemaining =
+    calculateEpisodesRemaining(
+        parentId = parentId,
+        tmdbId = tmdbId,
+        startingSeason = startingSeason,
+        startingEpisode = nextUnwatchedInSeason.episodeNumber
+    )
 )
         }
 
@@ -1890,6 +1982,14 @@ episodeDescription =
  runtimeMinutes =
     firstUnwatchedAired
         .runtime
+
+                    episodesRemaining =
+    calculateEpisodesRemaining(
+        parentId = parentId,
+        tmdbId = tmdbId,
+        startingSeason = season,
+        startingEpisode = firstUnwatchedAired.episodeNumber
+    )
 )
             }
         }
