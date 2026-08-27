@@ -730,7 +730,7 @@ LaunchedEffect(trailerPlaying, trailerKey) {
                     color = Color.White.copy(alpha = .94f),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 14.dp)
                 )
