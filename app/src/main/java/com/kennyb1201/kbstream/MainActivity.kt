@@ -347,7 +347,7 @@ fun AppRoot() {
 
                     screen = Screen.Player(
                         url = channel.streamUrl,
-                        audioUrl = stream.audioUrl,
+                        audioUrl = directSource.audioUrl,
                         parentId = channelId,
                         parentType = "channel",
                         season = null,
