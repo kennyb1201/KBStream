@@ -22,8 +22,8 @@ object TrailerPlayerLauncher {
      * fullscreen details player.
      */
     suspend fun resolvePlayableUrl(
-        trailerUrlOrId: String
-    ): Result<String> {
+    trailerUrlOrId: String
+): Result<PlayableSource> {
 
         val videoId =
             extractVideoId(trailerUrlOrId)
@@ -49,7 +49,7 @@ object TrailerPlayerLauncher {
 
         return NewPipeManager
             .getPlayableUrl(videoId)
-            .onSuccess { playableUrl ->
+            .onSuccess { source ->
                 Log.d(
                     TAG,
                     "Trailer resolved successfully: " +
@@ -66,13 +66,36 @@ object TrailerPlayerLauncher {
     }
 
     suspend fun playTrailer(
-        context: Context,
-        trailerUrlOrId: String
-    ) {
-        Log.d(
-            TAG,
-            "playTrailer called: $trailerUrlOrId"
-        )
+    context: Context,
+    trailerUrlOrId: String
+) {
+    Log.d(TAG, "playTrailer called: $trailerUrlOrId")
+
+    val source =
+        resolvePlayableUrl(trailerUrlOrId)
+            .getOrElse { error ->
+                Log.e(TAG, "Failed to resolve playable trailer URL", error)
+                return
+            }
+
+    val intent =
+        Intent(context, PlayerActivity::class.java).apply {
+            when (source) {
+                is PlayableSource.Muxed -> {
+                    putExtra("stream_url", source.url)
+                }
+                is PlayableSource.Adaptive -> {
+                    putExtra("stream_url", source.videoUrl)
+                    putExtra("audio_url", source.audioUrl)
+                }
+            }
+
+            putExtra("parent_type", "movie")
+            putExtra("item_name", "Trailer")
+        }
+
+    context.startActivity(intent)
+}
 
         val playableUrl =
             resolvePlayableUrl(trailerUrlOrId)
