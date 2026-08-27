@@ -79,6 +79,8 @@ data class UpNextItem(
     val runtimeMinutes: Int? = null,
     val remainingMinutes: Int? = null,
     val episodesRemaining: Int? = null,
+    val episodesWatched: Int? = null,
+val episodesTotal: Int? = null,
 
     val subtitle: String? = null,
     val progressPercent: Float? = null,
@@ -104,7 +106,9 @@ private data class ResolvedHomeSeriesTarget(
     val runtimeMinutes: Int? = null,
     val episodesWatched: Int? = null,
     val episodesTotal: Int? = null,
-    val episodesRemaining: Int? = null
+    val episodesRemaining: Int? = null,
+    val episodesWatched: Int? = null,
+    val episodesTotal: Int? = null
 )
 
 private sealed interface SimklUpNextResult {
@@ -1574,12 +1578,19 @@ episodeDescription =
         
     }
 
-private suspend fun calculateEpisodesRemaining(
+private data class EpisodeProgressCounts(
+    val watched: Int,
+    val total: Int,
+    val remaining: Int
+)
+
+private suspend fun calculateEpisodeProgressCounts(
     parentId: String,
     tmdbId: Int,
     startingSeason: Int,
     startingEpisode: Int
-): Int? {
+): EpisodeProgressCounts? {
+
     if (tmdbId <= 0) {
         return null
     }
@@ -1594,11 +1605,62 @@ private suspend fun calculateEpisodesRemaining(
         )
     }
 
+    var total = 0
+    var watched = 0
     var remaining = 0
 
     val lastSeasonToCheck =
         startingSeason + MAX_FORWARD_SEASON_LOOKAHEAD
 
+    for (season in 1..lastSeasonToCheck) {
+
+        val seasonEpisodes =
+            try {
+                tmdbLookupSemaphore.withPermit {
+                    tmdbRepository.getSeasonEpisodes(
+                        tmdbId,
+                        season,
+                        parentId
+                    )
+                }
+            } catch (_: Exception) {
+                emptyList()
+            }
+
+        if (seasonEpisodes.isEmpty()) {
+            continue
+        }
+
+        val watchedEpisodesForSeason =
+            WatchedEpisodeState
+                .effectiveWatchedEpisodesForSeason(
+                    parentId = parentId,
+                    season = season,
+                    simklWatchedEpisodes = simklWatchedEpisodes,
+                    watchedEpisodeKeys = watchedEpisodeKeys
+                )
+
+        for (episode in seasonEpisodes) {
+
+            if (!isAiredOrUnknown(episode.airDate)) {
+                continue
+            }
+
+            total++
+
+            if (
+                episode.episodeNumber in
+                watchedEpisodesForSeason
+            ) {
+                watched++
+            }
+        }
+    }
+
+    /*
+     * Remaining is based on the currently selected episode,
+     * so already-watched episodes before the target aren't counted.
+     */
     for (season in startingSeason..lastSeasonToCheck) {
 
         val seasonEpisodes =
@@ -1610,7 +1672,7 @@ private suspend fun calculateEpisodesRemaining(
                         parentId
                     )
                 }
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 emptyList()
             }
 
@@ -1619,12 +1681,13 @@ private suspend fun calculateEpisodesRemaining(
         }
 
         val watchedEpisodesForSeason =
-            WatchedEpisodeState.effectiveWatchedEpisodesForSeason(
-                parentId = parentId,
-                season = season,
-                simklWatchedEpisodes = simklWatchedEpisodes,
-                watchedEpisodeKeys = watchedEpisodeKeys
-            )
+            WatchedEpisodeState
+                .effectiveWatchedEpisodesForSeason(
+                    parentId = parentId,
+                    season = season,
+                    simklWatchedEpisodes = simklWatchedEpisodes,
+                    watchedEpisodeKeys = watchedEpisodeKeys
+                )
 
         for (episode in seasonEpisodes) {
 
@@ -1632,19 +1695,27 @@ private suspend fun calculateEpisodesRemaining(
                 continue
             }
 
-            if (season == startingSeason &&
+            if (
+                season == startingSeason &&
                 episode.episodeNumber < startingEpisode
             ) {
                 continue
             }
 
-            if (episode.episodeNumber !in watchedEpisodesForSeason) {
+            if (
+                episode.episodeNumber !in
+                watchedEpisodesForSeason
+            ) {
                 remaining++
             }
         }
     }
 
-    return remaining
+    return EpisodeProgressCounts(
+        watched = watched,
+        total = total,
+        remaining = remaining
+    )
 }
     
 
