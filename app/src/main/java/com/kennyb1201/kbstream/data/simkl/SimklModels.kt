@@ -147,7 +147,9 @@ data class SimklContinueWatchingItem(
     val mediaType: String,
     val source: String,
     val season: Int? = null,
-    val episode: Int? = null
+    val episode: Int? = null,
+    val watchedPositionSeconds: Long? = null,
+    val runtimeMinutes: Int? = null
 )
 
 @JsonClass(generateAdapter = true)
