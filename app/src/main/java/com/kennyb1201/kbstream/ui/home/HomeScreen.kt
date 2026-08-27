@@ -78,6 +78,9 @@ import com.kennyb1201.kbstream.ui.detail.StreamsTarget
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
+import com.kennyb1201.kbstream.data.youtube.PlayableSource
+import androidx.media3.exoplayer.source.MergingMediaSource
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import kotlinx.coroutines.delay
 
 private val HomePosterWidth = 124.dp
@@ -200,13 +203,13 @@ private fun TopActionBar(
 
 @Composable
 private fun HeroInlineTrailerPlayer(
-    playableUrl: String,
+    source: PlayableSource,
     modifier: Modifier = Modifier,
     onEnded: () -> Unit = {}
 ) {
     val context = LocalContext.current
 
-    val exoPlayer = remember(playableUrl) {
+    val exoPlayer = remember(source) {
         val httpFactory =
             DefaultHttpDataSource.Factory()
                 .setAllowCrossProtocolRedirects(true)
@@ -227,9 +230,43 @@ private fun HeroInlineTrailerPlayer(
             )
             .build()
             .apply {
-                setMediaItem(
-                    MediaItem.fromUri(playableUrl)
-                )
+                when (source) {
+                    is PlayableSource.Muxed -> {
+                        setMediaItem(
+                            MediaItem.fromUri(
+                                source.url
+                            )
+                        )
+                    }
+
+                    is PlayableSource.Adaptive -> {
+                        val videoSource =
+                            ProgressiveMediaSource.Factory(
+                                httpFactory
+                            ).createMediaSource(
+                                MediaItem.fromUri(
+                                    source.videoUrl
+                                )
+                            )
+
+                        val audioSource =
+                            ProgressiveMediaSource.Factory(
+                                httpFactory
+                            ).createMediaSource(
+                                MediaItem.fromUri(
+                                    source.audioUrl
+                                )
+                            )
+
+                        setMediaSource(
+                            MergingMediaSource(
+                                videoSource,
+                                audioSource
+                            )
+                        )
+                    }
+                }
+
                 repeatMode = Player.REPEAT_MODE_OFF
                 volume = 1f
                 playWhenReady = true
@@ -238,15 +275,19 @@ private fun HeroInlineTrailerPlayer(
     }
 
     DisposableEffect(exoPlayer) {
-        val listener = object : Player.Listener {
-            override fun onPlaybackStateChanged(
-                playbackState: Int
-            ) {
-                if (playbackState == Player.STATE_ENDED) {
-                    onEnded()
+        val listener =
+            object : Player.Listener {
+                override fun onPlaybackStateChanged(
+                    playbackState: Int
+                ) {
+                    if (
+                        playbackState ==
+                        Player.STATE_ENDED
+                    ) {
+                        onEnded()
+                    }
                 }
             }
-        }
 
         exoPlayer.addListener(listener)
 
@@ -262,9 +303,11 @@ private fun HeroInlineTrailerPlayer(
                 useController = false
                 resizeMode =
                     AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+
                 setShutterBackgroundColor(
                     android.graphics.Color.TRANSPARENT
                 )
+
                 player = exoPlayer
                 keepScreenOn = true
             }
@@ -301,28 +344,31 @@ private fun HomeHero(
     val trailerPlaying =
         !trailerKey.isNullOrBlank() && autoPlayTrailer
 
-    var resolvedTrailerUrl by remember(trailerKey) {
-        mutableStateOf<String?>(null)
-    }
+    var resolvedTrailerSource by remember(trailerKey) {
+    mutableStateOf<PlayableSource?>(null)
+}
 
     LaunchedEffect(trailerPlaying, trailerKey) {
         resolvedTrailerUrl = null
 
-        if (trailerPlaying && !trailerKey.isNullOrBlank()) {
-            TrailerPlayerLauncher
-                .resolvePlayableUrl(trailerKey)
-                .onSuccess { url ->
-                    resolvedTrailerUrl = url
-                }
-                .onFailure { error ->
-                    Log.e(
-                        "HOME_HERO",
-                        "Failed to resolve inline trailer URL",
-                        error
-                    )
-                }
-        }
+        LaunchedEffect(trailerPlaying, trailerKey) {
+    resolvedTrailerSource = null
+
+    if (trailerPlaying && !trailerKey.isNullOrBlank()) {
+        TrailerPlayerLauncher
+            .resolvePlayableUrl(trailerKey)
+            .onSuccess { source ->
+                resolvedTrailerSource = source
+            }
+            .onFailure { error ->
+                Log.e(
+                    "HOME_HERO",
+                    "Failed to resolve inline trailer source",
+                    error
+                )
+            }
     }
+}
 
     val year = if (preview.type == "movie") {
         tmdbDetail?.releaseYear()
@@ -538,30 +584,31 @@ private fun HomeHero(
                     .fillMaxHeight()
                     .weight(0.6f)
             ) {
+            
                 Crossfade(
-                    targetState = resolvedTrailerUrl,
-                    label = "hero_backdrop_crossfade"
-                ) { trailerUrl ->
-                    if (trailerUrl != null) {
-                        HeroInlineTrailerPlayer(
-                            playableUrl = trailerUrl,
-                            modifier = Modifier.fillMaxSize(),
-                            onEnded = {
-                                resolvedTrailerUrl = null
-                            }
-                        )
-                    } else {
-                        AsyncImage(
-                            model = ImageRequest.Builder(context)
-                                .data(backdrop)
-                                .build(),
-                            contentDescription = null,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop,
-                            alignment = Alignment.Center
-                        )
-                    }
-                }
+    targetState = resolvedTrailerSource,
+    label = "hero_backdrop_crossfade"
+) { trailerSource ->
+    if (trailerSource != null) {
+        HeroInlineTrailerPlayer(
+            source = trailerSource,
+            modifier = Modifier.fillMaxSize(),
+            onEnded = {
+                resolvedTrailerSource = null
+            }
+        )
+    } else {
+        AsyncImage(
+            model = ImageRequest.Builder(context)
+                .data(backdrop)
+                .build(),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop,
+            alignment = Alignment.Center
+        )
+    }
+}
 
                 Box(
                     modifier = Modifier
