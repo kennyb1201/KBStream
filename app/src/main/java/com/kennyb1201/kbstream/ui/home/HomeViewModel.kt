@@ -1981,7 +1981,7 @@ private suspend fun calculateEpisodesRemaining(
 
  runtimeMinutes =
     firstUnwatchedAired
-        .runtime
+        .runtime,
 
                     episodesRemaining =
     calculateEpisodesRemaining(
