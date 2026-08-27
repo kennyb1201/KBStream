@@ -1236,6 +1236,9 @@ val localItems =
 
          runtimeMinutes =
     resolvedTarget.runtimeMinutes
+
+        episodesRemaining =
+    resolvedTarget.episodesRemaining
                     
                     episodeTitle =
     resolvedTarget.episodeTitle
@@ -1369,6 +1372,9 @@ episodeDescription =
 
             runtimeMinutes =
                 runtimeMinutes,
+
+            episodesRemaining =
+    episodesRemaining,
 
             // Only meaningful for items with an actual watched position
             // (source == "playback"); "Next Up" items haven't been
