@@ -415,7 +415,7 @@ LaunchedEffect(trailerPlaying, trailerKey) {
         tmdbDetail?.releaseYear()
             ?: meta?.releaseInfo
                 ?.let {
-                    Regex("""\b(?:19|20)d{2}\b""")
+                    Regex("""\b(?:19|20)\d{2}\b""")
                         .find(it)
                         ?.value
                 }
