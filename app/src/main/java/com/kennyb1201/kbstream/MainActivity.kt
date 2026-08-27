@@ -553,6 +553,7 @@ fun AppRoot() {
 
                         screen = Screen.Player(
                             url = streamUrl,
+                            audioUrl = stream.audioUrl,
                             parentId = current.parentId,
                             parentType = current.parentType,
                             season = current.target.season,
