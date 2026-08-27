@@ -607,6 +607,22 @@ LaunchedEffect(trailerPlaying, trailerKey) {
     val continueTimeLeft =
         formatTimeLeft(continueWatchingItem?.remainingMinutes)
 
+        val continueEpisodeCount =
+    continueWatchingItem?.let { item ->
+        val watched = item.episodesWatched
+        val total = item.episodesTotal
+
+        if (
+            watched != null &&
+            total != null &&
+            total > 0
+        ) {
+            "$watched of $total episodes watched"
+        } else {
+            null
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -791,6 +807,17 @@ LaunchedEffect(trailerPlaying, trailerKey) {
                         )
                     }
                 }
+            }
+
+            continueEpisodeCount?.let { label ->
+    Text(
+        text = label,
+        color = Color.White.copy(alpha = .70f),
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Medium,
+        maxLines = 1,
+        modifier = Modifier.padding(top = 5.dp)
+    )
             }
 
             if (continueWatchingItem != null) {
