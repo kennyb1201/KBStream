@@ -2336,42 +2336,51 @@ private suspend fun calculateEpisodesRemaining(
     }
 
     private fun winnerScore(
-        item: UpNextItem
-    ): Int {
+    item: UpNextItem
+): Int {
 
-        var score =
-            0
+    var score =
+        0
 
-        if (
-            item.badge ==
-                UpNextBadge.CONTINUE_WATCHING
-        ) {
-            score += 5_000
-        }
-
-        if (
-            item.startPositionMs > 0L ||
-            (item.progressPercent ?: 0f) > 0f
-        ) {
-            score += 2_500
-        }
-
-        if (
-            !item.episodeStreamId
-                .isNullOrBlank()
-        ) {
-            score += 500
-        }
-
-        if (
-            item.season != null &&
-            item.episode != null
-        ) {
-            score += 250
-        }
-
-        return score
+    if (
+        item.badge ==
+            UpNextBadge.CONTINUE_WATCHING
+    ) {
+        score += 5_000
     }
+
+    // Prefer entries that actually have calculated
+    // remaining playback time.
+    if (
+        item.remainingMinutes != null &&
+        item.remainingMinutes > 0
+    ) {
+        score += 1_000
+    }
+
+    if (
+        item.startPositionMs > 0L ||
+        (item.progressPercent ?: 0f) > 0f
+    ) {
+        score += 2_500
+    }
+
+    if (
+        !item.episodeStreamId
+            .isNullOrBlank()
+    ) {
+        score += 500
+    }
+
+    if (
+        item.season != null &&
+        item.episode != null
+    ) {
+        score += 250
+    }
+
+    return score
+}
 
     private fun targetPrecisionScore(
         item: UpNextItem
