@@ -3091,7 +3091,6 @@ private fun formatSeriesYearRange(
     }
 }
 
-private fun seriesStatusTag(
 private fun seriesStatusTag(status: String?): String? {
     val normalizedStatus = status?.trim().orEmpty()
     return when {
