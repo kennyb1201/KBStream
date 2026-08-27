@@ -78,6 +78,8 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import androidx.media3.exoplayer.source.MergingMediaSource
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -119,6 +121,8 @@ class PlayerActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         val url = intent.getStringExtra("stream_url")
+        
+        val audioUrl = intent.getStringExtra("audio_url")
 
         if (url.isNullOrBlank()) {
             finish()
@@ -162,6 +166,7 @@ class PlayerActivity : ComponentActivity() {
         setContent {
             PlayerScreen(
                 url = url,
+                audioUrl = audioUrl,
                 parentId = parentId,
                 parentType = parentType,
                 season = season,
@@ -229,6 +234,7 @@ private fun Stream.label(): String {
 @Composable
 fun PlayerScreen(
     url: String,
+    audioUrl: String? = null,
     parentId: String,
     parentType: String,
     season: Int?,
@@ -360,6 +366,7 @@ fun PlayerScreen(
 
     val exoPlayer = remember(
         currentUrl,
+        audioUrl,
         streamHeaders,
         manualRetryToken,
         forceSoftwareDecoder
@@ -461,6 +468,34 @@ fun PlayerScreen(
             }
     }
 
+         ExoPlayer.Builder(context, renderersFactory)
+    .setMediaSourceFactory(mediaSourceFactory)
+    .build()
+    .apply {
+        if (audioUrl != null) {
+            val videoSource =
+                ProgressiveMediaSource.Factory(httpFactory)
+                    .createMediaSource(mediaItemBuilder.build())
+
+            val audioSource =
+                ProgressiveMediaSource.Factory(httpFactory)
+                    .createMediaSource(MediaItem.fromUri(audioUrl))
+
+            setMediaSource(
+                MergingMediaSource(videoSource, audioSource)
+            )
+        } else {
+            setMediaItem(mediaItemBuilder.build())
+        }
+
+        if (!isLiveChannel && carryPositionMs > 0L) {
+            seekTo(carryPositionMs)
+        }
+
+        setPlaybackSpeed(playbackSpeed)
+        playWhenReady = true
+        prepare()
+    }
     LaunchedEffect(
         exoPlayer,
         errorMessage,
