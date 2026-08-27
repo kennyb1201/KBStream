@@ -65,6 +65,10 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
+import androidx.compose.foundation.BorderStroke
+import androidx.tv.material3.Border
+import androidx.tv.material3.ClickableSurfaceDefaults
+import androidx.tv.material3.Surface
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import com.kennyb1201.kbstream.data.addon.Meta
@@ -114,20 +118,9 @@ private fun TopActionItem(
 ) {
     var focused by remember { mutableStateOf(false) }
 
-    Text(
-        text = label,
-        color = if (focused) Color.White else Color.White.copy(alpha = .76f),
-        fontSize = 13.sp,
-        fontWeight = if (focused) FontWeight.Bold else FontWeight.Medium,
+    androidx.tv.material3.Surface(
+        onClick = onClick,
         modifier = modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(
-                if (focused) {
-                    KBAccent.copy(alpha = .28f)
-                } else {
-                    Color.Transparent
-                }
-            )
             .onFocusChanged {
                 focused = it.isFocused
             }
@@ -141,14 +134,49 @@ private fun TopActionItem(
                 } else {
                     false
                 }
-            }
-            .focusable()
-            .clickable(onClick = onClick)
-            .padding(
+            },
+        shape = androidx.tv.material3.ClickableSurfaceDefaults.shape(
+            shape = RoundedCornerShape(6.dp)
+        ),
+        colors = androidx.tv.material3.ClickableSurfaceDefaults.colors(
+            containerColor = Color.Transparent,
+            contentColor = Color.White.copy(alpha = .76f),
+            focusedContainerColor = KBAccent.copy(alpha = .28f),
+            focusedContentColor = Color.White,
+            pressedContainerColor = KBAccent.copy(alpha = .28f),
+            pressedContentColor = Color.White
+        ),
+        border = androidx.tv.material3.ClickableSurfaceDefaults.border(
+            border = androidx.tv.material3.Border(
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    Color.Transparent
+                ),
+                shape = RoundedCornerShape(6.dp)
+            ),
+            focusedBorder = androidx.tv.material3.Border(
+                border = androidx.compose.foundation.BorderStroke(
+                    3.dp,
+                    KBAccent
+                ),
+                shape = RoundedCornerShape(6.dp)
+            )
+        ),
+        glow = androidx.tv.material3.ClickableSurfaceDefaults.glow(),
+        scale = androidx.tv.material3.ClickableSurfaceDefaults.scale(
+            focusedScale = 1f
+        )
+    ) {
+        Text(
+            text = label,
+            fontSize = 13.sp,
+            fontWeight = if (focused) FontWeight.Bold else FontWeight.Medium,
+            modifier = Modifier.padding(
                 horizontal = 12.dp,
                 vertical = 8.dp
             )
-    )
+        )
+    }
 }
 
 @Composable
