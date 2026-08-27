@@ -446,23 +446,32 @@ fun PlayerScreen(
     .setMediaSourceFactory(mediaSourceFactory)
     .build()
     .apply {
-        if (currentAudioUrl != null) {
-            val videoSource =
-                ProgressiveMediaSource.Factory(httpFactory)
-                    .createMediaSource(mediaItemBuilder.build())
+        val selectedAudioUrl = currentAudioUrl
 
-            val audioSource =
-                ProgressiveMediaSource.Factory(httpFactory)
-                   .createMediaSource(
-    MediaItem.fromUri(currentAudioUrl)
-)
-
-            setMediaSource(
-                MergingMediaSource(videoSource, audioSource)
+if (!selectedAudioUrl.isNullOrBlank()) {
+    val videoSource =
+        ProgressiveMediaSource.Factory(httpFactory)
+            .createMediaSource(
+                mediaItemBuilder.build()
             )
-        } else {
-            setMediaItem(mediaItemBuilder.build())
-        }
+
+    val audioSource =
+        ProgressiveMediaSource.Factory(httpFactory)
+            .createMediaSource(
+                MediaItem.fromUri(selectedAudioUrl)
+            )
+
+    setMediaSource(
+        MergingMediaSource(
+            videoSource,
+            audioSource
+        )
+    )
+} else {
+    setMediaItem(
+        mediaItemBuilder.build()
+    )
+}
 
         if (!isLiveChannel && carryPositionMs > 0L) {
             seekTo(carryPositionMs)
