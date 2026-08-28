@@ -1271,7 +1271,7 @@ var episodesTotal: Int? = null
 
          runtimeMinutes =
     resolvedTarget.runtimeMinutes
-        ?: detail.displayRuntimeMinutes()
+        ?: detail?.displayRuntimeMinutes()
         
         episodesRemaining =
     resolvedTarget.episodesRemaining
