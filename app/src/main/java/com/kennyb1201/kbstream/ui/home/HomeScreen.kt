@@ -71,11 +71,12 @@ import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Surface
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import com.kennyb1201.kbstream.data.tmdb.displaySeasonEpisodeCount
+import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.certification
-import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
@@ -542,7 +543,7 @@ LaunchedEffect(trailerPlaying, trailerKey) {
                 it.isNotBlank()
             }
 
-    val genre =
+        val genre =
         meta?.genres
             ?.firstOrNull()
             ?.trim()
@@ -550,15 +551,23 @@ LaunchedEffect(trailerPlaying, trailerKey) {
                 it.isNotBlank()
             }
 
+    val seasonEpisodeCount =
+        if (preview.type != "movie") {
+            tmdbDetail?.displaySeasonEpisodeCount()
+        } else {
+            null
+        }
+
     val heroInfo =
         listOfNotNull(
             imdb,
             year,
             rating,
             runtime,
+            seasonEpisodeCount,
             genre
         ).joinToString("  •  ")
-
+        
     val continueEpisodeLabel =
         continueWatchingItem?.let { item ->
             val prefix =
