@@ -575,8 +575,14 @@ LaunchedEffect(trailerPlaying, trailerKey) {
     // Prefer TMDB's overview, then addon metadata, then preview metadata.
     val heroDescription =
     tmdbDetail?.displayDescription()
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
         ?: meta?.description
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
         ?: preview.description
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
         
     val continueEpisodeLabel =
         continueWatchingItem?.let { item ->
