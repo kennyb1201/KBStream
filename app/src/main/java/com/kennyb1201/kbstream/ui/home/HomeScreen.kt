@@ -503,7 +503,7 @@ LaunchedEffect(trailerPlaying, trailerKey) {
                 "returning series" -> "Ongoing"
                 "ended" -> "Ended"
                 "canceled",
-                "cancelled" -> "Cancelled"
+                "cancelled" -> "Canceled"
                 "in production" -> "In Production"
                 "planned" -> "Planned"
                 else -> null
