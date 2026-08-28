@@ -438,7 +438,13 @@ Log.d(
 
                     val finalMeta = resolvedAddonMeta?.copy(
     logo = resolvedLogo ?: resolvedAddonMeta.logo,
-    background = resolvedBackdrop ?: resolvedAddonMeta.background
+    background = resolvedBackdrop ?: resolvedAddonMeta.background,
+    description =
+        resolvedAddonMeta.description
+            ?.takeIf { it.isNotBlank() }
+            ?: resolvedTmdbDetail
+                ?.displayDescription()
+            ?: item.description
 ) ?: resolvedTmdbDetail?.let { tmdb ->
     Meta(
         id = requestedId,
