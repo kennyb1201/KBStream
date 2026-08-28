@@ -445,7 +445,7 @@ Log.d(
     description =
         resolvedAddonMeta.description
     ?.trim()
-    ?.takeIf { it.isNotEmpty() }
+    ?.takeIf { it.isNotBlank() }
             ?: resolvedTmdbDetail
                 ?.displayDescription()
             ?: item.description
