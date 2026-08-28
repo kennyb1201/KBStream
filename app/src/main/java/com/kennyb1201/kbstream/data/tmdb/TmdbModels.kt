@@ -515,7 +515,15 @@ fun TmdbDetail.displayCountry(): String? =
         .joinToString(", ")
         .takeIf { it.isNotEmpty() }
 
-        fun TmdbDetail.displaySeasonCount(): Int? =
+        
+
+        fun TmdbDetail.episodeCountForSeason(seasonNumber: Int): Int? =
+    seasons
+        .firstOrNull { it.seasonNumber == seasonNumber }
+        ?.episodeCount
+        ?.takeIf { it > 0 }
+
+       fun TmdbDetail.displaySeasonCount(): Int? =
     seasons
         .count { it.seasonNumber > 0 }
         .takeIf { it > 0 }
@@ -543,13 +551,7 @@ fun TmdbDetail.displaySeasonEpisodeCount(): String? {
 
         else -> null
     }
-}
-
-        fun TmdbDetail.episodeCountForSeason(seasonNumber: Int): Int? =
-    seasons
-        .firstOrNull { it.seasonNumber == seasonNumber }
-        ?.episodeCount
-        ?.takeIf { it > 0 }
+} 
 
 private fun String.parsedLocalDate(): java.time.LocalDate? =
     takeIf { it.isNotBlank() }
