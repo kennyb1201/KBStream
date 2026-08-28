@@ -854,7 +854,7 @@ continueTimeLeft?.let { label ->
                         )
                     }
             } else {
-                        } else {
+        
                 (meta?.description ?: preview.description)
                     ?.takeIf {
                         it.isNotBlank()
