@@ -227,6 +227,10 @@ data class TmdbDetail(
     val productionCompanies: List<TmdbProductionCompany> = emptyList(),
 
     val networks: List<TmdbNetwork> = emptyList(),
+    @Json(name = "number_of_seasons")
+val numberOfSeasons: Int? = null,
+
+@Json(name = "number_of_episodes")
     val seasons: List<TmdbSeasonSummary> = emptyList(),
     val credits: TmdbCredits? = null,
     val videos: TmdbVideos? = null,
@@ -524,15 +528,10 @@ fun TmdbDetail.displayCountry(): String? =
         ?.takeIf { it > 0 }
 
        fun TmdbDetail.displaySeasonCount(): Int? =
-    seasons
-        .count { it.seasonNumber > 0 }
-        .takeIf { it > 0 }
+    numberOfSeasons?.takeIf { it > 0 }
 
 fun TmdbDetail.displayEpisodeCount(): Int? =
-    seasons
-        .filter { it.seasonNumber > 0 }
-        .sumOf { it.episodeCount ?: 0 }
-        .takeIf { it > 0 }
+    numberOfEpisodes?.takeIf { it > 0 }
 
 fun TmdbDetail.displaySeasonEpisodeCount(): String? {
     val seasonCount = displaySeasonCount()
@@ -551,7 +550,7 @@ fun TmdbDetail.displaySeasonEpisodeCount(): String? {
 
         else -> null
     }
-} 
+}
 
 private fun String.parsedLocalDate(): java.time.LocalDate? =
     takeIf { it.isNotBlank() }
