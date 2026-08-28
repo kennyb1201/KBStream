@@ -775,39 +775,38 @@ LaunchedEffect(trailerPlaying, trailerKey) {
                 )
 
                 continueProgress?.let { progress ->
-                    Box(
-                        modifier = Modifier
-                            .padding(top = 7.dp)
-                            .width(260.dp)
-                            .height(4.dp)
-                            .background(
-                                Color.White.copy(alpha = .28f),
-                                RoundedCornerShape(2.dp)
-                            )
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth(progress)
-                                .height(4.dp)
-                                .background(
-                                    KBAccent,
-                                    RoundedCornerShape(2.dp)
-                                )
-                        )
-                    }
+    Box(
+        modifier = Modifier
+            .padding(top = 7.dp)
+            .width(260.dp)
+            .height(4.dp)
+            .background(
+                Color.White.copy(alpha = .28f),
+                RoundedCornerShape(2.dp)
+            )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(progress)
+                .height(4.dp)
+                .background(
+                    KBAccent,
+                    RoundedCornerShape(2.dp)
+                )
+        )
+    }
+}
 
-                    continueTimeLeft?.let { label ->
-                        Text(
-                            text = label,
-                            color = Color.White.copy(alpha = .70f),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 1,
-                            modifier = Modifier.padding(top = 5.dp)
-                        )
-                    }
-                }
-            }
+continueTimeLeft?.let { label ->
+    Text(
+        text = label,
+        color = Color.White.copy(alpha = .70f),
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Medium,
+        maxLines = 1,
+        modifier = Modifier.padding(top = 5.dp)
+    )
+}
 
             continueEpisodeCount?.let { label ->
     Text(
