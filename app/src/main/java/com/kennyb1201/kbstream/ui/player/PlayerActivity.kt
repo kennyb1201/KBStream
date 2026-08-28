@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.player
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
+import java.util.concurrent.TimeUnit
 import android.view.LayoutInflater
 import android.view.ViewGroup
 import androidx.activity.ComponentActivity
@@ -90,11 +91,83 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONObject
 
 private const val PERIODIC_SAVE_INTERVAL_MS = 5_000L
 private const val MIN_RESUME_POSITION_MS = 10_000L
 private const val COMPLETION_THRESHOLD_RATIO = 0.95f
 private const val EXTRA_HEADERS = "stream_headers"
+
+private data class IntroDbStamp(
+    val startMs: Long,
+    val endMs: Long
+)
+
+private val introDbHttpClient = OkHttpClient.Builder()
+    .callTimeout(5, TimeUnit.SECONDS)
+    .build()
+
+private suspend fun fetchIntroDbStamps(
+    parentId: String,
+    season: Int?,
+    episode: Int?
+): List<IntroDbStamp> = withContext(Dispatchers.IO) {
+    val normalizedId = parentId.trim()
+    val idQuery = when {
+        normalizedId.startsWith("tt") &&
+            normalizedId.drop(2).isNotEmpty() &&
+            normalizedId.drop(2).all { it.isDigit() } ->
+            "imdb_id=${Uri.encode(normalizedId)}"
+
+        normalizedId.toLongOrNull() != null ->
+            "tmdb_id=$normalizedId"
+
+        else ->
+            return@withContext emptyList()
+    }
+
+    val episodeQuery = if (season != null && episode != null) {
+        "&season=$season&episode=$episode"
+    } else {
+        ""
+    }
+
+    val request = Request.Builder()
+        .url("https://api.theintrodb.org/v2/media?$idQuery$episodeQuery")
+        .get()
+        .build()
+
+    runCatching {
+        introDbHttpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                return@use emptyList()
+            }
+
+            val intro = JSONObject(
+                response.body?.string().orEmpty()
+            ).optJSONArray("intro")
+                ?: return@use emptyList()
+
+            buildList {
+                for (index in 0 until intro.length()) {
+                    val stamp = intro.optJSONObject(index)
+                        ?: continue
+                    val startMs = stamp.optLong("start_ms", -1L)
+                    val endMs = stamp.optLong("end_ms", -1L)
+
+                    if (startMs >= 0L && endMs > startMs) {
+                        add(IntroDbStamp(startMs, endMs))
+                    }
+                }
+            }.sortedBy { it.startMs }
+        }
+    }.getOrElse { error ->
+        Log.w("INTRO_DB", "IntroDB lookup failed", error)
+        emptyList()
+    }
+}
 private const val MAX_RETRY_ATTEMPTS = 6
 
 private val RETRY_BACKOFF_MS = listOf(
@@ -482,6 +555,65 @@ if (!selectedAudioUrl.isNullOrBlank()) {
         prepare()
     }
     }
+
+    var introDbStamps by remember(
+        parentId,
+        season,
+        episode,
+        parentType
+    ) {
+        mutableStateOf(emptyList<IntroDbStamp>())
+    }
+
+    LaunchedEffect(
+        parentId,
+        parentType,
+        season,
+        episode
+    ) {
+        introDbStamps = emptyList()
+
+        if (!isLiveChannel) {
+            introDbStamps = fetchIntroDbStamps(
+                parentId = parentId,
+                season = season,
+                episode = episode
+            )
+
+            if (introDbStamps.isNotEmpty()) {
+                Log.d(
+                    "INTRO_DB",
+                    "Loaded ${introDbStamps.size} intro stamp(s)"
+                )
+            }
+        }
+    }
+
+    var activeIntroStamp by remember(
+        parentId,
+        season,
+        episode,
+        parentType
+    ) {
+        mutableStateOf<IntroDbStamp?>(null)
+    }
+
+    LaunchedEffect(exoPlayer, introDbStamps) {
+        while (true) {
+            delay(250L)
+
+            val positionMs = exoPlayer.currentPosition
+            val nextActiveStamp = introDbStamps.firstOrNull { stamp ->
+                positionMs >= stamp.startMs &&
+                    positionMs < stamp.endMs
+            }
+
+            if (nextActiveStamp != activeIntroStamp) {
+                activeIntroStamp = nextActiveStamp
+            }
+        }
+    }
+
     LaunchedEffect(
         exoPlayer,
         errorMessage,
@@ -1139,6 +1271,38 @@ retryAttempt = 0
                             }
                         }
                     }
+                }
+            }
+
+            activeIntroStamp?.let { stamp ->
+                KBCard(
+                    onClick = {
+                        val durationMs = exoPlayer.duration
+                        val targetMs = if (
+                            durationMs > 0L &&
+                            durationMs != C.TIME_UNSET
+                        ) {
+                            stamp.endMs.coerceAtMost(durationMs)
+                        } else {
+                            stamp.endMs
+                        }
+
+                        exoPlayer.seekTo(targetMs)
+                        activeIntroStamp = null
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 120.dp)
+                ) {
+                    Text(
+                        text = "SKIP INTRO",
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(
+                            horizontal = 24.dp,
+                            vertical = 12.dp
+                        )
+                    )
                 }
             }
 
