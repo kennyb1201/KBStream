@@ -558,15 +558,17 @@ LaunchedEffect(trailerPlaying, trailerKey) {
             null
         }
 
-    val heroInfo =
-        listOfNotNull(
-            imdb,
-            year,
-            rating,
-            runtime,
-            seasonEpisodeCount,
-            genre
-        ).joinToString("  •  ")
+    val heroInfoParts =
+    listOfNotNull(
+        imdb,
+        year,
+        rating,
+        runtime,
+        genre
+    )
+
+val heroInfo =
+    heroInfoParts.joinToString("  •  ")
         
     val continueEpisodeLabel =
         continueWatchingItem?.let { item ->
@@ -749,17 +751,46 @@ LaunchedEffect(trailerPlaying, trailerKey) {
                 )
             }
 
+            if (
+    heroInfo.isNotBlank() ||
+    !seasonEpisodeCount.isNullOrBlank()
+) {
+    Row(
+        modifier = Modifier.padding(top = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (heroInfo.isNotBlank()) {
+            Text(
+                text = heroInfo,
+                color = Color.White.copy(alpha = .94f),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        if (!seasonEpisodeCount.isNullOrBlank()) {
             if (heroInfo.isNotBlank()) {
                 Text(
-                    text = heroInfo,
+                    text = "  •  ",
                     color = Color.White.copy(alpha = .94f),
                     fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 14.dp)
+                    fontWeight = FontWeight.SemiBold
                 )
             }
+
+            Text(
+                text = seasonEpisodeCount,
+                color = Color.White.copy(alpha = .94f),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                softWrap = false
+            )
+        }
+    }
+}
 
             statusTag?.let { status ->
                 Text(
@@ -846,22 +877,27 @@ continueTimeLeft?.let { label ->
                         )
                     }
 
-                continueWatchingItem.episodeDescription
-                    ?.trim()
-                    ?.takeIf {
-                        it.isNotBlank()
-                    }
-                    ?.let { description ->
-                        Text(
-                            text = description,
-                            color = Color.White.copy(alpha = .80f),
-                            fontSize = 12.sp,
-                            lineHeight = 17.sp,
-                            maxLines = 4,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(top = 7.dp)
-                        )
-                    }
+                if (
+    continueWatchingItem.badge !=
+        UpNextBadge.CONTINUE_WATCHING
+) {
+    continueWatchingItem.episodeDescription
+        ?.trim()
+        ?.takeIf {
+            it.isNotBlank()
+        }
+        ?.let { description ->
+            Text(
+                text = description,
+                color = Color.White.copy(alpha = .80f),
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 7.dp)
+            )
+        }
+}
             } else {
         
                 (meta?.description ?: preview.description)
