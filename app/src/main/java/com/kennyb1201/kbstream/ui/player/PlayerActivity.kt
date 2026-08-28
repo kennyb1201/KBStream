@@ -100,14 +100,105 @@ private const val MIN_RESUME_POSITION_MS = 10_000L
 private const val COMPLETION_THRESHOLD_RATIO = 0.95f
 private const val EXTRA_HEADERS = "stream_headers"
 
+private enum class IntroDbMarkerType(
+    val buttonLabel: String
+) {
+    Intro("SKIP INTRO"),
+    Recap("SKIP RECAP"),
+    Outro("SKIP OUTRO"),
+    Credits("SKIP CREDITS"),
+    Preview("SKIP PREVIEW")
+}
+
 private data class IntroDbStamp(
     val startMs: Long,
-    val endMs: Long
+    val endMs: Long,
+    val type: IntroDbMarkerType
 )
 
 private val introDbHttpClient = OkHttpClient.Builder()
     .callTimeout(5, TimeUnit.SECONDS)
     .build()
+
+private fun JSONObject.readIntroDbStamp(
+    type: IntroDbMarkerType
+): IntroDbStamp? {
+    fun readMillis(
+        millisKey: String,
+        secondsKey: String
+    ): Long {
+        val millis = optLong(millisKey, -1L)
+        if (millis >= 0L) return millis
+
+        val seconds = optDouble(secondsKey, -1.0)
+        return if (seconds >= 0.0) {
+            (seconds * 1_000.0).toLong()
+        } else {
+            -1L
+        }
+    }
+
+    val startMs = readMillis("start_ms", "start_sec")
+    val endMs = readMillis("end_ms", "end_sec")
+
+    return if (startMs >= 0L && endMs > startMs) {
+        IntroDbStamp(
+            startMs = startMs,
+            endMs = endMs,
+            type = type
+        )
+    } else {
+        null
+    }
+}
+
+private fun JSONObject.readIntroDbArray(
+    key: String,
+    type: IntroDbMarkerType
+): List<IntroDbStamp> {
+    val markers = optJSONArray(key) ?: return emptyList()
+
+    return buildList {
+        for (index in 0 until markers.length()) {
+            markers.optJSONObject(index)
+                ?.readIntroDbStamp(type)
+                ?.let { add(it) }
+        }
+    }
+}
+
+private fun fetchIntroDbJson(url: String): JSONObject? {
+    return runCatching {
+        val request = Request.Builder()
+            .url(url)
+            .get()
+            .build()
+
+        introDbHttpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                return@use null
+            }
+
+            JSONObject(response.body?.string().orEmpty())
+        }
+    }.getOrElse { error ->
+        Log.w("INTRO_DB", "IntroDB lookup failed", error)
+        null
+    }
+}
+
+private fun normalizeIntroDbStamps(
+    markers: List<IntroDbStamp>
+): List<IntroDbStamp> {
+    return markers
+        .distinctBy { marker ->
+            Triple(marker.type, marker.startMs, marker.endMs)
+        }
+        .sortedWith(
+            compareBy<IntroDbStamp> { it.startMs }
+                .thenBy { it.endMs }
+        )
+}
 
 private suspend fun fetchIntroDbStamps(
     parentId: String,
@@ -134,40 +225,47 @@ private suspend fun fetchIntroDbStamps(
         ""
     }
 
-    val request = Request.Builder()
-        .url("https://api.theintrodb.org/v2/media?$idQuery$episodeQuery")
-        .get()
-        .build()
-
-    runCatching {
-        introDbHttpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                return@use emptyList()
-            }
-
-            val intro = JSONObject(
-                response.body?.string().orEmpty()
-            ).optJSONArray("intro")
-                ?: return@use emptyList()
-
-            buildList {
-                for (index in 0 until intro.length()) {
-                    val stamp = intro.optJSONObject(index)
-                        ?: continue
-                    val startMs = stamp.optLong("start_ms", -1L)
-                    val endMs = stamp.optLong("end_ms", -1L)
-
-                    if (startMs >= 0L && endMs > startMs) {
-                        add(IntroDbStamp(startMs, endMs))
-                    }
-                }
-            }.sortedBy { it.startMs }
-        }
-    }.getOrElse { error ->
-        Log.w("INTRO_DB", "IntroDB lookup failed", error)
+    // IntroDB is the primary source for episodic markers.
+    val introDbMarkers = if (
+        normalizedId.startsWith("tt") &&
+            season != null &&
+            episode != null
+    ) {
+        fetchIntroDbJson(
+            "https://api.introdb.app/segments?" +
+                "imdb_id=${Uri.encode(normalizedId)}" +
+                "&season=$season&episode=$episode"
+        )?.let { root ->
+            listOfNotNull(
+                root.optJSONObject("intro")
+                    ?.readIntroDbStamp(IntroDbMarkerType.Intro),
+                root.optJSONObject("recap")
+                    ?.readIntroDbStamp(IntroDbMarkerType.Recap),
+                root.optJSONObject("outro")
+                    ?.readIntroDbStamp(IntroDbMarkerType.Outro)
+            )
+        }.orEmpty()
+    } else {
         emptyList()
     }
+
+    if (introDbMarkers.isNotEmpty()) {
+        return@withContext normalizeIntroDbStamps(introDbMarkers)
+    }
+
+    // TheIntroDB is the fallback when IntroDB has no usable markers.
+    val theIntroDbMarkers = fetchIntroDbJson(
+        "https://api.theintrodb.org/v2/media?$idQuery$episodeQuery"
+    )?.let { root ->
+        root.readIntroDbArray("intro", IntroDbMarkerType.Intro) +
+            root.readIntroDbArray("recap", IntroDbMarkerType.Recap) +
+            root.readIntroDbArray("credits", IntroDbMarkerType.Credits) +
+            root.readIntroDbArray("preview", IntroDbMarkerType.Preview)
+    }.orEmpty()
+
+    return@withContext normalizeIntroDbStamps(theIntroDbMarkers)
 }
+
 private const val MAX_RETRY_ATTEMPTS = 6
 
 private val RETRY_BACKOFF_MS = listOf(
@@ -1295,7 +1393,7 @@ retryAttempt = 0
                         .padding(bottom = 120.dp)
                 ) {
                     Text(
-                        text = "SKIP INTRO",
+                        text = stamp.type.buttonLabel,
                         color = KBTextHi,
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.padding(
