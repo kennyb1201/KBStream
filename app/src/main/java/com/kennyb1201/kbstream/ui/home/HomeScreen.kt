@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
+import com.kennyb1201.kbstream.data.tmdb.displayDescription
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -558,17 +559,28 @@ LaunchedEffect(trailerPlaying, trailerKey) {
             null
         }
 
-    val heroInfoParts =
-    listOfNotNull(
-        imdb,
-        year,
-        rating,
-        runtime,
-        genre
-    )
+        val heroInfoParts =
+        listOfNotNull(
+            imdb,
+            year,
+            rating,
+            runtime,
+            genre
+        )
 
-val heroInfo =
-    heroInfoParts.joinToString("  •  ")
+    val heroInfo =
+        heroInfoParts.joinToString("  •  ")
+
+    // Regular hero description.
+    // Prefer TMDB's overview, then addon metadata, then preview metadata.
+    val heroDescription =
+        if (continueWatchingItem == null) {
+            tmdbDetail?.displayDescription()
+                ?: meta?.description
+                ?: preview.description
+        } else {
+            null
+        }
         
     val continueEpisodeLabel =
         continueWatchingItem?.let { item ->
@@ -751,56 +763,70 @@ val heroInfo =
                 )
             }
 
-            if (
-    heroInfo.isNotBlank() ||
-    !seasonEpisodeCount.isNullOrBlank()
-) {
-    Row(
-        modifier = Modifier.padding(top = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (heroInfo.isNotBlank()) {
-            Text(
-                text = heroInfo,
-                color = Color.White.copy(alpha = .94f),
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-
-        if (!seasonEpisodeCount.isNullOrBlank()) {
+                        // Main metadata line.
             if (heroInfo.isNotBlank()) {
                 Text(
-                    text = "  •  ",
+                    text = heroInfo,
                     color = Color.White.copy(alpha = .94f),
                     fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 14.dp)
                 )
             }
 
-            Text(
-                text = seasonEpisodeCount,
-                color = Color.White.copy(alpha = .94f),
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                softWrap = false
-            )
-        }
-    }
-}
-
-            statusTag?.let { status ->
-                Text(
-                    text = status,
-                    color = KBAccent,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    modifier = Modifier.padding(top = 8.dp)
+            // Regular catalog items:
+            // Status comes FIRST, followed by season/episode totals.
+            //
+            // Continue Watching items intentionally do NOT show the
+            // TMDB status (Ongoing / Ended / Cancelled / etc.).
+            if (
+                continueWatchingItem == null &&
+                (
+                    !statusTag.isNullOrBlank() ||
+                    !seasonEpisodeCount.isNullOrBlank()
                 )
+            ) {
+                Row(
+                    modifier = Modifier.padding(top = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    statusTag?.let { status ->
+                        Text(
+                            text = status,
+                            color = KBAccent,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    if (
+                        !statusTag.isNullOrBlank() &&
+                        !seasonEpisodeCount.isNullOrBlank()
+                    ) {
+                        Text(
+                            text = "  •  ",
+                            color = Color.White.copy(alpha = .94f),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+
+                    seasonEpisodeCount?.let { count ->
+                        Text(
+                            text = count,
+                            color = Color.White.copy(alpha = .94f),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
             }
 
             continueEpisodeLabel?.let { label ->
@@ -898,9 +924,9 @@ continueTimeLeft?.let { label ->
             )
         }
 }
-            } else {
-        
-                (meta?.description ?: preview.description)
+                        } else {
+
+                heroDescription
                     ?.takeIf {
                         it.isNotBlank()
                     }
