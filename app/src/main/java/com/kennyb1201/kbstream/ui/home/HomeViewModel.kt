@@ -3059,7 +3059,7 @@ private suspend fun calculateEpisodesRemaining(
             100L
 
         private const val MAX_FORWARD_SEASON_LOOKAHEAD =
-            8
+            50
 
         private const val MAX_SIMKL_UP_NEXT_ITEMS =
             30
