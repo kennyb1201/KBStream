@@ -1380,17 +1380,18 @@ fun HomeScreen(
     }
 
     LaunchedEffect(
-        focusedItem?.id,
-        focusedItem?.type
-    ) {
-        heroTrailerReady = false
+    focusedItem?.id,
+    focusedItem?.type,
+    focusedContinueWatchingItem?.id
+) {
+    heroTrailerReady = false
 
-        focusedItem?.let {
-            viewModel.resolveHeroMeta(it)
-            delay(HeroTrailerDwellMs)
-            heroTrailerReady = true
-        }
+    focusedItem?.let {
+        viewModel.resolveHeroMeta(it)
+        delay(HeroTrailerDwellMs)
+        heroTrailerReady = true
     }
+}
 
     LifecycleEventEffect(
         Lifecycle.Event.ON_RESUME
