@@ -1099,17 +1099,38 @@ private fun CompactUpNextCard(
             item.episodesRemaining
     ?.takeIf { it > 0 }
     ?.let { remaining ->
-        Text(
-            text = "$remaining episodes left",
-            color = if (focused) {
-                Color.White.copy(alpha = .78f)
-            } else {
-                KBTextLo
-            },
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Medium,
+        Text(text = if (remaining == 1) {
+    "1 episode left"
+} else {
+    "$remaining episodes left"
+},
+            color = Color.White,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
             maxLines = 1,
-            modifier = Modifier.padding(top = 2.dp)
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(
+                    end = 10.dp,
+                    bottom = if (
+                        item.badge == UpNextBadge.CONTINUE_WATCHING &&
+                        progress != null &&
+                        progress > 0f
+                    ) {
+                        15.dp
+                    } else {
+                        9.dp
+                    }
+                )
+                .background(
+                    color = Color.Black.copy(alpha = 0.65f),
+                    shape = RoundedCornerShape(4.dp)
+                )
+                .padding(
+                    horizontal = 6.dp,
+                    vertical = 3.dp
+                )
         )
     }
         
