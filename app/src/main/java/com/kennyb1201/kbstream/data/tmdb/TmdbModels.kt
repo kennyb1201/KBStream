@@ -515,6 +515,36 @@ fun TmdbDetail.displayCountry(): String? =
         .joinToString(", ")
         .takeIf { it.isNotEmpty() }
 
+        fun TmdbDetail.displaySeasonCount(): Int? =
+    seasons
+        .count { it.seasonNumber > 0 }
+        .takeIf { it > 0 }
+
+fun TmdbDetail.displayEpisodeCount(): Int? =
+    seasons
+        .filter { it.seasonNumber > 0 }
+        .sumOf { it.episodeCount ?: 0 }
+        .takeIf { it > 0 }
+
+fun TmdbDetail.displaySeasonEpisodeCount(): String? {
+    val seasonCount = displaySeasonCount()
+    val episodeCount = displayEpisodeCount()
+
+    return when {
+        seasonCount != null && episodeCount != null ->
+            "$seasonCount ${if (seasonCount == 1) "Season" else "Seasons"} • " +
+                "$episodeCount ${if (episodeCount == 1) "Episode" else "Episodes"}"
+
+        seasonCount != null ->
+            "$seasonCount ${if (seasonCount == 1) "Season" else "Seasons"}"
+
+        episodeCount != null ->
+            "$episodeCount ${if (episodeCount == 1) "Episode" else "Episodes"}"
+
+        else -> null
+    }
+}
+
         fun TmdbDetail.episodeCountForSeason(seasonNumber: Int): Int? =
     seasons
         .firstOrNull { it.seasonNumber == seasonNumber }
