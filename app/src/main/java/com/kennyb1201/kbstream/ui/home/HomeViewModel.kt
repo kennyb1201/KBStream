@@ -444,7 +444,7 @@ Log.d(
     background = resolvedBackdrop ?: resolvedAddonMeta.background,
     description =
         resolvedAddonMeta.description
-            ?.takeIf { it.isNotBlank() }
+            ?.takeIf { it.isNotEmpty() }
             ?: resolvedTmdbDetail
                 ?.displayDescription()
             ?: item.description
