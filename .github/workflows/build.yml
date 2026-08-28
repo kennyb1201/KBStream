@@ -13,6 +13,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    env:
+      TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+      SIMKL_CLIENT_ID: ${{ secrets.SIMKL_CLIENT_ID }}
+      SIMKL_CLIENT_SECRET: ${{ secrets.SIMKL_CLIENT_SECRET }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,12 +30,6 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-
-      - name: Write local.properties
-        run: |
-          echo "TMDB_API_KEY=${{ secrets.TMDB_API_KEY }}" >> local.properties
-          echo "SIMKL_CLIENT_ID=${{ secrets.SIMKL_CLIENT_ID }}" >> local.properties
-          echo "SIMKL_CLIENT_SECRET=${{ secrets.SIMKL_CLIENT_SECRET }}" >> local.properties
 
       - name: Restore release keystore
         run: |
@@ -48,7 +47,7 @@ jobs:
         run: ./gradlew assembleRelease --stacktrace
         env:
           GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
-          KBSTREAM_STORE_FILE: kbstream-release.jks
+          KBSTREAM_STORE_FILE: app/kbstream-release.jks
           KBSTREAM_STORE_PASSWORD: ${{ secrets.KBSTREAM_KEYSTORE_PASSWORD }}
           KBSTREAM_KEY_ALIAS: ${{ secrets.KBSTREAM_KEY_ALIAS }}
           KBSTREAM_KEY_PASSWORD: ${{ secrets.KBSTREAM_KEY_PASSWORD }}
