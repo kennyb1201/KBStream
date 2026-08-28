@@ -716,18 +716,47 @@ Log.d(
     positionMs: Long,
     durationMs: Long
 ): Int? {
-    if (durationMs <= 0L || positionMs <= 0L) {
+    if (durationMs <= 0L || positionMs < 0L) {
         return null
     }
 
     val remainingMs =
         (durationMs - positionMs).coerceAtLeast(0L)
 
+    if (remainingMs <= 0L) {
+        return null
+    }
+
     return ((remainingMs + 30_000L) / 60_000L)
         .toInt()
         .coerceAtLeast(1)
+}
+
+    private fun calculateRemainingMinutesFromProgress(
+    runtimeMinutes: Int?,
+    progress: Float?
+): Int? {
+    val runtime = runtimeMinutes
+        ?.takeIf { it > 0 }
+        ?: return null
+
+    val progressPercent =
+        progress
+            ?.coerceIn(0f, 100f)
+            ?: return null
+
+    if (progressPercent >= 100f) {
+        return null
     }
 
+    val remaining =
+        runtime * (1f - (progressPercent / 100f))
+
+    return round(remaining)
+        .toInt()
+        .coerceAtLeast(1)
+    }
+    
     private suspend fun clearWatchedStateCaches() {
 
         watchedStateMutex.withLock {
@@ -1242,7 +1271,8 @@ var episodesTotal: Int? = null
 
          runtimeMinutes =
     resolvedTarget.runtimeMinutes
-
+        ?: detail.displayRuntimeMinutes()
+        
         episodesRemaining =
     resolvedTarget.episodesRemaining
                     
@@ -1395,24 +1425,18 @@ episodesTotal =
     episodesTotal,
 
             // Only meaningful for items with an actual watched position
-            // (source == "playback"); "Next Up" items haven't been
-            // started yet so there's no remaining time to show.
+                        // Calculate time remaining from the actual Simkl playback
+            // percentage. This is used for Continue Watching items.
             remainingMinutes =
-    if (item.source == "playback") {
-        runtimeMinutes?.let { total ->
-            val progressFraction =
-                (item.progress?.coerceIn(0f, 100f) ?: 0f) / 100f
-
-            kotlin.math.round(
-                total * (1f - progressFraction)
-            )
-                .toInt()
-                .coerceAtLeast(0)
-                .takeIf { it > 0 }
-        }
-    } else {
-        null
-    },
+                if (item.source == "playback") {
+                    calculateRemainingMinutesFromProgress(
+                        runtimeMinutes = runtimeMinutes,
+                        progress = item.progress
+                    )
+                } else {
+                    null
+                },
+            
             subtitle =
                 subtitle,
 
