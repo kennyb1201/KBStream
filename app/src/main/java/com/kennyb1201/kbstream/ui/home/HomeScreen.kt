@@ -574,13 +574,9 @@ LaunchedEffect(trailerPlaying, trailerKey) {
     // Regular hero description.
     // Prefer TMDB's overview, then addon metadata, then preview metadata.
     val heroDescription =
-        if (continueWatchingItem == null) {
-            tmdbDetail?.displayDescription()
-                ?: meta?.description
-                ?: preview.description
-        } else {
-            null
-        }
+    tmdbDetail?.displayDescription()
+        ?: meta?.description
+        ?: preview.description
         
     val continueEpisodeLabel =
         continueWatchingItem?.let { item ->
@@ -886,28 +882,48 @@ continueTimeLeft?.let { label ->
             }
 
             if (continueWatchingItem != null) {
-                continueWatchingItem.episodeTitle
-                    ?.trim()
-                    ?.takeIf {
-                        it.isNotBlank()
-                    }
-                    ?.let { episodeTitle ->
-                        Text(
-                            text = episodeTitle,
-                            color = Color.White,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(top = 10.dp)
-                        )
-                    }
+    continueWatchingItem.episodeTitle
+        ?.trim()
+        ?.takeIf {
+            it.isNotBlank()
+        }
+        ?.let { episodeTitle ->
+            Text(
+                text = episodeTitle,
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 10.dp)
+            )
+        }
 
-                if (
-    continueWatchingItem.badge !=
-        UpNextBadge.CONTINUE_WATCHING
-) {
-    continueWatchingItem.episodeDescription
+    // Only show the episode description for non-resume items.
+    if (
+        continueWatchingItem.badge !=
+            UpNextBadge.CONTINUE_WATCHING
+    ) {
+        continueWatchingItem.episodeDescription
+            ?.trim()
+            ?.takeIf {
+                it.isNotBlank()
+            }
+            ?.let { description ->
+                Text(
+                    text = description,
+                    color = Color.White.copy(alpha = .80f),
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    maxLines = 5,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 7.dp)
+                )
+            }
+    }
+
+    // Always keep the show's/movie's metadata description.
+    heroDescription
         ?.trim()
         ?.takeIf {
             it.isNotBlank()
@@ -923,25 +939,24 @@ continueTimeLeft?.let { label ->
                 modifier = Modifier.padding(top = 7.dp)
             )
         }
+} else {
+    heroDescription
+        ?.trim()
+        ?.takeIf {
+            it.isNotBlank()
+        }
+        ?.let { description ->
+            Text(
+                text = description,
+                color = Color.White.copy(alpha = .80f),
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+                maxLines = 5,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 12.dp)
+            )
+        }
 }
-                        } else {
-
-                heroDescription
-                    ?.takeIf {
-                        it.isNotBlank()
-                    }
-                    ?.let { description ->
-                        Text(
-                            text = description,
-                            color = Color.White.copy(alpha = .80f),
-                            fontSize = 12.sp,
-                            lineHeight = 17.sp,
-                            maxLines = 5,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(top = 12.dp)
-                        )
-                    }
-            }
         }
     }
 }
