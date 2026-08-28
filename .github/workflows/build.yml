@@ -47,7 +47,7 @@ jobs:
         run: ./gradlew assembleRelease --stacktrace
         env:
           GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
-          KBSTREAM_STORE_FILE: app/kbstream-release.jks
+          KBSTREAM_STORE_FILE: kbstream-release.jks
           KBSTREAM_STORE_PASSWORD: ${{ secrets.KBSTREAM_KEYSTORE_PASSWORD }}
           KBSTREAM_KEY_ALIAS: ${{ secrets.KBSTREAM_KEY_ALIAS }}
           KBSTREAM_KEY_PASSWORD: ${{ secrets.KBSTREAM_KEY_PASSWORD }}
