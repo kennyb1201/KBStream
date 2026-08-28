@@ -226,12 +226,15 @@ data class TmdbDetail(
     @Json(name = "production_companies")
     val productionCompanies: List<TmdbProductionCompany> = emptyList(),
 
-    val networks: List<TmdbNetwork> = emptyList(),
-    @Json(name = "number_of_seasons")
+val networks: List<TmdbNetwork> = emptyList(),
+
+@Json(name = "number_of_seasons")
 val numberOfSeasons: Int? = null,
 
 @Json(name = "number_of_episodes")
-    val seasons: List<TmdbSeasonSummary> = emptyList(),
+val numberOfEpisodes: Int? = null,
+
+val seasons: List<TmdbSeasonSummary> = emptyList(),
     val credits: TmdbCredits? = null,
     val videos: TmdbVideos? = null,
     val recommendations: TmdbRecommendations? = null,
