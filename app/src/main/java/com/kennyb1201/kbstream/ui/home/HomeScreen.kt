@@ -791,7 +791,7 @@ val heroInfo =
         }
     }
 }
-
+            if (continueWatchingItem == null) {
             statusTag?.let { status ->
                 Text(
                     text = status,
