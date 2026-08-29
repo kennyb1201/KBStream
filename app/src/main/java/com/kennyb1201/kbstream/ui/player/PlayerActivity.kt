@@ -65,9 +65,10 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -483,6 +484,7 @@ fun PlayerScreen(
             httpFactory,
             DefaultExtractorsFactory()
         )
+            .setLiveTargetOffsetMs(3_000L)
 
         val mimeType = resolveMimeType(currentUrl)
         val mediaItemBuilder = MediaItem.Builder().setUri(currentUrl)
@@ -515,6 +517,13 @@ fun PlayerScreen(
             .setMediaSourceFactory(mediaSourceFactory)
             .build()
             .apply {
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(C.USAGE_MEDIA)
+                        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                        .build(),
+                    true
+                )
                 val selectedAudioUrl = currentAudioUrl
                 if (!selectedAudioUrl.isNullOrBlank()) {
                     val videoSource = ProgressiveMediaSource.Factory(httpFactory)
@@ -530,6 +539,13 @@ fun PlayerScreen(
                     seekTo(carryPositionMs)
                 }
 
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(C.USAGE_MEDIA)
+                        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                        .build(),
+                    true
+                )
                 setPlaybackSpeed(playbackSpeed)
                 playWhenReady = true
                 prepare()
@@ -1208,7 +1224,7 @@ private fun PlayerControlsOverlay(
         .fillMaxWidth()
         .focusRequester(seekBarFocusRequester)
         .focusable()
-        .                    onKeyEvent { event ->
+        .onKeyEvent { event ->
             if (event.type == KeyEventType.KeyUp) {
                 seekDirection = null
                 seekMultiplier = 1

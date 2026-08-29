@@ -1371,6 +1371,17 @@ fun DetailScreen(
                                                         ep = ep,
                                                         isWatched =
                                                             isEpisodeWatched,
+                                                        progressFraction =
+                                                            if (
+                                                                resumeInfo?.episodeStreamId == ep.streamId &&
+                                                                    (resumeInfo?.durationMs ?: 0L) > 0L
+                                                            ) {
+                                                                ((resumeInfo?.positionMs ?: 0L).toFloat() /
+                                                                    (resumeInfo?.durationMs ?: 0L).toFloat())
+                                                                    .coerceIn(0f, 1f)
+                                                            } else {
+                                                                0f
+                                                            },
                                                         fallbackImageUrl =
                                                             backdropUrl
                                                                 ?: m.poster,
