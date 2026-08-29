@@ -69,19 +69,22 @@ sealed class Screen {
     data class Studio(
         val id: Int,
         val name: String,
-        val isNetwork: Boolean
+        val isNetwork: Boolean,
+        val returnTo: Screen = Home
     ) : Screen()
 
     data class Tag(
         val id: Int,
         val name: String,
         val isKeyword: Boolean,
-        val mediaType: String
+        val mediaType: String,
+        val returnTo: Screen = Home
     ) : Screen()
 
     data class Collection(
         val id: Int,
-        val name: String
+        val name: String,
+        val returnTo: Screen = Home
     ) : Screen()
 
     data class Streams(
@@ -195,6 +198,15 @@ fun AppRoot() {
                 is Screen.Actor ->
                 current.returnTo
 
+            is Screen.Studio ->
+                current.returnTo
+
+            is Screen.Tag ->
+                current.returnTo
+
+            is Screen.Collection ->
+                current.returnTo
+
             else ->
                 Screen.Home
         }
@@ -288,14 +300,16 @@ fun AppRoot() {
                     screen = Screen.Studio(
                         studio.id,
                         studio.name,
-                        false
+                        false,
+                        Screen.Search
                     )
                 },
 
                 onCollectionClick = { collection ->
                     screen = Screen.Collection(
                         collection.id,
-                        collection.name
+                        collection.name,
+                        Screen.Search
                     )
                 }
             )
@@ -403,7 +417,8 @@ fun AppRoot() {
                     screen = Screen.Studio(
                         id,
                         name,
-                        isNetwork
+                        isNetwork,
+                        Screen.Detail(current.type, current.id, current.pendingTarget, current.itemPoster)
                     )
                 },
 
@@ -417,7 +432,8 @@ fun AppRoot() {
                         id,
                         name,
                         isKeyword,
-                        type
+                        type,
+                        Screen.Detail(current.type, current.id, current.pendingTarget, current.itemPoster)
                     )
                 },
 
@@ -458,6 +474,10 @@ fun AppRoot() {
                         type,
                         id
                     )
+                },
+
+                onBack = {
+                    screen = current.returnTo
                 }
             )
         }
@@ -470,7 +490,7 @@ fun AppRoot() {
                 current.isNetwork,
 
                 onBack = {
-                    screen = Screen.Home
+                    screen = current.returnTo
                 },
 
                 onNavigateDetail = {
@@ -494,7 +514,7 @@ fun AppRoot() {
                 current.mediaType,
 
                 onBack = {
-                    screen = Screen.Home
+                    screen = current.returnTo
                 },
 
                 onNavigateDetail = {
@@ -515,6 +535,10 @@ fun AppRoot() {
                 current.id,
                 current.name,
                 tmdbRepository,
+
+                onBack = {
+                    screen = current.returnTo
+                },
 
                 onNavigateDetail = {
                         type,
