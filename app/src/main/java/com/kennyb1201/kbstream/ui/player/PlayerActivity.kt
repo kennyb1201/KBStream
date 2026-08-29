@@ -379,12 +379,16 @@ private fun isLikelyRetryable(error: PlaybackException): Boolean {
 }
 
 private fun Stream.label(): String {
-    return sequenceOf(
-        title,
-        name,
+    return listOfNotNull(
+        name?.takeIf { it.isNotBlank() },
+        title?.takeIf { it.isNotBlank() },
+        description?.takeIf { it.isNotBlank() },
         url?.substringAfterLast('/')?.substringBefore('?')
-    ).firstOrNull { !it.isNullOrBlank() }?.trim()
-        ?: "Source"
+            ?.takeIf { it.isNotBlank() }
+    )
+        .distinct()
+        .joinToString("\n")
+        .ifBlank { "Stream details unavailable" }
 }
 
 @Composable
@@ -1615,7 +1619,8 @@ private fun PickerRow(
             Text(
                 text = label,
                 color = if (selected) KBAccent else KBTextHi,
-                style = MaterialTheme.typography.bodyMedium
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 5
             )
         }
     }
