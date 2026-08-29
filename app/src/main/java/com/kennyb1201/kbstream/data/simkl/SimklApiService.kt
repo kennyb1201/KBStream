@@ -97,6 +97,6 @@ interface SimklApiService {
     suspend fun addToWatchedHistory(
         @Header("Authorization") authorization: String,
         @Body body: SimklHistoryRequest
-    ): Response<SimklHistoryResponse>
+    ): Response<ResponseBody>
 
 }

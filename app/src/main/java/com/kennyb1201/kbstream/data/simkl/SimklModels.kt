@@ -2,7 +2,6 @@ package com.kennyb1201.kbstream.data.simkl
 
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
-import com.squareup.moshi.JsonElement
 
 @JsonClass(generateAdapter = true)
 data class SimklPinCodeResponse(
