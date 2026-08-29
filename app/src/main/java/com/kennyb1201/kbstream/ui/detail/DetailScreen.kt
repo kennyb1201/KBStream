@@ -2441,7 +2441,8 @@ private fun EpisodeCard(
     isWatched: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    fallbackImageUrl: String? = null
+    fallbackImageUrl: String? = null,
+    progressFraction: Float = 0f
 ) {
     val posterUrl = remember(ep.thumbnail, fallbackImageUrl) {
         ep.thumbnail?.takeIf {
@@ -2521,6 +2522,28 @@ private fun EpisodeCard(
                 verticalArrangement =
                     Arrangement.SpaceBetween
             ) {
+                if (progressFraction > 0f) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .background(
+                                KBTextLo.copy(alpha = 0.45f),
+                                RoundedCornerShape(2.dp)
+                            )
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(progressFraction.coerceIn(0f, 1f))
+                                .fillMaxHeight()
+                                .background(
+                                    KBAccent,
+                                    RoundedCornerShape(2.dp)
+                                )
+                        )
+                    }
+                }
+
                 Column {
                     Row(
                         verticalAlignment =
