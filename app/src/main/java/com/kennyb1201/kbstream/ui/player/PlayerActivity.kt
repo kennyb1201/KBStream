@@ -1251,11 +1251,12 @@ private fun PlayerControlsOverlay(
                         style = MaterialTheme.typography.titleLarge
                     )
                     Spacer(modifier = Modifier.height(6.dp))
-                }                    Text(
-                        text = "Source: $sourceLabel",
-                        color = KBTextHi,
-                        style = MaterialTheme.typography.bodySmall
-                    )
+                }
+                Text(
+                    text = "Source: $sourceLabel",
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         }
 
