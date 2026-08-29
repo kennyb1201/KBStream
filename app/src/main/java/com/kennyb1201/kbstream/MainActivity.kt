@@ -103,6 +103,7 @@ sealed class Screen {
         val season: Int?,
         val episode: Int?,
         val episodeStreamId: String?,
+        val episodeTitle: String? = null,
         val itemName: String,
         val itemPoster: String?,
         val clearLogoUrl: String? = null,
@@ -568,6 +569,10 @@ fun AppRoot() {
                             episode = current.target.episode,
                             episodeStreamId =
                                 current.target.streamId,
+                            episodeTitle = current.target.title
+                                .substringAfterLast("•", "")
+                                .trim()
+                                .takeIf { it.isNotBlank() && it != current.target.title },
                             itemName =
                                 current.target.displayName,
                             itemPoster =
@@ -610,6 +615,7 @@ fun AppRoot() {
                 episode = current.episode,
                 episodeStreamId =
                     current.episodeStreamId,
+                episodeTitle = current.episodeTitle,
                 itemName = current.itemName,
                 itemPoster = current.itemPoster,
                 clearLogoUrl = current.clearLogoUrl,
@@ -631,6 +637,7 @@ fun AppRoot() {
                             season = current.season,
                             episode = current.episode,
                             episodeStreamId = current.episodeStreamId,
+                            episodeTitle = current.episodeTitle,
                             itemName = current.itemName,
                             itemPoster = current.itemPoster,
                             clearLogoUrl = current.clearLogoUrl,

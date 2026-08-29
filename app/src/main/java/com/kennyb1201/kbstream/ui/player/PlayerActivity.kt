@@ -804,11 +804,13 @@ fun PlayerScreen(
     // background overlay on every picker state change: doing so can race
     // the remote center event and immediately steal focus back to the
     // control row, making the picker look like it vanished.
+    var wasPickerShowing by remember { mutableStateOf(false) }
     LaunchedEffect(anyPickerShowing) {
-        if (!anyPickerShowing) {
+        if (wasPickerShowing && !anyPickerShowing) {
             withFrameNanos { }
             runCatching { playPauseFocusRequester.requestFocus() }
         }
+        wasPickerShowing = anyPickerShowing
     }
 
     Box(
@@ -1225,15 +1227,6 @@ private fun PlayerControlsOverlay(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.fillMaxWidth(0.7f)) {
-                if (season != null && episode != null) {
-                    Text(
-                        text = "S${season.toString().padStart(2, '0')} · E${episode.toString().padStart(2, '0')}" +
-                            (episodeTitle?.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""),
-                        color = KBTextHi,
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                }
                 if (!clearLogoUrl.isNullOrBlank()) {
                     AsyncImage(
                         model = clearLogoUrl,
@@ -1250,6 +1243,22 @@ private fun PlayerControlsOverlay(
                         color = KBTextHi,
                         style = MaterialTheme.typography.titleLarge
                     )
+                    Spacer(modifier = Modifier.height(6.dp))
+                }
+                if (season != null && episode != null) {
+                    Text(
+                        text = "S${season.toString().padStart(2, '0')} · E${episode.toString().padStart(2, '0')}",
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    episodeTitle?.takeIf { it.isNotBlank() }?.let { title ->
+                        Text(
+                            text = title,
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 2
+                        )
+                    }
                     Spacer(modifier = Modifier.height(6.dp))
                 }
                 Text(
@@ -1469,7 +1478,9 @@ private fun ControlIconButton(
 ) {
     KBCard(
         onClick = onClick,
-        modifier = modifier.size(48.dp)
+        modifier = modifier
+            .size(48.dp)
+            .focusable()
     ) {
         Box(
             modifier = Modifier
