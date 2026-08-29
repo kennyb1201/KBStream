@@ -425,6 +425,7 @@ fun PlayerScreen(
     var showAudioPicker by remember { mutableStateOf(false) }
     var showSubtitlePicker by remember { mutableStateOf(false) }
     var showSpeedPicker by remember { mutableStateOf(false) }
+    var wasPickerShowing by remember { mutableStateOf(false) }
     var playbackSpeed by remember { mutableStateOf(1f) }
     var resizeModeIndex by remember { mutableIntStateOf(0) }
 
@@ -516,22 +517,17 @@ fun PlayerScreen(
     }
 
     LaunchedEffect(exoPlayer, showControls) {
-        // currentPositionMs/durationMs only feed the seekbar and time
-        // labels inside PlayerControlsOverlay, which isn't even composed
-        // while showControls is false -- ticking this every 200ms
-        // regardless drove Compose state writes (and recomposition of
-        // whatever's actually reading them) 5x/sec for no visible benefit
-        // most of the time you're just watching. Only run while the
-        // overlay's actually up, and 400ms is still plenty smooth for a
-        // progress bar.
         if (showControls) {
             while (true) {
-                currentPositionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+                val position = exoPlayer.currentPosition.coerceAtLeast(0L)
                 val dur = exoPlayer.duration
-                if (dur != C.TIME_UNSET && dur > 0L) {
+                if (position / 1000L != currentPositionMs / 1000L) {
+                    currentPositionMs = position
+                }
+                if (dur != C.TIME_UNSET && dur > 0L && dur != durationMs) {
                     durationMs = dur
                 }
-                delay(400L)
+                delay(500L)
             }
         }
     }
@@ -553,13 +549,14 @@ fun PlayerScreen(
 
     LaunchedEffect(exoPlayer, introDbStamps) {
         while (true) {
-            delay(500L)
+            delay(750L)
             val positionMs = exoPlayer.currentPosition
             val matchingStamp = introDbStamps.firstOrNull { stamp ->
                 positionMs >= stamp.startMs && positionMs < stamp.endMs
             }
             if (matchingStamp?.type != activeIntroStamp?.type ||
-                matchingStamp?.startMs != activeIntroStamp?.startMs) {
+                matchingStamp?.startMs != activeIntroStamp?.startMs ||
+                matchingStamp?.endMs != activeIntroStamp?.endMs) {
                 activeIntroStamp = matchingStamp
             }
         }
@@ -783,10 +780,11 @@ fun PlayerScreen(
         showSpeedPicker
 
     LaunchedEffect(anyPickerShowing) {
-        if (!anyPickerShowing) {
-            // The picker owns focus while open. Restore it after the dialog
-            // has actually left composition, otherwise requestFocus can run
-            // against a stale focus tree and the video surface wins.
+        val pickerJustClosed = wasPickerShowing && !anyPickerShowing
+        wasPickerShowing = anyPickerShowing
+        if (pickerJustClosed) {
+            // Restore focus only after a picker transition, not on the
+            // initial player composition or while switching between pickers.
             withFrameNanos { }
             runCatching { playPauseFocusRequester.requestFocus() }
         }
