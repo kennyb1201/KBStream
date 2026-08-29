@@ -279,9 +279,9 @@ private fun HeroInlineTrailerPlayer(
                 when (source) {
                     is PlayableSource.Muxed -> {
                         setMediaItem(
-                            MediaItem.fromUri(
-                                source.url
-                            )
+                            MediaItem.Builder()
+                                .setUri(source.url)
+                                .build()
                         )
                     }
 
