@@ -274,15 +274,3 @@ data class SimklHistorySeason(
 data class SimklHistoryEpisode(
     @Json(name = "number") val number: Int
 )
-
-@JsonClass(generateAdapter = true)
-data class SimklHistoryResponse(
-    @Json(name = "added") val added: SimklHistoryAdded? = null
-)
-
-@JsonClass(generateAdapter = true)
-data class SimklHistoryAdded(
-    @Json(name = "movies") val movies: List<JsonElement>? = null,
-    @Json(name = "shows") val shows: List<JsonElement>? = null,
-    @Json(name = "episodes") val episodes: List<JsonElement>? = null
-)
