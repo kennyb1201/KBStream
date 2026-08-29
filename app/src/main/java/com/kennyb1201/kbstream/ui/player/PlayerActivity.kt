@@ -58,6 +58,9 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -1157,6 +1160,22 @@ private fun PlayerControlsOverlay(
     onNavigateActor: (Int) -> Unit,
     playPauseFocusRequester: FocusRequester
 ) {
+    val seekStepMs = 5_000L
+    val seekBarModifier = Modifier
+        .fillMaxWidth()
+        .onKeyEvent { event ->
+            if (event.type != KeyEventType.KeyDown || durationMs <= 0L) return@onKeyEvent false
+            val target = when (event.key) {
+                androidx.compose.ui.input.key.Key.DirectionLeft ->
+                    (currentPositionMs - seekStepMs).coerceAtLeast(0L)
+                androidx.compose.ui.input.key.Key.DirectionRight ->
+                    (currentPositionMs + seekStepMs).coerceAtMost(durationMs)
+                else -> return@onKeyEvent false
+            }
+            onSeek(target)
+            true
+        }
+
     LaunchedEffect(Unit) {
         // Wait one frame so the control row has attached its focus nodes.
         withFrameNanos { }
@@ -1302,13 +1321,14 @@ private fun PlayerControlsOverlay(
                     androidx.compose.material3.Slider(
                         value = currentPositionMs.toFloat(),
                         onValueChange = { onSeek(it.toLong()) },
+                        onValueChangeFinished = { onSeek(currentPositionMs) },
                         valueRange = 0f..durationMs.toFloat(),
                         colors = androidx.compose.material3.SliderDefaults.colors(
                             thumbColor = KBAccent,
                             activeTrackColor = KBAccent,
                             inactiveTrackColor = KBSurfaceRaised
                         ),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = seekBarModifier
                     )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
