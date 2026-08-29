@@ -1187,19 +1187,44 @@ private fun PlayerControlsOverlay(
     onNavigateActor: (Int) -> Unit,
     playPauseFocusRequester: FocusRequester
 ) {
-    val seekStepMs = 5_000L
+    val seekBarFocusRequester = remember { FocusRequester() }
+    var seekDirection by remember { mutableStateOf<Int?>(null) }
+    var seekMultiplier by remember { mutableIntStateOf(1) }
+    var seekPositionMs by remember(currentPositionMs) { mutableStateOf(currentPositionMs) }
+
+    LaunchedEffect(seekDirection) {
+        val direction = seekDirection ?: return@LaunchedEffect
+        while (seekDirection == direction) {
+            val stepMs = 5_000L * seekMultiplier
+            seekPositionMs = (seekPositionMs + direction * stepMs)
+                .coerceIn(0L, durationMs)
+            onSeek(seekPositionMs)
+            seekMultiplier = (seekMultiplier + 1).coerceAtMost(12)
+            delay(180L)
+        }
+    }
+
     val seekBarModifier = Modifier
         .fillMaxWidth()
-        .onKeyEvent { event ->
+        .focusRequester(seekBarFocusRequester)
+        .focusable()
+        .                    onKeyEvent { event ->
+            if (event.type == KeyEventType.KeyUp) {
+                seekDirection = null
+                seekMultiplier = 1
+                return@onKeyEvent true
+            }
             if (event.type != KeyEventType.KeyDown || durationMs <= 0L) return@onKeyEvent false
-            val target = when (event.key) {
-                androidx.compose.ui.input.key.Key.DirectionLeft ->
-                    (currentPositionMs - seekStepMs).coerceAtLeast(0L)
-                androidx.compose.ui.input.key.Key.DirectionRight ->
-                    (currentPositionMs + seekStepMs).coerceAtMost(durationMs)
+            val direction = when (event.key) {
+                androidx.compose.ui.input.key.Key.DirectionLeft -> -1
+                androidx.compose.ui.input.key.Key.DirectionRight -> 1
                 else -> return@onKeyEvent false
             }
-            onSeek(target)
+            if (seekDirection != direction) {
+                seekPositionMs = currentPositionMs
+                seekMultiplier = 1
+                seekDirection = direction
+            }
             true
         }
 
@@ -1362,9 +1387,16 @@ private fun PlayerControlsOverlay(
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     androidx.compose.material3.Slider(
-                        value = currentPositionMs.toFloat(),
-                        onValueChange = { onSeek(it.toLong()) },
-                        onValueChangeFinished = { onSeek(currentPositionMs) },
+                        value = seekPositionMs.toFloat(),
+                        onValueChange = {
+                            seekDirection = null
+                            seekPositionMs = it.toLong()
+                            onSeek(seekPositionMs)
+                        },
+                        onValueChangeFinished = {
+                            seekDirection = null
+                            onSeek(seekPositionMs)
+                        },
                         valueRange = 0f..durationMs.toFloat(),
                         colors = androidx.compose.material3.SliderDefaults.colors(
                             thumbColor = KBAccent,
