@@ -868,6 +868,25 @@ fun PlayerScreen(
         wasPickerShowing = anyPickerShowing
     }
 
+    // Block system Back from exiting the Activity while a picker is open.
+    // Without this, the Back key fires onDismiss() but also propagates to
+    // Android, calling finish() on the Activity — kicking the user out of
+    // the player entirely.
+    DisposableEffect(anyPickerShowing) {
+        val callback = object : androidx.activity.OnBackPressedCallback(anyPickerShowing) {
+            override fun handleOnBackPressed() {
+                showSourcePicker = false
+                showAudioPicker = false
+                showSubtitlePicker = false
+                showSpeedPicker = false
+            }
+        }
+        (context as? ComponentActivity)
+            ?.onBackPressedDispatcher
+            ?.addCallback(callback)
+        onDispose { callback.remove() }
+    }
+
     // When the overlay hides (play pressed), move focus back to the root
     // surface so the remote keeps working and focus is never lost to a
     // disposed control row.
@@ -1679,12 +1698,13 @@ private fun TrackPickerDialog(
         runCatching { dialogFocusRequester.requestFocus() }
     }
 
-    // NOTE: no .focusGroup() on Box or Column. Nested focusGroups trap
-    // D-pad inside the Column and prevent it from reaching the LazyColumn
-    // rows — the submenu the user could never interact with. Removing
-    // focusGroup lets D-pad flow naturally between the title, item rows,
-    // and CLOSE button. exit = FocusRequester.Cancel still prevents
-    // focus from escaping the dialog scrim.
+    // KEY DESIGN: no .focusGroup() on Box or Column, and no .focusable()
+    // on the Column. This lets D-pad flow directly from the scrim box to
+    // the LazyColumn picker rows and back to CLOSE, without any intermediate
+    // focusable container stealing D-pad events. Back/Escape is handled on
+    // the Box (the only focusable node outside the rows) and an
+    // OnBackPressedCallback at the Activity level prevents system Back from
+    // exiting the player while a picker is open.
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -1693,6 +1713,17 @@ private fun TrackPickerDialog(
             .focusable()
             .focusProperties {
                 exit = { FocusRequester.Cancel }
+            }
+            .onKeyEvent { event ->
+                if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN &&
+                    (event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK ||
+                        event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE)
+                ) {
+                    onDismiss()
+                    true
+                } else {
+                    false
+                }
             },
         contentAlignment = Alignment.CenterEnd
     ) {
@@ -1702,18 +1733,6 @@ private fun TrackPickerDialog(
                 .padding(24.dp)
                 .background(KBSurfaceRaised, RoundedCornerShape(16.dp))
                 .padding(16.dp)
-                .focusable()
-                .onKeyEvent { event ->
-                    if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN &&
-                        (event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK ||
-                            event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE)
-                    ) {
-                        onDismiss()
-                        true
-                    } else {
-                        false
-                    }
-                }
         ) {
             Text(
                 text = title,
