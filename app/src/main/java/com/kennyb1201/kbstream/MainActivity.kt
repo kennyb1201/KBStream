@@ -474,10 +474,6 @@ fun AppRoot() {
                         type,
                         id
                     )
-                },
-
-                onBack = {
-                    screen = current.returnTo
                 }
             )
         }
@@ -488,10 +484,6 @@ fun AppRoot() {
                 current.id,
                 current.name,
                 current.isNetwork,
-
-                onBack = {
-                    screen = current.returnTo
-                },
 
                 onNavigateDetail = {
                         type,
@@ -513,10 +505,6 @@ fun AppRoot() {
                 current.isKeyword,
                 current.mediaType,
 
-                onBack = {
-                    screen = current.returnTo
-                },
-
                 onNavigateDetail = {
                         type,
                         id ->
@@ -535,10 +523,6 @@ fun AppRoot() {
                 current.id,
                 current.name,
                 tmdbRepository,
-
-                onBack = {
-                    screen = current.returnTo
-                },
 
                 onNavigateDetail = {
                         type,
