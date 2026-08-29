@@ -383,9 +383,7 @@ private fun Stream.label(): String {
     return listOfNotNull(
         name?.takeIf { it.isNotBlank() },
         title?.takeIf { it.isNotBlank() },
-        description?.takeIf { it.isNotBlank() },
-        url?.substringAfterLast('/')?.substringBefore('?')
-            ?.takeIf { it.isNotBlank() }
+        description?.takeIf { it.isNotBlank() }
     )
         .distinct()
         .joinToString("\n")
