@@ -9,6 +9,7 @@ import android.view.ViewGroup
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -51,6 +52,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.focus.FocusRequester
@@ -1279,9 +1281,23 @@ private fun PlayerControlsOverlay(
         }
     }
 
+    // Focused state drives a highlight ring on the slider so it is obvious
+    // when the scrubber has focus.
+    var seekBarFocused by remember { mutableStateOf(false) }
     val seekBarModifier = Modifier
         .fillMaxWidth()
         .focusRequester(seekBarFocusRequester)
+        .onFocusChanged { seekBarFocused = it.isFocused }
+        .then(
+            if (seekBarFocused) {
+                Modifier
+                    .clip(RoundedCornerShape(24.dp))
+                    .border(3.dp, KBAccent, RoundedCornerShape(24.dp))
+                    .padding(horizontal = 6.dp, vertical = 4.dp)
+            } else {
+                Modifier
+            }
+        )
         .focusable()
         .onKeyEvent { event ->
             if (event.type == KeyEventType.KeyUp) {
@@ -1587,22 +1603,50 @@ private fun ControlIconButton(
     isPrimary: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    // Focus state drives a hard border + color inversion so the highlighted
+    // control is unmistakable on a TV (KBCard's border alone is too subtle
+    // on the small 40dp buttons over a dark video surface).
+    var focused by remember { mutableStateOf(false) }
     KBCard(
         onClick = onClick,
         modifier = modifier
-            .size(48.dp)
+            .size(40.dp)
+            .onFocusChanged { focused = it.isFocused }
+            .then(
+                if (focused) {
+                    Modifier.border(
+                        3.dp,
+                        if (isPrimary) KBVoid else KBAccent,
+                        RoundedCornerShape(10.dp)
+                    )
+                } else {
+                    Modifier
+                }
+            )
     ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(if (isPrimary) KBAccent else KBSurface),
+                .background(
+                    when {
+                        focused && isPrimary -> KBVoid
+                        focused -> KBAccent
+                        isPrimary -> KBAccent
+                        else -> KBSurface
+                    }
+                ),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = contentDescription,
-                tint = if (isPrimary) KBVoid else KBTextHi,
-                modifier = Modifier.size(24.dp)
+                tint = when {
+                    focused && isPrimary -> KBAccent
+                    focused -> KBVoid
+                    isPrimary -> KBVoid
+                    else -> KBTextHi
+                },
+                modifier = Modifier.size(20.dp)
             )
         }
     }
