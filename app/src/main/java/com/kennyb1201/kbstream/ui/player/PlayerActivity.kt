@@ -378,9 +378,12 @@ private fun isLikelyRetryable(error: PlaybackException): Boolean {
 }
 
 private fun Stream.label(): String {
-    return title?.takeIf { it.isNotBlank() }
-        ?: name?.takeIf { it.isNotBlank() }
-        ?: "Unknown source"
+    return sequenceOf(
+        title,
+        name,
+        url?.substringAfterLast('/')?.substringBefore('?')
+    ).firstOrNull { !it.isNullOrBlank() }?.trim()
+        ?: "Source"
 }
 
 @Composable
@@ -392,6 +395,7 @@ fun PlayerScreen(
     season: Int?,
     episode: Int?,
     episodeStreamId: String?,
+    episodeTitle: String? = null,
     itemName: String,
     itemPoster: String?,
     clearLogoUrl: String? = null,
@@ -997,8 +1001,14 @@ fun PlayerScreen(
                     hasMultipleSources = sources.size > 1,
                     hasNextEpisode = season != null && episode != null,
                     itemName = itemName,
+                    season = season,
+                    episode = episode,
+                    episodeTitle = episodeTitle,
                     clearLogoUrl = clearLogoUrl,
                     overview = overview,
+                    season = season,
+                    episode = episode,
+                    episodeTitle = episodeTitle,
                     cast = cast,
                     currentPositionMs = currentPositionMs,
                     durationMs = durationMs,
@@ -1144,6 +1154,9 @@ private fun PlayerControlsOverlay(
     hasMultipleSources: Boolean,
     hasNextEpisode: Boolean,
     itemName: String,
+    season: Int?,
+    episode: Int?,
+    episodeTitle: String?,
     clearLogoUrl: String?,
     overview: String?,
     cast: List<PlayerCastMember>,
@@ -1204,6 +1217,15 @@ private fun PlayerControlsOverlay(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.fillMaxWidth(0.7f)) {
+                if (season != null && episode != null) {
+                    Text(
+                        text = "S${season.toString().padStart(2, '0')} · E${episode.toString().padStart(2, '0')}" +
+                            (episodeTitle?.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""),
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                }
                 if (!clearLogoUrl.isNullOrBlank()) {
                     AsyncImage(
                         model = clearLogoUrl,
