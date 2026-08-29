@@ -764,40 +764,6 @@ fun DetailScreen(
                             )
                         }
 
-                        if (hasSeriesResume) {
-                            KBCard(
-                                onClick = {
-                                    val resumeTarget =
-                                        playTarget.copy(
-                                            resumePositionMs =
-                                                resumeInfo?.positionMs
-                                                    ?: 0L
-                                        )
-
-                                    onNavigateStreams(
-                                        resumeTarget,
-                                        id,
-                                        type,
-                                        m.poster,
-                                        backdropUrl,
-                                        clearLogoUrl,
-                                        m.description,
-                                        tmdbDetail?.credits?.cast.orEmpty()
-                                    )
-                                },
-                                modifier = Modifier.padding(end = 8.dp)
-                            ) {
-                                Text(
-                                    "RESUME",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    modifier = Modifier.padding(
-                                        horizontal = 9.dp,
-                                        vertical = 7.dp
-                                    )
-                                )
-                            }
-                        }
-
                         if (
                             tmdbDetail?.videos?.results?.any {
                                 it.site == "YouTube" &&
