@@ -68,7 +68,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.AudioAttributes
-import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -1532,7 +1532,6 @@ private fun ControlIconButton(
         onClick = onClick,
         modifier = modifier
             .size(48.dp)
-            .focusable()
     ) {
         Box(
             modifier = Modifier
@@ -1581,6 +1580,7 @@ private fun TrackPickerDialog(
         modifier = Modifier
             .fillMaxSize()
             .background(KBVoid.copy(alpha = 0.75f))
+            .focusRequester(dialogFocusRequester)
             .focusable()
             .focusGroup()
             // Traps D-pad navigation inside the dialog while it's open --
@@ -1601,7 +1601,6 @@ private fun TrackPickerDialog(
                 .padding(24.dp)
                 .background(KBSurfaceRaised, RoundedCornerShape(16.dp))
                 .padding(16.dp)
-                .focusRequester(dialogFocusRequester)
                 .focusable()
                 .focusGroup()
                 .onKeyEvent { event ->
@@ -1656,6 +1655,7 @@ private fun PickerRow(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
+            .focusable()
     ) {
         Row(
             modifier = Modifier
