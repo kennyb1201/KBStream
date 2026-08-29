@@ -297,6 +297,112 @@ class SimklRepository(
         )
     }
 
+    /*
+     * Outbound scrobble: record a completed movie or episode to the
+     * user's Simkl history (POST /sync/history). Called from the player
+     * when playback completes; failures are logged, never thrown, so
+     * playback is never blocked by tracking.
+     */
+    suspend fun pushWatchedMovie(
+        imdbId: String,
+        title: String? = null
+    ): Boolean {
+
+        if (!isConfigured() || !hasToken()) {
+            Log.d("SIMKL_REPO", "pushWatchedMovie skipped: not configured/authenticated")
+            return false
+        }
+
+        if (imdbId.isBlank()) {
+            Log.d("SIMKL_REPO", "pushWatchedMovie skipped: blank imdb id")
+            return false
+        }
+
+        return try {
+            val response = api.addToWatchedHistory(
+                authorization = bearer(requireAccessToken()),
+                body = SimklHistoryRequest(
+                    movies = listOf(
+                        SimklHistoryMovie(
+                            title = title,
+                            ids = SimklPlaybackIdsRef(imdb = imdbId.trim())
+                        )
+                    )
+                )
+            )
+
+            if (!response.isSuccessful) {
+                val errorText = try {
+                    response.errorBody()?.string()
+                } catch (e: Exception) {
+                    "unreadable: ${e.message}"
+                }
+                Log.e("SIMKL_REPO", "pushWatchedMovie failed code=${response.code()} body=$errorText")
+            } else {
+                Log.d("SIMKL_REPO", "pushWatchedMovie ok imdb=$imdbId")
+            }
+
+            response.isSuccessful
+        } catch (e: Exception) {
+            Log.e("SIMKL_REPO", "pushWatchedMovie error: ${e.message}", e)
+            false
+        }
+    }
+
+    suspend fun pushWatchedEpisode(
+        showImdbId: String,
+        season: Int,
+        episode: Int,
+        title: String? = null
+    ): Boolean {
+
+        if (!isConfigured() || !hasToken()) {
+            Log.d("SIMKL_REPO", "pushWatchedEpisode skipped: not configured/authenticated")
+            return false
+        }
+
+        if (showImdbId.isBlank() || season <= 0 || episode <= 0) {
+            Log.d("SIMKL_REPO", "pushWatchedEpisode skipped: ids incomplete show=$showImdbId s=$season e=$episode")
+            return false
+        }
+
+        return try {
+            val response = api.addToWatchedHistory(
+                authorization = bearer(requireAccessToken()),
+                body = SimklHistoryRequest(
+                    shows = listOf(
+                        SimklHistoryShow(
+                            title = title,
+                            ids = SimklPlaybackIdsRef(imdb = showImdbId.trim()),
+                            seasons = listOf(
+                                SimklHistorySeason(
+                                    number = season,
+                                    episodes = listOf(SimklHistoryEpisode(number = episode))
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+
+            if (!response.isSuccessful) {
+                val errorText = try {
+                    response.errorBody()?.string()
+                } catch (e: Exception) {
+                    "unreadable: ${e.message}"
+                }
+                Log.e("SIMKL_REPO", "pushWatchedEpisode failed code=${response.code()} body=$errorText")
+            } else {
+                Log.d("SIMKL_REPO", "pushWatchedEpisode ok show=$showImdbId s=$season e=$episode")
+            }
+
+            response.isSuccessful
+        } catch (e: Exception) {
+            Log.e("SIMKL_REPO", "pushWatchedEpisode error: ${e.message}", e)
+            false
+        }
+    }
+
     fun forceClearWatchedActivitySync() {
         prefs
             ?.edit()

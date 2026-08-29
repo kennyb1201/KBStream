@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.simkl
 
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
+import com.squareup.moshi.JsonElement
 
 @JsonClass(generateAdapter = true)
 data class SimklPinCodeResponse(
@@ -237,4 +238,51 @@ data class SimklCompletedMovie(
     @Json(name = "year") val year: Int?,
     @Json(name = "poster") val poster: String?,
     @Json(name = "ids") val ids: SimklPlaybackIds?
+)
+
+/*
+ * Outbound "mark watched" (scrobble) payloads for POST /sync/history.
+ * Movies are matched by ids (imdb preferred); shows carry the ids plus
+ * the specific season/episode to mark.
+ */
+@JsonClass(generateAdapter = true)
+data class SimklHistoryRequest(
+    @Json(name = "movies") val movies: List<SimklHistoryMovie> = emptyList(),
+    @Json(name = "shows") val shows: List<SimklHistoryShow> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class SimklHistoryMovie(
+    @Json(name = "title") val title: String? = null,
+    @Json(name = "ids") val ids: SimklPlaybackIdsRef
+)
+
+@JsonClass(generateAdapter = true)
+data class SimklHistoryShow(
+    @Json(name = "title") val title: String? = null,
+    @Json(name = "ids") val ids: SimklPlaybackIdsRef,
+    @Json(name = "seasons") val seasons: List<SimklHistorySeason>? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class SimklHistorySeason(
+    @Json(name = "number") val number: Int,
+    @Json(name = "episodes") val episodes: List<SimklHistoryEpisode>? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class SimklHistoryEpisode(
+    @Json(name = "number") val number: Int
+)
+
+@JsonClass(generateAdapter = true)
+data class SimklHistoryResponse(
+    @Json(name = "added") val added: SimklHistoryAdded? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class SimklHistoryAdded(
+    @Json(name = "movies") val movies: List<JsonElement>? = null,
+    @Json(name = "shows") val shows: List<JsonElement>? = null,
+    @Json(name = "episodes") val episodes: List<JsonElement>? = null
 )

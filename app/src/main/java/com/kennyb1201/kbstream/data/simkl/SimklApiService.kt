@@ -93,4 +93,10 @@ interface SimklApiService {
         @Body body: SimklWatchedBulkRequest
     ): Response<ResponseBody>
 
+    @POST("sync/history")
+    suspend fun addToWatchedHistory(
+        @Header("Authorization") authorization: String,
+        @Body body: SimklHistoryRequest
+    ): Response<SimklHistoryResponse>
+
 }

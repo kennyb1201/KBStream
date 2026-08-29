@@ -87,6 +87,7 @@ import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
+import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -691,6 +692,33 @@ fun PlayerScreen(
                 completedAt = if (isCompleted) existing?.completedAt ?: now else null
             )
             withContext(Dispatchers.IO) { dao.upsert(entry) }
+
+            // Scrobble to Simkl when an item is first completed locally.
+            // Fire-and-forget on IO: never blocks or fails the save, and the
+            // existing?.completedAt guard prevents duplicate pushes on re-save.
+            if (isCompleted && existing?.completedAt == null) {
+                scope.launch(Dispatchers.IO) {
+                    val simklRepository = SimklRepository(context)
+                    when (parentType.lowercase()) {
+                        "movie" -> simklRepository.pushWatchedMovie(
+                            imdbId = parentId,
+                            title = itemName
+                        )
+                        "series", "show", "tv" -> {
+                            val s = season
+                            val e = episode
+                            if (s != null && e != null) {
+                                simklRepository.pushWatchedEpisode(
+                                    showImdbId = parentId,
+                                    season = s,
+                                    episode = e,
+                                    title = itemName
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         val playerListener = object : Player.Listener {
