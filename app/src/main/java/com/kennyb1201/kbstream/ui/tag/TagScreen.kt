@@ -28,7 +28,6 @@ import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.tmdb.StudioItem
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
-import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import kotlinx.coroutines.delay
@@ -40,7 +39,6 @@ fun TagScreen(
     name: String,
     isKeyword: Boolean,
     type: String,
-    onBack: () -> Unit = {},
     onNavigateDetail: (String, String) -> Unit = { _, _ -> },
     viewModel: TagViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
@@ -104,22 +102,6 @@ fun TagScreen(
                                 firstItemFocusRequester = firstItemFocusRequester,
                                 viewModel = viewModel
                             )
-                        }
-
-                        item(key = "back_button") {
-                            KBCard(
-                                onClick = onBack,
-                                modifier = Modifier.padding(top = 8.dp)
-                            ) {
-                                Text(
-                                    text = "BACK",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    modifier = Modifier.padding(
-                                        horizontal = 16.dp,
-                                        vertical = 10.dp
-                                    )
-                                )
-                            }
                         }
 
                         item(key = "bottom_spacer") {

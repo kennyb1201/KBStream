@@ -195,7 +195,7 @@ fun AppRoot() {
                     )
                 }
 
-                is Screen.Actor ->
+            is Screen.Actor ->
                 current.returnTo
 
             is Screen.Studio ->

@@ -28,7 +28,6 @@ import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.tmdb.StudioItem
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
-import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import kotlinx.coroutines.delay
@@ -39,7 +38,6 @@ fun StudioScreen(
     id: Int,
     name: String,
     isNetwork: Boolean,
-    onBack: () -> Unit = {},
     onNavigateDetail: (String, String) -> Unit = { _, _ -> },
     viewModel: StudioViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
@@ -103,22 +101,6 @@ fun StudioScreen(
                                 firstItemFocusRequester = firstItemFocusRequester,
                                 viewModel = viewModel
                             )
-                        }
-
-                        item(key = "back_button") {
-                            KBCard(
-                                onClick = onBack,
-                                modifier = Modifier.padding(top = 8.dp)
-                            ) {
-                                Text(
-                                    text = "BACK",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    modifier = Modifier.padding(
-                                        horizontal = 16.dp,
-                                        vertical = 10.dp
-                                    )
-                                )
-                            }
                         }
 
                         item(key = "bottom_spacer") {
