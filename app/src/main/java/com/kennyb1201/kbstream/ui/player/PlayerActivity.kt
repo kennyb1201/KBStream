@@ -1679,21 +1679,19 @@ private fun TrackPickerDialog(
         runCatching { dialogFocusRequester.requestFocus() }
     }
 
+    // NOTE: no .focusGroup() on Box or Column. Nested focusGroups trap
+    // D-pad inside the Column and prevent it from reaching the LazyColumn
+    // rows — the submenu the user could never interact with. Removing
+    // focusGroup lets D-pad flow naturally between the title, item rows,
+    // and CLOSE button. exit = FocusRequester.Cancel still prevents
+    // focus from escaping the dialog scrim.
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(KBVoid.copy(alpha = 0.75f))
             .focusRequester(dialogFocusRequester)
             .focusable()
-            .focusGroup()
-            // Traps D-pad navigation inside the dialog while it's open --
-            // without this, pressing a direction past the dialog's last
-            // focusable row lets Compose's default spatial search jump
-            // straight through the scrim to whatever's underneath (the
-            // controls row, even the video surface), since a translucent
-            // overlay doesn't block focus traversal on its own.
             .focusProperties {
-                enter = { dialogFocusRequester }
                 exit = { FocusRequester.Cancel }
             },
         contentAlignment = Alignment.CenterEnd
@@ -1705,7 +1703,6 @@ private fun TrackPickerDialog(
                 .background(KBSurfaceRaised, RoundedCornerShape(16.dp))
                 .padding(16.dp)
                 .focusable()
-                .focusGroup()
                 .onKeyEvent { event ->
                     if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN &&
                         (event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK ||
@@ -1758,7 +1755,6 @@ private fun PickerRow(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
-            .focusable()
     ) {
         Row(
             modifier = Modifier
