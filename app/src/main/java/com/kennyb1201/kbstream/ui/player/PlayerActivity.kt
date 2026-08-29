@@ -781,10 +781,15 @@ fun PlayerScreen(
         showSubtitlePicker ||
         showSpeedPicker
 
+    var pickerWasShowing by remember { mutableStateOf(false) }
+
     LaunchedEffect(anyPickerShowing) {
-        if (!anyPickerShowing) {
+        if (anyPickerShowing) {
+            pickerWasShowing = true
+        } else if (pickerWasShowing) {
             withFrameNanos { }
             runCatching { playPauseFocusRequester.requestFocus() }
+            pickerWasShowing = false
         }
     }
 
@@ -1455,7 +1460,8 @@ private fun TrackPickerDialog(
     val dialogFocusRequester = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
-        dialogFocusRequester.requestFocus()
+        withFrameNanos { }
+        runCatching { dialogFocusRequester.requestFocus() }
     }
 
     Box(
@@ -1469,7 +1475,10 @@ private fun TrackPickerDialog(
             // straight through the scrim to whatever's underneath (the
             // controls row, even the video surface), since a translucent
             // overlay doesn't block focus traversal on its own.
-            .focusProperties { exit = { FocusRequester.Cancel } },
+            .focusProperties {
+                enter = { dialogFocusRequester }
+                exit = { FocusRequester.Cancel }
+            },
         contentAlignment = Alignment.CenterEnd
     ) {
         Column(
@@ -1480,6 +1489,7 @@ private fun TrackPickerDialog(
                 .padding(16.dp)
                 .focusRequester(dialogFocusRequester)
                 .focusable()
+                .focusGroup()
         ) {
             Text(
                 text = title,
