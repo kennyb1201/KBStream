@@ -1678,6 +1678,7 @@ private fun formatMillis(ms: Long): String {
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun TrackPickerDialog(
     title: String,
