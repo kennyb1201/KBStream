@@ -191,7 +191,7 @@ fun AppRoot() {
                     )
                 }
 
-            is Screen.Actor ->
+                is Screen.Actor ->
                 current.returnTo
 
             else ->

@@ -577,10 +577,15 @@ fun PlayerScreen(
         }
     }
 
-    LaunchedEffect(showControls) {
-        if (showControls) {
+    LaunchedEffect(showControls, isPlaying) {
+        if (showControls && isPlaying) {
             delay(6_000L)
-            if (!showSourcePicker && !showAudioPicker && !showSubtitlePicker && !showSpeedPicker) {
+            if (isPlaying &&
+                !showSourcePicker &&
+                !showAudioPicker &&
+                !showSubtitlePicker &&
+                !showSpeedPicker
+            ) {
                 showControls = false
             }
         }
@@ -989,7 +994,10 @@ fun PlayerScreen(
                     cast = cast,
                     currentPositionMs = currentPositionMs,
                     durationMs = durationMs,
-                    onPlayPause = { exoPlayer.playWhenReady = !exoPlayer.playWhenReady },
+                    onPlayPause = {
+                        exoPlayer.playWhenReady = !exoPlayer.playWhenReady
+                        showControls = true
+                    },
                     onSeek = { targetMs -> exoPlayer.seekTo(targetMs) },
                     onNextEpisode = {
                         // Hook up your next episode navigator here if needed
