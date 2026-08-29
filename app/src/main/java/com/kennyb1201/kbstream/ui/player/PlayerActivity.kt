@@ -788,15 +788,14 @@ fun PlayerScreen(
         showSubtitlePicker ||
         showSpeedPicker
 
-    var pickerWasShowing by remember { mutableStateOf(false) }
-
+    // The dialog owns focus while open. Do not request focus from the
+    // background overlay on every picker state change: doing so can race
+    // the remote center event and immediately steal focus back to the
+    // control row, making the picker look like it vanished.
     LaunchedEffect(anyPickerShowing) {
-        if (anyPickerShowing) {
-            pickerWasShowing = true
-        } else if (pickerWasShowing) {
+        if (!anyPickerShowing) {
             withFrameNanos { }
             runCatching { playPauseFocusRequester.requestFocus() }
-            pickerWasShowing = false
         }
     }
 
@@ -1507,6 +1506,7 @@ private fun TrackPickerDialog(
         modifier = Modifier
             .fillMaxSize()
             .background(KBVoid.copy(alpha = 0.75f))
+            .focusable()
             .focusGroup()
             // Traps D-pad navigation inside the dialog while it's open --
             // without this, pressing a direction past the dialog's last
@@ -1529,6 +1529,17 @@ private fun TrackPickerDialog(
                 .focusRequester(dialogFocusRequester)
                 .focusable()
                 .focusGroup()
+                .onKeyEvent { event ->
+                    if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN &&
+                        (event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK ||
+                            event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE)
+                    ) {
+                        onDismiss()
+                        true
+                    } else {
+                        false
+                    }
+                }
         ) {
             Text(
                 text = title,
