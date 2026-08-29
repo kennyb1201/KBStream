@@ -62,7 +62,8 @@ sealed class Screen {
     ) : Screen()
 
     data class Actor(
-        val personId: Int
+        val personId: Int,
+        val returnTo: Screen = Home
     ) : Screen()
 
     data class Studio(
@@ -171,18 +172,9 @@ fun AppRoot() {
                 if (current.parentType == "channel") {
                     Screen.Guide
                 } else {
-                    Screen.Streams(
-                        target = StreamsTarget(
-                            current.parentType,
-                            current.episodeStreamId ?: "",
-                            current.itemName,
-                            current.itemName,
-                            current.season,
-                            current.episode,
-                            current.startPositionMs
-                        ),
-                        parentId = current.parentId,
-                        parentType = current.parentType,
+                    Screen.Detail(
+                        current.parentType,
+                        current.parentId,
                         itemPoster = current.itemPoster
                     )
                 }
@@ -198,6 +190,9 @@ fun AppRoot() {
                         current.itemPoster
                     )
                 }
+
+            is Screen.Actor ->
+                current.returnTo
 
             else ->
                 Screen.Home
@@ -283,7 +278,8 @@ fun AppRoot() {
 
                 onPersonClick = { person ->
                     screen = Screen.Actor(
-                        person.id
+                        person.id,
+                        Screen.Search
                     )
                 },
 
@@ -393,7 +389,8 @@ fun AppRoot() {
                 onNavigateActor = { personId ->
 
                     screen = Screen.Actor(
-                        personId
+                        personId,
+                        Screen.Detail(current.type, current.id, current.pendingTarget, current.itemPoster)
                     )
                 },
 
@@ -625,7 +622,24 @@ fun AppRoot() {
                     current.streamHeaders,
                 onNavigateActor = { personId ->
                     screen = Screen.Actor(
-                        personId
+                        personId,
+                        Screen.Player(
+                            url = current.url,
+                            audioUrl = current.audioUrl,
+                            parentId = current.parentId,
+                            parentType = current.parentType,
+                            season = current.season,
+                            episode = current.episode,
+                            episodeStreamId = current.episodeStreamId,
+                            itemName = current.itemName,
+                            itemPoster = current.itemPoster,
+                            clearLogoUrl = current.clearLogoUrl,
+                            overview = current.overview,
+                            cast = current.cast,
+                            startPositionMs = current.startPositionMs,
+                            sources = current.sources,
+                            streamHeaders = current.streamHeaders
+                        )
                     )
                 }
             )

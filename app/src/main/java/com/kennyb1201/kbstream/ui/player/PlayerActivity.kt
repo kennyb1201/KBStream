@@ -30,10 +30,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.ClosedCaption
-import androidx.compose.material.icons.filled.Forward30
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Speed
@@ -425,7 +423,6 @@ fun PlayerScreen(
     var showAudioPicker by remember { mutableStateOf(false) }
     var showSubtitlePicker by remember { mutableStateOf(false) }
     var showSpeedPicker by remember { mutableStateOf(false) }
-    var wasPickerShowing by remember { mutableStateOf(false) }
     var playbackSpeed by remember { mutableStateOf(1f) }
     var resizeModeIndex by remember { mutableIntStateOf(0) }
 
@@ -780,11 +777,7 @@ fun PlayerScreen(
         showSpeedPicker
 
     LaunchedEffect(anyPickerShowing) {
-        val pickerJustClosed = wasPickerShowing && !anyPickerShowing
-        wasPickerShowing = anyPickerShowing
-        if (pickerJustClosed) {
-            // Restore focus only after a picker transition, not on the
-            // initial player composition or while switching between pickers.
+        if (!anyPickerShowing) {
             withFrameNanos { }
             runCatching { playPauseFocusRequester.requestFocus() }
         }
@@ -998,14 +991,6 @@ fun PlayerScreen(
                     durationMs = durationMs,
                     onPlayPause = { exoPlayer.playWhenReady = !exoPlayer.playWhenReady },
                     onSeek = { targetMs -> exoPlayer.seekTo(targetMs) },
-                    onSkipBack = {
-                        exoPlayer.seekTo((exoPlayer.currentPosition - 10_000L).coerceAtLeast(0L))
-                    },
-                    onSkipForward = {
-                        val duration = exoPlayer.duration
-                        val target = exoPlayer.currentPosition + 30_000L
-                        exoPlayer.seekTo(if (duration > 0L) target.coerceAtMost(duration) else target)
-                    },
                     onNextEpisode = {
                         // Hook up your next episode navigator here if needed
                     },
@@ -1150,8 +1135,6 @@ private fun PlayerControlsOverlay(
     durationMs: Long,
     onPlayPause: () -> Unit,
     onSeek: (Long) -> Unit,
-    onSkipBack: () -> Unit,
-    onSkipForward: () -> Unit,
     onNextEpisode: () -> Unit,
     onSourcePicker: () -> Unit,
     onAudioPicker: () -> Unit,
@@ -1340,12 +1323,6 @@ private fun PlayerControlsOverlay(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (!isLiveChannel) {
-                    ControlIconButton(
-                        icon = Icons.Filled.Replay10,
-                        contentDescription = "Back 10 seconds",
-                        onClick = onSkipBack
-                    )
-                    Spacer(modifier = Modifier.width(16.dp))
                 }
 
                 ControlIconButton(
@@ -1357,13 +1334,6 @@ private fun PlayerControlsOverlay(
                 )
 
                 if (!isLiveChannel) {
-                    Spacer(modifier = Modifier.width(16.dp))
-                    ControlIconButton(
-                        icon = Icons.Filled.Forward30,
-                        contentDescription = "Forward 30 seconds",
-                        onClick = onSkipForward
-                    )
-
                     if (hasNextEpisode) {
                         Spacer(modifier = Modifier.width(16.dp))
                         ControlIconButton(
