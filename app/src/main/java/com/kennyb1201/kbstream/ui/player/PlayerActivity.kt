@@ -7,6 +7,7 @@ import java.util.concurrent.TimeUnit
 import android.view.LayoutInflater
 import android.view.ViewGroup
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -869,22 +870,15 @@ fun PlayerScreen(
     }
 
     // Block system Back from exiting the Activity while a picker is open.
-    // Without this, the Back key fires onDismiss() but also propagates to
-    // Android, calling finish() on the Activity — kicking the user out of
-    // the player entirely.
-    DisposableEffect(anyPickerShowing) {
-        val callback = object : androidx.activity.OnBackPressedCallback(anyPickerShowing) {
-            override fun handleOnBackPressed() {
-                showSourcePicker = false
-                showAudioPicker = false
-                showSubtitlePicker = false
-                showSpeedPicker = false
-            }
-        }
-        (context as? ComponentActivity)
-            ?.onBackPressedDispatcher
-            ?.addCallback(callback)
-        onDispose { callback.remove() }
+    // BackHandler is the standard Compose mechanism — more reliable than
+    // manually registering an OnBackPressedCallback via DisposableEffect.
+    // (Each TrackPickerDialog also has its own BackHandler for close-on-back;
+    // this outer one is a safety net in case the dialog's doesn't fire.)
+    BackHandler(enabled = anyPickerShowing) {
+        showSourcePicker = false
+        showAudioPicker = false
+        showSubtitlePicker = false
+        showSpeedPicker = false
     }
 
     // When the overlay hides (play pressed), move focus back to the root
@@ -1684,7 +1678,6 @@ private fun formatMillis(ms: Long): String {
     }
 }
 
-@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun TrackPickerDialog(
     title: String,
@@ -1698,32 +1691,20 @@ private fun TrackPickerDialog(
         runCatching { dialogFocusRequester.requestFocus() }
     }
 
-    // KEY DESIGN: no .focusGroup() on Box or Column, and no .focusable()
-    // on the Column. This lets D-pad flow directly from the scrim box to
-    // the LazyColumn picker rows and back to CLOSE, without any intermediate
-    // focusable container stealing D-pad events. Back/Escape is handled on
-    // the Box (the only focusable node outside the rows) and an
-    // OnBackPressedCallback at the Activity level prevents system Back from
-    // exiting the player while a picker is open.
+    // The Box is a focus group (not a focusable leaf) so that requestFocus()
+    // delegates to the first child (first PickerRow) instead of trapping
+    // focus on the scrim.  exit = Cancel prevents D-pad from escaping
+    // past the dialog to the controls underneath.  Back is handled by
+    // BackHandler (Android Back goes through onBackPressed, not key events).
+    BackHandler { onDismiss() }
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(KBVoid.copy(alpha = 0.75f))
             .focusRequester(dialogFocusRequester)
-            .focusable()
+            .focusGroup()
             .focusProperties {
                 exit = { FocusRequester.Cancel }
-            }
-            .onKeyEvent { event ->
-                if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN &&
-                    (event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK ||
-                        event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE)
-                ) {
-                    onDismiss()
-                    true
-                } else {
-                    false
-                }
             },
         contentAlignment = Alignment.CenterEnd
     ) {
