@@ -43,6 +43,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -552,10 +553,14 @@ fun PlayerScreen(
 
     LaunchedEffect(exoPlayer, introDbStamps) {
         while (true) {
-            delay(250L)
+            delay(500L)
             val positionMs = exoPlayer.currentPosition
-            activeIntroStamp = introDbStamps.firstOrNull { stamp ->
+            val matchingStamp = introDbStamps.firstOrNull { stamp ->
                 positionMs >= stamp.startMs && positionMs < stamp.endMs
+            }
+            if (matchingStamp?.type != activeIntroStamp?.type ||
+                matchingStamp?.startMs != activeIntroStamp?.startMs) {
+                activeIntroStamp = matchingStamp
             }
         }
     }
@@ -779,6 +784,10 @@ fun PlayerScreen(
 
     LaunchedEffect(anyPickerShowing) {
         if (!anyPickerShowing) {
+            // The picker owns focus while open. Restore it after the dialog
+            // has actually left composition, otherwise requestFocus can run
+            // against a stale focus tree and the video surface wins.
+            withFrameNanos { }
             runCatching { playPauseFocusRequester.requestFocus() }
         }
     }
@@ -1155,6 +1164,8 @@ private fun PlayerControlsOverlay(
     playPauseFocusRequester: FocusRequester
 ) {
     LaunchedEffect(Unit) {
+        // Wait one frame so the control row has attached its focus nodes.
+        withFrameNanos { }
         runCatching { playPauseFocusRequester.requestFocus() }
     }
 
