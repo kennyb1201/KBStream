@@ -71,6 +71,7 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
@@ -485,6 +486,16 @@ fun PlayerScreen(
             mediaItemBuilder.setMimeType(mimeType)
         }
 
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                2_500,
+                10_000,
+                1_000,
+                2_000
+            )
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+
         val renderersFactory = DefaultRenderersFactory(context)
             .setExtensionRendererMode(
                 if (forceSoftwareDecoder) {
@@ -496,6 +507,7 @@ fun PlayerScreen(
             .setEnableDecoderFallback(true)
 
         ExoPlayer.Builder(context, renderersFactory)
+            .setLoadControl(loadControl)
             .setMediaSourceFactory(mediaSourceFactory)
             .build()
             .apply {
@@ -1197,9 +1209,9 @@ private fun PlayerControlsOverlay(
             .background(
                 androidx.compose.ui.graphics.Brush.verticalGradient(
                     listOf(
-                        KBVoid.copy(alpha = 0.75f),
-                        Color.Transparent,
-                        KBVoid.copy(alpha = 0.95f)
+                        KBVoid.copy(alpha = 0.92f),
+                        KBVoid.copy(alpha = 0.18f),
+                        KBVoid.copy(alpha = 0.96f)
                     )
                 )
             )
@@ -1239,12 +1251,11 @@ private fun PlayerControlsOverlay(
                         style = MaterialTheme.typography.titleLarge
                     )
                     Spacer(modifier = Modifier.height(6.dp))
-                }
-                Text(
-                    text = "Source: $sourceLabel",
-                    color = KBTextLo,
-                    style = MaterialTheme.typography.bodySmall
-                )
+                }                    Text(
+                        text = "Source: $sourceLabel",
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.bodySmall
+                    )
             }
         }
 
@@ -1259,7 +1270,7 @@ private fun PlayerControlsOverlay(
                 if (!overview.isNullOrBlank()) {
                     Text(
                         text = overview,
-                        color = KBTextLo,
+                        color = KBTextHi,
                         style = MaterialTheme.typography.bodyMedium,
                         maxLines = 3,
                         modifier = Modifier.fillMaxWidth(0.75f)
@@ -1354,12 +1365,12 @@ private fun PlayerControlsOverlay(
                     ) {
                         Text(
                             text = formatMillis(currentPositionMs),
-                            color = KBTextLo,
+                            color = KBTextHi,
                             style = MaterialTheme.typography.labelSmall
                         )
                         Text(
                             text = formatMillis(durationMs),
-                            color = KBTextLo,
+                            color = KBTextHi,
                             style = MaterialTheme.typography.labelSmall
                         )
                     }
