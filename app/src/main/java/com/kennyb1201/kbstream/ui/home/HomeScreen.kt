@@ -58,9 +58,11 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -270,7 +272,14 @@ private fun HeroInlineTrailerPlayer(
                 httpFactory
             )
 
-        ExoPlayer.Builder(context)
+        val renderersFactory =
+            DefaultRenderersFactory(context)
+                .setExtensionRendererMode(
+                    DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
+                )
+                .setEnableDecoderFallback(true)
+
+        ExoPlayer.Builder(context, renderersFactory)
             .setMediaSourceFactory(
                 mediaSourceFactory
             )
@@ -332,6 +341,17 @@ private fun HeroInlineTrailerPlayer(
                     ) {
                         onEnded()
                     }
+                }
+
+                override fun onPlayerError(error: PlaybackException) {
+                    // A failed trailer must never leave a blank hero:
+                    // fall back to the backdrop image immediately.
+                    Log.e(
+                        "HOME_HERO",
+                        "Inline trailer playback failed: ${error.errorCodeName}",
+                        error
+                    )
+                    onEnded()
                 }
             }
 
