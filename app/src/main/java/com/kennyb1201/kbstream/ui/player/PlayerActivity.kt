@@ -432,7 +432,9 @@ fun PlayerScreen(
     var retryExhausted by remember(currentUrl) { mutableStateOf(false) }
     var manualRetryToken by remember { mutableIntStateOf(0) }
     var forceSoftwareDecoder by remember(currentUrl) { mutableStateOf(false) }
-    var showControls by remember { mutableStateOf(true) }
+    // Overlay starts hidden (video first). It appears on pause / D-pad tap
+    // and disappears immediately on play.
+    var showControls by remember { mutableStateOf(false) }
 
     var showSourcePicker by remember { mutableStateOf(false) }
     var showAudioPicker by remember { mutableStateOf(false) }
@@ -554,19 +556,21 @@ fun PlayerScreen(
             }
     }
 
-    LaunchedEffect(exoPlayer, showControls) {
-        if (showControls) {
-            while (true) {
-                val position = exoPlayer.currentPosition.coerceAtLeast(0L)
-                val dur = exoPlayer.duration
-                if (position / 1000L != currentPositionMs / 1000L) {
-                    currentPositionMs = position
-                }
-                if (dur != C.TIME_UNSET && dur > 0L && dur != durationMs) {
-                    durationMs = dur
-                }
-                delay(500L)
+    // Poll position/duration for the whole player lifetime (not only while
+    // the overlay is up). Keeping the loop always-on avoids recomposing the
+    // overlay's slider from a cold start every time controls reappear, which
+    // showed up as visible lag when pausing.
+    LaunchedEffect(exoPlayer) {
+        while (true) {
+            val position = exoPlayer.currentPosition.coerceAtLeast(0L)
+            val dur = exoPlayer.duration
+            if (position / 1000L != currentPositionMs / 1000L) {
+                currentPositionMs = position
             }
+            if (dur != C.TIME_UNSET && dur > 0L && dur != durationMs) {
+                durationMs = dur
+            }
+            delay(500L)
         }
     }
 
@@ -862,6 +866,16 @@ fun PlayerScreen(
         wasPickerShowing = anyPickerShowing
     }
 
+    // When the overlay hides (play pressed), move focus back to the root
+    // surface so the remote keeps working and focus is never lost to a
+    // disposed control row.
+    LaunchedEffect(showControls) {
+        if (!showControls) {
+            withFrameNanos { }
+            runCatching { focusRequester.requestFocus() }
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -869,28 +883,42 @@ fun PlayerScreen(
             .focusRequester(focusRequester)
             .focusable()
             .onKeyEvent { event ->
-                if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN) {
-                    val keyCode = event.nativeKeyEvent.keyCode
-                    when (keyCode) {
-                        android.view.KeyEvent.KEYCODE_DPAD_CENTER,
-                        android.view.KeyEvent.KEYCODE_ENTER,
-                        android.view.KeyEvent.KEYCODE_BUTTON_SELECT,
-                        android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
-                        android.view.KeyEvent.KEYCODE_MEDIA_PLAY,
-                        android.view.KeyEvent.KEYCODE_MEDIA_PAUSE,
-                        android.view.KeyEvent.KEYCODE_DPAD_UP,
-                        android.view.KeyEvent.KEYCODE_DPAD_DOWN,
-                        android.view.KeyEvent.KEYCODE_DPAD_LEFT,
-                        android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
-                        android.view.KeyEvent.KEYCODE_CHANNEL_UP,
-                        android.view.KeyEvent.KEYCODE_CHANNEL_DOWN -> {
-                            showControls = true
-                            false
-                        }
-                        else -> false
+                if (event.nativeKeyEvent.action != android.view.KeyEvent.ACTION_DOWN) {
+                    return@onKeyEvent false
+                }
+                when (event.nativeKeyEvent.keyCode) {
+                    android.view.KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                        exoPlayer.pause()
+                        showControls = true
+                        true
                     }
-                } else {
-                    false
+                    android.view.KeyEvent.KEYCODE_MEDIA_PLAY -> {
+                        exoPlayer.play()
+                        showControls = false
+                        true
+                    }
+                    android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                        exoPlayer.playWhenReady = !exoPlayer.playWhenReady
+                        showControls = !exoPlayer.playWhenReady
+                        true
+                    }
+                    android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+                    android.view.KeyEvent.KEYCODE_ENTER,
+                    android.view.KeyEvent.KEYCODE_BUTTON_SELECT -> {
+                        // Remote OK with the overlay hidden pops the overlay.
+                        showControls = true
+                        true
+                    }
+                    android.view.KeyEvent.KEYCODE_DPAD_UP,
+                    android.view.KeyEvent.KEYCODE_DPAD_DOWN,
+                    android.view.KeyEvent.KEYCODE_DPAD_LEFT,
+                    android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                    android.view.KeyEvent.KEYCODE_CHANNEL_UP,
+                    android.view.KeyEvent.KEYCODE_CHANNEL_DOWN -> {
+                        showControls = true
+                        false
+                    }
+                    else -> false
                 }
             }
     ) {
@@ -1073,7 +1101,9 @@ fun PlayerScreen(
                     durationMs = durationMs,
                     onPlayPause = {
                         exoPlayer.playWhenReady = !exoPlayer.playWhenReady
-                        showControls = true
+                        // Overlay follows playback state: visible while paused,
+                        // gone the instant playback resumes.
+                        showControls = !exoPlayer.playWhenReady
                     },
                     onSeek = { targetMs -> exoPlayer.seekTo(targetMs) },
                     onNextEpisode = {
