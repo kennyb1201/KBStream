@@ -346,15 +346,19 @@ private val SPEED_OPTIONS = listOf(
  * Falls back to "WxH" when height is unknown.
  */
 internal fun normalizeResolution(width: Int, height: Int): String {
-    if (height <= 0) return if (width > 0) "${width}p" else "—"
+    if (width <= 0 && height <= 0) return "—"
+    // Use the larger dimension for classification — this correctly
+    // handles ultrawide content like 3840x1920 (should show "4K")
+    // and tall/portrait content like 1920x3840.
+    val maxDim = maxOf(width, height)
     return when {
-        height >= 2160 -> "4K"
-        height >= 1440 -> "1440p"
-        height >= 1080 -> "1080p"
-        height >= 720  -> "720p"
-        height >= 480  -> "480p"
-        height >= 360  -> "360p"
-        else           -> "${height}p"
+        maxDim >= 3840 -> "4K"
+        maxDim >= 2560 -> "1440p"
+        maxDim >= 1920 -> "1080p"
+        maxDim >= 1280 -> "720p"
+        maxDim >= 854  -> "480p"
+        maxDim >= 640  -> "360p"
+        else           -> "${maxDim}p"
     }
 }
 
@@ -367,6 +371,8 @@ internal fun normalizeCodec(codec: String?): String {
     if (codec.isNullOrBlank()) return "—"
     val lower = codec.lowercase()
     return when {
+        // Video codecs — ExoPlayer reports these as codec strings like
+        // "avc1.640028", "hvc1.1.6.L150.90", "hev1.2.4.L150", etc.
         lower.startsWith("avc") || lower.contains("h264") || lower.contains("h.264") -> "H.264"
         lower.startsWith("hev") || lower.startsWith("hvc") || lower.contains("h265") || lower.contains("h.265") -> "H.265"
         lower.startsWith("vp09") || lower.startsWith("vp9") -> "VP9"
@@ -377,6 +383,12 @@ internal fun normalizeCodec(codec: String?): String {
         lower.contains("ec-3") || lower.contains("eac3") -> "EAC3"
         lower.contains("opus") -> "Opus"
         lower.contains("vorbis") -> "Vorbis"
+        lower.contains("flac") -> "FLAC"
+        // MIME types — some addons report these instead of codec strings
+        lower.contains("video/h264") || lower.contains("video/avc") -> "H.264"
+        lower.contains("video/hevc") || lower.contains("video/h265") -> "H.265"
+        lower.contains("video/vp9") -> "VP9"
+        lower.contains("video/av01") || lower.contains("video/av1") -> "AV1"
         else -> codec.uppercase()
     }
 }

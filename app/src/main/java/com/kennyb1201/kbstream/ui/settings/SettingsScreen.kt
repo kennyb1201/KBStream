@@ -26,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Icon
@@ -284,14 +285,25 @@ private fun SectionHeader(title: String) {
 
 @Composable
 private fun PillChip(label: String, selected: Boolean) {
+    var focused by remember { mutableStateOf(false) }
     Text(
         text = label,
         color = if (selected) KBVoid else KBTextHi,
         style = MaterialTheme.typography.labelSmall,
         modifier = Modifier
-            .background(
-                if (selected) KBAccent else KBSurface,
-                RoundedCornerShape(6.dp)
+            .onFocusChanged { focused = it.isFocused }
+            .then(
+                if (focused) {
+                    Modifier.background(
+                        if (selected) KBAccent else KBAccent.copy(alpha = 0.3f),
+                        RoundedCornerShape(6.dp)
+                    )
+                } else {
+                    Modifier.background(
+                        if (selected) KBAccent else KBSurface,
+                        RoundedCornerShape(6.dp)
+                    )
+                }
             )
             .padding(horizontal = 14.dp, vertical = 8.dp)
     )
@@ -304,26 +316,30 @@ private fun ToggleRow(
     checked: Boolean,
     onToggle: (Boolean) -> Unit
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+    KBCard(
+        onClick = { onToggle(!checked) },
+        modifier = Modifier.fillMaxWidth()
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = label,
-                color = KBTextHi,
-                style = MaterialTheme.typography.bodySmall
-            )
-            Text(
-                text = description,
-                color = KBTextLo,
-                style = MaterialTheme.typography.labelSmall
-            )
-        }
-        KBCard(onClick = { onToggle(!checked) }) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(KBSurfaceRaised, RoundedCornerShape(8.dp))
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = label,
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text(
+                    text = description,
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
             Text(
                 text = if (checked) "ON" else "OFF",
                 color = if (checked) KBVoid else KBTextHi,
