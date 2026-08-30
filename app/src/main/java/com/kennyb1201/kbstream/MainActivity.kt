@@ -114,7 +114,8 @@ sealed class Screen {
         val cast: List<PlayerCastMember> = emptyList(),
         val startPositionMs: Long,
         val sources: List<Stream> = emptyList(),
-        val streamHeaders: Map<String, String> = emptyMap()
+        val streamHeaders: Map<String, String> = emptyMap(),
+        val totalEpisodesInSeason: Int? = null
     ) : Screen()
 }
 
@@ -603,7 +604,9 @@ fun AppRoot() {
                                 },
                             startPositionMs =
                                 current.target.resumePositionMs,
-                            sources = allSources
+                            sources = allSources,
+                            totalEpisodesInSeason =
+                                current.target.totalEpisodesInSeason
                         )
                     }
                 },
@@ -653,21 +656,32 @@ fun AppRoot() {
                             cast = current.cast,
                             startPositionMs = current.startPositionMs,
                             sources = current.sources,
-                            streamHeaders = current.streamHeaders
+                            streamHeaders = current.streamHeaders,
+                            totalEpisodesInSeason = current.totalEpisodesInSeason
                         )
                     )
                 },
                 onNextEpisode = {
-                    val nextEp = (current.episode ?: 0) + 1
+                    val currentSeason = current.season ?: 1
+                    val currentEp = current.episode ?: 1
+                    val maxEp = current.totalEpisodesInSeason
+
+                    val (nextSeason, nextEp) = if (maxEp != null && currentEp >= maxEp) {
+                        // At or past the last episode — roll to season +1, episode 1
+                        (currentSeason + 1) to 1
+                    } else {
+                        currentSeason to (currentEp + 1)
+                    }
+
                     screen = Screen.Detail(
                         type = current.parentType,
                         id = current.parentId,
                         pendingTarget = StreamsTarget(
                             contentType = "series",
-                            streamId = "${current.parentId}:${current.season ?: 0}:$nextEp",
-                            title = "${current.itemName} S${current.season ?: 0} E$nextEp",
+                            streamId = "${current.parentId}:$nextSeason:$nextEp",
+                            title = "${current.itemName} S$nextSeason E$nextEp",
                             displayName = current.itemName,
-                            season = current.season,
+                            season = nextSeason,
                             episode = nextEp,
                             resumePositionMs = 0L
                         ),

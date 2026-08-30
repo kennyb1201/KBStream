@@ -113,7 +113,8 @@ data class StreamsTarget(
     val displayName: String,
     val season: Int?,
     val episode: Int?,
-    val resumePositionMs: Long
+    val resumePositionMs: Long,
+    val totalEpisodesInSeason: Int? = null
 )
 
 private sealed interface PeopleRowItem {
@@ -631,7 +632,8 @@ fun DetailScreen(
                                 resumeInfo?.positionMs ?: 0L
                             } else {
                                 0L
-                            }
+                            },
+                        totalEpisodesInSeason = episodes.size
                     )
                 }
             }
@@ -1385,7 +1387,8 @@ fun DetailScreen(
                                                                                 ?: 0L
                                                                         } else {
                                                                             0L
-                                                                        }
+                                                                        },
+                                                                    totalEpisodesInSeason = episodes.size
                                                                 )
 
                                                             onNavigateStreams(
