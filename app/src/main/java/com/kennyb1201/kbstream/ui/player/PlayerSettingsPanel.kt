@@ -3,8 +3,7 @@ package com.kennyb1201.kbstream.ui.player
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
-import androidx.compose.foundation.focus.FocusRequester
-import androidx.compose.foundation.focus.focusProperties
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -65,9 +64,7 @@ fun SettingsPanel(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(KBVoid.copy(alpha = 0.75f))
-            .focusGroup()
-            .focusProperties { exit = { FocusRequester.Cancel } },
+            .background(KBVoid.copy(alpha = 0.75f))            .focusGroup(),
         contentAlignment = Alignment.CenterEnd
     ) {
         Column(

@@ -564,10 +564,27 @@ fun PlayerScreen(
             httpFactory.setDefaultRequestProperties(extraHeaders)
         }
 
+        val drmLicenseUrlLocal = drmLicenseUrl
         val mediaSourceFactory = DefaultMediaSourceFactory(
             httpFactory,
             DefaultExtractorsFactory()
-        )
+        ).apply {
+            // Widevine DRM: attach when a license URL is provided,
+            // leaving non-DRM streams completely untouched.
+            if (!drmLicenseUrlLocal.isNullOrBlank()) {
+                val drmCallback = androidx.media3.exoplayer.drm.HttpMediaDrmCallback(
+                    drmLicenseUrlLocal,
+                    DefaultHttpDataSource.Factory()
+                        .setConnectTimeoutMs(15_000)
+                        .setReadTimeoutMs(15_000)
+                )
+                val drmSessionManager =
+                    androidx.media3.exoplayer.drm.DefaultDrmSessionManager.Builder()
+                        .build(drmCallback)
+                setDrmSessionManagerProvider { drmSessionManager }
+                Log.i("PLAYER_DRM", "Widevine DRM configured: licenseUrl=$drmLicenseUrlLocal")
+            }
+        }
             .setLiveTargetOffsetMs(3_000L)
 
         val mimeType = resolveMimeType(currentUrl)
@@ -619,25 +636,6 @@ fun PlayerScreen(
             .setMediaSourceFactory(mediaSourceFactory)
             .setHandleAudioBecomingNoisy(true) // auto-pause on BT disconnect
             .setWakeMode(C.WAKE_MODE_NETWORK)  // keep Wi-Fi alive while buffering
-            .apply {
-                // Widevine DRM: only attach when a license URL is provided,
-                // leaving non-DRM streams completely untouched.
-                val licenseUrl = drmLicenseUrl
-                if (!licenseUrl.isNullOrBlank()) {
-                    val drmCallback = androidx.media3.exoplayer.drm.HttpMediaDrmCallback(
-                        licenseUrl,
-                        DefaultHttpDataSource.Factory()
-                            .setConnectTimeoutMs(15_000)
-                            .setReadTimeoutMs(15_000)
-                    )
-                    setDrmSessionManagerProvider(
-                        androidx.media3.exoplayer.drm.DefaultDrmSessionManagerProvider().apply {
-                            setMediaDrmCallback(drmCallback)
-                        }
-                    )
-                    Log.i("PLAYER_DRM", "Widevine DRM configured: licenseUrl=$licenseUrl")
-                }
-            }
             .build()
             .apply {
                 // Single audio-attributes call — handles audio focus and
@@ -668,6 +666,7 @@ fun PlayerScreen(
                 playWhenReady = true
                 prepare()
             }
+    }
 
     // ---------- Dolby Vision / HDR detection ----------
     // After prepare(), the player's tracks are resolved.  We listen for
@@ -725,7 +724,6 @@ fun PlayerScreen(
             }
         }
     })
-    }
 
     // ---------- MediaSession ----------
     // Exposes playback state to the system: lock-screen controls, notification
@@ -1389,7 +1387,7 @@ fun PlayerScreen(
             item {
                 PickerRow(
                     label = "OFF",
-                    selected = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }.none { it.isSelected },
+                    selected = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }.none { g -> (0 until g.length).any { g.isTrackSelected(it) } },
                     onClick = {
                         exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
                             .buildUpon()
