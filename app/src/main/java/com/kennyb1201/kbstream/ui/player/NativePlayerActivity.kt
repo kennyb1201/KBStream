@@ -694,10 +694,7 @@ class NativePlayerActivity : ComponentActivity() {
 
     private fun updateHeaderInfo() {
         clearLogoUrl?.takeIf { it.isNotBlank() }?.let { url ->
-            clearLogo.load(url) {
-                crossfade(true)
-                allowHardware(false)
-            }
+            clearLogo.load(url)
             clearLogo.visibility = View.VISIBLE
             itemNameView.visibility = View.GONE
         } ?: run {
@@ -821,7 +818,7 @@ class NativePlayerActivity : ComponentActivity() {
         }
     }
 
-    private fun showPicker(mode: PickerMode) {
+    private fun togglePlayPause() {
         exoPlayer?.let {
             it.playWhenReady = !it.isPlaying
             if (it.isPlaying) {
@@ -873,12 +870,14 @@ class NativePlayerActivity : ComponentActivity() {
                             label = format.language?.uppercase() ?: "Track ${groupIdx + 1}",
                             isSelected = group.isTrackSelected(trackIdx),
                             onClick = {
-                                exoPlayer?.trackSelectionParameters = exoPlayer?.trackSelectionParameters
-                                    ?.buildUpon()
-                                    ?.setOverrideForType(
-                                        TrackSelectionOverride(group.mediaTrackGroup, trackIdx)
-                                    )
-                                    ?.build()
+                                exoPlayer?.let { player ->
+                                    player.trackSelectionParameters = player.trackSelectionParameters
+                                        .buildUpon()
+                                        .setOverrideForType(
+                                            TrackSelectionOverride(group.mediaTrackGroup, trackIdx)
+                                        )
+                                        .build()
+                                }
                                 dismissPicker()
                             }
                         )
@@ -894,10 +893,12 @@ class NativePlayerActivity : ComponentActivity() {
                     label = "OFF",
                     isSelected = !anySelected,
                     onClick = {
-                        exoPlayer?.trackSelectionParameters = exoPlayer?.trackSelectionParameters
-                            ?.buildUpon()
-                            ?.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-                            ?.build()
+                        exoPlayer?.let { player ->
+                            player.trackSelectionParameters = player.trackSelectionParameters
+                                .buildUpon()
+                                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                                .build()
+                        }
                         dismissPicker()
                     }
                 )
@@ -908,13 +909,15 @@ class NativePlayerActivity : ComponentActivity() {
                             label = format.language?.uppercase() ?: "Track ${groupIdx + 1}",
                             isSelected = group.isTrackSelected(trackIdx),
                             onClick = {
-                                exoPlayer?.trackSelectionParameters = exoPlayer?.trackSelectionParameters
-                                    ?.buildUpon()
-                                    ?.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-                                    ?.setOverrideForType(
-                                        TrackSelectionOverride(group.mediaTrackGroup, trackIdx)
-                                    )
-                                    ?.build()
+                                exoPlayer?.let { player ->
+                                    player.trackSelectionParameters = player.trackSelectionParameters
+                                        .buildUpon()
+                                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                                        .setOverrideForType(
+                                            TrackSelectionOverride(group.mediaTrackGroup, trackIdx)
+                                        )
+                                        .build()
+                                }
                                 dismissPicker()
                             }
                         )

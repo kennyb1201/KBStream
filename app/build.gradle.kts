@@ -115,6 +115,7 @@ dependencies {
     implementation("androidx.media3:media3-session:1.9.0")
     implementation("androidx.media3:media3-datasource-okhttp:1.9.0")
     implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.9.0+1")
+    implementation("androidx.recyclerview:recyclerview:1.3.2")
 implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.26.4")
 
 
