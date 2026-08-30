@@ -795,9 +795,7 @@ Log.d(
                     val requestVersion =
                         nextUpNextRequestVersion()
 
-                    try {
-
-val localItems =
+                    try {val localItems =
     history.map { entry ->
 
         val isEpisodePlayback =
@@ -806,10 +804,27 @@ val localItems =
         var episodeRating: Double? = null
         var episodeThumbnail: String? = null
 
+        // Cache completed episode keys per show so we only query the
+        // DAO once per parentId instead of once per history row.
+        val localCompletedForParent: Set<Pair<Int, Int>> =
+            if (isEpisodePlayback && entry.totalEpisodesInSeason != null) {
+                try {
+                    val resolvedParentId = entry.parentId.trim().ifBlank { entry.id.trim() }
+                    historyDao.getCompletedForParent(resolvedParentId)
+                        .mapNotNull { e ->
+                            e.season?.let { s -> e.episode?.let { ep -> s to ep } }
+                        }
+                        .toSet()
+                } catch (_: Exception) {
+                    emptySet()
+                }
+            } else {
+                emptySet()
+            }
+
         if (
             isEpisodePlayback &&
-            entry.season != null &&
-            entry.episode != null
+            entry.season != null && entry.episode != null
         ) {
             try {
                 val parentId =
@@ -912,13 +927,13 @@ val localItems =
             episodeDescription = entry.overview?.takeIf { it.isNotBlank() },
             episodesWatched = entry.season?.let { seasonNumber ->
                 entry.totalEpisodesInSeason?.let { total ->
-                    history.count { it.parentId == entry.parentId && it.season == seasonNumber && it.isCompleted }
+                    localCompletedForParent.count { (s, _) -> s == seasonNumber }
                         .coerceAtMost(total)
                 }
             },
             episodesTotal = entry.totalEpisodesInSeason,
             episodesRemaining = entry.totalEpisodesInSeason?.let { total ->
-                val watched = history.count { it.parentId == entry.parentId && it.season == entry.season && it.isCompleted }
+                val watched = localCompletedForParent.count { (s, _) -> s == entry.season }
                 (total - watched).coerceAtLeast(0)
             },
 
