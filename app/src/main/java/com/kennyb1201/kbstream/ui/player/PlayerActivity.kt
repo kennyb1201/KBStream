@@ -619,7 +619,6 @@ fun PlayerScreen(
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(20_000)  // longer for slow CDNs
             .setReadTimeoutMs(20_000)     // longer for non-faststart MP4s
-            .setAllowUnsecureRedirects(true)
             .setUserAgent(
                 streamHeaders["User-Agent"]
                     ?: streamHeaders["user-agent"]
@@ -640,24 +639,22 @@ fun PlayerScreen(
         val mediaSourceFactory = DefaultMediaSourceFactory(
             httpFactory,
             DefaultExtractorsFactory()
-        ).apply {
-            // Widevine DRM: attach when a license URL is provided,
-            // leaving non-DRM streams completely untouched.
-            if (!drmLicenseUrlLocal.isNullOrBlank()) {
-                val drmCallback = androidx.media3.exoplayer.drm.HttpMediaDrmCallback(
-                    drmLicenseUrlLocal,
-                    DefaultHttpDataSource.Factory()
-                        .setConnectTimeoutMs(15_000)
-                        .setReadTimeoutMs(15_000)
-                )
-                val drmSessionManager =
-                    androidx.media3.exoplayer.drm.DefaultDrmSessionManager.Builder()
-                        .build(drmCallback)
-                setDrmSessionManagerProvider { drmSessionManager }
-                Log.i("PLAYER_DRM", "Widevine DRM configured: licenseUrl=$drmLicenseUrlLocal")
-            }
-        }
-            .setLiveTargetOffsetMs(3_000L)
+        ).setLiveTargetOffsetMs(3_000L)
+
+        // Build DRM session manager if a license URL is provided.
+        // setDrmSessionManagerProvider lives on ExoPlayer.Builder, not
+        // on DefaultMediaSourceFactory, so we build it here and attach later.
+        val drmSessionManager = if (!drmLicenseUrlLocal.isNullOrBlank()) {
+            val drmCallback = androidx.media3.exoplayer.drm.HttpMediaDrmCallback(
+                drmLicenseUrlLocal,
+                DefaultHttpDataSource.Factory()
+                    .setConnectTimeoutMs(15_000)
+                    .setReadTimeoutMs(15_000)
+            )
+            Log.i("PLAYER_DRM", "Widevine DRM configured: licenseUrl=$drmLicenseUrlLocal")
+            androidx.media3.exoplayer.drm.DefaultDrmSessionManager.Builder()
+                .build(drmCallback)
+        } else null
 
         // Nuvio-style: on retry attempts >= 3, skip the mime hint and
         // let ExoPlayer probe the raw bytes — this fixes containers
@@ -722,9 +719,14 @@ fun PlayerScreen(
                     .setFallbackMinPlaybackSpeed(0.97f)
                     .setFallbackMaxPlaybackSpeed(1.03f)
                     .setMinUpdateIntervalMs(100)
-                    .setProportionalControlFactor(0.1)
+                    .setProportionalControlFactor(0.1f)
                     .build()
             )
+            .apply {
+                if (drmSessionManager != null) {
+                    setDrmSessionManagerProvider { drmSessionManager }
+                }
+            }
             .build()
             .apply {
                 // Single audio-attributes call — handles audio focus and
