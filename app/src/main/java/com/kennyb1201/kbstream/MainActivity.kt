@@ -634,7 +634,7 @@ fun AppRoot() {
                 val action = data?.getStringExtra("player_result_action")
                 when (action) {
                     "next_episode" -> {
-                        val nextUrl = data.getStringExtra("next_url") ?: return@rememberLauncherForActivityResult
+                        val nextUrl = data.getStringExtra("next_url")
                         val nextEpisode = data.getIntExtra("next_episode", -1).takeIf { it >= 0 }
                         val nextSeason = data.getIntExtra("next_season", -1).takeIf { it >= 0 }
                         val nextTitle = data.getStringExtra("next_title")

@@ -243,6 +243,15 @@ class NativePlayerActivity : ComponentActivity() {
 
         setContentView(R.layout.activity_player)
         bindViews()
+        findViewById<View>(R.id.player_root).setOnClickListener {
+            if (controlsVisible) hideControls() else showControls()
+        }
+        playerView.setOnTouchListener { _, event ->
+            if (event.action == android.view.MotionEvent.ACTION_UP) {
+                if (controlsVisible) hideControls() else showControls()
+            }
+            true
+        }
 
         // Extract intent data
         currentUrl = intent.getStringExtra("stream_url").orEmpty()
@@ -584,7 +593,10 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     private fun setupKeyboardHandler() {
-        playerView.rootView.setOnKeyListener { _, keyCode, event ->
+        playerView.isFocusable = true
+        playerView.isFocusableInTouchMode = true
+        playerView.requestFocus()
+        playerView.setOnKeyListener { _, keyCode, event ->
             if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
             when (keyCode) {
                 KeyEvent.KEYCODE_MEDIA_PAUSE -> {
