@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.player
 import android.app.PictureInPictureParams
 import android.content.Intent
 import android.net.Uri
+import android.provider.OpenableColumns
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -19,6 +20,7 @@ import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.ImageView
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -192,6 +194,7 @@ class NativePlayerActivity : ComponentActivity() {
     private var streamHeaders = emptyMap<String, String>()
     private var drmLicenseUrl: String? = null
     private var drmHeaders = emptyMap<String, String>()
+    private var externalSubtitleUri: Uri? = null
     private var startPositionMs = 0L
     private var historyId = ""
 
@@ -207,6 +210,25 @@ class NativePlayerActivity : ComponentActivity() {
 
     // Scopes
     private var scope: CoroutineScope? = null
+
+    private val externalSubtitlePicker = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: SecurityException) {
+                // Some providers do not offer persistable permissions; the current
+                // playback session can still use the granted URI permission.
+            }
+            externalSubtitleUri = uri
+            carryPositionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
+            recreatePlayer()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -669,6 +691,22 @@ class NativePlayerActivity : ComponentActivity() {
                     setMediaItem(mediaItemBuilder.build())
                 }
 
+                externalSubtitleUri?.let { subtitleUri ->
+                    val subtitle = MediaItem.SubtitleConfiguration.Builder(subtitleUri)
+                        .setMimeType(resolveSubtitleMimeType(subtitleUri))
+                        .setLanguage("und")
+                        .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                        .build()
+                    val currentItem = mediaItemBuilder
+                        .setSubtitleConfigurations(listOf(subtitle))
+                        .build()
+                    if (audioUrl.isNullOrBlank()) {
+                        setMediaItem(currentItem)
+                    } else {
+                        Log.w(TAG, "External subtitles are not merged with a separate audio source")
+                    }
+                }
+
                 if (!isLiveChannel && carryPositionMs > 0L) seekTo(carryPositionMs)
                 setPlaybackSpeed(playbackSpeed)
                 playWhenReady = true
@@ -991,7 +1029,16 @@ class NativePlayerActivity : ComponentActivity() {
             }
             PickerMode.SUBTITLE -> {
                 pickerTitle.text = "SUBTITLES"
+                val openFileItem = PickerItem(
+                    label = "OPEN SUBTITLE FILE",
+                    isSelected = externalSubtitleUri != null,
+                    onClick = {
+                        externalSubtitlePicker.launch(arrayOf("text/plain", "text/*", "application/octet-stream"))
+                        dismissPicker()
+                    }
+                )
                 val tracks = exoPlayer?.currentTracks ?: return
+                val subtitleItems = listOf(openFileItem)
                 val textGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
                 val anySelected = textGroups.any { g -> (0 until g.length).any { g.isTrackSelected(it) } }
                 val offItem = PickerItem(
@@ -1007,7 +1054,7 @@ class NativePlayerActivity : ComponentActivity() {
                         dismissPicker()
                     }
                 )
-                listOf(offItem) + textGroups.flatMapIndexed { groupIdx, group ->
+                subtitleItems + listOf(offItem) + textGroups.flatMapIndexed { groupIdx, group ->
                     (0 until group.length).map { trackIdx ->
                         val format = group.getTrackFormat(trackIdx)
                         PickerItem(
@@ -1378,6 +1425,15 @@ private fun formatMillis(ms: Long): String {
 }
 
 private fun Stream.label(): String = listOfNotNull(name?.takeIf { it.isNotBlank() }, title?.takeIf { it.isNotBlank() }, description?.takeIf { it.isNotBlank() }).distinct().joinToString("\n").ifBlank { "Stream details unavailable" }
+
+private fun resolveSubtitleMimeType(uri: Uri): String {
+    val name = uri.lastPathSegment.orEmpty().lowercase()
+    return when {
+        name.endsWith(".vtt") -> MimeTypes.TEXT_VTT
+        name.endsWith(".ass") || name.endsWith(".ssa") -> MimeTypes.TEXT_SSA
+        else -> MimeTypes.APPLICATION_SUBRIP
+    }
+}
 
 private fun parseHeaders(raw: String): Map<String, String> {
     if (raw.isBlank()) return emptyMap()
