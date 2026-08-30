@@ -32,6 +32,7 @@ import com.kennyb1201.kbstream.ui.iptv.GuideScreen
 import com.kennyb1201.kbstream.ui.iptv.IptvViewModel
 import com.kennyb1201.kbstream.ui.player.PlayerCastMember
 import com.kennyb1201.kbstream.ui.player.PlayerScreen
+import com.kennyb1201.kbstream.ui.settings.SettingsScreen
 import com.kennyb1201.kbstream.ui.search.SearchScreen
 import com.kennyb1201.kbstream.ui.simkl.SimklConnectScreen
 import com.kennyb1201.kbstream.ui.streams.StreamsScreen
@@ -53,6 +54,8 @@ sealed class Screen {
     object Simkl : Screen()
 
     object Guide : Screen()
+
+    object Settings : Screen()
 
     data class Detail(
         val type: String,
@@ -254,7 +257,17 @@ fun AppRoot() {
 
                 onOpenGuide = {
                     screen = Screen.Guide
+                },
+
+                onOpenSettings = {
+                    screen = Screen.Settings
                 }
+            )
+        }
+
+        is Screen.Settings -> {
+            SettingsScreen(
+                onBack = { screen = Screen.Home }
             )
         }
 

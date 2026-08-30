@@ -205,6 +205,7 @@ private fun TopActionBar(
     onOpenGuide: () -> Unit,
     onManageAddons: () -> Unit,
     onOpenSimkl: () -> Unit,
+    onOpenSettings: () -> Unit,
     firstActionFocusRequester: FocusRequester,
     onDismiss: () -> Unit
 ) {
@@ -244,6 +245,13 @@ private fun TopActionBar(
         TopActionItem(
             label = "SIMKL",
             onClick = onOpenSimkl,
+            onDismiss = onDismiss,
+            modifier = Modifier.padding(end = 8.dp)
+        )
+
+        TopActionItem(
+            label = "SETTINGS",
+            onClick = onOpenSettings,
             onDismiss = onDismiss
         )
     }
@@ -1306,6 +1314,7 @@ fun HomeScreen(
     onSearch: () -> Unit = {},
     onOpenGuide: () -> Unit = {},
     onOpenSimkl: () -> Unit,
+    onOpenSettings: () -> Unit = {},
     viewModel: HomeViewModel =
         androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
@@ -1835,6 +1844,7 @@ fun HomeScreen(
                     onManageAddons =
                         onManageAddons,
                     onOpenSimkl = onOpenSimkl,
+                    onOpenSettings = onOpenSettings,
                     firstActionFocusRequester =
                         topBarFocusRequester,
                     onDismiss = {

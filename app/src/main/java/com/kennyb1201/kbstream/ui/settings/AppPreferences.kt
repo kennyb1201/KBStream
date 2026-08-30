@@ -1,0 +1,96 @@
+package com.kennyb1201.kbstream.ui.settings
+
+import android.content.Context
+import android.content.SharedPreferences
+
+/**
+ * Persistent player defaults stored in SharedPreferences.
+ *
+ * These values are loaded when the player opens and provide the
+ * starting point for each session. They can be overridden per-session
+ * in the player overlay settings panel.
+ *
+ * The home screen Settings screen edits these values. The player
+ * reads them once at creation and lets the user override during playback.
+ */
+object AppPreferences {
+
+    private const val PREFS_NAME = "kbstream_player_prefs"
+
+    // Keys
+    private const val KEY_DEFAULT_BUFFER_MODE = "default_buffer_mode"       // 0=balanced, 1=low-latency
+    private const val KEY_DEFAULT_SUBTITLE_SIZE = "default_subtitle_size"   // 0=small, 1=normal, 2=large
+    private const val KEY_DEFAULT_SUBTITLE_BG = "default_subtitle_bg"       // 0=none, 1=semi, 2=solid
+    private const val KEY_DEFAULT_SUBTITLE_OFFSET = "default_subtitle_offset" // ms
+    private const val KEY_ENABLE_TUNNELING = "enable_tunneling"
+    private const val KEY_AUTO_PLAY_NEXT = "auto_play_next"
+    private const val KEY_FORCE_SOFTWARE_DECODER = "force_software_decoder"
+    private const val KEY_DEFAULT_ASPECT_RATIO = "default_aspect_ratio"     // 0=fit, 1=zoom, 2=fill
+
+    private fun prefs(context: Context): SharedPreferences =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    // ── Buffer mode ──────────────────────────────────────────────────
+    fun getDefaultBufferMode(context: Context): Int =
+        prefs(context).getInt(KEY_DEFAULT_BUFFER_MODE, 0)
+
+    fun setDefaultBufferMode(context: Context, mode: Int) {
+        prefs(context).edit().putInt(KEY_DEFAULT_BUFFER_MODE, mode).apply()
+    }
+
+    // ── Subtitle size ────────────────────────────────────────────────
+    fun getDefaultSubtitleSize(context: Context): Int =
+        prefs(context).getInt(KEY_DEFAULT_SUBTITLE_SIZE, 1)
+
+    fun setDefaultSubtitleSize(context: Context, size: Int) {
+        prefs(context).edit().putInt(KEY_DEFAULT_SUBTITLE_SIZE, size).apply()
+    }
+
+    // ── Subtitle background ──────────────────────────────────────────
+    fun getDefaultSubtitleBackground(context: Context): Int =
+        prefs(context).getInt(KEY_DEFAULT_SUBTITLE_BG, 0)
+
+    fun setDefaultSubtitleBackground(context: Context, bg: Int) {
+        prefs(context).edit().putInt(KEY_DEFAULT_SUBTITLE_BG, bg).apply()
+    }
+
+    // ── Subtitle offset ──────────────────────────────────────────────
+    fun getDefaultSubtitleOffset(context: Context): Int =
+        prefs(context).getInt(KEY_DEFAULT_SUBTITLE_OFFSET, 0)
+
+    fun setDefaultSubtitleOffset(context: Context, offsetMs: Int) {
+        prefs(context).edit().putInt(KEY_DEFAULT_SUBTITLE_OFFSET, offsetMs).apply()
+    }
+
+    // ── Tunneled playback ────────────────────────────────────────────
+    fun getEnableTunneling(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_ENABLE_TUNNELING, false)
+
+    fun setEnableTunneling(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_ENABLE_TUNNELING, enabled).apply()
+    }
+
+    // ── Auto-play next episode ───────────────────────────────────────
+    fun getAutoPlayNext(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_AUTO_PLAY_NEXT, true)
+
+    fun setAutoPlayNext(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_AUTO_PLAY_NEXT, enabled).apply()
+    }
+
+    // ── Force software decoder ───────────────────────────────────────
+    fun getForceSoftwareDecoder(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_FORCE_SOFTWARE_DECODER, false)
+
+    fun setForceSoftwareDecoder(context: Context, forced: Boolean) {
+        prefs(context).edit().putBoolean(KEY_FORCE_SOFTWARE_DECODER, forced).apply()
+    }
+
+    // ── Default aspect ratio ─────────────────────────────────────────
+    fun getDefaultAspectRatio(context: Context): Int =
+        prefs(context).getInt(KEY_DEFAULT_ASPECT_RATIO, 0)
+
+    fun setDefaultAspectRatio(context: Context, ratio: Int) {
+        prefs(context).edit().putInt(KEY_DEFAULT_ASPECT_RATIO, ratio).apply()
+    }
+}

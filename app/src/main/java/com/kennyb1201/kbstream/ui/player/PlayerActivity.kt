@@ -102,6 +102,7 @@ import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
+import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
@@ -556,7 +557,7 @@ fun PlayerScreen(
     var showSubtitlePicker by remember { mutableStateOf(false) }
     var showSpeedPicker by remember { mutableStateOf(false) }
     var playbackSpeed by remember { mutableStateOf(1f) }
-    var resizeModeIndex by remember { mutableIntStateOf(0) }
+    var resizeModeIndex by remember { mutableIntStateOf(AppPreferences.getDefaultAspectRatio(context)) }
 
     // PiP state
     val activity = context as? ComponentActivity
@@ -571,7 +572,7 @@ fun PlayerScreen(
     // Settings panel
     var showSettingsPanel by remember { mutableStateOf(false) }
     var subtitleOffsetMs by remember { mutableIntStateOf(0) }
-    var subtitleSize by remember { mutableIntStateOf(1) } // 0=small, 1=normal, 2=large
+    var subtitleSize by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleSize(context)) }
     var showSubtitlePickerForFile by remember { mutableStateOf(false) }
 
     // External subtitle file
@@ -579,10 +580,10 @@ fun PlayerScreen(
     var externalSubtitleLabel by remember { mutableStateOf<String?>(null) }
 
     // Player settings
-    var enableTunneling by remember { mutableStateOf(false) }
-    var subtitleBackground by remember { mutableIntStateOf(0) } // 0=none, 1=semi, 2=solid
-    var bufferMode by remember { mutableIntStateOf(0) } // 0=balanced, 1=low-latency
-    var autoPlayNext by remember { mutableStateOf(true) }
+    var enableTunneling by remember { mutableStateOf(AppPreferences.getEnableTunneling(context)) }
+    var subtitleBackground by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleBackground(context)) }
+    var bufferMode by remember { mutableIntStateOf(AppPreferences.getDefaultBufferMode(context)) }
+    var autoPlayNext by remember { mutableStateOf(AppPreferences.getAutoPlayNext(context)) }
 
     val isPlayingFlow = remember { MutableStateFlow(false) }
     val isBufferingFlow = remember { MutableStateFlow(false) }
