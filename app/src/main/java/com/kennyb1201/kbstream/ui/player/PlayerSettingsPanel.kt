@@ -18,8 +18,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Slider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
@@ -60,11 +64,16 @@ fun SettingsPanel(
     val bufferModeOptions = listOf("Balanced", "Low Latency")
     val resizeModeLabels = listOf("Fit", "Zoom", "Fill")
 
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        runCatching { focusRequester.requestFocus() }
+    }
     BackHandler { onDismiss() }
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(KBVoid.copy(alpha = 0.75f))            .focusGroup(),
+            .background(KBVoid.copy(alpha = 0.75f))
+            .focusGroup(),
         contentAlignment = Alignment.CenterEnd
     ) {
         Column(
@@ -73,6 +82,7 @@ fun SettingsPanel(
                 .padding(24.dp)
                 .background(KBSurfaceRaised, RoundedCornerShape(16.dp))
                 .padding(20.dp)
+                .focusRequester(focusRequester)
                 .verticalScroll(rememberScrollState())
         ) {
             Text(
@@ -85,11 +95,12 @@ fun SettingsPanel(
             // ── STREAM ──────────────────────────────────────────────
             if (streamWidth > 0 && streamHeight > 0) {
                 SectionHeader("STREAM")
-                SettingsInfoRow("Resolution", "${streamWidth}x${streamHeight}")
+                SettingsInfoRow("Resolution", normalizeResolution(streamWidth, streamHeight))
                 if (streamBitrate > 0) {
                     SettingsInfoRow("Bitrate", "${streamBitrate / 1_000} kbps")
                 }
-                streamCodec?.let { SettingsInfoRow("Codec", it) }
+                val codecLabel = normalizeCodec(streamCodec)
+                if (codecLabel != "—") SettingsInfoRow("Codec", codecLabel)
                 SettingsInfoRow("Speed", "${playbackSpeed}x")
                 SettingsInfoRow("Aspect", resizeModeLabels.getOrElse(resizeModeIndex) { "Fit" })
                 Spacer(modifier = Modifier.height(12.dp))

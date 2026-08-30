@@ -339,6 +339,47 @@ private val SPEED_OPTIONS = listOf(
     2f
 )
 
+/**
+ * Normalize raw pixel height into a human-friendly label:
+ * 2160 → "4K", 1080 → "1080p", 720 → "720p", etc.
+ * Falls back to "WxH" when height is unknown.
+ */
+internal fun normalizeResolution(width: Int, height: Int): String {
+    if (height <= 0) return if (width > 0) "${width}p" else "—"
+    return when {
+        height >= 2160 -> "4K"
+        height >= 1440 -> "1440p"
+        height >= 1080 -> "1080p"
+        height >= 720  -> "720p"
+        height >= 480  -> "480p"
+        height >= 360  -> "360p"
+        else           -> "${height}p"
+    }
+}
+
+/**
+ * Normalize raw codec string into a friendly label:
+ * "hev1.1.6.L150" → "H.265", "avc1.640028" → "H.264",
+ * "vp09.00" → "VP9", "av01" → "AV1".
+ */
+internal fun normalizeCodec(codec: String?): String {
+    if (codec.isNullOrBlank()) return "—"
+    val lower = codec.lowercase()
+    return when {
+        lower.startsWith("avc") || lower.contains("h264") || lower.contains("h.264") -> "H.264"
+        lower.startsWith("hev") || lower.startsWith("hvc") || lower.contains("h265") || lower.contains("h.265") -> "H.265"
+        lower.startsWith("vp09") || lower.startsWith("vp9") -> "VP9"
+        lower.startsWith("vp08") || lower.startsWith("vp8") -> "VP8"
+        lower.startsWith("av01") || lower.startsWith("av1") -> "AV1"
+        lower.startsWith("mp4a") || lower.startsWith("mp3") || lower.contains("aac") -> "AAC"
+        lower.contains("ac-3") || lower.contains("ac3") -> "AC-3"
+        lower.contains("ec-3") || lower.contains("eac3") -> "EAC3"
+        lower.contains("opus") -> "Opus"
+        lower.contains("vorbis") -> "Vorbis"
+        else -> codec.uppercase()
+    }
+}
+
 class PlayerActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -822,7 +863,8 @@ fun PlayerScreen(
                 !showSourcePicker &&
                 !showAudioPicker &&
                 !showSubtitlePicker &&
-                !showSpeedPicker
+                !showSpeedPicker &&
+                !showSettingsPanel
             ) {
                 showControls = false
             }
@@ -1046,7 +1088,8 @@ fun PlayerScreen(
         showSourcePicker ||
         showAudioPicker ||
         showSubtitlePicker ||
-        showSpeedPicker
+        showSpeedPicker ||
+        showSettingsPanel
 
     // The dialog owns focus while open. Do not request focus from the
     // background overlay on every picker state change: doing so can race
@@ -1071,6 +1114,7 @@ fun PlayerScreen(
         showAudioPicker = false
         showSubtitlePicker = false
         showSpeedPicker = false
+        showSettingsPanel = false
     }
 
     // When the overlay hides (play pressed), move focus back to the root
@@ -1634,11 +1678,12 @@ private fun PlayerControlsOverlay(
                 )
                 if (streamWidth > 0 && streamHeight > 0) {
                     val healthText = buildString {
-                        append("${streamWidth}x${streamHeight}")
+                        append(normalizeResolution(streamWidth, streamHeight))
                         if (streamBitrate > 0) {
                             append(" • ${streamBitrate / 1_000} kbps")
                         }
-                        streamCodec?.let { append(" • $it") }
+                        val codecLabel = normalizeCodec(streamCodec)
+                        if (codecLabel != "—") append(" • $codecLabel")
                     }
                     Text(
                         text = healthText,
