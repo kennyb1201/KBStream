@@ -1,9 +1,7 @@
 package com.kennyb1201.kbstream.ui.settings
 
-import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,10 +10,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -29,6 +28,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.ui.components.KBCard
@@ -41,36 +41,21 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 
 @Composable
 fun SettingsScreen(
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onOpenAddons: () -> Unit = {},
+    onOpenSimkl: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val focusRequester = remember { FocusRequester() }
 
-    // Load persisted values
-    var bufferMode by remember {
-        mutableIntStateOf(AppPreferences.getDefaultBufferMode(context))
-    }
-    var subtitleSize by remember {
-        mutableIntStateOf(AppPreferences.getDefaultSubtitleSize(context))
-    }
-    var subtitleBg by remember {
-        mutableIntStateOf(AppPreferences.getDefaultSubtitleBackground(context))
-    }
-    var subtitleOffset by remember {
-        mutableIntStateOf(AppPreferences.getDefaultSubtitleOffset(context))
-    }
-    var enableTunneling by remember {
-        mutableStateOf(AppPreferences.getEnableTunneling(context))
-    }
-    var autoPlayNext by remember {
-        mutableStateOf(AppPreferences.getAutoPlayNext(context))
-    }
-    var forceSoftwareDecoder by remember {
-        mutableStateOf(AppPreferences.getForceSoftwareDecoder(context))
-    }
-    var aspectRatio by remember {
-        mutableIntStateOf(AppPreferences.getDefaultAspectRatio(context))
-    }
+    var bufferMode by remember { mutableIntStateOf(AppPreferences.getDefaultBufferMode(context)) }
+    var subtitleSize by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleSize(context)) }
+    var subtitleBg by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleBackground(context)) }
+    var subtitleOffset by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleOffset(context)) }
+    var enableTunneling by remember { mutableStateOf(AppPreferences.getEnableTunneling(context)) }
+    var autoPlayNext by remember { mutableStateOf(AppPreferences.getAutoPlayNext(context)) }
+    var decoderMode by remember { mutableIntStateOf(AppPreferences.getDecoderMode(context)) }
+    var aspectRatio by remember { mutableIntStateOf(AppPreferences.getDefaultAspectRatio(context)) }
 
     BackHandler { onBack() }
 
@@ -89,14 +74,60 @@ fun SettingsScreen(
             style = MaterialTheme.typography.headlineMedium
         )
         Text(
-            text = "Player defaults — applied to every new playback session",
+            text = "Player defaults \u2014 applied to every new playback session",
             color = KBTextLo,
             style = MaterialTheme.typography.bodyMedium
         )
         Spacer(modifier = Modifier.height(16.dp))
 
+        // ── INTEGRATIONS ────────────────────────────────────────
+        SectionHeader("INTEGRATIONS")
+
+        NavigationRow(
+            label = "Add-ons",
+            description = "Manage Stremio add-ons and catalogs",
+            onClick = onOpenAddons
+        )
+
+        NavigationRow(
+            label = "Simkl",
+            description = "Connect your Simkl account for scrobbling",
+            onClick = onOpenSimkl
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
         // ── PLAYBACK ──────────────────────────────────────────────
         SectionHeader("PLAYBACK")
+
+        Text(
+            text = "Video Decoder",
+            color = KBTextHi,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("Auto", "FFmpeg Only").forEachIndexed { index, label ->
+                KBCard(onClick = {
+                    decoderMode = index
+                    AppPreferences.setDecoderMode(context, index)
+                }) {
+                    PillChip(label, decoderMode == index)
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = when (decoderMode) {
+                0 -> "Hardware first, falls back to FFmpeg if unsupported"
+                1 -> "Use FFmpeg for all decoding (fixes green-tint DV)"
+                else -> ""
+            },
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelSmall
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
 
         ToggleRow(
             label = "Auto-play Next Episode",
@@ -105,16 +136,6 @@ fun SettingsScreen(
             onToggle = {
                 autoPlayNext = it
                 AppPreferences.setAutoPlayNext(context, it)
-            }
-        )
-
-        ToggleRow(
-            label = "Force Software Decoder",
-            description = "Use FFmpeg for all decoding (fixes green-tint DV on some boxes)",
-            checked = forceSoftwareDecoder,
-            onToggle = {
-                forceSoftwareDecoder = it
-                AppPreferences.setForceSoftwareDecoder(context, it)
             }
         )
 
@@ -139,9 +160,9 @@ fun SettingsScreen(
                 }
             }
         }
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(2.dp))
         Text(
-            text = if (bufferMode == 1) "Lower buffer for live IPTV" else "25s/120s buffer — best for movies & series",
+            text = if (bufferMode == 1) "Lower buffer for live IPTV" else "25s/120s buffer \u2014 best for movies & series",
             color = KBTextLo,
             style = MaterialTheme.typography.labelSmall
         )
@@ -249,7 +270,7 @@ fun SettingsScreen(
     }
 }
 
-// ── Helper composables (same as PlayerSettingsPanel) ──────────────
+// ── Helper composables ──────────────────────────────────────────
 
 @Composable
 private fun SectionHeader(title: String) {
@@ -313,6 +334,46 @@ private fun ToggleRow(
                         RoundedCornerShape(6.dp)
                     )
                     .padding(horizontal = 14.dp, vertical = 8.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun NavigationRow(
+    label: String,
+    description: String,
+    onClick: () -> Unit
+) {
+    KBCard(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(KBSurfaceRaised, RoundedCornerShape(10.dp))
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = label,
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text(
+                    text = description,
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
+            Icon(
+                imageVector = Icons.Filled.ChevronRight,
+                contentDescription = null,
+                tint = KBTextLo,
+                modifier = Modifier.padding(start = 8.dp)
             )
         }
     }

@@ -25,6 +25,7 @@ object AppPreferences {
     private const val KEY_ENABLE_TUNNELING = "enable_tunneling"
     private const val KEY_AUTO_PLAY_NEXT = "auto_play_next"
     private const val KEY_FORCE_SOFTWARE_DECODER = "force_software_decoder"
+    private const val KEY_DECODER_MODE = "decoder_mode"                      // 0=auto, 1=device-only, 2=ffmpeg-only
     private const val KEY_DEFAULT_ASPECT_RATIO = "default_aspect_ratio"     // 0=fit, 1=zoom, 2=fill
 
     private fun prefs(context: Context): SharedPreferences =
@@ -78,12 +79,22 @@ object AppPreferences {
         prefs(context).edit().putBoolean(KEY_AUTO_PLAY_NEXT, enabled).apply()
     }
 
-    // ── Force software decoder ───────────────────────────────────────
+    // ── Force software decoder (legacy) ──────────────────────────────
     fun getForceSoftwareDecoder(context: Context): Boolean =
         prefs(context).getBoolean(KEY_FORCE_SOFTWARE_DECODER, false)
 
     fun setForceSoftwareDecoder(context: Context, forced: Boolean) {
         prefs(context).edit().putBoolean(KEY_FORCE_SOFTWARE_DECODER, forced).apply()
+    }
+
+    // ── Decoder mode ────────────────────────────────────────────────
+    // 0 = Auto (HW first, FFmpeg fallback)
+    // 1 = FFmpeg only (software decoder for everything)
+    fun getDecoderMode(context: Context): Int =
+        prefs(context).getInt(KEY_DECODER_MODE, 0)
+
+    fun setDecoderMode(context: Context, mode: Int) {
+        prefs(context).edit().putInt(KEY_DECODER_MODE, mode).apply()
     }
 
     // ── Default aspect ratio ─────────────────────────────────────────

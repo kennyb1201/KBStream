@@ -176,7 +176,7 @@ fun AppRoot() {
                 Screen.Addons
 
             is Screen.Addons ->
-                Screen.Home
+                Screen.Settings
 
             is Screen.Player ->
                 if (current.parentType == "channel") {
@@ -243,16 +243,8 @@ fun AppRoot() {
                     )
                 },
 
-                onManageAddons = {
-                    screen = Screen.Addons
-                },
-
                 onSearch = {
                     screen = Screen.Search
-                },
-
-                onOpenSimkl = {
-                    screen = Screen.Simkl
                 },
 
                 onOpenGuide = {
@@ -267,7 +259,9 @@ fun AppRoot() {
 
         is Screen.Settings -> {
             SettingsScreen(
-                onBack = { screen = Screen.Home }
+                onBack = { screen = Screen.Home },
+                onOpenAddons = { screen = Screen.Addons },
+                onOpenSimkl = { screen = Screen.Simkl }
             )
         }
 
@@ -335,7 +329,7 @@ fun AppRoot() {
 
             SimklConnectScreen(
                 onBackToHome = {
-                    screen = Screen.Home
+                    screen = Screen.Settings
                 }
             )
         }

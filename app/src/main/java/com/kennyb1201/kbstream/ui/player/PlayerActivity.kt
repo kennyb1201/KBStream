@@ -580,6 +580,7 @@ fun PlayerScreen(
     var externalSubtitleLabel by remember { mutableStateOf<String?>(null) }
 
     // Player settings
+    var decoderMode by remember { mutableIntStateOf(AppPreferences.getDecoderMode(context)) } // 0=auto, 1=device, 2=ffmpeg
     var enableTunneling by remember { mutableStateOf(AppPreferences.getEnableTunneling(context)) }
     var subtitleBackground by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleBackground(context)) }
     var bufferMode by remember { mutableIntStateOf(AppPreferences.getDefaultBufferMode(context)) }
@@ -608,6 +609,7 @@ fun PlayerScreen(
         manualRetryToken,
         forceSoftwareDecoder,
         retryAttempt,
+        decoderMode,
         drmLicenseUrl,
         drmHeaders,
         enableTunneling,
@@ -700,14 +702,17 @@ fun PlayerScreen(
         // codec error or HDR green-tint), PREFER means FFmpeg handles
         // the entire decode pipeline including color space conversion,
         // which fixes green-tint DV7 content on non-DV-capable SoCs.
+        // Decoder mode:
+        // 0 = Auto: HW first, FFmpeg fallback (EXTENSION_RENDERER_MODE_ON)
+        // 1 = FFmpeg only: software for everything (EXTENSION_RENDERER_MODE_PREFER)
+        // forceSoftwareDecoder overrides to PREFER on retry when HW fails.
+        val extensionMode = when {
+            forceSoftwareDecoder -> DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
+            decoderMode == 1     -> DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
+            else                 -> DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
+        }
         val renderersFactory = DefaultRenderersFactory(context)
-            .setExtensionRendererMode(
-                if (forceSoftwareDecoder) {
-                    DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
-                } else {
-                    DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
-                }
-            )
+            .setExtensionRendererMode(extensionMode)
             .setEnableDecoderFallback(true)
             // Enable rendering immediately on audio completion — prevents
             // the brief blank screen that occurs when video finishes

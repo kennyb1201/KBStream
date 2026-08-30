@@ -203,8 +203,6 @@ private fun TopActionItem(
 private fun TopActionBar(
     onSearch: () -> Unit,
     onOpenGuide: () -> Unit,
-    onManageAddons: () -> Unit,
-    onOpenSimkl: () -> Unit,
     onOpenSettings: () -> Unit,
     firstActionFocusRequester: FocusRequester,
     onDismiss: () -> Unit
@@ -231,20 +229,6 @@ private fun TopActionBar(
         TopActionItem(
             label = "TV GUIDE",
             onClick = onOpenGuide,
-            onDismiss = onDismiss,
-            modifier = Modifier.padding(end = 8.dp)
-        )
-
-        TopActionItem(
-            label = "ADD-ONS",
-            onClick = onManageAddons,
-            onDismiss = onDismiss,
-            modifier = Modifier.padding(end = 8.dp)
-        )
-
-        TopActionItem(
-            label = "SIMKL",
-            onClick = onOpenSimkl,
             onDismiss = onDismiss,
             modifier = Modifier.padding(end = 8.dp)
         )
@@ -1310,10 +1294,8 @@ fun HomeScreen(
         StreamsTarget,
         String?
     ) -> Unit,
-    onManageAddons: () -> Unit,
     onSearch: () -> Unit = {},
     onOpenGuide: () -> Unit = {},
-    onOpenSimkl: () -> Unit,
     onOpenSettings: () -> Unit = {},
     viewModel: HomeViewModel =
         androidx.lifecycle.viewmodel.compose.viewModel()
@@ -1841,9 +1823,6 @@ fun HomeScreen(
                 TopActionBar(
                     onSearch = onSearch,
                     onOpenGuide = onOpenGuide,
-                    onManageAddons =
-                        onManageAddons,
-                    onOpenSimkl = onOpenSimkl,
                     onOpenSettings = onOpenSettings,
                     firstActionFocusRequester =
                         topBarFocusRequester,
