@@ -349,9 +349,10 @@
                     android:focusableInTouchMode="true"
                     android:fontFamily="@font/oswald_medium"
                     android:gravity="center"
-                    android:text="▶"
+                    android:text="PLAY"
                     android:textColor="@color/kb_accent"
-                    android:textSize="24sp" />
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
 
                 <!-- Next episode -->
                 <TextView
@@ -906,7 +907,7 @@
         android:id="@+id/scrim"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="@color/kb_overlay_scrim"
+        android:background="#66000000"
         android:clickable="true"
         android:focusable="true"
         android:visibility="gone" />

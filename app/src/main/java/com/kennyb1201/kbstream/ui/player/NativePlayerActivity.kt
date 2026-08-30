@@ -310,8 +310,11 @@ class NativePlayerActivity : ComponentActivity() {
                     Stream(
                         name = obj.optString("name", null),
                         title = obj.optString("title", null),
+                        description = obj.optString("description", null),
                         url = obj.optString("url", null),
-                        audioUrl = obj.optString("audioUrl", null)
+                        audioUrl = obj.optString("audioUrl", null),
+                        infoHash = obj.optString("infoHash", null),
+                        fileIdx = obj.optInt("fileIdx", -1).takeIf { it >= 0 }
                     )
                 }.filter { !it.url.isNullOrBlank() }
                 if (sources.none { it.url == currentUrl }) {
@@ -358,7 +361,7 @@ class NativePlayerActivity : ComponentActivity() {
                     charText.text = member.character
                     charText.visibility = View.VISIBLE
                 }
-                val profileUrl = member.profilePath
+                        val profileUrl = member.profilePath
                     ?.trim()
                     ?.let { path ->
                         when {
@@ -399,7 +402,9 @@ class NativePlayerActivity : ComponentActivity() {
             else -> parentId
         }
 
-        currentSourceLabel = sources.firstOrNull { it.url == currentUrl }?.label() ?: "Current source"
+        currentSourceLabel = sources.firstOrNull { it.url == currentUrl }?.label()
+            ?: sources.firstOrNull()?.label()
+            ?: "Current source"
         updateHeaderInfo()
         updateControlsInfo()
 
@@ -474,7 +479,7 @@ class NativePlayerActivity : ComponentActivity() {
         // Static UI
         liveBadge.visibility = if (isLiveChannel) View.VISIBLE else View.GONE
         btnNext.visibility = if (season != null && episode != null) View.VISIBLE else View.GONE
-        btnSource.visibility = if (sources.size > 1) View.VISIBLE else View.GONE
+        btnSource.visibility = if (sources.isNotEmpty()) View.VISIBLE else View.GONE
         sourceLabel.text = "Source: $currentSourceLabel"
 
         // Populate header info
@@ -895,19 +900,25 @@ class NativePlayerActivity : ComponentActivity() {
         errorContainer.visibility = View.VISIBLE
         errorTitle.text = if (isLiveChannel) "Channel unavailable" else "Playback failed"
         errorMessage.text = errorMessageStr.orEmpty()
-        btnChangeSource.visibility = if (sources.size > 1) View.VISIBLE else View.GONE
+        btnChangeSource.visibility = if (sources.isNotEmpty()) View.VISIBLE else View.GONE
     }
 
     private fun updateHeaderInfo() {
-        clearLogoUrl?.takeIf { it.isNotBlank() }?.let { url ->
+        clearLogoUrl?.takeIf { it.isNotBlank() }?.let { rawUrl ->
+            val logoUrl = if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
+                rawUrl
+            } else {
+                "https://image.tmdb.org/t/p/w780${if (rawUrl.startsWith("/")) rawUrl else "/$rawUrl"}"
+            }
             clearLogo.load(
                 ImageRequest.Builder(this)
-                    .data(url)
+                    .data(logoUrl)
                     .crossfade(true)
                     .build()
             )
             clearLogo.visibility = View.VISIBLE
-            itemNameView.visibility = View.GONE
+            itemNameView.visibility = View.VISIBLE
+            itemNameView.text = itemName
         } ?: run {
             if (itemName.isNotBlank()) {
                 itemNameView.text = itemName
@@ -944,7 +955,7 @@ class NativePlayerActivity : ComponentActivity() {
 
     private fun updateControlsInfo() {
         sourceLabel.text = "Source: $currentSourceLabel"
-        btnPlayPause.text = if (exoPlayer?.isPlaying == true) "⏸" else "▶"
+        btnPlayPause.text = if (exoPlayer?.isPlaying == true) "PAUSE" else "PLAY"
         btnSpeed.text = "${playbackSpeed}x"
         updateStreamHealthDisplay()
     }

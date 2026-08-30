@@ -699,8 +699,11 @@ fun AppRoot() {
                         val obj = JSONObject().apply {
                             put("name", stream.name)
                             put("title", stream.title)
+                            put("description", stream.description)
                             put("url", stream.url)
                             put("audioUrl", stream.audioUrl)
+                            put("infoHash", stream.infoHash)
+                            put("fileIdx", stream.fileIdx)
                         }
                         sourcesArray.put(obj)
                     }
