@@ -30,8 +30,11 @@ import com.kennyb1201.kbstream.ui.detail.StreamsTarget
 import com.kennyb1201.kbstream.ui.home.HomeScreen
 import com.kennyb1201.kbstream.ui.iptv.GuideScreen
 import com.kennyb1201.kbstream.ui.iptv.IptvViewModel
+import com.kennyb1201.kbstream.ui.player.NativePlayerActivity
 import com.kennyb1201.kbstream.ui.player.PlayerCastMember
-import com.kennyb1201.kbstream.ui.player.PlayerScreen
+import android.content.Intent
+import org.json.JSONArray
+import org.json.JSONObject
 import com.kennyb1201.kbstream.ui.settings.SettingsScreen
 import com.kennyb1201.kbstream.ui.search.SearchScreen
 import com.kennyb1201.kbstream.ui.simkl.SimklConnectScreen
@@ -623,79 +626,101 @@ fun AppRoot() {
         }
 
         is Screen.Player -> {
-
-            PlayerScreen(
-                url = current.url,
-                audioUrl = current.audioUrl,
-                parentId = current.parentId,
-                parentType = current.parentType,
-                season = current.season,
-                episode = current.episode,
-                episodeStreamId =
-                    current.episodeStreamId,
-                episodeTitle = current.episodeTitle,
-                itemName = current.itemName,
-                itemPoster = current.itemPoster,
-                clearLogoUrl = current.clearLogoUrl,
-                overview = current.overview,
-                cast = current.cast,
-                startPositionMs =
-                    current.startPositionMs,
-                sources = current.sources,
-                streamHeaders =
-                    current.streamHeaders,
-                onNavigateActor = { personId ->
-                    screen = Screen.Actor(
-                        personId,
-                        Screen.Player(
-                            url = current.url,
-                            audioUrl = current.audioUrl,
-                            parentId = current.parentId,
-                            parentType = current.parentType,
-                            season = current.season,
-                            episode = current.episode,
-                            episodeStreamId = current.episodeStreamId,
-                            episodeTitle = current.episodeTitle,
-                            itemName = current.itemName,
-                            itemPoster = current.itemPoster,
-                            clearLogoUrl = current.clearLogoUrl,
-                            overview = current.overview,
-                            cast = current.cast,
-                            startPositionMs = current.startPositionMs,
-                            sources = current.sources,
-                            streamHeaders = current.streamHeaders,
-                            totalEpisodesInSeason = current.totalEpisodesInSeason
+            val context = LocalContext.current
+            val playerResultLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+                contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+            ) { result ->
+                val data = result.data
+                val action = data?.getStringExtra("player_result_action")
+                when (action) {
+                    "next_episode" -> {
+                        val nextUrl = data.getStringExtra("next_url") ?: return@rememberLauncherForActivityResult
+                        val nextEpisode = data.getIntExtra("next_episode", -1).takeIf { it >= 0 }
+                        val nextSeason = data.getIntExtra("next_season", -1).takeIf { it >= 0 }
+                        val nextTitle = data.getStringExtra("next_title")
+                        val nextStreamId = data.getStringExtra("next_stream_id")
+                        // Re-navigate to streams to find the next episode stream, then back to player
+                        screen = Screen.Detail(
+                            type = current.parentType,
+                            id = current.parentId,
+                            pendingTarget = StreamsTarget(
+                                contentType = current.parentType,
+                                streamId = nextStreamId.orEmpty(),
+                                title = nextTitle.orEmpty(),
+                                displayName = current.itemName,
+                                season = nextSeason,
+                                episode = nextEpisode,
+                                totalEpisodesInSeason = current.totalEpisodesInSeason
+                            ),
+                            itemPoster = current.itemPoster
                         )
-                    )
-                },
-                onNextEpisode = {
-                    val currentSeason = current.season ?: 1
-                    val currentEp = current.episode ?: 1
-                    val maxEp = current.totalEpisodesInSeason
-
-                    val (nextSeason, nextEp) = if (maxEp != null && currentEp >= maxEp) {
-                        // At or past the last episode — roll to season +1, episode 1
-                        (currentSeason + 1) to 1
-                    } else {
-                        currentSeason to (currentEp + 1)
                     }
-
-                    screen = Screen.Detail(
-                        type = current.parentType,
-                        id = current.parentId,
-                        pendingTarget = StreamsTarget(
-                            contentType = "series",
-                            streamId = "${current.parentId}:$nextSeason:$nextEp",
-                            title = "${current.itemName} S$nextSeason E$nextEp",
-                            displayName = current.itemName,
-                            season = nextSeason,
-                            episode = nextEp,
-                            resumePositionMs = 0L
-                        ),
-                        itemPoster = current.itemPoster
-                    )
+                    "navigate_actor" -> {
+                        val personId = data.getIntExtra("actor_person_id", -1)
+                        if (personId > 0) {
+                            screen = Screen.Actor(
+                                personId = personId,
+                                returnTo = Screen.Detail(
+                                    type = current.parentType,
+                                    id = current.parentId,
+                                    itemPoster = current.itemPoster
+                                )
+                            )
+                        }
+                    }
                 }
-            )
+            }
+            LaunchedEffect(current.url) {
+                val intent = Intent(context, NativePlayerActivity::class.java).apply {
+                    putExtra("stream_url", current.url)
+                    current.audioUrl?.let { putExtra("audio_url", it) }
+                    putExtra("parent_id", current.parentId)
+                    putExtra("parent_type", current.parentType)
+                    putExtra("season", current.season ?: -1)
+                    putExtra("episode", current.episode ?: -1)
+                    current.episodeStreamId?.let { putExtra("episode_stream_id", it) }
+                    current.episodeTitle?.let { putExtra("episode_title", it) }
+                    putExtra("item_name", current.itemName)
+                    current.itemPoster?.let { putExtra("item_poster", it) }
+                    current.clearLogoUrl?.let { putExtra("clear_logo_url", it) }
+                    current.overview?.let { putExtra("item_overview", it) }
+                    putExtra("start_position_ms", current.startPositionMs)
+                    if (current.streamHeaders.isNotEmpty()) {
+                        putExtra("stream_headers", current.streamHeaders.entries.joinToString("\n") { "${it.key}: ${it.value}" })
+                    }
+                    current.drmLicenseUrl?.let { putExtra("drm_license_url", it) }
+                    if (current.drmHeaders.isNotEmpty()) {
+                        putExtra("drm_headers", current.drmHeaders.entries.joinToString("\n") { "${it.key}: ${it.value}" })
+                    }
+                    // Pass sources as JSON array
+                    val sourcesArray = JSONArray()
+                    current.sources.forEach { stream ->
+                        val obj = JSONObject().apply {
+                            put("name", stream.name)
+                            put("title", stream.title)
+                            put("url", stream.url)
+                            put("audioUrl", stream.audioUrl)
+                        }
+                        sourcesArray.put(obj)
+                    }
+                    putExtra("sources_json", sourcesArray.toString())
+                    // Pass cast as JSON array
+                    val castArray = JSONArray()
+                    current.cast.forEach { member ->
+                        val obj = JSONObject().apply {
+                            put("id", member.id)
+                            put("name", member.name)
+                            put("character", member.character)
+                            put("profilePath", member.profilePath)
+                        }
+                        castArray.put(obj)
+                    }
+                    putExtra("cast_json", castArray.toString())
+                    // Pass total episodes
+                    current.totalEpisodesInSeason?.let { putExtra("total_episodes_in_season", it) }
+                }
+                playerResultLauncher.launch(intent)
+            }
         }
     }
 }

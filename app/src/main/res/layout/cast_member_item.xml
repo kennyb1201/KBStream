@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:layout_marginEnd="14dp"
+    android:focusable="true"
+    android:focusableInTouchMode="true">
+
+    <ImageView
+        android:id="@+id/cast_member_image"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:scaleType="centerCrop"
+        android:contentDescription="Cast member photo"
+        android:background="@drawable/circle_avatar_bg" />
+
+    <TextView
+        android:id="@+id/cast_member_name"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:fontFamily="@font/oswald_medium"
+        android:textColor="@color/kb_text_hi"
+        android:textSize="10sp"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:maxWidth="64dp"
+        android:gravity="center" />
+
+    <TextView
+        android:id="@+id/cast_member_character"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:fontFamily="@font/oswald_medium"
+        android:textColor="@color/kb_text_lo"
+        android:textSize="9sp"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:maxWidth="64dp"
+        android:gravity="center"
+        android:visibility="gone" />
+</LinearLayout>

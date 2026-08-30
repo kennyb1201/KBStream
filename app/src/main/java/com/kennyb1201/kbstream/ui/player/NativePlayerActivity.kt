@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.player
 
 import android.app.PictureInPictureParams
+import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -59,6 +60,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 private const val TAG = "NativePlayer"
@@ -129,6 +132,8 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var btnOffsetMinus: TextView
     private lateinit var subtitleOffsetValue: TextView
     private lateinit var btnOffsetPlus: TextView
+    private lateinit var castSection: LinearLayout
+    private lateinit var castRow: LinearLayout
 
     // Player
     private var exoPlayer: ExoPlayer? = null
@@ -139,7 +144,7 @@ class NativePlayerActivity : ComponentActivity() {
     private var controlsVisible = false
     private var isInPiPMode = false
     private var showSettingsPanel = false
-    private var showPicker = false
+    private var isPickerShowing = false
     private var pickerMode = PickerMode.SOURCE
     private enum class PickerMode { SOURCE, AUDIO, SUBTITLE, SPEED }
 
@@ -180,6 +185,8 @@ class NativePlayerActivity : ComponentActivity() {
     private var clearLogoUrl: String? = null
     private var overview: String? = null
     private var sources: List<Stream> = emptyList()
+    private var castMembers: List<PlayerCastMember> = emptyList()
+    private var totalEpisodesInSeason: Int? = null
     private var streamHeaders = emptyMap<String, String>()
     private var drmLicenseUrl: String? = null
     private var drmHeaders = emptyMap<String, String>()
@@ -236,6 +243,81 @@ class NativePlayerActivity : ComponentActivity() {
         enableTunneling = AppPreferences.getEnableTunneling(this)
         bufferMode = AppPreferences.getDefaultBufferMode(this)
         autoPlayNext = AppPreferences.getAutoPlayNext(this)
+        totalEpisodesInSeason = intent.getIntExtra("total_episodes_in_season", -1).takeIf { it > 0 }
+
+        // Parse sources from JSON
+        val sourcesJson = intent.getStringExtra("sources_json")
+        if (!sourcesJson.isNullOrBlank()) {
+            try {
+                val arr = JSONArray(sourcesJson)
+                sources = (0 until arr.length()).mapNotNull { i ->
+                    val obj = arr.optJSONObject(i) ?: return@mapNotNull null
+n                    Stream(
+                        name = obj.optString("name", null),
+                        title = obj.optString("title", null),
+                        url = obj.optString("url", null),
+                        audioUrl = obj.optString("audioUrl", null)
+                    )
+                }.filter { !it.url.isNullOrBlank() }
+            } catch (e: Exception) {
+                Log.w("NativePlayer", "Failed to parse sources_json", e)
+            }
+        }
+
+        // Parse cast from JSON
+        val castJson = intent.getStringExtra("cast_json")
+        if (!castJson.isNullOrBlank()) {
+            try {
+                val arr = JSONArray(castJson)
+                castMembers = (0 until arr.length()).mapNotNull { i ->
+                    val obj = arr.optJSONObject(i) ?: return@mapNotNull null
+                    PlayerCastMember(
+                        id = obj.optInt("id", 0),
+                        name = obj.optString("name", ""),
+                        character = obj.optString("character", null),
+                        profilePath = obj.optString("profilePath", null)
+                    )
+                }.filter { it.name.isNotBlank() }
+            } catch (e: Exception) {
+                Log.w("NativePlayer", "Failed to parse cast_json", e)
+            }
+        }
+
+        // Populate cast row
+        if (castMembers.isNotEmpty()) {
+            castSection.visibility = View.VISIBLE
+            castRow.removeAllViews()
+            castMembers.forEach { member ->
+                val itemView = layoutInflater.inflate(R.layout.cast_member_item, castRow, false)
+                val nameText = itemView.findViewById<TextView>(R.id.cast_member_name)
+                val charText = itemView.findViewById<TextView>(R.id.cast_member_character)
+                val profileImage = itemView.findViewById<ImageView>(R.id.cast_member_image)
+
+                nameText.text = member.name
+                if (member.character.isNullOrBlank()) {
+                    charText.visibility = View.GONE
+                } else {
+                    charText.text = member.character
+                    charText.visibility = View.VISIBLE
+                }
+                if (!member.profilePath.isNullOrBlank()) {
+                    profileImage.load(member.profilePath) {
+                        crossfade(true)
+                        placeholder(R.drawable.ic_cast_placeholder)
+                    }
+                }
+
+                itemView.setOnClickListener {
+                    setResult(RESULT_OK, Intent().apply {
+                        putExtra("player_result_action", "navigate_actor")
+                        putExtra("actor_person_id", member.id)
+                    })
+                    finish()
+                }
+
+                castRow.addView(itemView)
+            }
+        }
 
         historyId = when {
             !episodeStreamId.isNullOrBlank() -> episodeStreamId!!
@@ -305,13 +387,15 @@ class NativePlayerActivity : ComponentActivity() {
         btnOffsetMinus = findViewById(R.id.btn_offset_minus)
         subtitleOffsetValue = findViewById(R.id.subtitle_offset_value)
         btnOffsetPlus = findViewById(R.id.btn_offset_plus)
+        castSection = findViewById(R.id.cast_section)
+        castRow = findViewById(R.id.cast_row)
 
         pickerList.layoutManager = LinearLayoutManager(this)
 
         // Static UI
         liveBadge.visibility = if (isLiveChannel) View.VISIBLE else View.GONE
         btnNext.visibility = if (season != null && episode != null) View.VISIBLE else View.GONE
-        btnSource.visibility = View.GONE // updated when sources loaded
+        btnSource.visibility = if (sources.size > 1) View.VISIBLE else View.GONE
         sourceLabel.text = "Source: $currentSourceLabel"
 
         // Populate header info
@@ -350,7 +434,22 @@ class NativePlayerActivity : ComponentActivity() {
         }
 
         // Overlay control buttons
-        btnNext.setOnClickListener { /* Handled by onNextEpisode callback */ }
+        btnNext.setOnClickListener {
+            if (season != null && episode != null) {
+                val nextEp = episode!! + 1
+                val maxEps = totalEpisodesInSeason
+                if (maxEps == null || nextEp <= maxEps) {
+                    setResult(RESULT_OK, Intent().apply {
+                        putExtra("player_result_action", "next_episode")
+                        putExtra("next_season", season!!)
+                        putExtra("next_episode", nextEp)
+                        putExtra("next_title", "Episode $nextEp")
+                        putExtra("next_stream_id", episodeStreamId)
+                    })
+                    finish()
+                }
+            }
+        }
         btnSource.setOnClickListener { showPicker(PickerMode.SOURCE) }
         btnAudio.setOnClickListener { showPicker(PickerMode.AUDIO) }
         btnSubtitle.setOnClickListener { showPicker(PickerMode.SUBTITLE) }
@@ -477,7 +576,7 @@ class NativePlayerActivity : ComponentActivity() {
                     showControls(); false
                 }
                 KeyEvent.KEYCODE_BACK -> {
-                    if (showPicker || showSettingsPanel) { dismissAllPanels(); true } else false
+                    if (isPickerShowing || showSettingsPanel) { dismissAllPanels(); true } else false
                 }
                 else -> false
             }
@@ -524,7 +623,7 @@ class NativePlayerActivity : ComponentActivity() {
         }
 
         val bufferDurations = if (bufferMode == 1) intArrayOf(2_500, 10_000, 1_500, 3_000)
-        else intArrayOf(15_000, 60_000, 5_000, 10_000)
+        else intArrayOf(10_000, 30_000, 3_000, 6_000)
 
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(bufferDurations[0], bufferDurations[1], bufferDurations[2], bufferDurations[3])
@@ -843,7 +942,7 @@ class NativePlayerActivity : ComponentActivity() {
     // --- Picker ---
     private fun showPicker(mode: PickerMode) {
         pickerMode = mode
-        showPicker = true
+        isPickerShowing = true
         dismissSettingsPanel()
         pickerContainer.visibility = View.VISIBLE
         scrim.visibility = View.VISIBLE
@@ -960,11 +1059,11 @@ class NativePlayerActivity : ComponentActivity() {
     private fun dismissSettingsPanel() {
         showSettingsPanel = false
         settingsContainer.visibility = View.GONE
-        if (!showPicker) scrim.visibility = View.GONE
+        if (!isPickerShowing) scrim.visibility = View.GONE
     }
 
     private fun dismissPicker() {
-        showPicker = false
+        isPickerShowing = false
         pickerContainer.visibility = View.GONE
         if (!showSettingsPanel) scrim.visibility = View.GONE
     }
@@ -1004,7 +1103,18 @@ class NativePlayerActivity : ComponentActivity() {
         scope?.launch {
             saveProgress(reason = "ended", forceCompleted = true)
             if (autoPlayNext && !isLiveChannel && season != null && episode != null) {
-                // TODO: Fire onNextEpisode callback to parent
+                val nextEp = episode!! + 1
+                val maxEps = totalEpisodesInSeason
+                if (maxEps == null || nextEp <= maxEps) {
+                    setResult(RESULT_OK, Intent().apply {
+                        putExtra("player_result_action", "next_episode")
+                        putExtra("next_season", season!!)
+                        putExtra("next_episode", nextEp)
+                        putExtra("next_title", "Episode $nextEp")
+                        putExtra("next_stream_id", episodeStreamId)
+                    })
+                    finish()
+                }
             }
         }
     }
@@ -1030,7 +1140,7 @@ class NativePlayerActivity : ComponentActivity() {
                 // Update play/pause button
                 btnPlayPause.text = if (player.isPlaying) "⏸" else "▶"
             }
-            handler.postDelayed(this, 500L)
+            handler.postDelayed(this, 1_000L)
         }
     }
 
@@ -1276,4 +1386,59 @@ private fun parseHeaders(raw: String): Map<String, String> {
     }.toMap()
 }
 
+/**
+ * Cast member data class used by both native and compose player paths.
+ */
+data class PlayerCastMember(
+    val id: Int,
+    val name: String,
+    val character: String?,
+    val profilePath: String?
+)
 
+/**
+ * Normalize raw pixel height into a human-friendly label:
+ * 2160 → "4K", 1080 → "1080p", 720 → "720p", etc.
+ */
+internal fun normalizeResolution(width: Int, height: Int): String {
+    if (width <= 0 && height <= 0) return "—"
+    val maxDim = maxOf(width, height)
+    return when {
+        maxDim >= 3840 -> "4K"
+        maxDim >= 2560 -> "1440p"
+        maxDim >= 1920 -> "1080p"
+        maxDim >= 1280 -> "720p"
+        maxDim >= 854  -> "480p"
+        maxDim >= 640  -> "360p"
+        else           -> "${maxDim}p"
+    }
+}
+
+/**
+ * Normalize raw codec string into a friendly label:
+ * "hev1.1.6.L150" → "H.265", "avc1.640028" → "H.264",
+ * "vp09.00" → "VP9", "av01" → "AV1".
+ */
+internal fun normalizeCodec(codec: String?): String {
+    if (codec.isNullOrBlank()) return "—"
+    val lower = codec.lowercase()
+    return when {
+        lower.startsWith("dv") || lower.contains("dolby vision") || lower.contains("dvhe") || lower.contains("dvh1") -> "Dolby Vision"
+        lower.startsWith("avc") || lower.contains("h264") || lower.contains("h.264") -> "H.264"
+        lower.startsWith("hev") || lower.startsWith("hvc") || lower.contains("h265") || lower.contains("h.265") -> "H.265"
+        lower.startsWith("vp09") || lower.startsWith("vp9") -> "VP9"
+        lower.startsWith("vp08") || lower.startsWith("vp8") -> "VP8"
+        lower.startsWith("av01") || lower.startsWith("av1") -> "AV1"
+        lower.startsWith("mp4a") || lower.startsWith("mp3") || lower.contains("aac") -> "AAC"
+        lower.contains("ac-3") || lower.contains("ac3") -> "AC-3"
+        lower.contains("ec-3") || lower.contains("eac3") -> "EAC3"
+        lower.contains("opus") -> "Opus"
+        lower.contains("vorbis") -> "Vorbis"
+        lower.contains("flac") -> "FLAC"
+        lower.contains("video/h264") || lower.contains("video/avc") -> "H.264"
+        lower.contains("video/hevc") || lower.contains("video/h265") -> "H.265"
+        lower.contains("video/vp9") -> "VP9"
+        lower.contains("video/av01") || lower.contains("video/av1") -> "AV1"
+        else -> codec.uppercase()
+    }
+}
