@@ -154,10 +154,9 @@
         android:paddingHorizontal="14dp"
         android:paddingVertical="7dp"
         android:textColor="@color/kb_text_hi"
-        android:textSize="12sp"
-        android:visibility="gone" />
+        android:textSize="12sp"                android:visibility="gone" />
 
-    <!-- Main controls overlay (gradient background, hidden by default) -->
+            <!-- Main controls overlay (gradient background, hidden by default) -->
     <LinearLayout
         android:id="@+id/controls_overlay"
         android:layout_width="match_parent"
@@ -218,6 +217,7 @@
                 android:id="@+id/source_label"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:visibility="visible"
                 android:layout_marginTop="6dp"
                 android:fontFamily="@font/oswald_medium"
                 android:textColor="@color/kb_text_hi"
@@ -236,7 +236,7 @@
             <!-- Overview text -->
             <TextView
                 android:id="@+id/overview_text"
-                android:layout_width="0dp"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:fontFamily="@font/oswald_medium"
@@ -339,16 +339,16 @@
                 <!-- Play/Pause (primary, focused by default) -->
                 <TextView
                     android:id="@+id/btn_play_pause"
-                    android:layout_width="48dp"
-                    android:layout_height="48dp"
+                    android:layout_width="56dp"
+                    android:layout_height="56dp"
                     android:background="@drawable/control_button_bg"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
                     android:fontFamily="@font/oswald_medium"
                     android:gravity="center"
                     android:text="▶"
-                    android:textColor="@color/kb_text_hi"
-                    android:textSize="20sp" />
+                    android:textColor="@color/kb_accent"
+                    android:textSize="24sp" />
 
                 <!-- Next episode -->
                 <TextView

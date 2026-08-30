@@ -851,7 +851,12 @@ class NativePlayerActivity : ComponentActivity() {
 
     private fun updateHeaderInfo() {
         clearLogoUrl?.takeIf { it.isNotBlank() }?.let { url ->
-            clearLogo.load(url)
+            clearLogo.load(
+                ImageRequest.Builder(this)
+                    .data(url)
+                    .crossfade(true)
+                    .build()
+            )
             clearLogo.visibility = View.VISIBLE
             itemNameView.visibility = View.GONE
         } ?: run {
@@ -872,6 +877,8 @@ class NativePlayerActivity : ComponentActivity() {
             overviewText.text = it
             overviewText.visibility = View.VISIBLE
         }
+        sourceLabel.visibility = View.VISIBLE
+        sourceLabel.text = "Source: $currentSourceLabel"
     }
 
     private fun updateStreamHealthDisplay() {
