@@ -592,7 +592,7 @@ fun PlayerScreen(
     var externalSubtitleLabel by remember { mutableStateOf<String?>(null) }
 
     // Player settings
-    var decoderMode by remember { mutableIntStateOf(AppPreferences.getDecoderMode(context)) } // 0=auto, 1=device, 2=ffmpeg
+    var decoderMode by remember { mutableIntStateOf(AppPreferences.getDecoderMode(context)) } // 0=auto, 1=ffmpeg
     var enableTunneling by remember { mutableStateOf(AppPreferences.getEnableTunneling(context)) }
     var subtitleBackground by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleBackground(context)) }
     var bufferMode by remember { mutableIntStateOf(AppPreferences.getDefaultBufferMode(context)) }
@@ -621,7 +621,6 @@ fun PlayerScreen(
         manualRetryToken,
         forceSoftwareDecoder,
         retryAttempt,
-        decoderMode,
         drmLicenseUrl,
         drmHeaders,
         enableTunneling,
@@ -723,24 +722,18 @@ fun PlayerScreen(
             decoderMode == 1     -> DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
             else                 -> DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
         }
-        // Tunneled playback: routes audio/video through a single tunnel
-        // session for tighter A/V sync. Especially useful on HDR content
-        // connected to an AVR via HDMI.
-        val audioSink = if (enableTunneling) {
+        // Tunneled playback: subclass DefaultRenderersFactory to inject
+        // a tunneled DefaultAudioSink when the toggle is ON.
+        val renderersFactory = if (enableTunneling) {
             Log.i("PLAYER_TUNNEL", "Tunneled playback enabled")
-            androidx.media3.exoplayer.audio.DefaultAudioSink.Builder()
-                .setTunneling(true)
-                .build()
-        } else null
-
-        val renderersFactory = DefaultRenderersFactory(context)
-            .setExtensionRendererMode(extensionMode)
-            .setEnableDecoderFallback(true)
-            .apply {
-                if (audioSink != null) {
-                    setAudioSink(audioSink)
-                }
-            }
+            TunneledRenderersFactory(context)
+                .setExtensionRendererMode(extensionMode)
+                .setEnableDecoderFallback(true)
+        } else {
+            DefaultRenderersFactory(context)
+                .setExtensionRendererMode(extensionMode)
+                .setEnableDecoderFallback(true)
+        }
             // Enable rendering immediately on audio completion — prevents
             // the brief blank screen that occurs when video finishes
             // rendering before the next item is ready.

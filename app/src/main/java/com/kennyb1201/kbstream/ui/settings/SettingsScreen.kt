@@ -53,8 +53,8 @@ fun SettingsScreen(
     var subtitleSize by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleSize(context)) }
     var subtitleBg by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleBackground(context)) }
     var subtitleOffset by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleOffset(context)) }
-    var enableTunneling by remember { mutableStateOf(AppPreferences.getEnableTunneling(context)) }
     var autoPlayNext by remember { mutableStateOf(AppPreferences.getAutoPlayNext(context)) }
+    var enableTunneling by remember { mutableStateOf(AppPreferences.getEnableTunneling(context)) }
     var decoderMode by remember { mutableIntStateOf(AppPreferences.getDecoderMode(context)) }
     var aspectRatio by remember { mutableIntStateOf(AppPreferences.getDefaultAspectRatio(context)) }
 
@@ -170,15 +170,46 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        ToggleRow(
-            label = "Tunneled Playback",
-            description = "Low-latency A/V sync for HDR + AVR setups",
-            checked = enableTunneling,
-            onToggle = {
-                enableTunneling = it
-                AppPreferences.setEnableTunneling(context, it)
+        KBCard(
+            onClick = {
+                enableTunneling = !enableTunneling
+                AppPreferences.setEnableTunneling(context, enableTunneling)
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(KBSurfaceRaised, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Tunneled Playback",
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(
+                        text = "A/V sync for HDR + AVR setups",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+                Text(
+                    text = if (enableTunneling) "ON" else "OFF",
+                    color = if (enableTunneling) KBVoid else KBTextHi,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier
+                        .background(
+                            if (enableTunneling) KBAccent else KBSurface,
+                            RoundedCornerShape(6.dp)
+                        )
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                )
             }
-        )
+        }
 
         Spacer(modifier = Modifier.height(10.dp))
 

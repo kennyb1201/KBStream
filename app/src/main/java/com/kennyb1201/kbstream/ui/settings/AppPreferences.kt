@@ -22,10 +22,11 @@ object AppPreferences {
     private const val KEY_DEFAULT_SUBTITLE_SIZE = "default_subtitle_size"   // 0=small, 1=normal, 2=large
     private const val KEY_DEFAULT_SUBTITLE_BG = "default_subtitle_bg"       // 0=none, 1=semi, 2=solid
     private const val KEY_DEFAULT_SUBTITLE_OFFSET = "default_subtitle_offset" // ms
-    private const val KEY_ENABLE_TUNNELING = "enable_tunneling"
+
     private const val KEY_AUTO_PLAY_NEXT = "auto_play_next"
     private const val KEY_FORCE_SOFTWARE_DECODER = "force_software_decoder"
-    private const val KEY_DECODER_MODE = "decoder_mode"                      // 0=auto, 1=device-only, 2=ffmpeg-only
+    private const val KEY_ENABLE_TUNNELING = "enable_tunneling"
+    private const val KEY_DECODER_MODE = "decoder_mode"                      // 0=auto, 1=ffmpeg-only
     private const val KEY_DEFAULT_ASPECT_RATIO = "default_aspect_ratio"     // 0=fit, 1=zoom, 2=fill
 
     private fun prefs(context: Context): SharedPreferences =
@@ -63,15 +64,7 @@ object AppPreferences {
         prefs(context).edit().putInt(KEY_DEFAULT_SUBTITLE_OFFSET, offsetMs).apply()
     }
 
-    // ── Tunneled playback ────────────────────────────────────────────
-    fun getEnableTunneling(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_ENABLE_TUNNELING, false)
-
-    fun setEnableTunneling(context: Context, enabled: Boolean) {
-        prefs(context).edit().putBoolean(KEY_ENABLE_TUNNELING, enabled).apply()
-    }
-
-    // ── Auto-play next episode ───────────────────────────────────────
+    // ── Auto-play next episode
     fun getAutoPlayNext(context: Context): Boolean =
         prefs(context).getBoolean(KEY_AUTO_PLAY_NEXT, true)
 
@@ -79,6 +72,13 @@ object AppPreferences {
         prefs(context).edit().putBoolean(KEY_AUTO_PLAY_NEXT, enabled).apply()
     }
 
+    // ── Tunneled playback ────────────────────────────────────────────
+    fun getEnableTunneling(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_ENABLE_TUNNELING, false)
+
+    fun setEnableTunneling(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_ENABLE_TUNNELING, enabled).apply()
+    }
     // ── Force software decoder (legacy) ──────────────────────────────
     fun getForceSoftwareDecoder(context: Context): Boolean =
         prefs(context).getBoolean(KEY_FORCE_SOFTWARE_DECODER, false)

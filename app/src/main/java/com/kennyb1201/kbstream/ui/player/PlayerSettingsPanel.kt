@@ -191,11 +191,11 @@ fun SettingsPanel(
                 style = MaterialTheme.typography.labelSmall
             )
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             ToggleRow(
                 label = "Tunneled Playback",
-                description = "Low-latency A/V sync for HDR + AVR",
+                description = "A/V sync for HDR + AVR",
                 checked = enableTunneling,
                 onToggle = onTunnelingChange
             )
