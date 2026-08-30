@@ -657,14 +657,11 @@ fun AppRoot() {
                     }
                     "navigate_actor" -> {
                         val personId = data.getIntExtra("actor_person_id", -1)
+                        val resumePos = data.getLongExtra("actor_resume_position_ms", 0L)
                         if (personId > 0) {
                             screen = Screen.Actor(
                                 personId = personId,
-                                returnTo = Screen.Detail(
-                                    type = current.parentType,
-                                    id = current.parentId,
-                                    itemPoster = current.itemPoster
-                                )
+                                returnTo = current.copy(startPositionMs = resumePos)
                             )
                         }
                     }

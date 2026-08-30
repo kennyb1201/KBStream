@@ -18,7 +18,8 @@
         android:layout_height="56dp"
         android:scaleType="centerCrop"
         android:contentDescription="Cast member photo"
-        android:background="@drawable/circle_avatar_bg" />
+        android:background="@drawable/circle_avatar_bg"
+        android:clipToOutline="true" />
 
     <TextView
         android:id="@+id/cast_member_name"

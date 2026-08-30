@@ -107,7 +107,7 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var seekbar: SeekBar
     private lateinit var currentTime: TextView
     private lateinit var totalTime: TextView
-    private lateinit var btnPlayPause: TextView
+    private lateinit var btnPlayPause: ImageView
     private lateinit var btnNext: TextView
     private lateinit var btnSource: TextView
     private lateinit var btnAudio: TextView
@@ -385,9 +385,12 @@ class NativePlayerActivity : ComponentActivity() {
                 itemView.isFocusable = true
                 itemView.isFocusableInTouchMode = true
                 itemView.setOnClickListener {
+                    // Save current position before navigating away
+                    val currentPosition = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs
                     setResult(RESULT_OK, Intent().apply {
                         putExtra("player_result_action", "navigate_actor")
                         putExtra("actor_person_id", member.id)
+                        putExtra("actor_resume_position_ms", currentPosition)
                     })
                     finish()
                 }
@@ -449,6 +452,12 @@ class NativePlayerActivity : ComponentActivity() {
         pickerContainer = findViewById(R.id.picker_container)
         pickerTitle = findViewById(R.id.picker_title)
         settingsContainer = findViewById(R.id.settings_container)
+        settingsContainer.setOnKeyListener { _, keyCode, event ->
+            if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+            if (keyCode == KeyEvent.KEYCODE_BACK) {
+                dismissSettingsPanel(); showControls(); true
+            } else false
+        }
         scrim = findViewById(R.id.scrim)
         settingsBufferBalanced = findViewById(R.id.btn_buffer_balanced)
         settingsBufferLow = findViewById(R.id.btn_buffer_low)
@@ -475,6 +484,12 @@ class NativePlayerActivity : ComponentActivity() {
         pickerList.isFocusable = true
         pickerList.isFocusableInTouchMode = true
         pickerList.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+        pickerList.setOnKeyListener { _, keyCode, event ->
+            if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+            if (keyCode == KeyEvent.KEYCODE_BACK) {
+                dismissPicker(); showControls(); true
+            } else false
+        }
 
         // Static UI
         liveBadge.visibility = if (isLiveChannel) View.VISIBLE else View.GONE
@@ -904,26 +919,29 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     private fun updateHeaderInfo() {
-        clearLogoUrl?.takeIf { it.isNotBlank() }?.let { rawUrl ->
-            val logoUrl = if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
-                rawUrl
-            } else {
-                "https://image.tmdb.org/t/p/w780${if (rawUrl.startsWith("/")) rawUrl else "/$rawUrl"}"
-            }
+        // Resolve clear logo URL from multiple sources
+        val resolvedLogoUrl = clearLogoUrl?.takeIf { it.isNotBlank() }?.let { rawUrl ->
+            if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) rawUrl
+            else "https://image.tmdb.org/t/p/w780${if (rawUrl.startsWith("/")) rawUrl else "/$rawUrl"}"
+        } ?: itemPoster?.takeIf { it.isNotBlank() }?.let { rawPoster ->
+            if (rawPoster.startsWith("http://") || rawPoster.startsWith("https://")) rawPoster
+            else if (rawPoster.startsWith("/")) "https://image.tmdb.org/t/p/w500$rawPoster"
+            else null
+        }
+
+        if (resolvedLogoUrl != null) {
             clearLogo.load(
                 ImageRequest.Builder(this)
-                    .data(logoUrl)
+                    .data(resolvedLogoUrl)
                     .crossfade(true)
                     .build()
             )
             clearLogo.visibility = View.VISIBLE
-            itemNameView.visibility = if (itemName.isBlank()) View.GONE else View.VISIBLE
+            itemNameView.visibility = View.GONE
+        } else if (itemName.isNotBlank()) {
+            clearLogo.visibility = View.GONE
             itemNameView.text = itemName
-        } ?: run {
-            if (itemName.isNotBlank()) {
-                itemNameView.text = itemName
-                itemNameView.visibility = View.VISIBLE
-            }
+            itemNameView.visibility = View.VISIBLE
         }
         if (season != null && episode != null) {
             episodeLabel.text = "S${season.toString().padStart(2, '0')} · E${episode.toString().padStart(2, '0')}"
@@ -955,7 +973,9 @@ class NativePlayerActivity : ComponentActivity() {
 
     private fun updateControlsInfo() {
         sourceLabel.text = "Source: $currentSourceLabel"
-        btnPlayPause.text = if (exoPlayer?.isPlaying == true) "PAUSE" else "PLAY"
+        btnPlayPause.setImageResource(
+            if (exoPlayer?.isPlaying == true) R.drawable.ic_player_pause else R.drawable.ic_player_play
+        )
         btnSpeed.text = "${playbackSpeed}x"
         updateStreamHealthDisplay()
     }
@@ -1277,7 +1297,9 @@ class NativePlayerActivity : ComponentActivity() {
                 }
 
                 // Update play/pause button
-                btnPlayPause.text = if (player.isPlaying) "PAUSE" else "PLAY"
+                btnPlayPause.setImageResource(
+                    if (player.isPlaying) R.drawable.ic_player_pause else R.drawable.ic_player_play
+                )
             }
             handler.postDelayed(this, 1_000L)
         }
@@ -1371,6 +1393,16 @@ class NativePlayerActivity : ComponentActivity() {
                 enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build())
             } catch (e: Exception) { Log.w("PLAYER_PIP", "PiP failed", e) }
         }
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        when {
+            isPickerShowing -> { dismissPicker(); showControls(); return }
+            showSettingsPanel -> { dismissSettingsPanel(); showControls(); return }
+            controlsVisible -> { hideControls(); return }
+        }
+        super.onBackPressed()
     }
 
     override fun onUserLeaveHint() { super.onUserLeaveHint(); enterPipIfEnabled() }
