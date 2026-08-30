@@ -531,6 +531,22 @@ fun PlayerScreen(
             mediaItemBuilder.setMimeType(mimeType)
         }
 
+        // DRM: set Widevine license on the MediaItem for DRM-protected content.
+        val drmUrl = drmLicenseUrl
+        if (!drmUrl.isNullOrBlank()) {
+            mediaItemBuilder.setDrmConfiguration(
+                MediaItem.DrmConfiguration.Builder(C.WIDEVINE_UUID)
+                    .setLicenseUri(drmUrl)
+                    .apply {
+                        if (drmHeaders.isNotEmpty()) {
+                            setLicenseRequestHeaders(drmHeaders)
+                        }
+                    }
+                    .build()
+            )
+            Log.i("PLAYER_DRM", "Widevine DRM configured: $drmUrl")
+        }
+
         // ---------- Buffered playback for smooth playback ----------
         // Balanced mode: 15 s / 60 s — enough runway for most content
         // without blowing the heap on memory-constrained TV sticks.

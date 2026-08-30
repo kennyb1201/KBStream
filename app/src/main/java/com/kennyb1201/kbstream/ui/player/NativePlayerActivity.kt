@@ -506,6 +506,23 @@ class NativePlayerActivity : ComponentActivity() {
         val mediaItemBuilder = MediaItem.Builder().setUri(currentUrl)
         if (mimeType != null) mediaItemBuilder.setMimeType(mimeType)
 
+        // DRM: set license URL and headers on the MediaItem so ExoPlayer's
+        // built-in DRM negotiation handles Widevine playback.
+        if (!drmLicenseUrl.isNullOrBlank()) {
+            val drmHeaders = drmHeaders
+            mediaItemBuilder.setDrmConfiguration(
+                MediaItem.DrmConfiguration.Builder(C.WIDEVINE_UUID)
+                    .setLicenseUri(drmLicenseUrl)
+                    .apply {
+                        if (drmHeaders.isNotEmpty()) {
+                            setLicenseRequestHeaders(drmHeaders)
+                        }
+                    }
+                    .build()
+            )
+            Log.i("PLAYER_DRM", "Widevine DRM configured: $drmLicenseUrl")
+        }
+
         val bufferDurations = if (bufferMode == 1) intArrayOf(2_500, 10_000, 1_500, 3_000)
         else intArrayOf(15_000, 60_000, 5_000, 10_000)
 
