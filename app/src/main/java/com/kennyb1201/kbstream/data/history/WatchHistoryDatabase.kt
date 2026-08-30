@@ -15,7 +15,7 @@ import com.kennyb1201.kbstream.data.cache.WatchedStatusEntity
         WatchedStatusEntity::class,
         ImdbResolutionEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class WatchHistoryDatabase : RoomDatabase() {

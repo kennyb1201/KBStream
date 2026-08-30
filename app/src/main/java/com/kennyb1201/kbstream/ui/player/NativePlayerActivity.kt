@@ -402,8 +402,8 @@ class NativePlayerActivity : ComponentActivity() {
             else -> parentId
         }
 
-        currentSourceLabel = sources.firstOrNull { it.url == currentUrl }?.label()
-            ?: sources.firstOrNull()?.label()
+        currentSourceLabel = sources.firstOrNull { it.url == currentUrl }?.displayLabel()
+            ?: sources.firstOrNull()?.displayLabel()
             ?: "Current source"
         updateHeaderInfo()
         updateControlsInfo()
@@ -479,7 +479,7 @@ class NativePlayerActivity : ComponentActivity() {
         // Static UI
         liveBadge.visibility = if (isLiveChannel) View.VISIBLE else View.GONE
         btnNext.visibility = if (season != null && episode != null) View.VISIBLE else View.GONE
-        btnSource.visibility = if (sources.isNotEmpty()) View.VISIBLE else View.GONE
+        btnSource.visibility = View.VISIBLE
         sourceLabel.text = "Source: $currentSourceLabel"
 
         // Populate header info
@@ -900,7 +900,7 @@ class NativePlayerActivity : ComponentActivity() {
         errorContainer.visibility = View.VISIBLE
         errorTitle.text = if (isLiveChannel) "Channel unavailable" else "Playback failed"
         errorMessage.text = errorMessageStr.orEmpty()
-        btnChangeSource.visibility = if (sources.isNotEmpty()) View.VISIBLE else View.GONE
+        btnChangeSource.visibility = View.VISIBLE
     }
 
     private fun updateHeaderInfo() {
@@ -917,7 +917,7 @@ class NativePlayerActivity : ComponentActivity() {
                     .build()
             )
             clearLogo.visibility = View.VISIBLE
-            itemNameView.visibility = View.VISIBLE
+            itemNameView.visibility = if (itemName.isBlank()) View.GONE else View.VISIBLE
             itemNameView.text = itemName
         } ?: run {
             if (itemName.isNotBlank()) {
@@ -1078,7 +1078,7 @@ class NativePlayerActivity : ComponentActivity() {
                 pickerTitle.text = "SOURCES"
                 sources.map { stream ->
                     PickerItem(
-                        label = stream.label(),
+                        label = stream.displayLabel(),
                         isSelected = stream.url == currentUrl,
                         onClick = { switchToSource(stream); dismissPicker() }
                     )
@@ -1277,7 +1277,7 @@ class NativePlayerActivity : ComponentActivity() {
                 }
 
                 // Update play/pause button
-                btnPlayPause.text = if (player.isPlaying) "⏸" else "▶"
+                btnPlayPause.text = if (player.isPlaying) "PAUSE" else "PLAY"
             }
             handler.postDelayed(this, 1_000L)
         }
@@ -1300,7 +1300,6 @@ class NativePlayerActivity : ComponentActivity() {
                 posMs >= stamp.startMs && posMs < stamp.endMs &&
                     stamp.endMs > stamp.startMs && stamp.endMs - stamp.startMs <= 10 * 60 * 1000L
             }
-
             if (matching != activeIntroStamp) {
                 activeIntroStamp = matching
                 if (matching != null) {
@@ -1338,7 +1337,9 @@ class NativePlayerActivity : ComponentActivity() {
 
             val entry = WatchHistoryEntity(
                 id = historyId, parentId = parentId, type = parentType,
-                name = itemName, poster = itemPoster, streamUrl = currentUrl,
+                name = itemName, episodeTitle = episodeTitle, overview = overview,
+                clearLogo = clearLogoUrl, totalEpisodesInSeason = totalEpisodesInSeason,
+                poster = itemPoster, streamUrl = currentUrl,
                 season = season, episode = episode, episodeStreamId = episodeStreamId,
                 positionMs = safePos, durationMs = dur, updatedAt = now,
                 isCompleted = isCompleted,
@@ -1417,7 +1418,9 @@ class NativePlayerActivity : ComponentActivity() {
                 val existing = withContext(Dispatchers.IO) { dao.getById(historyId) }
                 val entry = WatchHistoryEntity(
                     id = historyId, parentId = parentId, type = parentType,
-                    name = itemName, poster = itemPoster, streamUrl = currentUrl,
+                    name = itemName, episodeTitle = episodeTitle, overview = overview,
+                    clearLogo = clearLogoUrl, totalEpisodesInSeason = totalEpisodesInSeason,
+                    poster = itemPoster, streamUrl = currentUrl,
                     season = season, episode = episode, episodeStreamId = episodeStreamId,
                     positionMs = safePos, durationMs = dur, updatedAt = now,
                     isCompleted = isCompleted,
@@ -1444,7 +1447,7 @@ class NativePlayerActivity : ComponentActivity() {
         val newUrl = stream.url ?: return
         if (newUrl == currentUrl) return
         carryPositionMs = if (isLiveChannel) 0L else exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
-        currentSourceLabel = stream.label()
+        currentSourceLabel = stream.displayLabel()
         currentUrl = newUrl
         currentAudioUrl = stream.audioUrl
         retryAttempt = 0; retryExhausted = false; errorMessageStr = null; forceSoftwareDecoder = false
@@ -1517,7 +1520,14 @@ private fun formatMillis(ms: Long): String {
     else String.format("%02d:%02d", minutes, seconds)
 }
 
-private fun Stream.label(): String = listOfNotNull(name?.takeIf { it.isNotBlank() }, title?.takeIf { it.isNotBlank() }, description?.takeIf { it.isNotBlank() }).distinct().joinToString("\n").ifBlank { "Stream details unavailable" }
+private fun Stream.displayLabel(): String = listOfNotNull(
+    name?.takeIf { it.isNotBlank() },
+    title?.takeIf { it.isNotBlank() },
+    description?.takeIf { it.isNotBlank() }
+).distinct().joinToString(" • ").ifBlank {
+    url?.substringAfterLast('/').orEmpty().substringBefore('?').takeIf { it.isNotBlank() }
+        ?: "Current source"
+}
 
 private fun resolveSubtitleMimeType(uri: Uri): String {
     val name = uri.lastPathSegment.orEmpty().lowercase()

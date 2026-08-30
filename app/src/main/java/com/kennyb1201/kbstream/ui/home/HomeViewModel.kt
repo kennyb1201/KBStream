@@ -908,8 +908,19 @@ val localItems =
             showTitle =
                 if (isEpisodePlayback) entry.name else null,
 
-            episodeTitle = null,
-            episodeDescription = null,
+            episodeTitle = entry.episodeTitle?.takeIf { it.isNotBlank() },
+            episodeDescription = entry.overview?.takeIf { it.isNotBlank() },
+            episodesWatched = entry.season?.let { seasonNumber ->
+                entry.totalEpisodesInSeason?.let { total ->
+                    history.count { it.parentId == entry.parentId && it.season == seasonNumber && it.isCompleted }
+                        .coerceAtMost(total)
+                }
+            },
+            episodesTotal = entry.totalEpisodesInSeason,
+            episodesRemaining = entry.totalEpisodesInSeason?.let { total ->
+                val watched = history.count { it.parentId == entry.parentId && it.season == entry.season && it.isCompleted }
+                (total - watched).coerceAtLeast(0)
+            },
 
             // Episode-specific TMDB rating.
             // Your UI currently calls this field imdbRating.
