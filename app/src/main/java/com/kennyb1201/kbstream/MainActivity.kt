@@ -665,6 +665,38 @@ fun AppRoot() {
                             )
                         }
                     }
+                    else -> {
+                        // Normal BACK exit from player — go back to streams screen
+                        if (current.parentType == "channel") {
+                            screen = Screen.Guide
+                        } else {
+                            screen = Screen.Streams(
+                                target = StreamsTarget(
+                                    contentType = current.parentType,
+                                    streamId = current.episodeStreamId.orEmpty(),
+                                    title = current.episodeTitle.orEmpty().ifBlank { current.itemName },
+                                    displayName = current.itemName,
+                                    season = current.season,
+                                    episode = current.episode,
+                                    resumePositionMs = current.startPositionMs,
+                                    totalEpisodesInSeason = current.totalEpisodesInSeason
+                                ),
+                                parentId = current.parentId,
+                                parentType = current.parentType,
+                                itemPoster = current.itemPoster,
+                                clearLogoUrl = current.clearLogoUrl,
+                                overview = current.overview,
+                                cast = current.cast.map { member ->
+                                    TmdbCastMember(
+                                        id = member.id,
+                                        name = member.name,
+                                        character = member.character,
+                                        profilePath = member.profilePath?.removePrefix(TmdbRepository.PROFILE_BASE)
+                                    )
+                                }
+                            )
+                        }
+                    }
                 }
             }
             LaunchedEffect(current.url) {
