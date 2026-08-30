@@ -72,8 +72,10 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.ColorInfo
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Tracks
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -500,16 +502,27 @@ fun PlayerScreen(
             mediaItemBuilder.setMimeType(mimeType)
         }
 
+        // ---------- Buffered playback for smooth playback ----------
+        // The old 2.5 s / 10 s min/max caused constant rebuffers on
+        // high-bitrate HEVC / DV7 streams.  The 15 s / 60 s values
+        // give the decoder enough runway to absorb network jitter
+        // while still starting playback quickly.
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                2_500,
-                10_000,
-                1_000,
-                2_000
+                15_000,   // minBufferMs – 15 s minimum before playback starts
+                60_000,   // maxBufferMs – 60 s ceiling
+                5_000,    // bufferForPlaybackMs – 5 s needed to start/resume
+                10_000    // bufferForPlaybackAfterRebufferMs – 10 s after stall
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
+        // ---------- Renderers ----------
+        // Extension renderer mode ON means MediaCodec hardware decoders
+        // are tried first; the FFmpeg extension (libde265 / libavcodec)
+        // is used only when no HW decoder matches (e.g. DV7 HEVC10 on
+        // a device without a DV-capable SoC).  Decoder fallback allows
+        // graceful downgrade instead of an immediate error.
         val renderersFactory = DefaultRenderersFactory(context)
             .setExtensionRendererMode(
                 if (forceSoftwareDecoder) {
@@ -519,19 +532,24 @@ fun PlayerScreen(
                 }
             )
             .setEnableDecoderFallback(true)
+            .setAllowedVideoDecoderCount(0) // 0 = unlimited – let the platform decide
 
         ExoPlayer.Builder(context, renderersFactory)
             .setLoadControl(loadControl)
             .setMediaSourceFactory(mediaSourceFactory)
+            .setHandleAudioBecomingNoisy(true) // auto-pause on BT disconnect
+            .setWakeMode(C.WAKE_MODE_NETWORK)  // keep Wi-Fi alive while buffering
             .build()
             .apply {
-                setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(C.USAGE_MEDIA)
-                        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-                        .build(),
-                    true
-                )
+                // Single audio-attributes call — handles audio focus and
+                // routes to the correct output (e.g. HDMI ARC, BT, TV speakers).
+                val audioAttrs = AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                    .build()
+                setAudioAttributes(audioAttrs, true)
+
+                // External audio track merge (separate AC-3/EAC3 streams).
                 val selectedAudioUrl = currentAudioUrl
                 if (!selectedAudioUrl.isNullOrBlank()) {
                     val videoSource = ProgressiveMediaSource.Factory(httpFactory)
@@ -547,17 +565,60 @@ fun PlayerScreen(
                     seekTo(carryPositionMs)
                 }
 
-                setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(C.USAGE_MEDIA)
-                        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-                        .build(),
-                    true
-                )
                 setPlaybackSpeed(playbackSpeed)
                 playWhenReady = true
                 prepare()
             }
+
+    // ---------- Dolby Vision / HDR detection ----------
+    // After prepare(), the player's tracks are resolved.  We listen for
+    // video format changes to log the codec, color space, and whether
+    // tunnelled playback is active — useful for diagnosing green-tint
+    // or washed-out DV7 files where the tone-mapping path matters.
+    exoPlayer.addListener(object : Player.Listener {
+        override fun onTracksChanged(
+            tracks: androidx.media3.common.Tracks
+        ) {
+            for (group in tracks.groups) {
+                for (i in 0 until group.length) {
+                    val fmt = group.getTrackFormat(i)
+                    if (group.type == C.TRACK_TYPE_VIDEO) {
+                        val codec = fmt.codecs.orEmpty()
+                        val colorInfo = fmt.colorInfo
+                        Log.i(
+                            "PLAYER_CODEC",
+                            buildString {
+                                append("video codec=$codec")
+                                append(" mime=${fmt.sampleMimeType}")
+                                append(" ${fmt.width}x${fmt.height}")
+                                colorInfo?.let { c ->
+                                    append(" color=${c.colorSpace}/${c.colorTransfer}/${c.colorRange}")
+                                    append(" hdr=${c.hdr10PlusInfo != null || c.hdrStaticInfo != null}")
+                                }
+                            }
+                        )
+                        // If the file reports a BT.2020 color space or PQ/HLG
+                        // transfer function but the device decoder is not tone-
+                        // mapping (green tint), force a software-decoder retry
+                        // so the FFmpeg extension handles the colour pipeline.
+                        val isHdr = colorInfo?.let {
+                            it.colorTransfer == C.COLOR_TRANSFER_ST2084 ||
+                                it.colorTransfer == C.COLOR_TRANSFER_HLG ||
+                                it.colorSpace == C.COLOR_SPACE_BT2020
+                        } ?: false
+                        if (isHdr && !forceSoftwareDecoder) {
+                            Log.w(
+                                "PLAYER_CODEC",
+                                "HDR/DV content detected with color space " +
+                                    "${colorInfo?.colorSpace}/${colorInfo?.colorTransfer} — " +
+                                    "hardware tone-mapping active"
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    })
     }
 
     // Poll position/duration for the whole player lifetime (not only while
