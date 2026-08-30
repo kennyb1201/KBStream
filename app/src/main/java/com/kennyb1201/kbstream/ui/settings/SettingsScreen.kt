@@ -52,9 +52,9 @@ fun SettingsScreen(
     var bufferMode by remember { mutableIntStateOf(AppPreferences.getDefaultBufferMode(context)) }
     var subtitleSize by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleSize(context)) }
     var subtitleBg by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleBackground(context)) }
-    var subtitleOffset by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleOffset(context)) }
     var autoPlayNext by remember { mutableStateOf(AppPreferences.getAutoPlayNext(context)) }
     var enableTunneling by remember { mutableStateOf(AppPreferences.getEnableTunneling(context)) }
+    var enablePip by remember { mutableStateOf(AppPreferences.getEnablePip(context)) }
     var decoderMode by remember { mutableIntStateOf(AppPreferences.getDecoderMode(context)) }
     var aspectRatio by remember { mutableIntStateOf(AppPreferences.getDefaultAspectRatio(context)) }
 
@@ -163,7 +163,7 @@ fun SettingsScreen(
         }
         Spacer(modifier = Modifier.height(2.dp))
         Text(
-            text = if (bufferMode == 1) "Lower buffer for live IPTV" else "25s/120s buffer \u2014 best for movies & series",
+            text = if (bufferMode == 1) "Lower buffer for live IPTV" else "15s/60s buffer \u2014 best for movies & series",
             color = KBTextLo,
             style = MaterialTheme.typography.labelSmall
         )
@@ -204,6 +204,49 @@ fun SettingsScreen(
                     modifier = Modifier
                         .background(
                             if (enableTunneling) KBAccent else KBSurface,
+                            RoundedCornerShape(6.dp)
+                        )
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        KBCard(
+            onClick = {
+                enablePip = !enablePip
+                AppPreferences.setEnablePip(context, enablePip)
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(KBSurfaceRaised, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Picture-in-Picture",
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(
+                        text = "Auto-enter PiP when pressing Home",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+                Text(
+                    text = if (enablePip) "ON" else "OFF",
+                    color = if (enablePip) KBVoid else KBTextHi,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier
+                        .background(
+                            if (enablePip) KBAccent else KBSurface,
                             RoundedCornerShape(6.dp)
                         )
                         .padding(horizontal = 14.dp, vertical = 8.dp)
@@ -268,31 +311,7 @@ fun SettingsScreen(
                 }) {
                     PillChip(label, subtitleBg == index)
                 }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        Text(
-            text = "Default Offset: ${subtitleOffset}ms",
-            color = KBTextHi,
-            style = MaterialTheme.typography.bodySmall
-        )
-        androidx.compose.material3.Slider(
-            value = subtitleOffset.toFloat(),
-            onValueChange = { subtitleOffset = it.toInt() },
-            onValueChangeFinished = {
-                AppPreferences.setDefaultSubtitleOffset(context, subtitleOffset)
-            },
-            valueRange = -5000f..5000f,
-            steps = 19,
-            colors = androidx.compose.material3.SliderDefaults.colors(
-                thumbColor = KBAccent,
-                activeTrackColor = KBAccent,
-                inactiveTrackColor = KBSurface
-            ),
-            modifier = Modifier.fillMaxWidth()
-        )
+            }        }
 
         Spacer(modifier = Modifier.height(24.dp))
     }

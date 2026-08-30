@@ -372,7 +372,8 @@ internal fun normalizeCodec(codec: String?): String {
     val lower = codec.lowercase()
     return when {
         // Video codecs — ExoPlayer reports these as codec strings like
-        // "avc1.640028", "hvc1.1.6.L150.90", "hev1.2.4.L150", etc.
+        // "avc1.640028", "hvc1.1.6.L150.90", "dvhe.08.06", etc.
+        lower.startsWith("dv") || lower.contains("dolby vision") || lower.contains("dvhe") || lower.contains("dvh1") -> "Dolby Vision"
         lower.startsWith("avc") || lower.contains("h264") || lower.contains("h.264") -> "H.264"
         lower.startsWith("hev") || lower.startsWith("hvc") || lower.contains("h265") || lower.contains("h.265") -> "H.265"
         lower.startsWith("vp09") || lower.startsWith("vp9") -> "VP9"
@@ -453,6 +454,22 @@ class PlayerActivity : ComponentActivity() {
     ) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         // PlayerScreen observes this via PiP state; the overlay auto-hides in PiP
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        // Auto-enter PiP when user presses Home, if preference is enabled
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            com.kennyb1201.kbstream.ui.settings.AppPreferences.getEnablePip(this)
+        ) {
+            try {
+                enterPictureInPictureMode(
+                    PictureInPictureParams.Builder().build()
+                )
+            } catch (_: Exception) {
+                // Device may not support PiP — silently ignore
+            }
+        }
     }
 }
 
@@ -594,6 +611,7 @@ fun PlayerScreen(
     // Player settings
     var decoderMode by remember { mutableIntStateOf(AppPreferences.getDecoderMode(context)) } // 0=auto, 1=ffmpeg
     var enableTunneling by remember { mutableStateOf(AppPreferences.getEnableTunneling(context)) }
+    var enablePip by remember { mutableStateOf(AppPreferences.getEnablePip(context)) }
     var subtitleBackground by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleBackground(context)) }
     var bufferMode by remember { mutableIntStateOf(AppPreferences.getDefaultBufferMode(context)) }
     var autoPlayNext by remember { mutableStateOf(AppPreferences.getAutoPlayNext(context)) }
@@ -685,14 +703,15 @@ fun PlayerScreen(
         }
 
         // ---------- Buffered playback for smooth playback ----------
-        // Balanced mode: 25 s / 120 s gives 4K and high-bitrate content
-        // enough runway to absorb network jitter without rebuffering.
-        // The old 15 s / 60 s was too aggressive for 4K HDR streams.
+        // Balanced mode: 15 s / 60 s — enough runway for most content
+        // without blowing the heap on memory-constrained TV sticks.
+        // 4K DV streams already consume 150+ MB for codec buffers;
+        // pushing to 120 s pushes the heap over the 192 MB clamp.
         // Low-latency mode: 2.5 s / 10 s for live/fast-start content.
         val bufferDurations = if (bufferMode == 1) {
             intArrayOf(2_500, 10_000, 1_500, 3_000) // low latency
         } else {
-            intArrayOf(25_000, 120_000, 10_000, 15_000) // balanced (4K-ready)
+            intArrayOf(15_000, 60_000, 5_000, 10_000) // balanced
         }
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
@@ -864,17 +883,24 @@ fun PlayerScreen(
 
     // ---------- PiP auto-enter ----------
     // When the user navigates away (Home key on TV), automatically enter PiP
-    // if the device supports it.  This covers the common TV pattern of
+    // if the preference is enabled.  This covers the common TV pattern of
     // pressing Home while a video plays.
     LaunchedEffect(activity, isPlaying) {
-        if (activity != null && isPlaying && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        if (activity != null && isPlaying && enablePip &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+        ) {
             activity.addOnPictureInPictureModeChangedListener(
                 androidx.core.util.Consumer { info ->
                     isInPiPMode = info.isInPictureInPictureMode
+                    if (info.isInPictureInPictureMode) {
+                        showControls = false
+                    }
                 }
             )
         }
     }
+
+
 
     // Poll position/duration for the whole player lifetime (not only while
     // the overlay is up). Keeping the loop always-on avoids recomposing the

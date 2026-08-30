@@ -21,11 +21,10 @@ object AppPreferences {
     private const val KEY_DEFAULT_BUFFER_MODE = "default_buffer_mode"       // 0=balanced, 1=low-latency
     private const val KEY_DEFAULT_SUBTITLE_SIZE = "default_subtitle_size"   // 0=small, 1=normal, 2=large
     private const val KEY_DEFAULT_SUBTITLE_BG = "default_subtitle_bg"       // 0=none, 1=semi, 2=solid
-    private const val KEY_DEFAULT_SUBTITLE_OFFSET = "default_subtitle_offset" // ms
-
     private const val KEY_AUTO_PLAY_NEXT = "auto_play_next"
     private const val KEY_FORCE_SOFTWARE_DECODER = "force_software_decoder"
     private const val KEY_ENABLE_TUNNELING = "enable_tunneling"
+    private const val KEY_ENABLE_PIP = "enable_pip"
     private const val KEY_DECODER_MODE = "decoder_mode"                      // 0=auto, 1=ffmpeg-only
     private const val KEY_DEFAULT_ASPECT_RATIO = "default_aspect_ratio"     // 0=fit, 1=zoom, 2=fill
 
@@ -56,14 +55,6 @@ object AppPreferences {
         prefs(context).edit().putInt(KEY_DEFAULT_SUBTITLE_BG, bg).apply()
     }
 
-    // ── Subtitle offset ──────────────────────────────────────────────
-    fun getDefaultSubtitleOffset(context: Context): Int =
-        prefs(context).getInt(KEY_DEFAULT_SUBTITLE_OFFSET, 0)
-
-    fun setDefaultSubtitleOffset(context: Context, offsetMs: Int) {
-        prefs(context).edit().putInt(KEY_DEFAULT_SUBTITLE_OFFSET, offsetMs).apply()
-    }
-
     // ── Auto-play next episode
     fun getAutoPlayNext(context: Context): Boolean =
         prefs(context).getBoolean(KEY_AUTO_PLAY_NEXT, true)
@@ -85,6 +76,14 @@ object AppPreferences {
 
     fun setForceSoftwareDecoder(context: Context, forced: Boolean) {
         prefs(context).edit().putBoolean(KEY_FORCE_SOFTWARE_DECODER, forced).apply()
+    }
+
+    // ── Picture-in-Picture ──────────────────────────────────────────
+    fun getEnablePip(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_ENABLE_PIP, true)
+
+    fun setEnablePip(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_ENABLE_PIP, enabled).apply()
     }
 
     // ── Decoder mode ────────────────────────────────────────────────
