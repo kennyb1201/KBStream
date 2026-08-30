@@ -3,6 +3,8 @@ package com.kennyb1201.kbstream.ui.player
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.focus.FocusRequester
+import androidx.compose.foundation.focus.focusProperties
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,8 +17,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.focus.FocusRequester
-import androidx.compose.foundation.focus.focusProperties
 import androidx.compose.material3.Slider
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -42,13 +42,23 @@ fun SettingsPanel(
     resizeModeIndex: Int,
     subtitleOffsetMs: Int,
     subtitleSize: Int,
+    subtitleBackground: Int,
     externalSubtitleLabel: String?,
     isLiveChannel: Boolean,
+    enableTunneling: Boolean,
+    bufferMode: Int,
+    autoPlayNext: Boolean,
     onSubtitleOffsetChange: (Int) -> Unit,
     onSubtitleSizeChange: (Int) -> Unit,
+    onSubtitleBackgroundChange: (Int) -> Unit,
+    onTunnelingChange: (Boolean) -> Unit,
+    onBufferModeChange: (Int) -> Unit,
+    onAutoPlayNextChange: (Boolean) -> Unit,
     onDismiss: () -> Unit
 ) {
     val subtitleSizeOptions = listOf("Small", "Normal", "Large")
+    val subtitleBgOptions = listOf("None", "Semi", "Solid")
+    val bufferModeOptions = listOf("Balanced", "Low Latency")
     val resizeModeLabels = listOf("Fit", "Zoom", "Fill")
 
     BackHandler { onDismiss() }
@@ -75,13 +85,9 @@ fun SettingsPanel(
             )
             Spacer(modifier = Modifier.height(16.dp))
 
+            // ── STREAM ──────────────────────────────────────────────
             if (streamWidth > 0 && streamHeight > 0) {
-                Text(
-                    text = "STREAM",
-                    color = KBAccent,
-                    style = MaterialTheme.typography.labelMedium,
-                    modifier = Modifier.padding(bottom = 6.dp)
-                )
+                SectionHeader("STREAM")
                 SettingsInfoRow("Resolution", "${streamWidth}x${streamHeight}")
                 if (streamBitrate > 0) {
                     SettingsInfoRow("Bitrate", "${streamBitrate / 1_000} kbps")
@@ -92,12 +98,9 @@ fun SettingsPanel(
                 Spacer(modifier = Modifier.height(12.dp))
             }
 
-            Text(
-                text = "SUBTITLES",
-                color = KBAccent,
-                style = MaterialTheme.typography.labelMedium,
-                modifier = Modifier.padding(bottom = 6.dp)
-            )
+            // ── SUBTITLES ──────────────────────────────────────────
+            SectionHeader("SUBTITLES")
+
             Text(
                 text = "Size",
                 color = KBTextHi,
@@ -106,20 +109,23 @@ fun SettingsPanel(
             )
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 subtitleSizeOptions.forEachIndexed { index, label ->
-                    KBCard(
-                        onClick = { onSubtitleSizeChange(index) }
-                    ) {
-                        Text(
-                            text = label,
-                            color = if (subtitleSize == index) KBVoid else KBTextHi,
-                            style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier
-                                .background(
-                                    if (subtitleSize == index) KBAccent else KBSurface,
-                                    RoundedCornerShape(6.dp)
-                                )
-                                .padding(horizontal = 12.dp, vertical = 6.dp)
-                        )
+                    KBCard(onClick = { onSubtitleSizeChange(index) }) {
+                        PillChip(label, subtitleSize == index)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Background",
+                color = KBTextHi,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                subtitleBgOptions.forEachIndexed { index, label ->
+                    KBCard(onClick = { onSubtitleBackgroundChange(index) }) {
+                        PillChip(label, subtitleBackground == index)
                     }
                 }
             }
@@ -144,13 +150,128 @@ fun SettingsPanel(
             )
 
             if (!isLiveChannel) {
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(6.dp))
                 Text(
                     text = externalSubtitleLabel ?: "No external subtitle loaded",
                     color = KBTextLo,
                     style = MaterialTheme.typography.labelSmall
                 )
             }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // ── VIDEO ──────────────────────────────────────────────
+            SectionHeader("VIDEO")
+
+            Text(
+                text = "Network Buffer",
+                color = KBTextHi,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                bufferModeOptions.forEachIndexed { index, label ->
+                    KBCard(onClick = { onBufferModeChange(index) }) {
+                        PillChip(label, bufferMode == index)
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = if (bufferMode == 1) "Lower buffer for live content" else "Best for most streams",
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelSmall
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            ToggleRow(
+                label = "Tunneled Playback",
+                description = "Low-latency A/V sync for HDR + AVR",
+                checked = enableTunneling,
+                onToggle = onTunnelingChange
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // ── PLAYBACK ──────────────────────────────────────────
+            SectionHeader("PLAYBACK")
+
+            ToggleRow(
+                label = "Auto-play Next Episode",
+                description = "Continue to the next episode when one ends",
+                checked = autoPlayNext,
+                onToggle = onAutoPlayNextChange
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+    }
+}
+
+@Composable
+private fun SectionHeader(title: String) {
+    Text(
+        text = title,
+        color = KBAccent,
+        style = MaterialTheme.typography.labelMedium,
+        modifier = Modifier.padding(bottom = 6.dp)
+    )
+}
+
+@Composable
+private fun PillChip(label: String, selected: Boolean) {
+    Text(
+        text = label,
+        color = if (selected) KBVoid else KBTextHi,
+        style = MaterialTheme.typography.labelSmall,
+        modifier = Modifier
+            .background(
+                if (selected) KBAccent else KBSurface,
+                RoundedCornerShape(6.dp)
+            )
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+    )
+}
+
+@Composable
+private fun ToggleRow(
+    label: String,
+    description: String,
+    checked: Boolean,
+    onToggle: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = label,
+                color = KBTextHi,
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                text = description,
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
+        KBCard(onClick = { onToggle(!checked) }) {
+            Text(
+                text = if (checked) "ON" else "OFF",
+                color = if (checked) KBVoid else KBTextHi,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier
+                    .background(
+                        if (checked) KBAccent else KBSurface,
+                        RoundedCornerShape(6.dp)
+                    )
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            )
         }
     }
 }

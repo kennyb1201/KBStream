@@ -515,6 +515,12 @@ fun PlayerScreen(
     var externalSubtitleUri by remember { mutableStateOf<String?>(null) }
     var externalSubtitleLabel by remember { mutableStateOf<String?>(null) }
 
+    // Player settings
+    var enableTunneling by remember { mutableStateOf(false) }
+    var subtitleBackground by remember { mutableIntStateOf(0) } // 0=none, 1=semi, 2=solid
+    var bufferMode by remember { mutableIntStateOf(0) } // 0=balanced, 1=low-latency
+    var autoPlayNext by remember { mutableStateOf(true) }
+
     val isPlayingFlow = remember { MutableStateFlow(false) }
     val isBufferingFlow = remember { MutableStateFlow(false) }
     val isPlaying by isPlayingFlow.collectAsState()
@@ -538,7 +544,9 @@ fun PlayerScreen(
         manualRetryToken,
         forceSoftwareDecoder,
         drmLicenseUrl,
-        drmHeaders
+        drmHeaders,
+        enableTunneling,
+        bufferMode
     ) {
         val httpFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
@@ -571,16 +579,18 @@ fun PlayerScreen(
         }
 
         // ---------- Buffered playback for smooth playback ----------
-        // The old 2.5 s / 10 s min/max caused constant rebuffers on
-        // high-bitrate HEVC / DV7 streams.  The 15 s / 60 s values
-        // give the decoder enough runway to absorb network jitter
-        // while still starting playback quickly.
+        // Balanced mode: 15 s / 60 s gives the decoder enough runway
+        // to absorb network jitter while starting quickly.
+        // Low-latency mode: 2.5 s / 10 s for live/fast-start content.
+        val bufferDurations = if (bufferMode == 1) {
+            intArrayOf(2_500, 10_000, 1_500, 3_000) // low latency
+        } else {
+            intArrayOf(15_000, 60_000, 5_000, 10_000) // balanced
+        }
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                15_000,   // minBufferMs – 15 s minimum before playback starts
-                60_000,   // maxBufferMs – 60 s ceiling
-                5_000,    // bufferForPlaybackMs – 5 s needed to start/resume
-                10_000    // bufferForPlaybackAfterRebufferMs – 10 s after stall
+                bufferDurations[0], bufferDurations[1],
+                bufferDurations[2], bufferDurations[3]
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
@@ -601,6 +611,15 @@ fun PlayerScreen(
             )
             .setEnableDecoderFallback(true)
             .setAllowedVideoDecoderCount(0) // 0 = unlimited – let the platform decide
+            .apply {
+                // Tunneled playback: routes audio/video through a single
+                // tunnel session, reducing A/V sync jitter.  Useful for
+                // HDR content on TV devices connected to an AVR via HDMI.
+                if (enableTunneling) {
+                    setTunnelingAudioSessionId(C.AUDIO_SESSION_ID_UNSET)
+                    Log.i("PLAYER_TUNNEL", "Tunneled playback enabled")
+                }
+            }
 
         ExoPlayer.Builder(context, renderersFactory)
             .setLoadControl(loadControl)
@@ -952,6 +971,12 @@ fun PlayerScreen(
                 if (playbackState == Player.STATE_ENDED && !hasEnded) {
                     hasEnded = true
                     scope.launch { saveProgress(reason = "ended", forceCompleted = true) }
+                    // Auto-play next episode for series content
+                    if (autoPlayNext && !isLiveChannel && season != null && episode != null) {
+                        scope.launch(Dispatchers.Main.immediate) {
+                            onNextEpisode()
+                        }
+                    }
                 }
             }
 
@@ -1449,10 +1474,18 @@ fun PlayerScreen(
             resizeModeIndex = resizeModeIndex,
             subtitleOffsetMs = subtitleOffsetMs,
             subtitleSize = subtitleSize,
+            subtitleBackground = subtitleBackground,
             externalSubtitleLabel = externalSubtitleLabel,
             isLiveChannel = isLiveChannel,
+            enableTunneling = enableTunneling,
+            bufferMode = bufferMode,
+            autoPlayNext = autoPlayNext,
             onSubtitleOffsetChange = { subtitleOffsetMs = it },
             onSubtitleSizeChange = { subtitleSize = it },
+            onSubtitleBackgroundChange = { subtitleBackground = it },
+            onTunnelingChange = { enableTunneling = it },
+            onBufferModeChange = { bufferMode = it },
+            onAutoPlayNextChange = { autoPlayNext = it },
             onDismiss = { showSettingsPanel = false }
         )
     }
