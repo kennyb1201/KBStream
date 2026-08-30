@@ -458,16 +458,32 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        // Auto-enter PiP when user presses Home, if preference is enabled
+        enterPipIfEnabled()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Fire TV calls onPause (not onUserLeaveHint) when Home is pressed.
+        // If we're not already in PiP and PiP is enabled, enter PiP.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !isInPictureInPictureMode &&
+            com.kennyb1201.kbstream.ui.settings.AppPreferences.getEnablePip(this)
+        ) {
+            enterPipIfEnabled()
+        }
+    }
+
+    private fun enterPipIfEnabled() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
             com.kennyb1201.kbstream.ui.settings.AppPreferences.getEnablePip(this)
         ) {
             try {
-                enterPictureInPictureMode(
-                    PictureInPictureParams.Builder().build()
-                )
-            } catch (_: Exception) {
-                // Device may not support PiP — silently ignore
+                val params = PictureInPictureParams.Builder()
+                    .setAspectRatio(Rational(16, 9))
+                    .build()
+                enterPictureInPictureMode(params)
+            } catch (e: Exception) {
+                Log.w("PLAYER_PIP", "PiP not supported", e)
             }
         }
     }
@@ -641,6 +657,7 @@ fun PlayerScreen(
         retryAttempt,
         drmLicenseUrl,
         drmHeaders,
+        decoderMode,
         enableTunneling,
         bufferMode
     ) {
@@ -767,24 +784,15 @@ fun PlayerScreen(
             .apply {
                 // Audio attributes: handle audio focus and route to the
                 // correct output (HDMI ARC, BT, TV speakers).
-                // When tunneled playback is ON, add FLAG_HW_AV_SYNC so
-                // the hardware decoder routes compressed audio/video
-                // through a single tunnel session for tighter A/V sync.
-                val audioAttrs = if (enableTunneling) {
-                    // FLAG_HW_AV_SYNC tells the hardware decoder to route
-                    // compressed audio/video through a single tunnel session.
-                    Log.i("PLAYER_TUNNEL", "Tunneled playback enabled via AudioAttributes")
-                    AudioAttributes.Builder()
-                        .setUsage(C.USAGE_MEDIA)
-                        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-                        .setFlags(android.media.AudioAttributes.FLAG_HW_AV_SYNC)
-                        .build()
-                } else {
-                    AudioAttributes.Builder()
-                        .setUsage(C.USAGE_MEDIA)
-                        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-                        .build()
-                }
+                // NOTE: Do NOT use FLAG_HW_AV_SYNC here — it creates a
+                // tunnel AudioTrack that crashes on EAC3/Dolby Digital Plus
+                // content on Fire TV Stick (MTK SoC).  Tunnel mode requires
+                // per-session AudioTrack setup at the HAL level which the
+                // Jellyfin media3 fork doesn't expose.
+                val audioAttrs = AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                    .build()
                 setAudioAttributes(audioAttrs, true)
 
                 // External audio track merge (separate AC-3/EAC3 streams).
@@ -806,6 +814,20 @@ fun PlayerScreen(
                 setPlaybackSpeed(playbackSpeed)
                 playWhenReady = true
                 prepare()
+
+                // Tunneled playback: use DefaultTrackSelector to enable
+                // tunneling properly (media3 1.9.0 API).  This lets ExoPlayer
+                // manage the audio session ID and hardware tunnel negotiation
+                // instead of us setting FLAG_HW_AV_SYNC on AudioAttributes
+                // (which crashes on EAC3/Dolby Digital Plus content).
+                if (enableTunneling) {
+                    val tunnelParams = androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+                        .Parameters.Builder(context)
+                        .setTunnelingEnabled(true)
+                        .build()
+                    trackSelectionParameters = tunnelParams
+                    Log.i("PLAYER_TUNNEL", "Tunneled playback enabled via TrackSelector")
+                }
             }
     }
 

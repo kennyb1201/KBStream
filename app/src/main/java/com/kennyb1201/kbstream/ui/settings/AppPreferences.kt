@@ -70,6 +70,7 @@ object AppPreferences {
     fun setEnableTunneling(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_ENABLE_TUNNELING, enabled).apply()
     }
+
     // ── Force software decoder (legacy) ──────────────────────────────
     fun getForceSoftwareDecoder(context: Context): Boolean =
         prefs(context).getBoolean(KEY_FORCE_SOFTWARE_DECODER, false)
@@ -80,7 +81,7 @@ object AppPreferences {
 
     // ── Picture-in-Picture ──────────────────────────────────────────
     fun getEnablePip(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_ENABLE_PIP, true)
+        prefs(context).getBoolean(KEY_ENABLE_PIP, false)
 
     fun setEnablePip(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_ENABLE_PIP, enabled).apply()
