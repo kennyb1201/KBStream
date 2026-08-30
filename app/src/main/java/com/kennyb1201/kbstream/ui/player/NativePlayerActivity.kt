@@ -51,6 +51,8 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import coil3.load
+import coil3.request.ImageRequest
+import coil3.request.crossfade
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -301,10 +303,14 @@ class NativePlayerActivity : ComponentActivity() {
                     charText.visibility = View.VISIBLE
                 }
                 if (!member.profilePath.isNullOrBlank()) {
-                    profileImage.load(member.profilePath) {
-                        crossfade(true)
-                        placeholder(R.drawable.ic_cast_placeholder)
-                    }
+                    profileImage.load(
+                        ImageRequest.Builder(this@NativePlayerActivity)
+                            .data(member.profilePath)
+                            .crossfade(true)
+                            .build()
+                    )
+                } else {
+                    profileImage.setImageResource(R.drawable.ic_cast_placeholder)
                 }
 
                 itemView.setOnClickListener {

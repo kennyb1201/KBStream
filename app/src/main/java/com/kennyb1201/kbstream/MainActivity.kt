@@ -650,6 +650,7 @@ fun AppRoot() {
                                 displayName = current.itemName,
                                 season = nextSeason,
                                 episode = nextEpisode,
+                                resumePositionMs = 0L,
                                 totalEpisodesInSeason = current.totalEpisodesInSeason
                             ),
                             itemPoster = current.itemPoster
