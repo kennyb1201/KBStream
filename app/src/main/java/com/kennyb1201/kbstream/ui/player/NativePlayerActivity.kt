@@ -252,7 +252,7 @@ class NativePlayerActivity : ComponentActivity() {
                 val arr = JSONArray(sourcesJson)
                 sources = (0 until arr.length()).mapNotNull { i ->
                     val obj = arr.optJSONObject(i) ?: return@mapNotNull null
-n                    Stream(
+                    Stream(
                         name = obj.optString("name", null),
                         title = obj.optString("title", null),
                         url = obj.optString("url", null),
