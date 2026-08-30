@@ -81,7 +81,6 @@ import androidx.media3.common.ColorInfo
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
-import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -119,8 +118,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
-import okhttp3.Request
-import org.json.JSONObject
 
 private const val PERIODIC_SAVE_INTERVAL_MS = 5_000L
 private const val MIN_RESUME_POSITION_MS = 10_000L
@@ -154,173 +151,7 @@ data class PlayerCastMember(
     val name: String,
     val character: String?,
     val profilePath: String?
-)
-
-private enum class IntroDbMarkerType(
-    val buttonLabel: String
-) {
-    Intro("SKIP INTRO"),
-    Recap("SKIP RECAP"),
-    Outro("SKIP OUTRO"),
-    Credits("SKIP CREDITS"),
-    Preview("SKIP PREVIEW")
-}
-
-private data class IntroDbStamp(
-    val startMs: Long,
-    val endMs: Long,
-    val type: IntroDbMarkerType
-)
-
-private val introDbHttpClient = OkHttpClient.Builder()
-    .callTimeout(5, TimeUnit.SECONDS)
-    .build()
-
-private fun JSONObject.readIntroDbStamp(
-    type: IntroDbMarkerType
-): IntroDbStamp? {
-    fun readMillis(
-        millisKey: String,
-        secondsKey: String
-    ): Long {
-        val millis = optLong(millisKey, -1L)
-        if (millis >= 0L) return millis
-
-        val seconds = optDouble(secondsKey, -1.0)
-        return if (seconds >= 0.0) {
-            (seconds * 1_000.0).toLong()
-        } else {
-            -1L
-        }
-    }
-
-    val startMs = readMillis("start_ms", "start_sec")
-    val endMs = readMillis("end_ms", "end_sec")
-
-    return if (startMs >= 0L && endMs > startMs) {
-        IntroDbStamp(
-            startMs = startMs,
-            endMs = endMs,
-            type = type
-        )
-    } else {
-        null
-    }
-}
-
-private fun JSONObject.readIntroDbArray(
-    key: String,
-    type: IntroDbMarkerType
-): List<IntroDbStamp> {
-    val markers = optJSONArray(key) ?: return emptyList()
-
-    return buildList {
-        for (index in 0 until markers.length()) {
-            markers.optJSONObject(index)
-                ?.readIntroDbStamp(type)
-                ?.let { add(it) }
-        }
-    }
-}
-
-private fun fetchIntroDbJson(url: String): JSONObject? {
-    return runCatching {
-        val request = Request.Builder()
-            .url(url)
-            .get()
-            .build()
-
-        introDbHttpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                return@use null
-            }
-
-            JSONObject(response.body?.string().orEmpty())
-        }
-    }.getOrElse { error ->
-        Log.w("INTRO_DB", "IntroDB lookup failed", error)
-        null
-    }
-}
-
-private fun normalizeIntroDbStamps(
-    markers: List<IntroDbStamp>
-): List<IntroDbStamp> {
-    return markers
-        .distinctBy { marker ->
-            Triple(marker.type, marker.startMs, marker.endMs)
-        }
-        .sortedWith(
-            compareBy<IntroDbStamp> { it.startMs }
-                .thenBy { it.endMs }
-        )
-}
-
-private suspend fun fetchIntroDbStamps(
-    parentId: String,
-    season: Int?,
-    episode: Int?
-): List<IntroDbStamp> = withContext(Dispatchers.IO) {
-    val normalizedId = parentId.trim()
-    val idQuery = when {
-        normalizedId.startsWith("tt") &&
-            normalizedId.drop(2).isNotEmpty() &&
-            normalizedId.drop(2).all { it.isDigit() } ->
-            "imdb_id=${Uri.encode(normalizedId)}"
-
-        normalizedId.toLongOrNull() != null ->
-            "tmdb_id=$normalizedId"
-
-        else ->
-            return@withContext emptyList()
-    }
-
-    val episodeQuery = if (season != null && episode != null) {
-        "&season=$season&episode=$episode"
-    } else {
-        ""
-    }
-
-    val introDbMarkers = if (
-        normalizedId.startsWith("tt") &&
-            season != null &&
-            episode != null
-    ) {
-        fetchIntroDbJson(
-            "https://api.introdb.app/segments?" +
-                "imdb_id=${Uri.encode(normalizedId)}" +
-                "&season=$season&episode=$episode"
-        )?.let { root ->
-            listOfNotNull(
-                root.optJSONObject("intro")
-                    ?.readIntroDbStamp(IntroDbMarkerType.Intro),
-                root.optJSONObject("recap")
-                    ?.readIntroDbStamp(IntroDbMarkerType.Recap),
-                root.optJSONObject("outro")
-                    ?.readIntroDbStamp(IntroDbMarkerType.Outro)
-            )
-        }.orEmpty()
-    } else {
-        emptyList()
-    }
-
-    if (introDbMarkers.isNotEmpty()) {
-        return@withContext normalizeIntroDbStamps(introDbMarkers)
-    }
-
-    val theIntroDbMarkers = fetchIntroDbJson(
-        "https://api.theintrodb.org/v2/media?$idQuery$episodeQuery"
-    )?.let { root ->
-        root.readIntroDbArray("intro", IntroDbMarkerType.Intro) +
-            root.readIntroDbArray("recap", IntroDbMarkerType.Recap) +
-            root.readIntroDbArray("credits", IntroDbMarkerType.Credits) +
-            root.readIntroDbArray("preview", IntroDbMarkerType.Preview)
-    }.orEmpty()
-
-    return@withContext normalizeIntroDbStamps(theIntroDbMarkers)
-}
-
-private const val MAX_RETRY_ATTEMPTS = 6
+)private const val MAX_RETRY_ATTEMPTS = 6
 
 private val RETRY_BACKOFF_MS = listOf(
     1_000L,
@@ -677,7 +508,6 @@ fun PlayerScreen(
         val httpFactory = androidx.media3.datasource.okhttp.OkHttpDataSource
             .Factory(okHttpClient)
             .setUserAgent(userAgent)
-            .setAllowCrossProtocolRedirects(true)
 
         val extraHeaders = streamHeaders
             .filterKeys { !it.equals("User-Agent", ignoreCase = true) }
@@ -687,31 +517,10 @@ fun PlayerScreen(
             httpFactory.setDefaultRequestProperties(extraHeaders)
         }
 
-        val drmLicenseUrlLocal = drmLicenseUrl
-
-        // Build DRM session manager if a license URL is provided,
-        // then attach it to the media source factory.
-        val drmSessionManager = if (!drmLicenseUrlLocal.isNullOrBlank()) {
-            val drmCallback = androidx.media3.exoplayer.drm.HttpMediaDrmCallback(
-                drmLicenseUrlLocal,
-                DefaultHttpDataSource.Factory()
-                    .setConnectTimeoutMs(15_000)
-                    .setReadTimeoutMs(15_000)
-            )
-            Log.i("PLAYER_DRM", "Widevine DRM configured: licenseUrl=$drmLicenseUrlLocal")
-            androidx.media3.exoplayer.drm.DefaultDrmSessionManager.Builder()
-                .build(drmCallback)
-        } else null
-
         val mediaSourceFactory = DefaultMediaSourceFactory(
             httpFactory,
             DefaultExtractorsFactory()
-        ).apply {
-            setLiveTargetOffsetMs(3_000L)
-            if (drmSessionManager != null) {
-                setDrmSessionManagerProvider { drmSessionManager }
-            }
-        }
+        )
 
         // Nuvio-style: on retry attempts >= 3, skip the mime hint and
         // let ExoPlayer probe the raw bytes — this fixes containers

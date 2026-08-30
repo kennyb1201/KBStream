@@ -18,6 +18,7 @@ import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.ImageView
 import androidx.activity.ComponentActivity
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -27,8 +28,10 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
-import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -46,6 +49,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import coil3.load
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -55,8 +59,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
-import okhttp3.Request
-import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 private const val TAG = "NativePlayer"
@@ -70,16 +72,6 @@ private const val MAX_RETRY_ATTEMPTS = 6
 private val RETRY_BACKOFF_MS = listOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 30_000L)
 private val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 private const val CONTROLS_HIDE_DELAY_MS = 6_000L
-private val introDbHttpClient = OkHttpClient.Builder()
-    .callTimeout(5, TimeUnit.SECONDS)
-    .build()
-
-// IntroDb types (same as before)
-private enum class IntroDbMarkerType(val buttonLabel: String) {
-    Intro("SKIP INTRO"), Recap("SKIP RECAP"), Outro("SKIP OUTRO"),
-    Credits("SKIP CREDITS"), Preview("SKIP PREVIEW")
-}
-private data class IntroDbStamp(val startMs: Long, val endMs: Long, val type: IntroDbMarkerType)
 
 class NativePlayerActivity : ComponentActivity() {
 
@@ -127,6 +119,16 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var settingsBitrate: TextView
     private lateinit var settingsCodec: TextView
     private lateinit var settingsSpeedAspect: TextView
+    private lateinit var pickerList: RecyclerView
+    private lateinit var btnSubSmall: TextView
+    private lateinit var btnSubNormal: TextView
+    private lateinit var btnSubLarge: TextView
+    private lateinit var btnSubBgNone: TextView
+    private lateinit var btnSubBgSemi: TextView
+    private lateinit var btnSubBgSolid: TextView
+    private lateinit var btnOffsetMinus: TextView
+    private lateinit var subtitleOffsetValue: TextView
+    private lateinit var btnOffsetPlus: TextView
 
     // Player
     private var exoPlayer: ExoPlayer? = null
@@ -293,6 +295,18 @@ class NativePlayerActivity : ComponentActivity() {
         settingsBitrate = findViewById(R.id.settings_bitrate)
         settingsCodec = findViewById(R.id.settings_codec)
         settingsSpeedAspect = findViewById(R.id.settings_speed_aspect)
+        pickerList = findViewById(R.id.picker_list)
+        btnSubSmall = findViewById(R.id.btn_sub_small)
+        btnSubNormal = findViewById(R.id.btn_sub_normal)
+        btnSubLarge = findViewById(R.id.btn_sub_large)
+        btnSubBgNone = findViewById(R.id.btn_sub_bg_none)
+        btnSubBgSemi = findViewById(R.id.btn_sub_bg_semi)
+        btnSubBgSolid = findViewById(R.id.btn_sub_bg_solid)
+        btnOffsetMinus = findViewById(R.id.btn_offset_minus)
+        subtitleOffsetValue = findViewById(R.id.subtitle_offset_value)
+        btnOffsetPlus = findViewById(R.id.btn_offset_plus)
+
+        pickerList.layoutManager = LinearLayoutManager(this)
 
         // Static UI
         liveBadge.visibility = if (isLiveChannel) View.VISIBLE else View.GONE
@@ -396,6 +410,50 @@ class NativePlayerActivity : ComponentActivity() {
             AppPreferences.setAutoPlayNext(this, autoPlayNext)
             updateSettingsPanelState()
         }
+
+        // Subtitle size
+        btnSubSmall.setOnClickListener {
+            subtitleSize = 0; AppPreferences.setDefaultSubtitleSize(this, 0)
+            updateSubtitleSettings()
+            applySubtitleStyle()
+        }
+        btnSubNormal.setOnClickListener {
+            subtitleSize = 1; AppPreferences.setDefaultSubtitleSize(this, 1)
+            updateSubtitleSettings()
+            applySubtitleStyle()
+        }
+        btnSubLarge.setOnClickListener {
+            subtitleSize = 2; AppPreferences.setDefaultSubtitleSize(this, 2)
+            updateSubtitleSettings()
+            applySubtitleStyle()
+        }
+
+        // Subtitle background
+        btnSubBgNone.setOnClickListener {
+            subtitleBackground = 0; AppPreferences.setDefaultSubtitleBackground(this, 0)
+            updateSubtitleSettings()
+            applySubtitleStyle()
+        }
+        btnSubBgSemi.setOnClickListener {
+            subtitleBackground = 1; AppPreferences.setDefaultSubtitleBackground(this, 1)
+            updateSubtitleSettings()
+            applySubtitleStyle()
+        }
+        btnSubBgSolid.setOnClickListener {
+            subtitleBackground = 2; AppPreferences.setDefaultSubtitleBackground(this, 2)
+            updateSubtitleSettings()
+            applySubtitleStyle()
+        }
+
+        // Subtitle offset
+        btnOffsetMinus.setOnClickListener {
+            subtitleOffsetMs = (subtitleOffsetMs - 500).coerceAtLeast(-5000)
+            subtitleOffsetValue.text = "${subtitleOffsetMs}ms"
+        }
+        btnOffsetPlus.setOnClickListener {
+            subtitleOffsetMs = (subtitleOffsetMs + 500).coerceAtMost(5000)
+            subtitleOffsetValue.text = "${subtitleOffsetMs}ms"
+        }
     }
 
     private fun setupKeyboardHandler() {
@@ -436,27 +494,13 @@ class NativePlayerActivity : ComponentActivity() {
             .build()
         val httpFactory = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(okHttpClient)
             .setUserAgent(agent)
-            .setAllowCrossProtocolRedirects(true)
 
         val extraHeaders = streamHeaders
             .filterKeys { !it.equals("User-Agent", ignoreCase = true) }
             .filterValues { it.isNotBlank() }
         if (extraHeaders.isNotEmpty()) httpFactory.setDefaultRequestProperties(extraHeaders)
 
-        val drmSessionManager = if (!drmLicenseUrl.isNullOrBlank()) {
-            val drmCallback = androidx.media3.exoplayer.drm.HttpMediaDrmCallback(
-                drmLicenseUrl!!, DefaultHttpDataSource.Factory()
-                    .setConnectTimeoutMs(15_000).setReadTimeoutMs(15_000)
-            )
-            Log.i("PLAYER_DRM", "Widevine DRM: $drmLicenseUrl")
-            androidx.media3.exoplayer.drm.DefaultDrmSessionManager.Builder().build(drmCallback)
-        } else null
-
         val mediaSourceFactory = DefaultMediaSourceFactory(httpFactory, DefaultExtractorsFactory())
-            .apply {
-                setLiveTargetOffsetMs(3_000L)
-                if (drmSessionManager != null) setDrmSessionManagerProvider { drmSessionManager }
-            }
 
         val mimeType = if (retryAttempt < 3) resolveMimeType(currentUrl) else null
         val mediaItemBuilder = MediaItem.Builder().setUri(currentUrl)
@@ -632,9 +676,18 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     private fun updateHeaderInfo() {
-        if (itemName.isNotBlank()) {
-            itemNameView.text = itemName
-            itemNameView.visibility = View.VISIBLE
+        clearLogoUrl?.takeIf { it.isNotBlank() }?.let { url ->
+            clearLogo.load(url) {
+                crossfade(true)
+                allowHardware(false)
+            }
+            clearLogo.visibility = View.VISIBLE
+            itemNameView.visibility = View.GONE
+        } ?: run {
+            if (itemName.isNotBlank()) {
+                itemNameView.text = itemName
+                itemNameView.visibility = View.VISIBLE
+            }
         }
         if (season != null && episode != null) {
             episodeLabel.text = "S${season.toString().padStart(2, '0')} · E${episode.toString().padStart(2, '0')}"
@@ -691,6 +744,8 @@ class NativePlayerActivity : ComponentActivity() {
         settingsSpeedAspect.text = "Speed: ${playbackSpeed}x • Aspect: ${resizeModeLabels.getOrElse(resizeModeIndex) { "Fit" }}"
         settingsSpeedAspect.visibility = View.VISIBLE
 
+        updateSubtitleSettings()
+
         if (streamWidth > 0 && streamHeight > 0) {
             settingsResolution.text = "Resolution: ${normalizeResolution(streamWidth, streamHeight)}"
             settingsResolution.visibility = View.VISIBLE
@@ -721,7 +776,35 @@ class NativePlayerActivity : ComponentActivity() {
         bufferingSpinner.visibility = if (exoPlayer?.isPlaying == false) View.VISIBLE else View.GONE
     }
 
-    private fun togglePlayPause() {
+    private fun updateSubtitleSettings() {
+        val sizeLabels = listOf("Small", "Normal", "Large")
+        val bgLabels = listOf("None", "Semi", "Solid")
+
+        listOf(btnSubSmall to 0, btnSubNormal to 1, btnSubLarge to 2).forEach { (btn, idx) ->
+            btn.setBackgroundResource(if (subtitleSize == idx) R.drawable.pill_chip_selected_bg else R.drawable.pill_chip_bg)
+            btn.setTextColor(if (subtitleSize == idx) getColor(R.color.kb_void) else getColor(R.color.kb_text_hi))
+        }
+        listOf(btnSubBgNone to 0, btnSubBgSemi to 1, btnSubBgSolid to 2).forEach { (btn, idx) ->
+            btn.setBackgroundResource(if (subtitleBackground == idx) R.drawable.pill_chip_selected_bg else R.drawable.pill_chip_bg)
+            btn.setTextColor(if (subtitleBackground == idx) getColor(R.color.kb_void) else getColor(R.color.kb_text_hi))
+        }
+        subtitleOffsetValue.text = "${subtitleOffsetMs}ms"
+    }
+
+    private fun applySubtitleStyle() {
+        val view = playerView.findViewById<View>(androidx.media3.ui.R.id.exo_subtitle)
+        if (view is TextView) {
+            val sizes = listOf(0.8f, 1f, 1.3f)
+            view.textSize = 14 * sizes[subtitleSize]
+            when (subtitleBackground) {
+                1 -> { view.setBackgroundColor(0x80000000.toInt()); view.setPadding(16, 4, 16, 4) }
+                2 -> { view.setBackgroundColor(0xE5000000.toInt()); view.setPadding(16, 4, 16, 4) }
+                else -> { view.setBackgroundColor(0); view.setPadding(0, 0, 0, 0) }
+            }
+        }
+    }
+
+    private fun showPicker(mode: PickerMode) {
         exoPlayer?.let {
             it.playWhenReady = !it.isPlaying
             if (it.isPlaying) {
@@ -751,21 +834,94 @@ class NativePlayerActivity : ComponentActivity() {
         pickerContainer.visibility = View.VISIBLE
         scrim.visibility = View.VISIBLE
 
-        when (mode) {
+        val items = when (mode) {
             PickerMode.SOURCE -> {
                 pickerTitle.text = "SOURCES"
-                // TODO: Populate with source list RecyclerView
+                sources.map { stream ->
+                    PickerItem(
+                        label = stream.label(),
+                        isSelected = stream.url == currentUrl,
+                        onClick = { switchToSource(stream); dismissPicker() }
+                    )
+                }
             }
             PickerMode.AUDIO -> {
                 pickerTitle.text = "AUDIO"
+                val tracks = exoPlayer?.currentTracks ?: return
+                val audioGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                audioGroups.flatMapIndexed { groupIdx, group ->
+                    (0 until group.length).map { trackIdx ->
+                        val format = group.getTrackFormat(trackIdx)
+                        PickerItem(
+                            label = format.language?.uppercase() ?: "Track ${groupIdx + 1}",
+                            isSelected = group.isTrackSelected(trackIdx),
+                            onClick = {
+                                exoPlayer?.trackSelectionParameters = exoPlayer?.trackSelectionParameters
+                                    ?.buildUpon()
+                                    ?.setOverrideForType(
+                                        TrackSelectionOverride(group.mediaTrackGroup, trackIdx)
+                                    )
+                                    ?.build()
+                                dismissPicker()
+                            }
+                        )
+                    }
+                }
             }
             PickerMode.SUBTITLE -> {
                 pickerTitle.text = "SUBTITLES"
+                val tracks = exoPlayer?.currentTracks ?: return
+                val textGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
+                val anySelected = textGroups.any { g -> (0 until g.length).any { g.isTrackSelected(it) } }
+                val offItem = PickerItem(
+                    label = "OFF",
+                    isSelected = !anySelected,
+                    onClick = {
+                        exoPlayer?.trackSelectionParameters = exoPlayer?.trackSelectionParameters
+                            ?.buildUpon()
+                            ?.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                            ?.build()
+                        dismissPicker()
+                    }
+                )
+                listOf(offItem) + textGroups.flatMapIndexed { groupIdx, group ->
+                    (0 until group.length).map { trackIdx ->
+                        val format = group.getTrackFormat(trackIdx)
+                        PickerItem(
+                            label = format.language?.uppercase() ?: "Track ${groupIdx + 1}",
+                            isSelected = group.isTrackSelected(trackIdx),
+                            onClick = {
+                                exoPlayer?.trackSelectionParameters = exoPlayer?.trackSelectionParameters
+                                    ?.buildUpon()
+                                    ?.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                                    ?.setOverrideForType(
+                                        TrackSelectionOverride(group.mediaTrackGroup, trackIdx)
+                                    )
+                                    ?.build()
+                                dismissPicker()
+                            }
+                        )
+                    }
+                }
             }
             PickerMode.SPEED -> {
                 pickerTitle.text = "SPEED"
+                SPEED_OPTIONS.map { speed ->
+                    PickerItem(
+                        label = "${speed}x",
+                        isSelected = speed == playbackSpeed,
+                        onClick = {
+                            playbackSpeed = speed
+                            exoPlayer?.setPlaybackSpeed(speed)
+                            updateControlsInfo()
+                            dismissPicker()
+                        }
+                    )
+                }
             }
         }
+
+        pickerList.adapter = PickerAdapter(items)
     }
 
     // --- Settings Panel ---
@@ -1100,55 +1256,4 @@ private fun parseHeaders(raw: String): Map<String, String> {
     }.toMap()
 }
 
-// IntroDB helpers
-private fun JSONObject.readIntroDbStamp(type: IntroDbMarkerType): IntroDbStamp? {
-    fun readMillis(millisKey: String, secondsKey: String): Long {
-        val millis = optLong(millisKey, -1L)
-        if (millis >= 0L) return millis
-        val seconds = optDouble(secondsKey, -1.0)
-        return if (seconds >= 0.0) (seconds * 1_000.0).toLong() else -1L
-    }
-    val startMs = readMillis("start_ms", "start_sec")
-    val endMs = readMillis("end_ms", "end_sec")
-    return if (startMs >= 0L && endMs > startMs) IntroDbStamp(startMs, endMs, type) else null
-}
 
-private fun fetchIntroDbJson(url: String): JSONObject? = runCatching {
-    introDbHttpClient.newCall(Request.Builder().url(url).get().build()).execute().use { response ->
-        if (!response.isSuccessful) null else JSONObject(response.body?.string().orEmpty())
-    }
-}.getOrElse { null }
-
-private suspend fun fetchIntroDbStamps(parentId: String, season: Int?, episode: Int?): List<IntroDbStamp> = withContext(Dispatchers.IO) {
-    val normalizedId = parentId.trim()
-    val idQuery = when {
-        normalizedId.startsWith("tt") && normalizedId.drop(2).all { it.isDigit() } -> "imdb_id=${Uri.encode(normalizedId)}"
-        normalizedId.toLongOrNull() != null -> "tmdb_id=$normalizedId"
-        else -> return@withContext emptyList()
-    }
-    val episodeQuery = if (season != null && episode != null) "&season=$season&episode=$episode" else ""
-
-    if (normalizedId.startsWith("tt") && season != null && episode != null) {
-        val introDbMarkers = fetchIntroDbJson(
-            "https://api.introdb.app/segments?imdb_id=${Uri.encode(normalizedId)}&season=$season&episode=$episode"
-        )?.let { root ->
-            listOfNotNull(
-                root.optJSONObject("intro")?.readIntroDbStamp(IntroDbMarkerType.Intro),
-                root.optJSONObject("recap")?.readIntroDbStamp(IntroDbMarkerType.Recap),
-                root.optJSONObject("outro")?.readIntroDbStamp(IntroDbMarkerType.Outro)
-            )
-        }.orEmpty()
-        if (introDbMarkers.isNotEmpty()) return@withContext introDbMarkers
-    }
-
-    val theIntroDbMarkers = fetchIntroDbJson("https://api.theintrodb.org/v2/media?$idQuery$episodeQuery")?.let { root ->
-        fun readArray(key: String, type: IntroDbMarkerType): List<IntroDbStamp> {
-            val arr = root.optJSONArray(key) ?: return emptyList()
-            return (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.readIntroDbStamp(type) }
-        }
-        readArray("intro", IntroDbMarkerType.Intro) + readArray("recap", IntroDbMarkerType.Recap) +
-            readArray("credits", IntroDbMarkerType.Credits) + readArray("preview", IntroDbMarkerType.Preview)
-    }.orEmpty()
-
-    return@withContext theIntroDbMarkers
-}
