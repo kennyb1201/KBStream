@@ -722,18 +722,9 @@ fun PlayerScreen(
             decoderMode == 1     -> DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
             else                 -> DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
         }
-        // Tunneled playback: subclass DefaultRenderersFactory to inject
-        // a tunneled DefaultAudioSink when the toggle is ON.
-        val renderersFactory = if (enableTunneling) {
-            Log.i("PLAYER_TUNNEL", "Tunneled playback enabled")
-            TunneledRenderersFactory(context)
-                .setExtensionRendererMode(extensionMode)
-                .setEnableDecoderFallback(true)
-        } else {
-            DefaultRenderersFactory(context)
-                .setExtensionRendererMode(extensionMode)
-                .setEnableDecoderFallback(true)
-        }
+        val renderersFactory = DefaultRenderersFactory(context)
+            .setExtensionRendererMode(extensionMode)
+            .setEnableDecoderFallback(true)
             // Enable rendering immediately on audio completion — prevents
             // the brief blank screen that occurs when video finishes
             // rendering before the next item is ready.
@@ -755,12 +746,26 @@ fun PlayerScreen(
             )
             .build()
             .apply {
-                // Single audio-attributes call — handles audio focus and
-                // routes to the correct output (e.g. HDMI ARC, BT, TV speakers).
-                val audioAttrs = AudioAttributes.Builder()
-                    .setUsage(C.USAGE_MEDIA)
-                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-                    .build()
+                // Audio attributes: handle audio focus and route to the
+                // correct output (HDMI ARC, BT, TV speakers).
+                // When tunneled playback is ON, add FLAG_HW_AV_SYNC so
+                // the hardware decoder routes compressed audio/video
+                // through a single tunnel session for tighter A/V sync.
+                val audioAttrs = if (enableTunneling) {
+                    // FLAG_HW_AV_SYNC tells the hardware decoder to route
+                    // compressed audio/video through a single tunnel session.
+                    Log.i("PLAYER_TUNNEL", "Tunneled playback enabled via AudioAttributes")
+                    AudioAttributes.Builder()
+                        .setUsage(C.USAGE_MEDIA)
+                        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                        .setFlags(android.media.AudioAttributes.FLAG_HW_AV_SYNC)
+                        .build()
+                } else {
+                    AudioAttributes.Builder()
+                        .setUsage(C.USAGE_MEDIA)
+                        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                        .build()
+                }
                 setAudioAttributes(audioAttrs, true)
 
                 // External audio track merge (separate AC-3/EAC3 streams).
