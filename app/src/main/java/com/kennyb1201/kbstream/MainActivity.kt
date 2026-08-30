@@ -656,6 +656,23 @@ fun AppRoot() {
                             streamHeaders = current.streamHeaders
                         )
                     )
+                },
+                onNextEpisode = {
+                    val nextEp = (current.episode ?: 0) + 1
+                    screen = Screen.Detail(
+                        type = current.parentType,
+                        id = current.parentId,
+                        pendingTarget = StreamsTarget(
+                            contentType = "series",
+                            streamId = "${current.parentId}:${current.season ?: 0}:$nextEp",
+                            title = "${current.itemName} S${current.season ?: 0} E$nextEp",
+                            displayName = current.itemName,
+                            season = current.season,
+                            episode = nextEp,
+                            resumePositionMs = 0L
+                        ),
+                        itemPoster = current.itemPoster
+                    )
                 }
             )
         }

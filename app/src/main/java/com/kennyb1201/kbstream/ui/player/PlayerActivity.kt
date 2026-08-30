@@ -415,7 +415,8 @@ fun PlayerScreen(
     streamHeaders: Map<String, String> = emptyMap(),
     sources: List<Stream> = emptyList(),
     cast: List<PlayerCastMember> = emptyList(),
-    onNavigateActor: (Int) -> Unit = {}
+    onNavigateActor: (Int) -> Unit = {},
+    onNextEpisode: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val isLiveChannel = parentType == "channel"
@@ -1121,9 +1122,7 @@ fun PlayerScreen(
                         showControls = !exoPlayer.playWhenReady
                     },
                     onSeek = { targetMs -> exoPlayer.seekTo(targetMs) },
-                    onNextEpisode = {
-                        // Hook up your next episode navigator here if needed
-                    },
+                    onNextEpisode = onNextEpisode,
                     onSourcePicker = { showSourcePicker = true },
                     onAudioPicker = { showAudioPicker = true },
                     onSubtitlePicker = { showSubtitlePicker = true },
