@@ -358,10 +358,19 @@ class NativePlayerActivity : ComponentActivity() {
                     charText.text = member.character
                     charText.visibility = View.VISIBLE
                 }
-                if (!member.profilePath.isNullOrBlank()) {
+                val profileUrl = member.profilePath
+                    ?.trim()
+                    ?.let { path ->
+                        when {
+                            path.startsWith("http://") || path.startsWith("https://") -> path
+                            path.startsWith("/") -> "https://image.tmdb.org/t/p/w185$path"
+                            else -> "https://image.tmdb.org/t/p/w185/$path"
+                        }
+                    }
+                if (!profileUrl.isNullOrBlank()) {
                     profileImage.load(
                         ImageRequest.Builder(this@NativePlayerActivity)
-                            .data(member.profilePath)
+                            .data(profileUrl)
                             .crossfade(true)
                             .build()
                     )
@@ -369,6 +378,9 @@ class NativePlayerActivity : ComponentActivity() {
                     profileImage.setImageResource(R.drawable.ic_cast_placeholder)
                 }
 
+                itemView.isClickable = true
+                itemView.isFocusable = true
+                itemView.isFocusableInTouchMode = true
                 itemView.setOnClickListener {
                     setResult(RESULT_OK, Intent().apply {
                         putExtra("player_result_action", "navigate_actor")
@@ -455,6 +467,9 @@ class NativePlayerActivity : ComponentActivity() {
         castRow = findViewById(R.id.cast_row)
 
         pickerList.layoutManager = LinearLayoutManager(this)
+        pickerList.isFocusable = true
+        pickerList.isFocusableInTouchMode = true
+        pickerList.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
 
         // Static UI
         liveBadge.visibility = if (isLiveChannel) View.VISIBLE else View.GONE
@@ -515,7 +530,9 @@ class NativePlayerActivity : ComponentActivity() {
             }
         }
         btnSource.setOnClickListener { showPicker(PickerMode.SOURCE) }
+        btnSource.setOnFocusChangeListener { _, focused -> if (focused) removeAutoHide() else scheduleAutoHide() }
         btnAudio.setOnClickListener { showPicker(PickerMode.AUDIO) }
+        btnAudio.setOnFocusChangeListener { _, focused -> if (focused) removeAutoHide() else scheduleAutoHide() }
         btnSubtitle.setOnClickListener { showPicker(PickerMode.SUBTITLE) }
         btnSpeed.setOnClickListener { showPicker(PickerMode.SPEED) }
         btnAspect.setOnClickListener {
@@ -527,6 +544,7 @@ class NativePlayerActivity : ComponentActivity() {
             }
         }
         btnSettings.setOnClickListener { toggleSettingsPanel() }
+        btnSettings.setOnFocusChangeListener { _, focused -> if (focused) removeAutoHide() else scheduleAutoHide() }
 
         // Scrim (dismiss panels)
         scrim.setOnClickListener { dismissAllPanels() }
@@ -1147,6 +1165,7 @@ class NativePlayerActivity : ComponentActivity() {
         }
 
         pickerList.adapter = PickerAdapter(items)
+        pickerList.post { pickerList.requestFocus() }
     }
 
     // --- Settings Panel ---
@@ -1159,7 +1178,10 @@ class NativePlayerActivity : ComponentActivity() {
         showSettingsPanel = true
         settingsContainer.visibility = View.VISIBLE
         scrim.visibility = View.VISIBLE
+        settingsContainer.isFocusable = true
+        settingsContainer.isFocusableInTouchMode = true
         updateSettingsPanelState()
+        settingsContainer.post { settingsBufferBalanced.requestFocus() }
     }
 
     private fun dismissSettingsPanel() {
