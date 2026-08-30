@@ -726,13 +726,19 @@ fun PlayerScreen(
         // Tunneled playback: routes audio/video through a single tunnel
         // session for tighter A/V sync. Especially useful on HDR content
         // connected to an AVR via HDMI.
+        val audioSink = if (enableTunneling) {
+            Log.i("PLAYER_TUNNEL", "Tunneled playback enabled")
+            androidx.media3.exoplayer.audio.DefaultAudioSink.Builder()
+                .setTunneling(true)
+                .build()
+        } else null
+
         val renderersFactory = DefaultRenderersFactory(context)
             .setExtensionRendererMode(extensionMode)
             .setEnableDecoderFallback(true)
             .apply {
-                if (enableTunneling) {
-                    setTunnelingAudioSessionId(C.AUDIO_SESSION_ID_UNSET)
-                    Log.i("PLAYER_TUNNEL", "Tunneled playback enabled")
+                if (audioSink != null) {
+                    setAudioSink(audioSink)
                 }
             }
             // Enable rendering immediately on audio completion — prevents
