@@ -636,14 +636,9 @@ fun PlayerScreen(
         }
 
         val drmLicenseUrlLocal = drmLicenseUrl
-        val mediaSourceFactory = DefaultMediaSourceFactory(
-            httpFactory,
-            DefaultExtractorsFactory()
-        ).setLiveTargetOffsetMs(3_000L)
 
-        // Build DRM session manager if a license URL is provided.
-        // setDrmSessionManagerProvider lives on ExoPlayer.Builder, not
-        // on DefaultMediaSourceFactory, so we build it here and attach later.
+        // Build DRM session manager if a license URL is provided,
+        // then attach it to the media source factory.
         val drmSessionManager = if (!drmLicenseUrlLocal.isNullOrBlank()) {
             val drmCallback = androidx.media3.exoplayer.drm.HttpMediaDrmCallback(
                 drmLicenseUrlLocal,
@@ -655,6 +650,16 @@ fun PlayerScreen(
             androidx.media3.exoplayer.drm.DefaultDrmSessionManager.Builder()
                 .build(drmCallback)
         } else null
+
+        val mediaSourceFactory = DefaultMediaSourceFactory(
+            httpFactory,
+            DefaultExtractorsFactory()
+        ).apply {
+            setLiveTargetOffsetMs(3_000L)
+            if (drmSessionManager != null) {
+                setDrmSessionManagerProvider { drmSessionManager }
+            }
+        }
 
         // Nuvio-style: on retry attempts >= 3, skip the mime hint and
         // let ExoPlayer probe the raw bytes — this fixes containers
@@ -722,11 +727,6 @@ fun PlayerScreen(
                     .setProportionalControlFactor(0.1f)
                     .build()
             )
-            .apply {
-                if (drmSessionManager != null) {
-                    setDrmSessionManagerProvider { drmSessionManager }
-                }
-            }
             .build()
             .apply {
                 // Single audio-attributes call — handles audio focus and
