@@ -1541,7 +1541,6 @@ private fun PlayerControlsOverlay(
                     icon = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                     contentDescription = if (isPlaying) "Pause" else "Play",
                     onClick = onPlayPause,
-                    isPrimary = true,
                     modifier = Modifier.focusRequester(playPauseFocusRequester)
                 )
 
@@ -1723,24 +1722,6 @@ private fun TrackPickerDialog(
             )
             Spacer(modifier = Modifier.height(10.dp))
             LazyColumn(content = content)
-            Spacer(modifier = Modifier.height(10.dp))
-            KBCard(
-                onClick = onDismiss,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 10.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "CLOSE",
-                        color = KBTextHi,
-                        style = MaterialTheme.typography.labelLarge
-                    )
-                }
-            }
         }
     }
 }
