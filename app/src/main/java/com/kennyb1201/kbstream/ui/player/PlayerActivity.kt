@@ -1646,25 +1646,26 @@ private fun PlayerControlsOverlay(
                         )
                     }
                     Spacer(modifier = Modifier.height(6.dp))
-                }                    Text(
-                        text = "Source: $sourceLabel",
-                        color = KBTextHi,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    if (streamWidth > 0 && streamHeight > 0) {
-                        val healthText = buildString {
-                            append("${streamWidth}x${streamHeight}")
-                            if (streamBitrate > 0) {
-                                append(" • ${streamBitrate / 1_000} kbps")
-                            }
-                            streamCodec?.let { append(" • $it") }
+                }
+                Text(
+                    text = "Source: $sourceLabel",
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                if (streamWidth > 0 && streamHeight > 0) {
+                    val healthText = buildString {
+                        append("${streamWidth}x${streamHeight}")
+                        if (streamBitrate > 0) {
+                            append(" • ${streamBitrate / 1_000} kbps")
                         }
-                        Text(
-                            text = healthText,
-                            color = KBTextLo,
-                            style = MaterialTheme.typography.labelSmall
-                        )
+                        streamCodec?.let { append(" • $it") }
                     }
+                    Text(
+                        text = healthText,
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
             }
         }
 

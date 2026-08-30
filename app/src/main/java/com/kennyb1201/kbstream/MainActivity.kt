@@ -567,7 +567,9 @@ fun AppRoot() {
                         allSources ->
 
                     val streamUrl =
-                        stream.url.orEmpty()                    if (streamUrl.isNotBlank()) {
+                        stream.url.orEmpty()
+
+                    if (streamUrl.isNotBlank()) {
 
                         screen = Screen.Player(
                             url = streamUrl,
