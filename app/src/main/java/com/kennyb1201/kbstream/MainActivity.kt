@@ -115,7 +115,9 @@ sealed class Screen {
         val startPositionMs: Long,
         val sources: List<Stream> = emptyList(),
         val streamHeaders: Map<String, String> = emptyMap(),
-        val totalEpisodesInSeason: Int? = null
+        val totalEpisodesInSeason: Int? = null,
+        val drmLicenseUrl: String? = null,
+        val drmHeaders: Map<String, String> = emptyMap()
     ) : Screen()
 }
 
@@ -565,9 +567,7 @@ fun AppRoot() {
                         allSources ->
 
                     val streamUrl =
-                        stream.url.orEmpty()
-
-                    if (streamUrl.isNotBlank()) {
+                        stream.url.orEmpty()                    if (streamUrl.isNotBlank()) {
 
                         screen = Screen.Player(
                             url = streamUrl,
@@ -584,29 +584,27 @@ fun AppRoot() {
                                 .takeIf { it.isNotBlank() && it != current.target.title },
                             itemName =
                                 current.target.displayName,
-                            itemPoster =
-                                current.itemPoster,
-                            clearLogoUrl =
-                                current.clearLogoUrl,
-                            overview =
-                                current.overview,
-                            cast =
-                                current.cast.map { member ->
-                                    PlayerCastMember(
-                                        id = member.id,
-                                        name = member.name,
-                                        character = member.character,
-                                        profilePath =
-                                            member.profilePath?.let {
-                                                TmdbRepository.PROFILE_BASE + it
-                                            }
-                                    )
-                                },
+                            itemPoster = current.itemPoster,
+                            clearLogoUrl = current.clearLogoUrl,
+                            overview = current.overview,
+                            cast = current.cast.map { member ->
+                                PlayerCastMember(
+                                    id = member.id,
+                                    name = member.name,
+                                    character = member.character,
+                                    profilePath =
+                                        member.profilePath?.let {
+                                            TmdbRepository.PROFILE_BASE + it
+                                        }
+                                )
+                            },
                             startPositionMs =
                                 current.target.resumePositionMs,
                             sources = allSources,
                             totalEpisodesInSeason =
-                                current.target.totalEpisodesInSeason
+                                current.target.totalEpisodesInSeason,
+                            drmLicenseUrl = stream.drm?.licenseUrl,
+                            drmHeaders = stream.drm?.headers.orEmpty()
                         )
                     }
                 },

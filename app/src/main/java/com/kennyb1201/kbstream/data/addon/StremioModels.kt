@@ -71,7 +71,17 @@ data class Stream(
     @Json(name = "infoHash")
     val infoHash: String? = null,
 
-    val fileIdx: Int? = null
+    val fileIdx: Int? = null,
+
+    @Json(name = "drm")
+    val drm: StreamDrm? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class StreamDrm(
+    val type: String? = null,
+    val licenseUrl: String? = null,
+    val headers: Map<String, String>? = null
 )
 
 @JsonClass(generateAdapter = true)

@@ -1,14 +1,20 @@
 package com.kennyb1201.kbstream.ui.player
 
+import android.app.PictureInPictureParams
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.util.Rational
 import java.util.concurrent.TimeUnit
 import android.view.LayoutInflater
 import android.view.ViewGroup
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.media3.session.MediaSession
+import androidx.media3.session.MediaSessionConnector
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
@@ -120,6 +126,29 @@ private const val PERIODIC_SAVE_INTERVAL_MS = 5_000L
 private const val MIN_RESUME_POSITION_MS = 10_000L
 private const val COMPLETION_THRESHOLD_RATIO = 0.95f
 private const val EXTRA_HEADERS = "stream_headers"
+private const val EXTRA_DRM_LICENSE_URL = "drm_license_url"
+private const val EXTRA_DRM_HEADERS = "drm_headers"
+
+/**
+ * Friendly error messages for common ExoPlayer error codes.
+ */
+private fun friendlyErrorMessage(error: PlaybackException): String {
+    return when (error.errorCode) {
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+        PlaybackException.ERROR_CODE_TIMEOUT -> "No internet connection. Check your network and try again."
+        PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "The server returned an error. The stream may be unavailable."
+        PlaybackException.ERROR_CODE_DECODING_FAILED,
+        PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+        PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES -> "This video format is not supported by your device."
+        PlaybackException.ERROR_CODE_DRM_UNSPECIFIED,
+        PlaybackException.ERROR_CODE_DRM_DEVICE_FAILED,
+        PlaybackException.ERROR_CODE_DRM_LICENSE_EXPIRED -> "DRM license error. This content may require a valid license."
+        PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED -> "Audio playback failed. Try restarting."
+        else -> error.message?.takeIf { it.isNotBlank() }
+            ?: error.errorCodeName
+    }
+}
 
 data class PlayerCastMember(
     val id: Int,
@@ -317,6 +346,9 @@ class PlayerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Keep screen on during playback
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
         val url = intent.getStringExtra("stream_url")
         val audioUrl = intent.getStringExtra("audio_url")
 
@@ -336,6 +368,8 @@ class PlayerActivity : ComponentActivity() {
         val overview = intent.getStringExtra("item_overview")
         val startPositionMs = intent.getLongExtra("start_position_ms", 0L)
         val streamHeaders = intent.getStringExtra(EXTRA_HEADERS).orEmpty()
+        val drmLicenseUrl = intent.getStringExtra(EXTRA_DRM_LICENSE_URL)
+        val drmHeadersRaw = intent.getStringExtra(EXTRA_DRM_HEADERS).orEmpty()
 
         setContent {
             PlayerScreen(
@@ -352,11 +386,21 @@ class PlayerActivity : ComponentActivity() {
                 overview = overview,
                 startPositionMs = startPositionMs,
                 streamHeaders = parseHeaders(streamHeaders),
+                drmLicenseUrl = drmLicenseUrl,
+                drmHeaders = parseHeaders(drmHeadersRaw),
                 sources = emptyList(),
                 cast = emptyList(),
                 onNavigateActor = { personId -> }
             )
         }
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: android.content.res.Configuration
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        // PlayerScreen observes this via PiP state; the overlay auto-hides in PiP
     }
 }
 
@@ -415,6 +459,8 @@ fun PlayerScreen(
     overview: String? = null,
     startPositionMs: Long,
     streamHeaders: Map<String, String> = emptyMap(),
+    drmLicenseUrl: String? = null,
+    drmHeaders: Map<String, String> = emptyMap(),
     sources: List<Stream> = emptyList(),
     cast: List<PlayerCastMember> = emptyList(),
     onNavigateActor: (Int) -> Unit = {},
@@ -449,6 +495,26 @@ fun PlayerScreen(
     var playbackSpeed by remember { mutableStateOf(1f) }
     var resizeModeIndex by remember { mutableIntStateOf(0) }
 
+    // PiP state
+    val activity = context as? ComponentActivity
+    var isInPiPMode by remember { mutableStateOf(false) }
+
+    // Stream health state
+    var streamWidth by remember { mutableIntStateOf(0) }
+    var streamHeight by remember { mutableIntStateOf(0) }
+    var streamBitrate by remember { mutableIntStateOf(0) }
+    var streamCodec by remember { mutableStateOf<String?>(null) }
+
+    // Settings panel
+    var showSettingsPanel by remember { mutableStateOf(false) }
+    var subtitleOffsetMs by remember { mutableIntStateOf(0) }
+    var subtitleSize by remember { mutableIntStateOf(1) } // 0=small, 1=normal, 2=large
+    var showSubtitlePickerForFile by remember { mutableStateOf(false) }
+
+    // External subtitle file
+    var externalSubtitleUri by remember { mutableStateOf<String?>(null) }
+    var externalSubtitleLabel by remember { mutableStateOf<String?>(null) }
+
     val isPlayingFlow = remember { MutableStateFlow(false) }
     val isBufferingFlow = remember { MutableStateFlow(false) }
     val isPlaying by isPlayingFlow.collectAsState()
@@ -470,7 +536,9 @@ fun PlayerScreen(
         currentAudioUrl,
         streamHeaders,
         manualRetryToken,
-        forceSoftwareDecoder
+        forceSoftwareDecoder,
+        drmLicenseUrl,
+        drmHeaders
     ) {
         val httpFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
@@ -539,6 +607,28 @@ fun PlayerScreen(
             .setMediaSourceFactory(mediaSourceFactory)
             .setHandleAudioBecomingNoisy(true) // auto-pause on BT disconnect
             .setWakeMode(C.WAKE_MODE_NETWORK)  // keep Wi-Fi alive while buffering
+            .apply {
+                // Widevine DRM: only attach when a license URL is provided,
+                // leaving non-DRM streams completely untouched.
+                val licenseUrl = drmLicenseUrl
+                if (!licenseUrl.isNullOrBlank()) {
+                    val drmCallback = object : androidx.media3.exoplayer.drm.HttpMediaDrmCallback(
+                        DefaultHttpDataSource.Factory()
+                            .setConnectTimeoutMs(15_000)
+                            .setReadTimeoutMs(15_000)
+                    ) {
+                        override fun getKeyRequestParams(): Map<String, String> {
+                            return drmHeaders
+                        }
+                    }
+                    val drmSessionManager = androidx.media3.exoplayer.drm.DefaultDrmSessionManager.Builder()
+                        .setMultiSession(false)
+                        .build()
+                    drmSessionManager.setMediaDrmCallback(drmCallback)
+                    setDrmSessionManager(drmSessionManager)
+                    Log.i("PLAYER_DRM", "Widevine DRM configured: licenseUrl=$licenseUrl")
+                }
+            }
             .build()
             .apply {
                 // Single audio-attributes call — handles audio focus and
@@ -585,12 +675,19 @@ fun PlayerScreen(
                     if (group.type == C.TRACK_TYPE_VIDEO) {
                         val codec = fmt.codecs.orEmpty()
                         val colorInfo = fmt.colorInfo
+                        // Update stream health state for the overlay
+                        streamWidth = fmt.width
+                        streamHeight = fmt.height
+                        streamBitrate = fmt.bitrate
+                        streamCodec = codec.ifBlank { null }
+
                         Log.i(
                             "PLAYER_CODEC",
                             buildString {
                                 append("video codec=$codec")
                                 append(" mime=${fmt.sampleMimeType}")
                                 append(" ${fmt.width}x${fmt.height}")
+                                if (fmt.bitrate > 0) append(" ${fmt.bitrate / 1_000}kbps")
                                 colorInfo?.let { c ->
                                     append(" color=${c.colorSpace}/${c.colorTransfer}/${c.colorRange}")
                                     append(" hdr=${c.hdr10PlusInfo != null || c.hdrStaticInfo != null}")
@@ -619,6 +716,38 @@ fun PlayerScreen(
             }
         }
     })
+    }
+
+    // ---------- MediaSession ----------
+    // Exposes playback state to the system: lock-screen controls, notification
+    // transport, and Google Assistant / voice commands.
+    DisposableEffect(exoPlayer) {
+        val mediaSession = MediaSession.Builder(context, exoPlayer).build()
+        val connector = MediaSessionConnector(mediaSession)
+        connector.setPlayer(exoPlayer)
+        onDispose {
+            connector.setPlayer(null)
+            mediaSession.release()
+        }
+    }
+
+    // ---------- PiP auto-enter ----------
+    // When the user navigates away (Home key on TV), automatically enter PiP
+    // if the device supports it.  This covers the common TV pattern of
+    // pressing Home while a video plays.
+    LaunchedEffect(activity, isPlaying) {
+        if (activity != null && isPlaying && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            activity.addOnPictureInPictureModeChangedListener(
+                object : ComponentActivity.OnPictureInPictureModeChangedListener {
+                    override fun onPictureInPictureModeChanged(
+                        inPipMode: Boolean,
+                        newConfig: android.content.res.Configuration
+                    ) {
+                        isInPiPMode = inPipMode
+                    }
+                }
+            )
+        }
     }
 
     // Poll position/duration for the whole player lifetime (not only while
@@ -829,11 +958,7 @@ fun PlayerScreen(
             override fun onPlayerError(error: PlaybackException) {
                 val retryable = isLikelyRetryable(error)
                 errorMessage = buildString {
-                    append(error.errorCodeName)
-                    error.message?.takeIf { it.isNotBlank() }?.let {
-                        append(" — ")
-                        append(it)
-                    }
+                    append(friendlyErrorMessage(error))
                     if (forceSoftwareDecoder) {
                         append(" (software decoder)")
                     }
@@ -1189,7 +1314,12 @@ fun PlayerScreen(
                     onSubtitlePicker = { showSubtitlePicker = true },
                     onSpeedPicker = { showSpeedPicker = true },
                     onAspect = { resizeModeIndex = (resizeModeIndex + 1) % 3 },
+                    onSettings = { showSettingsPanel = true },
                     onNavigateActor = onNavigateActor,
+                    streamWidth = streamWidth,
+                    streamHeight = streamHeight,
+                    streamBitrate = streamBitrate,
+                    streamCodec = streamCodec,
                     playPauseFocusRequester = playPauseFocusRequester
                 )
             }
@@ -1308,6 +1438,31 @@ fun PlayerScreen(
             }
         }
     }
+
+    if (showSettingsPanel) {
+        SettingsPanel(
+            streamWidth = streamWidth,
+            streamHeight = streamHeight,
+            streamBitrate = streamBitrate,
+            streamCodec = streamCodec,
+            playbackSpeed = playbackSpeed,
+            resizeModeIndex = resizeModeIndex,
+            subtitleOffsetMs = subtitleOffsetMs,
+            subtitleSize = subtitleSize,
+            externalSubtitleLabel = externalSubtitleLabel,
+            isLiveChannel = isLiveChannel,
+            onSubtitleOffsetChange = { subtitleOffsetMs = it },
+            onSubtitleSizeChange = { subtitleSize = it },
+            onDismiss = { showSettingsPanel = false }
+        )
+    }
+
+    // PiP: hide overlay when in PiP mode
+    LaunchedEffect(isInPiPMode) {
+        if (isInPiPMode) {
+            showControls = false
+        }
+    }
 }
 
 @Composable
@@ -1334,7 +1489,12 @@ private fun PlayerControlsOverlay(
     onSubtitlePicker: () -> Unit,
     onSpeedPicker: () -> Unit,
     onAspect: () -> Unit,
+    onSettings: () -> Unit,
     onNavigateActor: (Int) -> Unit,
+    streamWidth: Int,
+    streamHeight: Int,
+    streamBitrate: Int,
+    streamCodec: String?,
     playPauseFocusRequester: FocusRequester
 ) {
     val seekBarFocusRequester = remember { FocusRequester() }
@@ -1453,12 +1613,25 @@ private fun PlayerControlsOverlay(
                         )
                     }
                     Spacer(modifier = Modifier.height(6.dp))
-                }
-                Text(
-                    text = "Source: $sourceLabel",
-                    color = KBTextHi,
-                    style = MaterialTheme.typography.bodySmall
-                )
+                }                    Text(
+                        text = "Source: $sourceLabel",
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    if (streamWidth > 0 && streamHeight > 0) {
+                        val healthText = buildString {
+                            append("${streamWidth}x${streamHeight}")
+                            if (streamBitrate > 0) {
+                                append(" • ${streamBitrate / 1_000} kbps")
+                            }
+                            streamCodec?.let { append(" • $it") }
+                        }
+                        Text(
+                            text = healthText,
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
             }
         }
 
@@ -1660,7 +1833,7 @@ private fun PlayerControlsOverlay(
                 ControlIconButton(
                     icon = Icons.Filled.Settings,
                     contentDescription = "Settings",
-                    onClick = {}
+                    onClick = onSettings
                 )
             }
         }
