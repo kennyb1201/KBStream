@@ -252,6 +252,7 @@ class NativePlayerActivity : ComponentActivity() {
             }
             true
         }
+        playerView.setOnClickListener { if (controlsVisible) hideControls() else showControls() }
 
         // Extract intent data
         currentUrl = intent.getStringExtra("stream_url").orEmpty()
@@ -269,6 +270,7 @@ class NativePlayerActivity : ComponentActivity() {
         overview = intent.getStringExtra("item_overview")
         episodeTitle = intent.getStringExtra("episode_title")
         startPositionMs = intent.getLongExtra("start_position_ms", 0L)
+        carryPositionMs = startPositionMs
         streamHeaders = parseHeaders(intent.getStringExtra(EXTRA_HEADERS).orEmpty())
         drmLicenseUrl = intent.getStringExtra(EXTRA_DRM_LICENSE_URL)
         drmHeaders = parseHeaders(intent.getStringExtra(EXTRA_DRM_HEADERS).orEmpty())
@@ -1222,7 +1224,11 @@ class NativePlayerActivity : ComponentActivity() {
                 return
             }
             val posMs = player.currentPosition
-            val matching = introDbStamps.firstOrNull { posMs >= it.startMs && posMs < it.endMs }
+            val            matching = introDbStamps.firstOrNull { stamp ->
+                posMs >= stamp.startMs && posMs < stamp.endMs &&
+                    stamp.endMs > stamp.startMs && stamp.endMs - stamp.startMs <= 10 * 60 * 1000L
+            }
+
             if (matching != activeIntroStamp) {
                 activeIntroStamp = matching
                 if (matching != null) {
