@@ -681,6 +681,7 @@ fun AppRoot() {
                     current.episodeStreamId?.let { putExtra("episode_stream_id", it) }
                     current.episodeTitle?.let { putExtra("episode_title", it) }
                     putExtra("item_name", current.itemName)
+                    putExtra("display_name", current.itemName)
                     current.itemPoster?.let { putExtra("item_poster", it) }
                     current.clearLogoUrl?.let { putExtra("clear_logo_url", it) }
                     current.overview?.let { putExtra("item_overview", it) }
@@ -716,6 +717,7 @@ fun AppRoot() {
                         castArray.put(obj)
                     }
                     putExtra("cast_json", castArray.toString())
+                    putExtra("season_episode_label", listOfNotNull(current.season?.let { "Season $it" }, current.episode?.let { "Episode $it" }).joinToString(" • "))
                     // Pass total episodes
                     current.totalEpisodesInSeason?.let { putExtra("total_episodes_in_season", it) }
                 }

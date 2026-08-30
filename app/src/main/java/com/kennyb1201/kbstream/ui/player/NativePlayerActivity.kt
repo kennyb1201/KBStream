@@ -12,6 +12,7 @@ import android.util.Log
 import android.util.Rational
 import android.view.KeyEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.ProgressBar
@@ -253,6 +254,18 @@ class NativePlayerActivity : ComponentActivity() {
             true
         }
         playerView.setOnClickListener { if (controlsVisible) hideControls() else showControls() }
+        controlsOverlay.isFocusable = true
+        controlsOverlay.isFocusableInTouchMode = true
+        controlsOverlay.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+        controlsOverlay.isClickable = true
+        controlsOverlay.setOnKeyListener { _, keyCode, event ->
+            if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+            when (keyCode) {
+                KeyEvent.KEYCODE_BACK -> { dismissAllPanels(); hideControls(); true }
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> { true }
+                else -> false
+            }
+        }
 
         // Extract intent data
         currentUrl = intent.getStringExtra("stream_url").orEmpty()
@@ -264,7 +277,9 @@ class NativePlayerActivity : ComponentActivity() {
         season = intent.getIntExtra("season", -1).takeIf { it >= 0 }
         episode = intent.getIntExtra("episode", -1).takeIf { it >= 0 }
         episodeStreamId = intent.getStringExtra("episode_stream_id")
-        itemName = intent.getStringExtra("item_name").orEmpty()
+        itemName = intent.getStringExtra("item_name")
+            ?.takeIf { it.isNotBlank() }
+            ?: intent.getStringExtra("display_name").orEmpty()
         itemPoster = intent.getStringExtra("item_poster")
         clearLogoUrl = intent.getStringExtra("clear_logo_url")
         overview = intent.getStringExtra("item_overview")
@@ -280,6 +295,11 @@ class NativePlayerActivity : ComponentActivity() {
         autoPlayNext = AppPreferences.getAutoPlayNext(this)
         totalEpisodesInSeason = intent.getIntExtra("total_episodes_in_season", -1).takeIf { it > 0 }
 
+        // Keep the currently selected stream available even when the caller did not
+        // provide a complete source list.
+        val selectedStream = Stream(name = "Current source", title = null, url = currentUrl, audioUrl = currentAudioUrl)
+        sources = listOf(selectedStream)
+
         // Parse sources from JSON
         val sourcesJson = intent.getStringExtra("sources_json")
         if (!sourcesJson.isNullOrBlank()) {
@@ -294,6 +314,9 @@ class NativePlayerActivity : ComponentActivity() {
                         audioUrl = obj.optString("audioUrl", null)
                     )
                 }.filter { !it.url.isNullOrBlank() }
+                if (sources.none { it.url == currentUrl }) {
+                    sources = listOf(selectedStream) + sources
+                }
             } catch (e: Exception) {
                 Log.w("NativePlayer", "Failed to parse sources_json", e)
             }
@@ -364,7 +387,9 @@ class NativePlayerActivity : ComponentActivity() {
             else -> parentId
         }
 
-        currentSourceLabel = sources.firstOrNull { it.url == currentUrl }?.label() ?: "Source 1"
+        currentSourceLabel = sources.firstOrNull { it.url == currentUrl }?.label() ?: "Current source"
+        updateHeaderInfo()
+        updateControlsInfo()
 
         setupListeners()
         setupKeyboardHandler()
@@ -596,6 +621,10 @@ class NativePlayerActivity : ComponentActivity() {
 
     private fun setupKeyboardHandler() {
         playerView.isFocusable = true
+        playerView.isClickable = true
+        playerView.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus && controlsVisible) controlsOverlay.requestFocus()
+        }
         playerView.isFocusableInTouchMode = true
         playerView.requestFocus()
         playerView.setOnKeyListener { _, keyCode, event ->
@@ -615,7 +644,9 @@ class NativePlayerActivity : ComponentActivity() {
                     true
                 }
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                    showControls(); false
+                    showControls()
+                    controlsOverlay.requestFocus()
+                    true
                 }
                 KeyEvent.KEYCODE_BACK -> {
                     if (isPickerShowing || showSettingsPanel) { dismissAllPanels(); true } else false
@@ -944,6 +975,7 @@ class NativePlayerActivity : ComponentActivity() {
         controlsVisible = true
         controlsOverlay.visibility = View.VISIBLE
         updateControlsInfo()
+        controlsOverlay.post { btnPlayPause.requestFocus() }
         scheduleAutoHide()
     }
 
@@ -1231,7 +1263,7 @@ class NativePlayerActivity : ComponentActivity() {
                 return
             }
             val posMs = player.currentPosition
-            val            matching = introDbStamps.firstOrNull { stamp ->
+            val matching = introDbStamps.firstOrNull { stamp ->
                 posMs >= stamp.startMs && posMs < stamp.endMs &&
                     stamp.endMs > stamp.startMs && stamp.endMs - stamp.startMs <= 10 * 60 * 1000L
             }
