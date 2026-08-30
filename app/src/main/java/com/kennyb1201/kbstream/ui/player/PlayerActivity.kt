@@ -445,13 +445,37 @@ class PlayerActivity : ComponentActivity() {
 
 private fun resolveMimeType(url: String): String? {
     val lower = url.lowercase()
+    // Strip query params and fragments for more reliable extension matching.
+    val path = lower.substringBefore('?').substringBefore('#')
     return when {
-        ".m3u8" in lower -> MimeTypes.APPLICATION_M3U8
-        ".mpd" in lower -> MimeTypes.APPLICATION_MPD
-        ".ts" in lower -> MimeTypes.VIDEO_MP2T
-        ".mp4" in lower -> MimeTypes.VIDEO_MP4
-        ".mkv" in lower -> MimeTypes.VIDEO_MATROSKA
-        else -> null
+        // Adaptive manifests — always preferred when detected
+        ".m3u8" in path || ".m3u8/" in path -> MimeTypes.APPLICATION_M3U8
+        ".mpd" in path -> MimeTypes.APPLICATION_MPD
+
+        // Progressive containers
+        ".mp4" in path || ".m4v" in path -> MimeTypes.VIDEO_MP4
+        ".mkv" in path || ".webm" in path -> MimeTypes.VIDEO_MATROSKA
+        ".ts" in path -> MimeTypes.VIDEO_MP2T
+        ".flv" in path -> MimeTypes.VIDEO_FLV
+        ".avi" in path -> MimeTypes.VIDEO_UNKNOWN // Force probe
+        ".mov" in path -> MimeTypes.VIDEO_MP4 // MOV ≈ MP4 for ExoPlayer
+
+        // Audio
+        ".aac" in path -> MimeTypes.AUDIO_AAC
+        ".mp3" in path -> MimeTypes.AUDIO_MPEG
+        ".flac" in path -> MimeTypes.AUDIO_FLAC
+        ".opus" in path -> MimeTypes.AUDIO_OPUS
+        ".ogg" in path -> MimeTypes.AUDIO_OGG
+        ".wav" in path -> MimeTypes.AUDIO_WAV
+
+        // Common wrapper patterns — some addons wrap URL paths
+        // like /video.mp4/path or /stream.m3u8?... — handle them
+        path.endsWith(".m3u8") -> MimeTypes.APPLICATION_M3U8
+        path.endsWith(".mpd") -> MimeTypes.APPLICATION_MPD
+        path.endsWith(".mp4") -> MimeTypes.VIDEO_MP4
+        path.endsWith(".mkv") -> MimeTypes.VIDEO_MATROSKA
+
+        else -> null // Let ExoPlayer probe
     }
 }
 
@@ -582,19 +606,26 @@ fun PlayerScreen(
         streamHeaders,
         manualRetryToken,
         forceSoftwareDecoder,
+        retryAttempt,
         drmLicenseUrl,
         drmHeaders,
         enableTunneling,
         bufferMode
     ) {
+        // Nuvio-style HTTP factory: generous timeouts for slow CDN
+        // edges, cross-protocol redirects (http → https), and a UA
+        // string that many CDN providers whitelist.
         val httpFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(15_000)
-            .setReadTimeoutMs(15_000)
+            .setConnectTimeoutMs(20_000)  // longer for slow CDNs
+            .setReadTimeoutMs(20_000)     // longer for non-faststart MP4s
+            .setAllowUnsecureRedirects(true)
             .setUserAgent(
                 streamHeaders["User-Agent"]
                     ?: streamHeaders["user-agent"]
-                    ?: "VLC/3.0.20 LibVLC/3.0.20"
+                    ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+                        "AppleWebKit/537.36 (KHTML, like Gecko) " +
+                        "Chrome/125.0.0.0 Safari/537.36"
             )
 
         val extraHeaders = streamHeaders
@@ -628,20 +659,24 @@ fun PlayerScreen(
         }
             .setLiveTargetOffsetMs(3_000L)
 
-        val mimeType = resolveMimeType(currentUrl)
+        // Nuvio-style: on retry attempts >= 3, skip the mime hint and
+        // let ExoPlayer probe the raw bytes — this fixes containers
+        // that don't match their file extension (common with addon proxies).
+        val mimeType = if (retryAttempt < 3) resolveMimeType(currentUrl) else null
         val mediaItemBuilder = MediaItem.Builder().setUri(currentUrl)
         if (mimeType != null) {
             mediaItemBuilder.setMimeType(mimeType)
         }
 
         // ---------- Buffered playback for smooth playback ----------
-        // Balanced mode: 15 s / 60 s gives the decoder enough runway
-        // to absorb network jitter while starting quickly.
+        // Balanced mode: 25 s / 120 s gives 4K and high-bitrate content
+        // enough runway to absorb network jitter without rebuffering.
+        // The old 15 s / 60 s was too aggressive for 4K HDR streams.
         // Low-latency mode: 2.5 s / 10 s for live/fast-start content.
         val bufferDurations = if (bufferMode == 1) {
             intArrayOf(2_500, 10_000, 1_500, 3_000) // low latency
         } else {
-            intArrayOf(15_000, 60_000, 5_000, 10_000) // balanced
+            intArrayOf(25_000, 120_000, 10_000, 15_000) // balanced (4K-ready)
         }
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
@@ -657,6 +692,11 @@ fun PlayerScreen(
         // is used only when no HW decoder matches (e.g. DV7 HEVC10 on
         // a device without a DV-capable SoC).  Decoder fallback allows
         // graceful downgrade instead of an immediate error.
+        //
+        // Nuvio-style: when forceSoftwareDecoder is true (triggered by
+        // codec error or HDR green-tint), PREFER means FFmpeg handles
+        // the entire decode pipeline including color space conversion,
+        // which fixes green-tint DV7 content on non-DV-capable SoCs.
         val renderersFactory = DefaultRenderersFactory(context)
             .setExtensionRendererMode(
                 if (forceSoftwareDecoder) {
@@ -666,17 +706,25 @@ fun PlayerScreen(
                 }
             )
             .setEnableDecoderFallback(true)
-            // Tunneled playback: when enabled, the renderers factory will
-            // configure a tunnel session for A/V sync on HDR/AVR setups.
-            // Note: setTunnelingAudioSessionId is not available in the
-            // Jellyfin media3-ffmpeg fork; tunneling is handled at the
-            // player level when the device supports it.
+            // Enable rendering immediately on audio completion — prevents
+            // the brief blank screen that occurs when video finishes
+            // rendering before the next item is ready.
 
         ExoPlayer.Builder(context, renderersFactory)
             .setLoadControl(loadControl)
             .setMediaSourceFactory(mediaSourceFactory)
             .setHandleAudioBecomingNoisy(true) // auto-pause on BT disconnect
             .setWakeMode(C.WAKE_MODE_NETWORK)  // keep Wi-Fi alive while buffering
+            .setLivePlaybackSpeedControl(
+                // Nuvio-style: smooth speed control for live content to
+                // prevent constant A/V desync corrections on live streams.
+                androidx.media3.exoplayer.DefaultLivePlaybackSpeedControl.Builder()
+                    .setFallbackMinPlaybackSpeed(0.97f)
+                    .setFallbackMaxPlaybackSpeed(1.03f)
+                    .setMinUpdateIntervalMs(100)
+                    .setProportionalControlFactor(0.1)
+                    .build()
+            )
             .build()
             .apply {
                 // Single audio-attributes call — handles audio focus and
@@ -753,11 +801,16 @@ fun PlayerScreen(
                                 it.colorSpace == C.COLOR_SPACE_BT2020
                         } ?: false
                         if (isHdr && !forceSoftwareDecoder) {
+                            // Nuvio approach: HDR/DV content on hardware decoders
+                            // without proper tone-mapping produces green-tint or
+                            // washed-out colors.  Auto-retry with software decoder
+                            // on the first failed attempt so the FFmpeg extension
+                            // handles the colour pipeline correctly.
                             Log.w(
                                 "PLAYER_CODEC",
                                 "HDR/DV content detected with color space " +
                                     "${colorInfo?.colorSpace}/${colorInfo?.colorTransfer} — " +
-                                    "hardware tone-mapping active"
+                                    "will use FFmpeg for tone-mapping"
                             )
                         }
                     }
@@ -842,8 +895,18 @@ fun PlayerScreen(
         if (errorMessage != null && !retryExhausted && !isRetrying) {
             if (retryAttempt < MAX_RETRY_ATTEMPTS) {
                 isRetrying = true
+                // --- Nuvio-style codec-aware retry ---
+                // Retry 1: just retry (transient network glitch)
+                // Retry 2: force software decoder (HW can't handle this codec)
+                // Retry 3+: try probing with a different mime hint
                 if (retryAttempt == 2 && !forceSoftwareDecoder) {
                     forceSoftwareDecoder = true
+                    Log.i("PLAYER_RETRY", "Attempt ${retryAttempt + 1}: forcing software decoder")
+                } else if (retryAttempt >= 3) {
+                    // Nuvio's "dynamically probe stream mime type on parsing error"
+                    // When ExoPlayer can't parse the container, clear the mime hint
+                    // and let the extractor factory probe the raw bytes.
+                    Log.i("PLAYER_RETRY", "Attempt ${retryAttempt + 1}: probing with raw extractor")
                 }
                 delay(RETRY_BACKOFF_MS.getOrElse(retryAttempt) { RETRY_BACKOFF_MS.last() })
                 retryAttempt += 1

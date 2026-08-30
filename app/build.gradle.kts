@@ -108,11 +108,14 @@ dependencies {
     implementation("com.squareup.moshi:moshi-kotlin:1.15.1")
 
     implementation("androidx.media3:media3-exoplayer:1.9.0")
-implementation("androidx.media3:media3-exoplayer-hls:1.9.0")
-implementation("androidx.media3:media3-ui:1.9.0")
-implementation("androidx.media3:media3-session:1.9.0")
-implementation("androidx.media3:media3-datasource-okhttp:1.9.0")
-implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.9.0+1")
+    implementation("androidx.media3:media3-exoplayer-hls:1.9.0")
+    implementation("androidx.media3:media3-exoplayer-dash:1.9.0")
+    implementation("androidx.media3:media3-exoplayer-rtsp:1.9.0")
+    implementation("androidx.media3:media3-exoplayer-drm:1.9.0")
+    implementation("androidx.media3:media3-ui:1.9.0")
+    implementation("androidx.media3:media3-session:1.9.0")
+    implementation("androidx.media3:media3-datasource-okhttp:1.9.0")
+    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.9.0+1")
 implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.26.4")
 
 
