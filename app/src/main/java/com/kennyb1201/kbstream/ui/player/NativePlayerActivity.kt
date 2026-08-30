@@ -1205,7 +1205,10 @@ class NativePlayerActivity : ComponentActivity() {
     // --- Intro Stamp Polling ---
     private val introStampRunnable = object : Runnable {
         override fun run() {
-            val player = exoPlayer ?: return
+            val player = exoPlayer ?: run {
+                handler.postDelayed(this, 750L)
+                return
+            }
             val posMs = player.currentPosition
             val matching = introDbStamps.firstOrNull { posMs >= it.startMs && posMs < it.endMs }
             if (matching != activeIntroStamp) {
