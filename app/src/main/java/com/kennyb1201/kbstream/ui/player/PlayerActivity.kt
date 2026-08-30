@@ -723,9 +723,18 @@ fun PlayerScreen(
             decoderMode == 1     -> DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
             else                 -> DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
         }
+        // Tunneled playback: routes audio/video through a single tunnel
+        // session for tighter A/V sync. Especially useful on HDR content
+        // connected to an AVR via HDMI.
         val renderersFactory = DefaultRenderersFactory(context)
             .setExtensionRendererMode(extensionMode)
             .setEnableDecoderFallback(true)
+            .apply {
+                if (enableTunneling) {
+                    setTunnelingAudioSessionId(C.AUDIO_SESSION_ID_UNSET)
+                    Log.i("PLAYER_TUNNEL", "Tunneled playback enabled")
+                }
+            }
             // Enable rendering immediately on audio completion — prevents
             // the brief blank screen that occurs when video finishes
             // rendering before the next item is ready.
