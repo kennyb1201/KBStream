@@ -4,7 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.util.Log
-import com.kennyb1201.kbstream.ui.player.PlayerActivity
+import com.kennyb1201.kbstream.ui.player.NativePlayerActivity
 
 object TrailerPlayerLauncher {
 
@@ -97,7 +97,7 @@ object TrailerPlayerLauncher {
         val intent =
             Intent(
                 context,
-                PlayerActivity::class.java
+                NativePlayerActivity::class.java
             ).apply {
 
                 when (source) {

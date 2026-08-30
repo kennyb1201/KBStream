@@ -31,7 +31,7 @@
         </activity>
 
         <activity
-            android:name=".ui.player.PlayerActivity"
+            android:name=".ui.player.NativePlayerActivity"
             android:exported="false"
             android:resizeableActivity="true"
             android:supportsPictureInPicture="true"

@@ -661,20 +661,23 @@ fun PlayerScreen(
         enableTunneling,
         bufferMode
     ) {
-        // Nuvio-style HTTP factory: generous timeouts for slow CDN
-        // edges, cross-protocol redirects (http → https), and a UA
-        // string that many CDN providers whitelist.
-        val httpFactory = DefaultHttpDataSource.Factory()
+        // OkHttpDataSource for persistent connection pooling and
+        // automatic HTTP→HTTPS redirects.  Connection reuse is critical
+        // for high-bitrate (90+ Mbps) 4K DV streams where reconnecting
+        // between segments causes rebuffer stalls.
+        val userAgent = streamHeaders["User-Agent"]
+            ?: streamHeaders["user-agent"]
+            ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+                "AppleWebKit/537.36 (KHTML, like Gecko) " +
+                "Chrome/125.0.0.0 Safari/537.36"
+        val okHttpClient = okhttp3.OkHttpClient.Builder()
+            .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+        val httpFactory = androidx.media3.datasource.okhttp.OkHttpDataSource
+            .Factory(okHttpClient)
+            .setUserAgent(userAgent)
             .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(20_000)  // longer for slow CDNs
-            .setReadTimeoutMs(20_000)     // longer for non-faststart MP4s
-            .setUserAgent(
-                streamHeaders["User-Agent"]
-                    ?: streamHeaders["user-agent"]
-                    ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
-                        "AppleWebKit/537.36 (KHTML, like Gecko) " +
-                        "Chrome/125.0.0.0 Safari/537.36"
-            )
 
         val extraHeaders = streamHeaders
             .filterKeys { !it.equals("User-Agent", ignoreCase = true) }
@@ -938,7 +941,7 @@ fun PlayerScreen(
             if (dur != C.TIME_UNSET && dur > 0L && dur != durationMs) {
                 durationMs = dur
             }
-            delay(500L)
+            delay(1_000L)
         }
     }
 
@@ -960,6 +963,12 @@ fun PlayerScreen(
     LaunchedEffect(exoPlayer, introDbStamps) {
         while (true) {
             delay(750L)
+            // Skip intro stamp updates when overlay is hidden —
+            // this avoids recomposing the parent Box every 750ms
+            // during normal playback, reducing heap churn.
+            if (!showControls && activeIntroStamp == null) {
+                continue
+            }
             val positionMs = exoPlayer.currentPosition
             val matchingStamp = introDbStamps.firstOrNull { stamp ->
                 positionMs >= stamp.startMs && positionMs < stamp.endMs
