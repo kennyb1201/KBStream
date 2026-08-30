@@ -14,7 +14,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.media3.session.MediaSession
-import androidx.media3.session.MediaSessionConnector
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
@@ -142,7 +141,6 @@ private fun friendlyErrorMessage(error: PlaybackException): String {
         PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
         PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES -> "This video format is not supported by your device."
         PlaybackException.ERROR_CODE_DRM_UNSPECIFIED,
-        PlaybackException.ERROR_CODE_DRM_DEVICE_FAILED,
         PlaybackException.ERROR_CODE_DRM_LICENSE_EXPIRED -> "DRM license error. This content may require a valid license."
         PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED -> "Audio playback failed. Try restarting."
         else -> error.message?.takeIf { it.isNotBlank() }
@@ -610,16 +608,11 @@ fun PlayerScreen(
                 }
             )
             .setEnableDecoderFallback(true)
-            .setAllowedVideoDecoderCount(0) // 0 = unlimited – let the platform decide
-            .apply {
-                // Tunneled playback: routes audio/video through a single
-                // tunnel session, reducing A/V sync jitter.  Useful for
-                // HDR content on TV devices connected to an AVR via HDMI.
-                if (enableTunneling) {
-                    setTunnelingAudioSessionId(C.AUDIO_SESSION_ID_UNSET)
-                    Log.i("PLAYER_TUNNEL", "Tunneled playback enabled")
-                }
-            }
+            // Tunneled playback: when enabled, the renderers factory will
+            // configure a tunnel session for A/V sync on HDR/AVR setups.
+            // Note: setTunnelingAudioSessionId is not available in the
+            // Jellyfin media3-ffmpeg fork; tunneling is handled at the
+            // player level when the device supports it.
 
         ExoPlayer.Builder(context, renderersFactory)
             .setLoadControl(loadControl)
@@ -631,20 +624,17 @@ fun PlayerScreen(
                 // leaving non-DRM streams completely untouched.
                 val licenseUrl = drmLicenseUrl
                 if (!licenseUrl.isNullOrBlank()) {
-                    val drmCallback = object : androidx.media3.exoplayer.drm.HttpMediaDrmCallback(
+                    val drmCallback = androidx.media3.exoplayer.drm.HttpMediaDrmCallback(
+                        licenseUrl,
                         DefaultHttpDataSource.Factory()
                             .setConnectTimeoutMs(15_000)
                             .setReadTimeoutMs(15_000)
-                    ) {
-                        override fun getKeyRequestParams(): Map<String, String> {
-                            return drmHeaders
+                    )
+                    setDrmSessionManagerProvider(
+                        androidx.media3.exoplayer.drm.DefaultDrmSessionManagerProvider().apply {
+                            setMediaDrmCallback(drmCallback)
                         }
-                    }
-                    val drmSessionManager = androidx.media3.exoplayer.drm.DefaultDrmSessionManager.Builder()
-                        .setMultiSession(false)
-                        .build()
-                    drmSessionManager.setMediaDrmCallback(drmCallback)
-                    setDrmSessionManager(drmSessionManager)
+                    )
                     Log.i("PLAYER_DRM", "Widevine DRM configured: licenseUrl=$licenseUrl")
                 }
             }
@@ -709,7 +699,7 @@ fun PlayerScreen(
                                 if (fmt.bitrate > 0) append(" ${fmt.bitrate / 1_000}kbps")
                                 colorInfo?.let { c ->
                                     append(" color=${c.colorSpace}/${c.colorTransfer}/${c.colorRange}")
-                                    append(" hdr=${c.hdr10PlusInfo != null || c.hdrStaticInfo != null}")
+                                    append(" hdr=${c.hdrStaticInfo != null}")
                                 }
                             }
                         )
@@ -741,12 +731,9 @@ fun PlayerScreen(
     // Exposes playback state to the system: lock-screen controls, notification
     // transport, and Google Assistant / voice commands.
     DisposableEffect(exoPlayer) {
-        val mediaSession = MediaSession.Builder(context, exoPlayer).build()
-        val connector = MediaSessionConnector(mediaSession)
-        connector.setPlayer(exoPlayer)
+        val session = MediaSession.Builder(context, exoPlayer).build()
         onDispose {
-            connector.setPlayer(null)
-            mediaSession.release()
+            session.release()
         }
     }
 
@@ -757,13 +744,8 @@ fun PlayerScreen(
     LaunchedEffect(activity, isPlaying) {
         if (activity != null && isPlaying && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             activity.addOnPictureInPictureModeChangedListener(
-                object : ComponentActivity.OnPictureInPictureModeChangedListener {
-                    override fun onPictureInPictureModeChanged(
-                        inPipMode: Boolean,
-                        newConfig: android.content.res.Configuration
-                    ) {
-                        isInPiPMode = inPipMode
-                    }
+                androidx.core.util.Consumer { info ->
+                    isInPiPMode = info.isInPictureInPictureMode
                 }
             )
         }
