@@ -246,24 +246,24 @@
                 android:visibility="gone" />
 
             <TextView
-                android:id="@+id/source_label"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:visibility="visible"
-                android:layout_marginTop="6dp"
-                android:fontFamily="@font/oswald_medium"
-                android:textColor="@color/kb_text_hi"
-                android:textSize="12sp" />
-
-            <TextView
                 android:id="@+id/stream_health"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
+                android:layout_marginTop="6dp"
                 android:fontFamily="@font/oswald_medium"
                 android:textColor="@color/kb_text_lo"
                 android:textSize="11sp"
                 android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/source_label"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:visibility="visible"
+                android:layout_marginTop="2dp"
+                android:fontFamily="@font/oswald_medium"
+                android:textColor="@color/kb_text_hi"
+                android:textSize="12sp" />
 
             <!-- Overview text -->
             <TextView
