@@ -182,7 +182,6 @@ class NativePlayerActivity : ComponentActivity() {
     private var carryPositionMs = 0L
     private var playbackSpeed = 1f
     private var resizeModeIndex = 0
-    private var sessionSeq = 0
     private var subtitleOffsetMs = 0
     private var subtitleSize = 1
     private var subtitleBackground = 0
@@ -921,11 +920,7 @@ class NativePlayerActivity : ComponentActivity() {
         })
 
         mediaSession?.release()
-        mediaSession = MediaSession.Builder(
-            this,
-            player,
-            "kbstream-player-" + System.currentTimeMillis() + "-" + (sessionSeq++)
-        ).build()
+        mediaSession = MediaSession.Builder(this, player).build()
 
         // Start position polling
         startPositionPolling()
