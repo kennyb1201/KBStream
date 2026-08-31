@@ -807,7 +807,7 @@ Log.d(
         // Cache completed episode keys per show so we only query the
         // DAO once per parentId instead of once per history row.
         val localCompletedForParent: Set<Pair<Int, Int>> =
-            if (isEpisodePlayback && entry.totalEpisodesInSeason != null) {
+            if (isEpisodePlayback) {
                 try {
                     val resolvedParentId = entry.parentId.trim().ifBlank { entry.id.trim() }
                     historyDao.getCompletedForParent(resolvedParentId)
