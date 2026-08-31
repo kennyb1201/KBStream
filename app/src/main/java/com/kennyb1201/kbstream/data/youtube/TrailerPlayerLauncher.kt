@@ -78,7 +78,7 @@ object TrailerPlayerLauncher {
             }
             Log.w(TAG, "Cobalt proxy yielded no source; falling back to local extraction")
         } else {
-            Log.d(TAG, "Cobalt proxy not configured; using local extractors")
+            Log.w(TAG, "Cobalt proxy NOT CONFIGURED (TRAILER_PROXY_URL missing); using local extractors")
         }
 
         // Secondary: direct InnerTube player API
