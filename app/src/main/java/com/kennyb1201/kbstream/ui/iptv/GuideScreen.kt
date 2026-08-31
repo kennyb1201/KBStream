@@ -407,7 +407,7 @@ LaunchedEffect(channelListState, groupedChannelIds) {
             name = group,
             selected = group == selectedGroup,
             onClick = { selectedGroup = group },
-            onFocus = { selectedGroup = group },
+            onFocus = { if (!moveFocusToChannelList) selectedGroup = group },
             modifier = Modifier
                 .focusRequester(chipFocusRequester)
                 .let { base ->
