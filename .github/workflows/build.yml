@@ -17,7 +17,8 @@ jobs:
       TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
       SIMKL_CLIENT_ID: ${{ secrets.SIMKL_CLIENT_ID }}
       SIMKL_CLIENT_SECRET: ${{ secrets.SIMKL_CLIENT_SECRET }}
-
+      TRAILER_PROXY_URL: ${{ secrets.TRAILER_PROXY_URL }}
+      
     steps:
       - name: Checkout
         uses: actions/checkout@v4
