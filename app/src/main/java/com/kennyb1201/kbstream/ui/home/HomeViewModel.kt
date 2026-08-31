@@ -772,79 +772,6 @@ Log.d(
         .coerceAtLeast(1)
     }
 
-    /**
-     * Compute the whole-show watched/total episode counts for a local
-     * continue-watching item by counting aired episodes from TMDB season
-     * by season (starting at season 1), mirroring the SIMKL path that
-     * drives the hero's "X of Y episodes watched" display.
-     *
-     * This replaces the prior per-season heuristic that depended on
-     * WatchHistoryEntity.totalEpisodesInSeason, which is null for many
-     * shows and caused the "22 of 32" count to silently disappear.
-     */
-    private suspend fun computeShowEpisodeTotals(
-        tmdbId: Int,
-        parentId: String,
-        localCompletedForParent: Set<Pair<Int, Int>>
-    ): ShowEpisodeTotals? {
-        if (tmdbId <= 0 || localCompletedForParent.isEmpty()) {
-            return null
-        }
-
-        val watchedBySeason =
-            localCompletedForParent.groupBy(
-                { (season, _) -> season },
-                { (_, episode) -> episode }
-            )
-
-        var totalAired = 0
-        var watchedAired = 0
-        var season = 1
-
-        while (season <= MAX_FORWARD_SEASON_LOOKAHEAD) {
-            val seasonEpisodes =
-                try {
-                    tmdbLookupSemaphore.withPermit {
-                        tmdbRepository.getSeasonEpisodes(
-                            tvId = tmdbId,
-                            season = season,
-                            imdbId = parentId
-                        )
-                    }
-                } catch (_: Exception) {
-                    emptyList()
-                }
-
-            if (seasonEpisodes.isEmpty()) {
-                break
-            }
-
-            val watchedThisSeason =
-                watchedBySeason[season].orEmpty()
-
-            for (episode in seasonEpisodes) {
-                if (!isAiredOrUnknown(episode.airDate)) {
-                    continue
-                }
-                totalAired++
-                if (episode.episodeNumber in watchedThisSeason) {
-                    watchedAired++
-                }
-            }
-
-            season++
-        }
-
-        if (totalAired <= 0) {
-            return null
-        }
-
-        return ShowEpisodeTotals(
-            watched = watchedAired.coerceAtMost(totalAired),
-            total = totalAired
-        )
-    }
-
     private suspend fun clearWatchedStateCaches() {
 
         watchedStateMutex.withLock {
@@ -904,6 +831,7 @@ Log.d(
         // null when we can't resolve TMDB so we fall back to the stored
         // per-season total below.
         var tmdbEpisodeTotals: ShowEpisodeTotals? = null
+        var tmdbEpisodesRemaining: Int? = null
 
         if (
             isEpisodePlayback &&
@@ -950,16 +878,27 @@ Log.d(
 
                 val tmdbId = tmdbDetail?.id
 
-                tmdbEpisodeTotals =
-                    if (tmdbId != null && tmdbId > 0) {
-                        computeShowEpisodeTotals(
-                            tmdbId = tmdbId,
-                            parentId = parentId,
-                            localCompletedForParent = localCompletedForParent
-                        )
-                    } else {
-                        null
-                    }
+                if (tmdbId != null && tmdbId > 0) {
+                    // Count watched/total/remaining through the SAME shared-watched-state
+                    // mechanism the SIMKL path uses (the one that correctly renders
+                    // "X of Y episodes watched"), so local history stays consistent with
+                    // SIMKL across the hero and the continue-watching cards.
+                    preloadWatchedEpisodeStateForShow(
+                        parentId = parentId,
+                        tmdbShowId = tmdbId
+                    )
+                    val target = resolveSeriesTargetFromSharedWatchedState(
+                        parentId = parentId,
+                        tmdbId = tmdbId,
+                        simklSeason = entry.season,
+                        simklEpisode = entry.episode
+                    )
+                    tmdbEpisodeTotals =
+                        target?.episodesWatched?.let { w ->
+                            target.episodesTotal?.let { t -> ShowEpisodeTotals(w, t) }
+                        }
+                    tmdbEpisodesRemaining = target?.episodesRemaining
+                }
 
                 if (tmdbId != null && tmdbId > 0) {
                     // Single season lookup gives us both the episode's
@@ -1006,12 +945,15 @@ Log.d(
             tmdbEpisodeTotals?.watched
                 ?: localCompletedForParent.size
 
+        // Whole-show total from the shared SIMKL-style TMDB count; fall back to the
+        // stored per-season total only when that isn't resolvable.
         val localEpisodesTotal: Int? =
             tmdbEpisodeTotals?.total
                 ?: entry.totalEpisodesInSeason
 
         val localEpisodesRemaining: Int? =
-            localEpisodesTotal?.let { (it - localWatchedCount).coerceAtLeast(0) }
+            tmdbEpisodesRemaining
+                ?: localEpisodesTotal?.let { (it - localWatchedCount).coerceAtLeast(0) }
 
         UpNextItem(
             id = buildString {
