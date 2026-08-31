@@ -925,15 +925,26 @@ Log.d(
 
             episodeTitle = entry.episodeTitle?.takeIf { it.isNotBlank() },
             episodeDescription = entry.overview?.takeIf { it.isNotBlank() },
-            episodesWatched = entry.season?.let { seasonNumber ->
-                entry.totalEpisodesInSeason?.let { total ->
-                    localCompletedForParent.count { (s, _) -> s == seasonNumber }
-                        .coerceAtMost(total)
+            episodesWatched = localCompletedForParent.size.takeIf { it > 0 },
+            episodesTotal = run {
+                // Try to figure out the total episode count across all seasons
+                // by looking at the highest season number from completed episodes
+                // plus the current season's total.
+                val maxSeason = localCompletedForParent.maxOfOrNull { (s, _) -> s }
+                    ?: entry.season
+                if (maxSeason != null && maxSeason > 1) {
+                    // We have multi-season data — estimate total as
+                    // (completed across all seasons) + remaining in current season
+                    val currentSeasonWatched = localCompletedForParent.count { (s, _) -> s == entry.season }
+                    val currentSeasonRemaining = (entry.totalEpisodesInSeason ?: 0) - currentSeasonWatched
+                    localCompletedForParent.size + currentSeasonRemaining.coerceAtLeast(0)
+                } else {
+                    entry.totalEpisodesInSeason
                 }
             },
-            episodesTotal = entry.totalEpisodesInSeason,
-            episodesRemaining = entry.totalEpisodesInSeason?.let { total ->
-                val watched = localCompletedForParent.count { (s, _) -> s == entry.season }
+            episodesRemaining = run {
+                val total = episodesTotal ?: return@run null
+                val watched = localCompletedForParent.size
                 (total - watched).coerceAtLeast(0)
             },
 
