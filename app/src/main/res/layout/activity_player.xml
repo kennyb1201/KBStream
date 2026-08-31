@@ -464,7 +464,7 @@
                 <!-- Aspect ratio -->
                 <TextView
                     android:id="@+id/btn_aspect"
-                    android:layout_width="40dp"
+                    android:layout_width="48dp"
                     android:layout_height="40dp"
                     android:layout_marginEnd="8dp"
                     android:background="@drawable/control_button_bg"
@@ -473,7 +473,7 @@
                     android:gravity="center"
                     android:text="⊞"
                     android:textColor="@color/kb_text_hi"
-                    android:textSize="18sp" />
+                    android:textSize="12sp" />
 
                 <!-- Settings -->
                 <TextView

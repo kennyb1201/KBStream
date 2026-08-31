@@ -437,6 +437,10 @@ class NativePlayerActivity : ComponentActivity() {
         currentSourceLabel = sources.firstOrNull { it.url == currentUrl }?.displayLabel()
             ?: sources.firstOrNull()?.displayLabel()
             ?: "Current source"
+
+        // Now that season/episode are parsed, set dynamic visibility
+        btnNext.visibility = if (season != null && episode != null) View.VISIBLE else View.GONE
+
         updateHeaderInfo()
         updateControlsInfo()
 
@@ -544,7 +548,6 @@ class NativePlayerActivity : ComponentActivity() {
 
         // Static UI
         liveBadge.visibility = if (isLiveChannel) View.VISIBLE else View.GONE
-        btnNext.visibility = if (season != null && episode != null) View.VISIBLE else View.GONE
         btnSource.visibility = View.VISIBLE
         sourceLabel.text = "Source: $currentSourceLabel"
 
@@ -615,11 +618,11 @@ class NativePlayerActivity : ComponentActivity() {
         btnSpeed.setOnClickListener { showPicker(PickerMode.SPEED) }
         btnAspect.setOnClickListener {
             resizeModeIndex = (resizeModeIndex + 1) % 3
-            playerView.resizeMode = when (resizeModeIndex) {
+            applyResizeMode(when (resizeModeIndex) {
                 1 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                 2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
                 else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-            }
+            })
             val labels = listOf("Fit", "Zoom", "Fill")
             btnAspect.text = labels[resizeModeIndex]
             AppPreferences.setDefaultAspectRatio(this, resizeModeIndex)
@@ -911,11 +914,11 @@ class NativePlayerActivity : ComponentActivity() {
 
         exoPlayer = player
         playerView.player = player
-        playerView.resizeMode = when (resizeModeIndex) {
+        applyResizeMode(when (resizeModeIndex) {
             1 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
             2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
             else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-        }
+        })
 
         mediaSession?.release()
         mediaSession = MediaSession.Builder(this, player).build()
@@ -1215,6 +1218,22 @@ class NativePlayerActivity : ComponentActivity() {
         else -> R.drawable.pill_chip_bg
     }
 
+    private fun applyResizeMode(mode: Int) {
+        // Try PlayerView's setter
+        try { playerView.resizeMode = mode } catch (_: Exception) {}
+        // Also set directly on internal AspectRatioFrameLayout as fallback
+        try {
+            val contentFrame = playerView.findViewById<AspectRatioFrameLayout>(
+                androidx.media3.ui.R.id.exo_content_frame
+            )
+            contentFrame?.resizeMode = mode
+            contentFrame?.requestLayout()
+            contentFrame?.invalidate()
+        } catch (_: Exception) {}
+        // Force the PlayerView itself to relayout
+        playerView.requestLayout()
+    }
+
     private fun applyPillState(view: TextView, selected: Boolean) {
         view.setBackgroundResource(pillBg(selected, view.isFocused))
         view.setTextColor(if (selected) getColor(R.color.kb_void) else getColor(R.color.kb_text_hi))
@@ -1288,18 +1307,21 @@ class NativePlayerActivity : ComponentActivity() {
 }
 
     private fun updateSubtitleSettings() {
-        val sizeLabels = listOf("Small", "Normal", "Large")
-        val bgLabels = listOf("None", "Semi", "Solid")
-
         listOf(btnSubSmall to 0, btnSubNormal to 1, btnSubLarge to 2).forEach { (btn, idx) ->
-            btn.setBackgroundResource(if (subtitleSize == idx) R.drawable.pill_chip_selected_bg else R.drawable.pill_chip_bg)
-            btn.setTextColor(if (subtitleSize == idx) getColor(R.color.kb_void) else getColor(R.color.kb_text_hi))
+            applyPillState(btn, subtitleSize == idx)
         }
         listOf(btnSubBgNone to 0, btnSubBgSemi to 1, btnSubBgSolid to 2).forEach { (btn, idx) ->
-            btn.setBackgroundResource(if (subtitleBackground == idx) R.drawable.pill_chip_selected_bg else R.drawable.pill_chip_bg)
-            btn.setTextColor(if (subtitleBackground == idx) getColor(R.color.kb_void) else getColor(R.color.kb_text_hi))
+            applyPillState(btn, subtitleBackground == idx)
         }
         subtitleOffsetValue.text = "${subtitleOffsetMs}ms"
+
+        // Focus styling for offset +/- buttons
+        listOf(btnOffsetMinus, btnOffsetPlus).forEach { btn ->
+            btn.setOnFocusChangeListener { v, focused ->
+                val tv = v as TextView
+                tv.setBackgroundResource(pillBg(false, focused))
+            }
+        }
     }
 
     private fun applySubtitleStyle() {
