@@ -4,7 +4,7 @@
     android:layout_height="wrap_content"
     android:orientation="vertical"
     android:gravity="center"
-    android:layout_marginEnd="14dp"
+    android:layout_marginEnd="10dp"
     android:focusable="true"
     android:focusableInTouchMode="true"
     android:clickable="true"
@@ -14,8 +14,8 @@
 
     <ImageView
         android:id="@+id/cast_member_image"
-        android:layout_width="56dp"
-        android:layout_height="56dp"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
         android:scaleType="centerCrop"
         android:contentDescription="Cast member photo"
         android:background="@drawable/circle_avatar_bg"
@@ -25,13 +25,13 @@
         android:id="@+id/cast_member_name"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
+        android:layout_marginTop="3dp"
         android:fontFamily="@font/oswald_medium"
         android:textColor="@color/kb_text_hi"
-        android:textSize="10sp"
+        android:textSize="9sp"
         android:maxLines="1"
         android:ellipsize="end"
-        android:maxWidth="64dp"
+        android:maxWidth="72dp"
         android:gravity="center" />
 
     <TextView
@@ -40,10 +40,10 @@
         android:layout_height="wrap_content"
         android:fontFamily="@font/oswald_medium"
         android:textColor="@color/kb_text_lo"
-        android:textSize="9sp"
+        android:textSize="8sp"
         android:maxLines="1"
         android:ellipsize="end"
-        android:maxWidth="64dp"
+        android:maxWidth="72dp"
         android:gravity="center"
         android:visibility="gone" />
 </LinearLayout>

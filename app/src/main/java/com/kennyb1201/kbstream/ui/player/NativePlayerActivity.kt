@@ -1263,6 +1263,7 @@ class NativePlayerActivity : ComponentActivity() {
     private fun showControls() {
         controlsVisible = true
         controlsOverlay.visibility = View.VISIBLE
+        seekbarRow.visibility = View.VISIBLE
         updateControlsInfo()
         controlsOverlay.post { btnPlayPause.requestFocus() }
         scheduleAutoHide()
@@ -1275,6 +1276,7 @@ class NativePlayerActivity : ComponentActivity() {
 
         controlsVisible = false
         controlsOverlay.visibility = View.GONE
+        seekbarRow.visibility = View.GONE
         dismissAllPanels()
         if (exoPlayer?.isPlaying == true) {
             bufferingSpinner.visibility = View.GONE

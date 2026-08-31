@@ -62,8 +62,8 @@
     <!-- Buffering spinner (centered) -->
     <ProgressBar
         android:id="@+id/buffering_spinner"
-        android:layout_width="48dp"
-        android:layout_height="48dp"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
         android:layout_gravity="center"
         android:indeterminateTint="@color/kb_accent"
         android:visibility="gone" />
@@ -79,8 +79,8 @@
         android:visibility="gone">
 
         <ProgressBar
-            android:layout_width="48dp"
-            android:layout_height="48dp"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
             android:indeterminateTint="@color/kb_accent" />
 
         <TextView
@@ -371,12 +371,12 @@
                 <!-- Play/Pause (primary, focused by default) -->
                 <ImageView
                     android:id="@+id/btn_play_pause"
-                    android:layout_width="56dp"
-                    android:layout_height="56dp"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
                     android:background="@drawable/control_button_bg"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
-                    android:padding="14dp"
+                    android:padding="8dp"
                     android:scaleType="fitCenter"
                     android:src="@drawable/ic_player_play"
                     android:contentDescription="Play/Pause" />
@@ -384,16 +384,16 @@
                 <!-- Next episode -->
                 <TextView
                     android:id="@+id/btn_next"
-                    android:layout_width="48dp"
-                    android:layout_height="48dp"
-                    android:layout_marginStart="16dp"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginStart="10dp"
                     android:background="@drawable/control_button_bg"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
                     android:gravity="center"
                     android:text="⏭"
                     android:textColor="@color/kb_text_hi"
-                    android:textSize="18sp"
+                    android:textSize="16sp"
                     android:visibility="gone" />
 
                 <View
@@ -404,9 +404,9 @@
                 <!-- Source -->
                 <TextView
                     android:id="@+id/btn_source"
-                    android:layout_width="48dp"
-                    android:layout_height="48dp"
-                    android:layout_marginEnd="12dp"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
                     android:background="@drawable/control_button_bg"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
@@ -419,9 +419,9 @@
                 <!-- Audio -->
                 <TextView
                     android:id="@+id/btn_audio"
-                    android:layout_width="48dp"
-                    android:layout_height="48dp"
-                    android:layout_marginEnd="12dp"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
                     android:background="@drawable/control_button_bg"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
@@ -434,9 +434,9 @@
                 <!-- Subtitles -->
                 <TextView
                     android:id="@+id/btn_subtitle"
-                    android:layout_width="48dp"
-                    android:layout_height="48dp"
-                    android:layout_marginEnd="12dp"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
                     android:background="@drawable/control_button_bg"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
@@ -449,9 +449,9 @@
                 <!-- Speed -->
                 <TextView
                     android:id="@+id/btn_speed"
-                    android:layout_width="48dp"
-                    android:layout_height="48dp"
-                    android:layout_marginEnd="12dp"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
                     android:background="@drawable/control_button_bg"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
@@ -464,9 +464,9 @@
                 <!-- Aspect ratio -->
                 <TextView
                     android:id="@+id/btn_aspect"
-                    android:layout_width="48dp"
-                    android:layout_height="48dp"
-                    android:layout_marginEnd="12dp"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
                     android:background="@drawable/control_button_bg"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
@@ -478,8 +478,8 @@
                 <!-- Settings -->
                 <TextView
                     android:id="@+id/btn_settings"
-                    android:layout_width="48dp"
-                    android:layout_height="48dp"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
                     android:background="@drawable/control_button_bg"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
