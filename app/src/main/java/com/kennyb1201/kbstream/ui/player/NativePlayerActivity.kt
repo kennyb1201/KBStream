@@ -208,6 +208,8 @@ class NativePlayerActivity : ComponentActivity() {
     private var bufferMode = 0
     private var autoPlayNext = false
     private var episodeTitle: String? = null
+    private var preferredAudioLang = ""
+    private var preferredSubtitleLang = ""
 
     // Scopes
     private var scope: CoroutineScope? = null
@@ -293,6 +295,8 @@ class NativePlayerActivity : ComponentActivity() {
         enableTunneling = AppPreferences.getEnableTunneling(this)
         bufferMode = AppPreferences.getDefaultBufferMode(this)
         autoPlayNext = AppPreferences.getAutoPlayNext(this)
+        preferredAudioLang = AppPreferences.getPreferredAudioLanguage(this)
+        preferredSubtitleLang = AppPreferences.getPreferredSubtitleLanguage(this)
         totalEpisodesInSeason = intent.getIntExtra("total_episodes_in_season", -1).takeIf { it > 0 }
 
         // Keep the currently selected stream available even when the caller did not
@@ -846,6 +850,7 @@ class NativePlayerActivity : ComponentActivity() {
                     retryAttempt = 0
                     retryExhausted = false
                     errorMessageStr = null
+                    autoSelectPreferredLanguages()
                 }
                 Player.STATE_ENDED -> {
                     onPlaybackEnded()
@@ -969,6 +974,78 @@ class NativePlayerActivity : ComponentActivity() {
                 if (codecLabel != "—") append(" • $codecLabel")
             }
         }
+    }
+
+    /**
+     * Auto-select audio and subtitle tracks matching the user's preferred
+     * languages. Runs once when playback reaches STATE_READY so it does
+     * not fight with manual picker selections.
+     */
+    private var languagesAutoSelected = false
+
+    private fun autoSelectPreferredLanguages() {
+        val player = exoPlayer ?: return
+        if (languagesAutoSelected) return
+        val tracks = player.currentTracks
+        var changed = false
+
+        // ── Audio ──────────────────────────────────────────────
+        if (preferredAudioLang.isNotBlank()) {
+            val audioGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+            for (group in audioGroups) {
+                for (i in 0 until group.length) {
+                    val fmt = group.getTrackFormat(i)
+                    val lang = fmt.language?.lowercase()
+                    if (lang == preferredAudioLang.lowercase()) {
+                        player.trackSelectionParameters = player.trackSelectionParameters
+                            .buildUpon()
+                            .setOverrideForType(
+                                TrackSelectionOverride(group.mediaTrackGroup, i)
+                            )
+                            .build()
+                        changed = true
+                        Log.i("PLAYER_LANG", "Auto-selected audio: $lang")
+                        break
+                    }
+                }
+                if (changed) break
+            }
+        }
+
+        // ── Subtitle ──────────────────────────────────────────
+        if (preferredSubtitleLang.isNotBlank()) {
+            val textGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
+            var found = false
+            for (group in textGroups) {
+                for (i in 0 until group.length) {
+                    val fmt = group.getTrackFormat(i)
+                    val lang = fmt.language?.lowercase()
+                    if (lang == preferredSubtitleLang.lowercase()) {
+                        player.trackSelectionParameters = player.trackSelectionParameters
+                            .buildUpon()
+                            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                            .setOverrideForType(
+                                TrackSelectionOverride(group.mediaTrackGroup, i)
+                            )
+                            .build()
+                        found = true
+                        changed = true
+                        Log.i("PLAYER_LANG", "Auto-selected subtitle: $lang")
+                        break
+                    }
+                }
+                if (found) break
+            }
+            // If no matching subtitle track found, disable subtitles
+            if (!found) {
+                player.trackSelectionParameters = player.trackSelectionParameters
+                    .buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                    .build()
+            }
+        }
+
+        if (changed) languagesAutoSelected = true
     }
 
     private fun updateControlsInfo() {
@@ -1482,7 +1559,7 @@ class NativePlayerActivity : ComponentActivity() {
         currentSourceLabel = stream.displayLabel()
         currentUrl = newUrl
         currentAudioUrl = stream.audioUrl
-        retryAttempt = 0; retryExhausted = false; errorMessageStr = null; forceSoftwareDecoder = false
+        retryAttempt = 0; retryExhausted = false; errorMessageStr = null; forceSoftwareDecoder = false; languagesAutoSelected = false
         dismissPicker()
         recreatePlayer()
     }

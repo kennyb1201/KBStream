@@ -27,6 +27,8 @@ object AppPreferences {
     private const val KEY_ENABLE_PIP = "enable_pip"
     private const val KEY_DECODER_MODE = "decoder_mode"                      // 0=auto, 1=ffmpeg-only
     private const val KEY_DEFAULT_ASPECT_RATIO = "default_aspect_ratio"     // 0=fit, 1=zoom, 2=fill
+    private const val KEY_PREFERRED_AUDIO_LANG = "preferred_audio_language"   // BCP-47 tag or "" for auto
+    private const val KEY_PREFERRED_SUBTITLE_LANG = "preferred_subtitle_language" // BCP-47 tag or "" for auto
 
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -103,5 +105,23 @@ object AppPreferences {
 
     fun setDefaultAspectRatio(context: Context, ratio: Int) {
         prefs(context).edit().putInt(KEY_DEFAULT_ASPECT_RATIO, ratio).apply()
+    }
+
+    // ── Preferred audio language ──────────────────────────────────────
+    // Empty string = auto (let ExoPlayer decide)
+    fun getPreferredAudioLanguage(context: Context): String =
+        prefs(context).getString(KEY_PREFERRED_AUDIO_LANG, "") ?: ""
+
+    fun setPreferredAudioLanguage(context: Context, lang: String) {
+        prefs(context).edit().putString(KEY_PREFERRED_AUDIO_LANG, lang).apply()
+    }
+
+    // ── Preferred subtitle language ───────────────────────────────────
+    // Empty string = auto (don't force any subtitle)
+    fun getPreferredSubtitleLanguage(context: Context): String =
+        prefs(context).getString(KEY_PREFERRED_SUBTITLE_LANG, "") ?: ""
+
+    fun setPreferredSubtitleLanguage(context: Context, lang: String) {
+        prefs(context).edit().putString(KEY_PREFERRED_SUBTITLE_LANG, lang).apply()
     }
 }

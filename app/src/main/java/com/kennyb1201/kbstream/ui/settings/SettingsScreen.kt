@@ -57,6 +57,8 @@ fun SettingsScreen(
     var enablePip by remember { mutableStateOf(AppPreferences.getEnablePip(context)) }
     var decoderMode by remember { mutableIntStateOf(AppPreferences.getDecoderMode(context)) }
     var aspectRatio by remember { mutableIntStateOf(AppPreferences.getDefaultAspectRatio(context)) }
+    var preferredAudioLang by remember { mutableStateOf(AppPreferences.getPreferredAudioLanguage(context)) }
+    var preferredSubtitleLang by remember { mutableStateOf(AppPreferences.getPreferredSubtitleLanguage(context)) }
 
     BackHandler { onBack() }
 
@@ -269,6 +271,47 @@ fun SettingsScreen(
                     AppPreferences.setDefaultAspectRatio(context, index)
                 }) {
                     PillChip(label, aspectRatio == index)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // ── LANGUAGE ──────────────────────────────────────────────
+        SectionHeader("LANGUAGE")
+
+        Text(
+            text = "Preferred Audio Language",
+            color = KBTextHi,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("Auto" to "", "English" to "en", "Spanish" to "es", "French" to "fr", "German" to "de", "Japanese" to "ja", "Korean" to "ko", "Chinese" to "zh", "Portuguese" to "pt", "Italian" to "it", "Russian" to "ru").forEach { (label, code) ->
+                KBCard(onClick = {
+                    preferredAudioLang = code
+                    AppPreferences.setPreferredAudioLanguage(context, code)
+                }) {
+                    PillChip(label, preferredAudioLang == code)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = "Preferred Subtitle Language",
+            color = KBTextHi,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("Auto" to "", "English" to "en", "Spanish" to "es", "French" to "fr", "German" to "de", "Japanese" to "ja", "Korean" to "ko", "Chinese" to "zh", "Portuguese" to "pt", "Italian" to "it", "Russian" to "ru").forEach { (label, code) ->
+                KBCard(onClick = {
+                    preferredSubtitleLang = code
+                    AppPreferences.setPreferredSubtitleLanguage(context, code)
+                }) {
+                    PillChip(label, preferredSubtitleLang == code)
                 }
             }
         }
