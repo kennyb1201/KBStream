@@ -619,7 +619,12 @@ class NativePlayerActivity : ComponentActivity() {
                 2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
                 else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
             }
+            val labels = listOf("Fit", "Zoom", "Fill")
+            btnAspect.text = labels[resizeModeIndex]
+            AppPreferences.setDefaultAspectRatio(this, resizeModeIndex)
+            scheduleAutoHide()
         }
+        btnAspect.setOnFocusChangeListener { _, focused -> if (focused) removeAutoHide() else scheduleAutoHide() }
         btnSettings.setOnClickListener { toggleSettingsPanel() }
         btnSettings.setOnFocusChangeListener { _, focused -> if (focused) removeAutoHide() else scheduleAutoHide() }
 
@@ -905,6 +910,11 @@ class NativePlayerActivity : ComponentActivity() {
 
         exoPlayer = player
         playerView.player = player
+        playerView.resizeMode = when (resizeModeIndex) {
+            1 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+            else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+        }
 
         mediaSession?.release()
         mediaSession = MediaSession.Builder(this, player).build()
@@ -1192,6 +1202,8 @@ class NativePlayerActivity : ComponentActivity() {
             if (exoPlayer?.isPlaying == true) R.drawable.ic_player_pause else R.drawable.ic_player_play
         )
         btnSpeed.text = "${playbackSpeed}x"
+        val aspectLabels = listOf("Fit", "Zoom", "Fill")
+        btnAspect.text = aspectLabels.getOrElse(resizeModeIndex) { "Fit" }
         updateStreamHealthDisplay()
     }
 
