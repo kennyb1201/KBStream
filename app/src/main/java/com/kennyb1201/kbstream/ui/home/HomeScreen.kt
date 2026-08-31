@@ -61,7 +61,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -251,18 +250,11 @@ private fun HeroInlineTrailerPlayer(
     val context = LocalContext.current
 
     val exoPlayer = remember(source) {
-        val httpFactory =
-            DefaultHttpDataSource.Factory()
-                .setAllowCrossProtocolRedirects(true)
-                .setConnectTimeoutMs(15_000)
-                .setReadTimeoutMs(15_000)
-                .setUserAgent(
-                    "VLC/3.0.20 LibVLC/3.0.20"
-                )
-
+        // YouTube's googlevideo streams throttle/kill full-range requests;
+        // use the chunked data source so resolved trailers actually play.
         val mediaSourceFactory =
             DefaultMediaSourceFactory(
-                httpFactory
+                com.kennyb1201.kbstream.data.youtube.YoutubeChunkedDataSourceFactory()
             )
 
         val renderersFactory =
@@ -288,9 +280,12 @@ private fun HeroInlineTrailerPlayer(
                     }
 
                     is PlayableSource.Adaptive -> {
+                        val chunkedFactory =
+                            com.kennyb1201.kbstream.data.youtube.YoutubeChunkedDataSourceFactory()
+
                         val videoSource =
                             ProgressiveMediaSource.Factory(
-                                httpFactory
+                                chunkedFactory
                             ).createMediaSource(
                                 MediaItem.fromUri(
                                     source.videoUrl
@@ -299,7 +294,7 @@ private fun HeroInlineTrailerPlayer(
 
                         val audioSource =
                             ProgressiveMediaSource.Factory(
-                                httpFactory
+                                chunkedFactory
                             ).createMediaSource(
                                 MediaItem.fromUri(
                                     source.audioUrl
@@ -446,27 +441,27 @@ private fun HomeHero(
         !trailerKey.isNullOrBlank() && autoPlayTrailer
 
     var resolvedTrailerSource by remember(trailerKey) {
-    mutableStateOf<PlayableSource?>(null)
-}
-
-LaunchedEffect(trailerPlaying, trailerKey) {
-    resolvedTrailerSource = null
-
-    if (trailerPlaying && !trailerKey.isNullOrBlank()) {
-        TrailerPlayerLauncher
-            .resolvePlayableUrl(trailerKey)
-            .onSuccess { source ->
-                resolvedTrailerSource = source
-            }
-            .onFailure { error ->
-                Log.e(
-                    "HOME_HERO",
-                    "Failed to resolve inline trailer source",
-                    error
-                )
-            }
+        mutableStateOf<PlayableSource?>(null)
     }
-}
+
+    LaunchedEffect(trailerPlaying, trailerKey) {
+        resolvedTrailerSource = null
+
+        if (trailerPlaying && !trailerKey.isNullOrBlank()) {
+            TrailerPlayerLauncher
+                .resolvePlayableUrl(trailerKey)
+                .onSuccess { source ->
+                    resolvedTrailerSource = source
+                }
+                .onFailure { error ->
+                    Log.e(
+                        "HOME_HERO",
+                        "Failed to resolve inline trailer source",
+                        error
+                    )
+                }
+        }
+    }
 
     val year = if (preview.type == "movie") {
         tmdbDetail?.releaseYear()

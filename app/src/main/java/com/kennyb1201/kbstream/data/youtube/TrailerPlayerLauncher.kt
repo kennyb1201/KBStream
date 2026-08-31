@@ -10,13 +10,31 @@ object TrailerPlayerLauncher {
 
     private const val TAG = "TrailerLauncher"
 
+    /** 3-hour cache of resolved playback sources per video ID. */
+    private val sourceCache =
+        java.util.concurrent.ConcurrentHashMap<String, CachedSource>()
+
+    private data class CachedSource(
+        val source: PlayableSource,
+        val cachedAt: Long = System.currentTimeMillis()
+    ) {
+        val isStale: Boolean
+            get() = System.currentTimeMillis() - cachedAt > CACHE_TTL_MS
+    }
+
+    private companion object {
+        const val CACHE_TTL_MS = 3 * 60 * 60 * 1000L // 3 hours
+    }
+
     /**
      * Resolves a YouTube URL/ID down to a playable stream source
      * without launching any UI.
      *
-     * NewPipe is attempted first.
-     * NewPipeManager automatically falls back to Piped if
-     * NewPipe cannot provide a usable stream.
+     * Resolution order:
+     * 1. InnerTube direct player API (primary — most reliable)
+     * 2. NewPipe extractor (NewPipeManager falls back to Piped itself)
+     *
+     * Resolved sources are cached for 3 hours.
      */
     suspend fun resolvePlayableUrl(
         trailerUrlOrId: String
@@ -42,36 +60,59 @@ object TrailerPlayerLauncher {
             "Extracted YouTube video ID: $videoId"
         )
 
+        // Serve from cache if fresh
+        sourceCache[videoId]?.let { cached ->
+            if (!cached.isStale) {
+                Log.d(TAG, "Trailer source cache hit for $videoId")
+                return Result.success(cached.source)
+            }
+            sourceCache.remove(videoId)
+        }
+
+        // Primary: direct InnerTube player API
+        val innerTubeSource = InnerTubeExtractor.extractPlaybackSource(videoId)
+        if (innerTubeSource != null) {
+            sourceCache[videoId] = CachedSource(innerTubeSource)
+            logResolved("InnerTube", innerTubeSource)
+            return Result.success(innerTubeSource)
+        }
+
+        // Fallback: NewPipe (with its internal Piped fallback)
         return NewPipeManager
             .getPlayableUrl(videoId)
             .onSuccess { source ->
-                when (source) {
-                    is PlayableSource.Muxed -> {
-                        Log.d(
-                            TAG,
-                            "Trailer resolved successfully: " +
-                                source.url.take(200)
-                        )
-                    }
-
-                    is PlayableSource.Adaptive -> {
-                        Log.d(
-                            TAG,
-                            "Trailer resolved successfully: video=" +
-                                source.videoUrl.take(200) +
-                                " audio=" +
-                                source.audioUrl.take(200)
-                        )
-                    }
-                }
+                sourceCache[videoId] = CachedSource(source)
+                logResolved("NewPipe/Piped", source)
             }
             .onFailure { error ->
                 Log.e(
                     TAG,
-                    "Trailer resolution failed",
+                    "All trailer resolvers failed (InnerTube + NewPipe/Piped)",
                     error
                 )
             }
+    }
+
+    private fun logResolved(resolver: String, source: PlayableSource) {
+        when (source) {
+            is PlayableSource.Muxed -> {
+                Log.d(
+                    TAG,
+                    "Trailer resolved via $resolver: " +
+                        source.url.take(200)
+                )
+            }
+
+            is PlayableSource.Adaptive -> {
+                Log.d(
+                    TAG,
+                    "Trailer resolved via $resolver: video=" +
+                        source.videoUrl.take(200) +
+                        " audio=" +
+                        source.audioUrl.take(200)
+                )
+            }
+        }
     }
 
     suspend fun playTrailer(

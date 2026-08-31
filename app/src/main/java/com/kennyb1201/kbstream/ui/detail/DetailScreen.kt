@@ -483,12 +483,12 @@ fun DetailScreen(
             it.site == "YouTube" && it.type == "Trailer"
         } ?: return
 
-        context.startActivity(
-            Intent(
-                Intent.ACTION_VIEW,
-                Uri.parse("https://www.youtube.com/watch?v=${trailer.key}")
+        scope.launch {
+            com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher.playTrailer(
+                context,
+                "https://www.youtube.com/watch?v=${trailer.key}"
             )
-        )
+        }
     }
 
     when {
