@@ -53,10 +53,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
-import coil3.Coil
 import coil3.load
-import coil3.request.ImageRequest
-import coil3.request.crossfade
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -382,12 +379,7 @@ class NativePlayerActivity : ComponentActivity() {
                     }
                 if (!profileUrl.isNullOrBlank()) {
                     try {
-                        val request = ImageRequest.Builder(this@NativePlayerActivity)
-                            .target(profileImage)
-                            .data(profileUrl)
-                            .crossfade(true)
-                            .build()
-                        Coil.imageLoader(this@NativePlayerActivity).enqueue(request)
+                        profileImage.load(profileUrl)
                     } catch (e: Exception) {
                         Log.w("NativePlayer", "Failed to load cast image: $profileUrl", e)
                         profileImage.setImageResource(R.drawable.ic_cast_placeholder)
@@ -963,21 +955,11 @@ class NativePlayerActivity : ComponentActivity() {
         }
 
         if (resolvedLogoUrl != null) {
-            val logoRequest = ImageRequest.Builder(this)
-                .target(clearLogo)
-                .data(resolvedLogoUrl)
-                .crossfade(true)
-                .build()
-            Coil.imageLoader(this).enqueue(logoRequest)
+            clearLogo.load(resolvedLogoUrl)
             clearLogo.visibility = View.VISIBLE
             itemNameView.visibility = View.GONE
             // Also load into splash overlay
-            val splashLogoRequest = ImageRequest.Builder(this)
-                .target(splashClearLogo)
-                .data(resolvedLogoUrl)
-                .crossfade(true)
-                .build()
-            Coil.imageLoader(this).enqueue(splashLogoRequest)
+            splashClearLogo.load(resolvedLogoUrl)
         } else if (itemName.isNotBlank()) {
             clearLogo.visibility = View.GONE
             itemNameView.text = itemName
@@ -994,12 +976,7 @@ class NativePlayerActivity : ComponentActivity() {
             else null
         }
         if (resolvedBackdropUrl != null) {
-            val backdropRequest = ImageRequest.Builder(this)
-                .target(splashBackdrop)
-                .data(resolvedBackdropUrl)
-                .crossfade(true)
-                .build()
-            Coil.imageLoader(this).enqueue(backdropRequest)
+            splashBackdrop.load(resolvedBackdropUrl)
             // Show splash initially before video plays
             showSplash()
         }
