@@ -120,6 +120,7 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var pickerTitle: TextView
     private lateinit var settingsContainer: ScrollView
     private lateinit var scrim: View
+    private lateinit var settingsBufferAuto: TextView
     private lateinit var settingsBufferBalanced: TextView
     private lateinit var settingsBufferLow: TextView
     private lateinit var btnTunneling: TextView
@@ -464,11 +465,52 @@ class NativePlayerActivity : ComponentActivity() {
         settingsContainer = findViewById(R.id.settings_container)
         settingsContainer.setOnKeyListener { _, keyCode, event ->
             if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
-            if (keyCode == KeyEvent.KEYCODE_BACK) {
-                dismissSettingsPanel(); showControls(); true
-            } else false
+            when (keyCode) {
+                KeyEvent.KEYCODE_BACK -> {
+                    dismissSettingsPanel(); showControls(); true
+                }
+                KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_UP -> {
+                    // Keep focus cycling within the settings panel
+                    val focused = settingsContainer.findFocus()
+                    val scrollBounds = intArrayOf(0, 0)
+                    settingsContainer.getLocationOnScreen(scrollBounds)
+                    val childCount = settingsContainer.childCount
+                    if (childCount > 0) {
+                        val inner = settingsContainer.getChildAt(0) as? android.view.ViewGroup
+                        if (inner != null) {
+                            val focusedY = if (focused != null) {
+                                val loc = intArrayOf(0, 0)
+                                focused.getLocationOnScreen(loc)
+                                loc[1]
+                            } else -1
+                            val containerTop = scrollBounds[1]
+                            val containerBottom = containerTop + settingsContainer.height
+                            // If focus would leave the panel, snap to first/last child
+                            if (keyCode == KeyEvent.KEYCODE_DPAD_UP && focused != null &&
+                                focusedY <= containerTop + 30) {
+                                // Already at top, find first focusable
+                                for (i in 0 until inner.childCount) {
+                                    val v = inner.getChildAt(i)
+                                    if (v.isFocusable) { v.requestFocus(); break }
+                                }
+                                true
+                            } else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN && focused != null &&
+                                focusedY >= containerBottom - 60) {
+                                // Near bottom, scroll and find next focusable
+                                for (i in inner.childCount - 1 downTo 0) {
+                                    val v = inner.getChildAt(i)
+                                    if (v.isFocusable) { v.requestFocus(); break }
+                                }
+                                true
+                            } else false
+                        } else false
+                    } else false
+                }
+                else -> false
+            }
         }
         scrim = findViewById(R.id.scrim)
+        settingsBufferAuto = findViewById(R.id.btn_buffer_auto)
         settingsBufferBalanced = findViewById(R.id.btn_buffer_balanced)
         settingsBufferLow = findViewById(R.id.btn_buffer_low)
         btnTunneling = findViewById(R.id.btn_tunneling)
@@ -600,6 +642,11 @@ class NativePlayerActivity : ComponentActivity() {
         })
 
         // Settings toggles
+        settingsBufferAuto.setOnClickListener {
+            bufferMode = 2
+            AppPreferences.setDefaultBufferMode(this, 2)
+            updateSettingsPanelState()
+        }
         settingsBufferBalanced.setOnClickListener {
             bufferMode = 0
             AppPreferences.setDefaultBufferMode(this, 0)
@@ -743,7 +790,11 @@ class NativePlayerActivity : ComponentActivity() {
             Log.i("PLAYER_DRM", "Widevine DRM configured: $drmLicenseUrl")
         }
 
-        val bufferDurations = if (bufferMode == 1) intArrayOf(2_500, 10_000, 1_500, 3_000)
+        val resolvedBufferMode = if (bufferMode == 2) {
+            // Auto: detect IPTV from parentType or .m3u8 URL
+            if (isLiveChannel || currentUrl.lowercase().endsWith(".m3u8")) 1 else 0
+        } else bufferMode
+        val bufferDurations = if (resolvedBufferMode == 1) intArrayOf(2_500, 10_000, 1_500, 3_000)
         else intArrayOf(10_000, 30_000, 3_000, 6_000)
 
         val loadControl = DefaultLoadControl.Builder()
@@ -1089,23 +1140,33 @@ class NativePlayerActivity : ComponentActivity() {
         updateStreamHealthDisplay()
     }
 
+    private fun pillBg(selected: Boolean, focused: Boolean): Int = when {
+        selected && focused -> R.drawable.pill_chip_selected_focused_bg
+        selected -> R.drawable.pill_chip_selected_bg
+        focused -> R.drawable.pill_chip_focused_bg
+        else -> R.drawable.pill_chip_bg
+    }
+
+    private fun applyPillState(view: TextView, selected: Boolean) {
+        view.setBackgroundResource(pillBg(selected, view.isFocused))
+        view.setTextColor(if (selected) getColor(R.color.kb_void) else getColor(R.color.kb_text_hi))
+        view.setOnFocusChangeListener { v, _ ->
+            val tv = v as TextView
+            tv.setBackgroundResource(pillBg(selected, tv.isFocused))
+            tv.setTextColor(if (selected) getColor(R.color.kb_void) else getColor(R.color.kb_text_hi))
+        }
+    }
+
     private fun updateSettingsPanelState() {
-        settingsBufferBalanced.setBackgroundResource(
-            if (bufferMode == 0) R.drawable.pill_chip_selected_bg else R.drawable.pill_chip_bg
-        )
-        settingsBufferBalanced.setTextColor(if (bufferMode == 0) getColor(R.color.kb_void) else getColor(R.color.kb_text_hi))
-        settingsBufferLow.setBackgroundResource(
-            if (bufferMode == 1) R.drawable.pill_chip_selected_bg else R.drawable.pill_chip_bg
-        )
-        settingsBufferLow.setTextColor(if (bufferMode == 1) getColor(R.color.kb_void) else getColor(R.color.kb_text_hi))
+        applyPillState(settingsBufferAuto, bufferMode == 2)
+        applyPillState(settingsBufferBalanced, bufferMode == 0)
+        applyPillState(settingsBufferLow, bufferMode == 1)
 
         btnTunneling.text = if (enableTunneling) "ON" else "OFF"
-        btnTunneling.setBackgroundResource(if (enableTunneling) R.drawable.pill_chip_selected_bg else R.drawable.pill_chip_bg)
-        btnTunneling.setTextColor(if (enableTunneling) getColor(R.color.kb_void) else getColor(R.color.kb_text_hi))
+        applyPillState(btnTunneling, enableTunneling)
 
         btnAutoplay.text = if (autoPlayNext) "ON" else "OFF"
-        btnAutoplay.setBackgroundResource(if (autoPlayNext) R.drawable.pill_chip_selected_bg else R.drawable.pill_chip_bg)
-        btnAutoplay.setTextColor(if (autoPlayNext) getColor(R.color.kb_void) else getColor(R.color.kb_text_hi))
+        applyPillState(btnAutoplay, autoPlayNext)
 
         val resizeModeLabels = listOf("Fit", "Zoom", "Fill")
         settingsSpeedAspect.text = "Speed: ${playbackSpeed}x • Aspect: ${resizeModeLabels.getOrElse(resizeModeIndex) { "Fit" }}"
@@ -1326,7 +1387,7 @@ class NativePlayerActivity : ComponentActivity() {
         settingsContainer.isFocusable = true
         settingsContainer.isFocusableInTouchMode = true
         updateSettingsPanelState()
-        settingsContainer.post { settingsBufferBalanced.requestFocus() }
+        settingsContainer.post { settingsBufferAuto.requestFocus() }
     }
 
     private fun dismissSettingsPanel() {

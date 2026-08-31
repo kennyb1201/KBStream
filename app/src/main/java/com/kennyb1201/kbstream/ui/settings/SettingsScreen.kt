@@ -154,7 +154,7 @@ fun SettingsScreen(
             modifier = Modifier.padding(bottom = 4.dp)
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("Balanced (4K-ready)", "Low Latency").forEachIndexed { index, label ->
+            listOf("Auto", "Balanced (4K-ready)", "Low Latency").forEachIndexed { index, label ->
                 KBCard(onClick = {
                     bufferMode = index
                     AppPreferences.setDefaultBufferMode(context, index)
@@ -165,7 +165,11 @@ fun SettingsScreen(
         }
         Spacer(modifier = Modifier.height(2.dp))
         Text(
-            text = if (bufferMode == 1) "Lower buffer for live IPTV" else "15s/60s buffer \u2014 best for movies & series",
+            text = when (bufferMode) {
+                0 -> "Balanced 15s/60s buffer for movies & series"
+                1 -> "Lower buffer for live IPTV"
+                else -> "Auto-detects IPTV vs movies & series"
+            },
             color = KBTextLo,
             style = MaterialTheme.typography.labelSmall
         )

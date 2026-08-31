@@ -18,7 +18,7 @@ object AppPreferences {
     private const val PREFS_NAME = "kbstream_player_prefs"
 
     // Keys
-    private const val KEY_DEFAULT_BUFFER_MODE = "default_buffer_mode"       // 0=balanced, 1=low-latency
+    private const val KEY_DEFAULT_BUFFER_MODE = "default_buffer_mode"       // 0=balanced, 1=low-latency, 2=auto
     private const val KEY_DEFAULT_SUBTITLE_SIZE = "default_subtitle_size"   // 0=small, 1=normal, 2=large
     private const val KEY_DEFAULT_SUBTITLE_BG = "default_subtitle_bg"       // 0=none, 1=semi, 2=solid
     private const val KEY_AUTO_PLAY_NEXT = "auto_play_next"
@@ -35,7 +35,7 @@ object AppPreferences {
 
     // ── Buffer mode ──────────────────────────────────────────────────
     fun getDefaultBufferMode(context: Context): Int =
-        prefs(context).getInt(KEY_DEFAULT_BUFFER_MODE, 0)
+        prefs(context).getInt(KEY_DEFAULT_BUFFER_MODE, 2)
 
     fun setDefaultBufferMode(context: Context, mode: Int) {
         prefs(context).edit().putInt(KEY_DEFAULT_BUFFER_MODE, mode).apply()
