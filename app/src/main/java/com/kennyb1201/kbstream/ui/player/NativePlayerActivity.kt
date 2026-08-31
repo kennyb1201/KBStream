@@ -1742,11 +1742,23 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     // --- Lifecycle ---
+    override fun onStop() {
+        super.onStop()
+        // Release session & player early so the next NativePlayerActivity
+        // doesn't collide with a stale MediaSession ID.
+        handler.removeCallbacksAndMessages(null)
+        scope?.cancel()
+        saveProgressSync(reason = "stop")
+        exoPlayer?.release()
+        exoPlayer = null
+        mediaSession?.release()
+        mediaSession = null
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacksAndMessages(null)
         scope?.cancel()
-        saveProgressSync(reason = "destroy")
         exoPlayer?.release()
         exoPlayer = null
         mediaSession?.release()
