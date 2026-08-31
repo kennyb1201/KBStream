@@ -16,6 +16,31 @@
         app:use_controller="false"
         app:keep_content_on_player_reset="true" />
 
+    <!-- Loading splash: backdrop + clearlogo (shown while buffering) -->
+    <FrameLayout
+        android:id="@+id/splash_container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@android:color/black"
+        android:visibility="gone">
+
+        <ImageView
+            android:id="@+id/splash_backdrop"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:scaleType="centerCrop"
+            android:contentDescription="Backdrop" />
+
+        <ImageView
+            android:id="@+id/splash_clear_logo"
+            android:layout_width="240dp"
+            android:layout_height="80dp"
+            android:layout_gravity="center"
+            android:scaleType="fitCenter"
+            android:adjustViewBounds="true"
+            android:contentDescription="Clear logo" />
+    </FrameLayout>
+
     <!-- LIVE badge (top-left) -->
     <TextView
         android:id="@+id/live_badge"

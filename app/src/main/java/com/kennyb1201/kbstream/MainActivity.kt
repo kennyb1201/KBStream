@@ -116,6 +116,7 @@ sealed class Screen {
         val itemName: String,
         val itemPoster: String?,
         val clearLogoUrl: String? = null,
+        val backdropUrl: String? = null,
         val overview: String? = null,
         val cast: List<PlayerCastMember> = emptyList(),
         val startPositionMs: Long,
@@ -598,6 +599,7 @@ fun AppRoot() {
                                 current.target.displayName,
                             itemPoster = current.itemPoster,
                             clearLogoUrl = current.clearLogoUrl,
+                            backdropUrl = current.backdropUrl,
                             overview = current.overview,
                             cast = current.cast.map { member ->
                                 PlayerCastMember(
@@ -713,6 +715,7 @@ fun AppRoot() {
                     putExtra("display_name", current.itemName)
                     current.itemPoster?.let { putExtra("item_poster", it) }
                     current.clearLogoUrl?.let { putExtra("clear_logo_url", it) }
+                    current.backdropUrl?.let { putExtra("backdrop_url", it) }
                     current.overview?.let { putExtra("item_overview", it) }
                     putExtra("start_position_ms", current.startPositionMs)
                     if (current.streamHeaders.isNotEmpty()) {

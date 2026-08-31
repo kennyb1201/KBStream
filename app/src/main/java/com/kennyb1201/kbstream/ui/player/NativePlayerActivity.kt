@@ -96,6 +96,9 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var btnChangeSource: TextView
     private lateinit var btnSkipIntro: TextView
     private lateinit var controlsOverlay: LinearLayout
+    private lateinit var splashContainer: View
+    private lateinit var splashBackdrop: ImageView
+    private lateinit var splashClearLogo: ImageView
     private lateinit var clearLogo: ImageView
     private lateinit var itemNameView: TextView
     private lateinit var episodeLabel: TextView
@@ -188,6 +191,7 @@ class NativePlayerActivity : ComponentActivity() {
     private var itemName = ""
     private var itemPoster: String? = null
     private var clearLogoUrl: String? = null
+    private var backdropUrl: String? = null
     private var overview: String? = null
     private var sources: List<Stream> = emptyList()
     private var castMembers: List<PlayerCastMember> = emptyList()
@@ -284,6 +288,7 @@ class NativePlayerActivity : ComponentActivity() {
             ?: intent.getStringExtra("display_name").orEmpty()
         itemPoster = intent.getStringExtra("item_poster")
         clearLogoUrl = intent.getStringExtra("clear_logo_url")
+        backdropUrl = intent.getStringExtra("backdrop_url")
         overview = intent.getStringExtra("item_overview")
         episodeTitle = intent.getStringExtra("episode_title")
         startPositionMs = intent.getLongExtra("start_position_ms", 0L)
@@ -434,6 +439,9 @@ class NativePlayerActivity : ComponentActivity() {
         btnChangeSource = findViewById(R.id.btn_change_source)
         btnSkipIntro = findViewById(R.id.btn_skip_intro)
         controlsOverlay = findViewById(R.id.controls_overlay)
+        splashContainer = findViewById(R.id.splash_container)
+        splashBackdrop = findViewById(R.id.splash_backdrop)
+        splashClearLogo = findViewById(R.id.splash_clear_logo)
         clearLogo = findViewById(R.id.clear_logo)
         itemNameView = findViewById(R.id.item_name)
         episodeLabel = findViewById(R.id.episode_label)
@@ -831,7 +839,7 @@ class NativePlayerActivity : ComponentActivity() {
 
     private fun createPlayerListener() = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
-            // Update play/pause button
+            if (isPlaying) hideSplash()
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -901,9 +909,22 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     // --- UI Updates ---
+    private fun showSplash() {
+        splashContainer.visibility = View.VISIBLE
+        bufferingSpinner.visibility = View.GONE
+    }
+
+    private fun hideSplash() {
+        splashContainer.visibility = View.GONE
+    }
+
     private fun updateUIBuffering() {
         if (!controlsVisible) {
             bufferingSpinner.visibility = View.VISIBLE
+        }
+        // Show splash overlay during buffering if backdrop is available
+        if (splashBackdrop.drawable != null || splashClearLogo.drawable != null) {
+            showSplash()
         }
     }
 
@@ -911,6 +932,7 @@ class NativePlayerActivity : ComponentActivity() {
         bufferingSpinner.visibility = View.GONE
         reconnectingContainer.visibility = View.GONE
         errorContainer.visibility = View.GONE
+        hideSplash()
         updateControlsInfo()
     }
 
@@ -943,10 +965,37 @@ class NativePlayerActivity : ComponentActivity() {
             )
             clearLogo.visibility = View.VISIBLE
             itemNameView.visibility = View.GONE
+            // Also load into splash overlay
+            splashClearLogo.load(
+                ImageRequest.Builder(this)
+                    .data(resolvedLogoUrl)
+                    .crossfade(true)
+                    .build()
+            )
         } else if (itemName.isNotBlank()) {
             clearLogo.visibility = View.GONE
             itemNameView.text = itemName
             itemNameView.visibility = View.VISIBLE
+        }
+
+        // Load backdrop into splash overlay
+        val resolvedBackdropUrl = backdropUrl?.takeIf { it.isNotBlank() }?.let { rawUrl ->
+            if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) rawUrl
+            else "https://image.tmdb.org/t/p/w1280${if (rawUrl.startsWith("/")) rawUrl else "/$rawUrl"}"
+        } ?: itemPoster?.takeIf { it.isNotBlank() }?.let { rawPoster ->
+            if (rawPoster.startsWith("http://") || rawPoster.startsWith("https://")) rawPoster
+            else if (rawPoster.startsWith("/")) "https://image.tmdb.org/t/p/w1280$rawPoster"
+            else null
+        }
+        if (resolvedBackdropUrl != null) {
+            splashBackdrop.load(
+                ImageRequest.Builder(this)
+                    .data(resolvedBackdropUrl)
+                    .crossfade(true)
+                    .build()
+            )
+            // Show splash initially before video plays
+            showSplash()
         }
         if (season != null && episode != null) {
             episodeLabel.text = "S${season.toString().padStart(2, '0')} · E${episode.toString().padStart(2, '0')}"
@@ -1109,7 +1158,12 @@ class NativePlayerActivity : ComponentActivity() {
         controlsVisible = false
         controlsOverlay.visibility = View.GONE
         dismissAllPanels()
-        bufferingSpinner.visibility = if (exoPlayer?.isPlaying == false) View.VISIBLE else View.GONE
+        if (exoPlayer?.isPlaying == true) {
+            bufferingSpinner.visibility = View.GONE
+            hideSplash()
+        } else {
+            bufferingSpinner.visibility = View.VISIBLE
+        }
     }
 
     private fun updateSubtitleSettings() {
