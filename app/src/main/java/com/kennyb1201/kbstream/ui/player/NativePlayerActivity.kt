@@ -1330,21 +1330,22 @@ class NativePlayerActivity : ComponentActivity() {
                 2 -> { view.setBackgroundColor(0xE5000000.toInt()); view.setPadding(16, 4, 16, 4) }
                 else -> { view.setBackgroundColor(0); view.setPadding(0, 0, 0, 0) }
             }
+        }
     }
-
-}
 
     private fun togglePlayPause() {
         exoPlayer?.let {
             it.playWhenReady = !it.isPlaying
             if (it.isPlaying) {
+                // Pausing — keep overlay visible
                 showControls()
+                removeAutoHide()
             } else {
+                // Resuming — hide overlay instantly
                 hideControls()
             }
+        }
     }
-
-}
 
     private val autoHideRunnable = Runnable { hideControls() }
 
@@ -1552,9 +1553,8 @@ class NativePlayerActivity : ComponentActivity() {
                 })
                 finish()
             }
+        }
     }
-
-}
 
     // --- Position Polling ---
     private val positionRunnable = object : Runnable {

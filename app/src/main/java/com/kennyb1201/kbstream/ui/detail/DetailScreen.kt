@@ -2659,6 +2659,8 @@ private fun EpisodeCard(
                                 )
                             )
                         }
+                }
+
                 if (progressFraction > 0f) {
                     Box(
                         modifier = Modifier
@@ -2679,8 +2681,6 @@ private fun EpisodeCard(
                                 )
                         )
                     }
-                }
-
                 }
             }
         }

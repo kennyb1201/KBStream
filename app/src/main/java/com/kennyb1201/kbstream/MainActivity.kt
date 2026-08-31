@@ -640,11 +640,9 @@ fun AppRoot() {
                         val nextSeason = data.getIntExtra("next_season", -1).takeIf { it >= 0 }
                         val nextTitle = data.getStringExtra("next_title")
                         val nextStreamId = data.getStringExtra("next_stream_id")
-                        // Re-navigate to streams to find the next episode stream, then back to player
-                        screen = Screen.Detail(
-                            type = current.parentType,
-                            id = current.parentId,
-                            pendingTarget = StreamsTarget(
+                        // Navigate directly to streams screen for the next episode
+                        screen = Screen.Streams(
+                            target = StreamsTarget(
                                 contentType = current.parentType,
                                 streamId = nextStreamId.orEmpty(),
                                 title = nextTitle.orEmpty(),
@@ -654,7 +652,13 @@ fun AppRoot() {
                                 resumePositionMs = 0L,
                                 totalEpisodesInSeason = current.totalEpisodesInSeason
                             ),
-                            itemPoster = current.itemPoster
+                            parentId = current.parentId,
+                            parentType = current.parentType,
+                            itemPoster = current.itemPoster,
+                            backdropUrl = current.backdropUrl,
+                            clearLogoUrl = current.clearLogoUrl,
+                            overview = current.overview,
+                            cast = current.cast
                         )
                     }
                     "navigate_actor" -> {

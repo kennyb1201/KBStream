@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,6 +46,7 @@ import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
+import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 
@@ -62,6 +64,13 @@ fun StreamsScreen(
     val streams by viewModel.streams.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val context = LocalContext.current
+
+    // Auto-play: when streams finish loading and autoplay is on, auto-select the top result
+    LaunchedEffect(isLoading, streams) {
+        if (!isLoading && streams.isNotEmpty() && AppPreferences.getAutoPlayNext(context)) {
+            onStreamSelected(streams.first(), streams)
+        }
+    }
 
     // DetailScreen passes episode titles in the form:
     // "Show Name S1 E2 • Episode Name". Extract everything after the
