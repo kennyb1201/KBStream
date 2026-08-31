@@ -166,6 +166,7 @@ class NativePlayerActivity : ComponentActivity() {
             // Accelerate: increase step each tick, cap at 30s
             scrubStepMs = (scrubStepMs + scrubStepMs / 2 + 200L).coerceAtMost(30_000L)
             scrubHandler.postDelayed(this, 80L)
+        }
     }
 
     private var isInPiPMode = false
@@ -1809,9 +1810,6 @@ private fun resolveMimeType(url: String): String? {
         ".ogg" in path -> MimeTypes.AUDIO_OGG
         ".wav" in path -> MimeTypes.AUDIO_WAV
         else -> null
-    }
-
-        return false
     }
 }
 
