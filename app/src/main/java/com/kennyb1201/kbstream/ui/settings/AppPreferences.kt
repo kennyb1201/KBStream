@@ -60,7 +60,7 @@ object AppPreferences {
 
     // ── Auto-play next episode
     fun getAutoPlayNext(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_AUTO_PLAY_NEXT, true)
+        prefs(context).getBoolean(KEY_AUTO_PLAY_NEXT, false)
 
     fun setAutoPlayNext(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_AUTO_PLAY_NEXT, enabled).apply()
@@ -68,7 +68,7 @@ object AppPreferences {
 
     // ── Auto-select top stream on streams screen
     fun getAutoSelectStream(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_AUTO_SELECT_STREAM, true)
+        prefs(context).getBoolean(KEY_AUTO_SELECT_STREAM, false)
 
     fun setAutoSelectStream(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_AUTO_SELECT_STREAM, enabled).apply()

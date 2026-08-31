@@ -154,6 +154,7 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+    }
 }
 
 @Composable
@@ -632,42 +633,71 @@ fun AppRoot() {
             val playerResultLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
                 contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
             ) { result ->
-                val data = result.data
-                val action = data?.getStringExtra("player_result_action")
-                when (action) {
-                    "next_episode" -> {
-                        val nextEpisode = data.getIntExtra("next_episode", -1).takeIf { it >= 0 }
-                        val nextSeason = data.getIntExtra("next_season", -1).takeIf { it >= 0 }
-                        val nextTitle = data.getStringExtra("next_title")
-                        val nextStreamId = data.getStringExtra("next_stream_id")
-                        // Navigate directly to streams screen for the next episode
-                        screen = Screen.Streams(
-                            target = StreamsTarget(
-                                contentType = current.parentType,
-                                streamId = nextStreamId.orEmpty(),
-                                title = nextTitle.orEmpty(),
-                                displayName = current.itemName,
-                                season = nextSeason,
-                                episode = nextEpisode,
-                                resumePositionMs = 0L,
-                                totalEpisodesInSeason = current.totalEpisodesInSeason
-                            ),
-                            parentId = current.parentId,
-                            parentType = current.parentType,
-                            itemPoster = current.itemPoster,
-                            backdropUrl = current.backdropUrl,
-                            clearLogoUrl = current.clearLogoUrl,
-                            overview = current.overview,
-                            cast = current.cast.map { member ->
-                                TmdbCastMember(
-                                    id = member.id,
-                                    name = member.name,
-                                    character = member.character,
-                                    profilePath = member.profilePath?.removePrefix(TmdbRepository.PROFILE_BASE)
-                                )
-                            }
-                        )
-                    }
+                // Check shared state first (more reliable than activity results)
+                val next = com.kennyb1201.kbstream.ui.player.NextEpisodeResult.consume()
+                if (next != null) {
+                    screen = Screen.Streams(
+                        target = StreamsTarget(
+                            contentType = current.parentType,
+                            streamId = next.streamId,
+                            title = next.title,
+                            displayName = current.itemName,
+                            season = next.season,
+                            episode = next.episode,
+                            resumePositionMs = 0L,
+                            totalEpisodesInSeason = current.totalEpisodesInSeason
+                        ),
+                        parentId = current.parentId,
+                        parentType = current.parentType,
+                        itemPoster = current.itemPoster,
+                        backdropUrl = current.backdropUrl,
+                        clearLogoUrl = current.clearLogoUrl,
+                        overview = current.overview,
+                        cast = current.cast.map { member ->
+                            TmdbCastMember(
+                                id = member.id,
+                                name = member.name,
+                                character = member.character,
+                                profilePath = member.profilePath?.removePrefix(TmdbRepository.PROFILE_BASE)
+                            )
+                        }
+                    )
+                } else {
+                    val data = result.data
+                    val action = data?.getStringExtra("player_result_action")
+                    when (action) {
+                        "next_episode" -> {
+                            val nextEpisode = data.getIntExtra("next_episode", -1).takeIf { it >= 0 }
+                            val nextSeason = data.getIntExtra("next_season", -1).takeIf { it >= 0 }
+                            val nextTitle = data.getStringExtra("next_title")
+                            val nextStreamId = data.getStringExtra("next_stream_id")
+                            screen = Screen.Streams(
+                                target = StreamsTarget(
+                                    contentType = current.parentType,
+                                    streamId = nextStreamId.orEmpty(),
+                                    title = nextTitle.orEmpty(),
+                                    displayName = current.itemName,
+                                    season = nextSeason,
+                                    episode = nextEpisode,
+                                    resumePositionMs = 0L,
+                                    totalEpisodesInSeason = current.totalEpisodesInSeason
+                                ),
+                                parentId = current.parentId,
+                                parentType = current.parentType,
+                                itemPoster = current.itemPoster,
+                                backdropUrl = current.backdropUrl,
+                                clearLogoUrl = current.clearLogoUrl,
+                                overview = current.overview,
+                                cast = current.cast.map { member ->
+                                    TmdbCastMember(
+                                        id = member.id,
+                                        name = member.name,
+                                        character = member.character,
+                                        profilePath = member.profilePath?.removePrefix(TmdbRepository.PROFILE_BASE)
+                                    )
+                                }
+                            )
+                        }
                     "navigate_actor" -> {
                         val personId = data.getIntExtra("actor_person_id", -1)
                         val resumePos = data.getLongExtra("actor_resume_position_ms", 0L)

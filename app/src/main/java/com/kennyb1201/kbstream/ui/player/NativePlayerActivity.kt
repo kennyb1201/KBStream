@@ -600,13 +600,12 @@ class NativePlayerActivity : ComponentActivity() {
                 } else {
                     season!! to nextEp
                 }
-                setResult(RESULT_OK, Intent().apply {
-                    putExtra("player_result_action", "next_episode")
-                    putExtra("next_season", targetSeason)
-                    putExtra("next_episode", targetEpisode)
-                    putExtra("next_title", "S${targetSeason}E$targetEpisode")
-                    putExtra("next_stream_id", episodeStreamId)
-                })
+                NextEpisodeResult.pendingNextEpisode = NextEpisodeResult.PendingNext(
+                    season = targetSeason,
+                    episode = targetEpisode,
+                    title = "S${targetSeason}E$targetEpisode",
+                    streamId = episodeStreamId.orEmpty()
+                )
                 finish()
             }
         }
@@ -1583,13 +1582,12 @@ class NativePlayerActivity : ComponentActivity() {
                 } else {
                     season!! to nextEp
                 }
-                setResult(RESULT_OK, Intent().apply {
-                    putExtra("player_result_action", "next_episode")
-                    putExtra("next_season", targetSeason)
-                    putExtra("next_episode", targetEpisode)
-                    putExtra("next_title", "S${targetSeason}E$targetEpisode")
-                    putExtra("next_stream_id", episodeStreamId)
-                })
+                NextEpisodeResult.pendingNextEpisode = NextEpisodeResult.PendingNext(
+                    season = targetSeason,
+                    episode = targetEpisode,
+                    title = "S${targetSeason}E$targetEpisode",
+                    streamId = episodeStreamId.orEmpty()
+                )
                 finish()
             }
         }

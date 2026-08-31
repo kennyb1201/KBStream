@@ -134,24 +134,24 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(10.dp))
 
         ToggleRow(
-            label = "Auto-play Next Episode",
-            description = "Continue to the next episode when one ends",
-            checked = autoPlayNext,
-            onToggle = {
-                autoPlayNext = it
-                AppPreferences.setAutoPlayNext(context, it)
-            }
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        ToggleRow(
             label = "Auto-select Stream",
             description = "Automatically play the top source when streams load",
             checked = autoSelectStream,
             onToggle = {
                 autoSelectStream = it
                 AppPreferences.setAutoSelectStream(context, it)
+            }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        ToggleRow(
+            label = "Auto-play Next Episode",
+            description = "Continue to the next episode when one ends",
+            checked = autoPlayNext,
+            onToggle = {
+                autoPlayNext = it
+                AppPreferences.setAutoPlayNext(context, it)
             }
         )
 
