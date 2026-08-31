@@ -149,6 +149,25 @@ class NativePlayerActivity : ComponentActivity() {
     // State
     private val handler = Handler(Looper.getMainLooper())
     private var controlsVisible = false
+
+    // Hold-to-scrub acceleration
+    private var scrubDirection = 0  // -1 = back, 1 = forward, 0 = idle
+    private var scrubStepMs = 0L
+    private val scrubHandler = Handler(Looper.getMainLooper())
+    private val scrubRunnable = object : Runnable {
+        override fun run() {
+            if (scrubDirection == 0) return
+            val player = exoPlayer ?: return
+            val duration = player.duration.takeIf { it > 0 } ?: return
+            val newPos = (player.currentPosition + scrubStepMs * scrubDirection)
+                .coerceIn(0L, duration)
+            player.seekTo(newPos)
+            updateSeekBarPosition(newPos, duration)
+            // Accelerate: increase step each tick, cap at 30s
+            scrubStepMs = (scrubStepMs + scrubStepMs / 2 + 200L).coerceAtMost(30_000L)
+            scrubHandler.postDelayed(this, 80L)
+    }
+
     private var isInPiPMode = false
     private var showSettingsPanel = false
     private var isPickerShowing = false
@@ -233,8 +252,9 @@ class NativePlayerActivity : ComponentActivity() {
             externalSubtitleUri = uri
             carryPositionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
             recreatePlayer()
-        }
     }
+
+}
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -469,44 +489,22 @@ class NativePlayerActivity : ComponentActivity() {
                 KeyEvent.KEYCODE_BACK -> {
                     dismissSettingsPanel(); showControls(); true
                 }
-                KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_UP -> {
-                    // Keep focus cycling within the settings panel
-                    val focused = settingsContainer.findFocus()
-                    val scrollBounds = intArrayOf(0, 0)
-                    settingsContainer.getLocationOnScreen(scrollBounds)
-                    val childCount = settingsContainer.childCount
-                    if (childCount > 0) {
-                        val inner = settingsContainer.getChildAt(0) as? android.view.ViewGroup
-                        if (inner != null) {
-                            val focusedY = if (focused != null) {
-                                val loc = intArrayOf(0, 0)
-                                focused.getLocationOnScreen(loc)
-                                loc[1]
-                            } else -1
-                            val containerTop = scrollBounds[1]
-                            val containerBottom = containerTop + settingsContainer.height
-                            // If focus would leave the panel, snap to first/last child
-                            if (keyCode == KeyEvent.KEYCODE_DPAD_UP && focused != null &&
-                                focusedY <= containerTop + 30) {
-                                // Already at top, find first focusable
-                                for (i in 0 until inner.childCount) {
-                                    val v = inner.getChildAt(i)
-                                    if (v.isFocusable) { v.requestFocus(); break }
-                                }
-                                true
-                            } else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN && focused != null &&
-                                focusedY >= containerBottom - 60) {
-                                // Near bottom, scroll and find next focusable
-                                for (i in inner.childCount - 1 downTo 0) {
-                                    val v = inner.getChildAt(i)
-                                    if (v.isFocusable) { v.requestFocus(); break }
-                                }
-                                true
-                            } else false
-                        } else false
-                    } else false
-                }
                 else -> false
+            }
+        }
+        // Global focus listener: if settings panel is open and focus escapes, snap back
+        window.decorView.viewTreeObserver.addOnGlobalFocusChangeListener { _, newFocus ->
+            if (showSettingsPanel && newFocus != null && !isDescendantOf(newFocus, settingsContainer)) {
+                // Focus left the settings panel — snap back to first focusable inside it
+                settingsContainer.post {
+                    val inner = settingsContainer.getChildAt(0) as? android.view.ViewGroup
+                    if (inner != null) {
+                        for (i in 0 until inner.childCount) {
+                            val v = inner.getChildAt(i)
+                            if (v.isFocusable) { v.requestFocus(); break }
+                        }
+                    }
+                }
             }
         }
         scrim = findViewById(R.id.scrim)
@@ -589,16 +587,20 @@ class NativePlayerActivity : ComponentActivity() {
             if (season != null && episode != null) {
                 val nextEp = episode!! + 1
                 val maxEps = totalEpisodesInSeason
-                if (maxEps == null || nextEp <= maxEps) {
-                    setResult(RESULT_OK, Intent().apply {
-                        putExtra("player_result_action", "next_episode")
-                        putExtra("next_season", season!!)
-                        putExtra("next_episode", nextEp)
-                        putExtra("next_title", "Episode $nextEp")
-                        putExtra("next_stream_id", episodeStreamId)
-                    })
-                    finish()
+                val (targetSeason, targetEpisode) = if (maxEps != null && nextEp > maxEps) {
+                    // End of season — jump to next season episode 1
+                    (season!! + 1) to 1
+                } else {
+                    season!! to nextEp
                 }
+                setResult(RESULT_OK, Intent().apply {
+                    putExtra("player_result_action", "next_episode")
+                    putExtra("next_season", targetSeason)
+                    putExtra("next_episode", targetEpisode)
+                    putExtra("next_title", "S${targetSeason}E$targetEpisode")
+                    putExtra("next_stream_id", episodeStreamId)
+                })
+                finish()
             }
         }
         btnSource.setOnClickListener { showPicker(PickerMode.SOURCE) }
@@ -640,6 +642,35 @@ class NativePlayerActivity : ComponentActivity() {
                 scheduleAutoHide()
             }
         })
+
+        // Hold-to-scrub: DPAD_LEFT/RIGHT on seekbar with acceleration
+        seekbar.setOnKeyListener { _, keyCode, event ->
+            when (keyCode) {
+                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    if (event.action == KeyEvent.ACTION_DOWN) {
+                        if (scrubDirection == 0) {
+                            // Start scrubbing
+                            scrubDirection = if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1
+                            scrubStepMs = 1_000L  // Start at 1 second
+                            scrubHandler.post(scrubRunnable)
+                            removeAutoHide()
+                        }
+                        true
+                    } else if (event.action == KeyEvent.ACTION_UP) {
+                        // Stop scrubbing
+                        scrubDirection = 0
+                        scrubHandler.removeCallbacks(scrubRunnable)
+                        // Commit final position
+                        val durationMs = exoPlayer?.duration ?: 0L
+                        val posMs = (seekbar.progress.toLong() * durationMs) / 10_000L
+                        exoPlayer?.seekTo(posMs)
+                        scheduleAutoHide()
+                        true
+                    } else false
+                }
+                else -> false
+            }
+        }
 
         // Settings toggles
         settingsBufferAuto.setOnClickListener {
@@ -711,8 +742,9 @@ class NativePlayerActivity : ComponentActivity() {
         btnOffsetPlus.setOnClickListener {
             subtitleOffsetMs = (subtitleOffsetMs + 500).coerceAtMost(5000)
             subtitleOffsetValue.text = "${subtitleOffsetMs}ms"
-        }
     }
+
+}
 
     private fun setupKeyboardHandler() {
         playerView.isFocusable = true
@@ -748,8 +780,9 @@ class NativePlayerActivity : ComponentActivity() {
                 }
                 else -> false
             }
-        }
     }
+
+}
 
     // --- Player Creation ---
     private fun createPlayer() {
@@ -888,7 +921,13 @@ class NativePlayerActivity : ComponentActivity() {
 
     private fun createPlayerListener() = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
-            if (isPlaying) hideSplash()
+            if (isPlaying) {
+                hideSplash()
+                // Resume auto-hide when playback resumes while controls are visible
+                if (controlsVisible && !showSettingsPanel && !isPickerShowing) {
+                    scheduleAutoHide()
+                }
+            }
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -942,8 +981,9 @@ class NativePlayerActivity : ComponentActivity() {
                 retryExhausted = true
                 updateUIError()
             }
-        }
     }
+
+}
 
     private fun createAnalyticsListener() = object : AnalyticsListener {
         override fun onDroppedVideoFrames(
@@ -954,8 +994,9 @@ class NativePlayerActivity : ComponentActivity() {
             if (droppedFrames > 0) {
                 Log.w("PLAYER_PERF", "Dropped $droppedFrames frames over ${elapsedMs}ms (sw=$forceSoftwareDecoder)")
             }
-        }
     }
+
+}
 
     // --- UI Updates ---
     private fun showSplash() {
@@ -974,8 +1015,9 @@ class NativePlayerActivity : ComponentActivity() {
         // Show splash overlay during buffering if backdrop is available
         if (splashBackdrop.drawable != null || splashClearLogo.drawable != null) {
             showSplash()
-        }
     }
+
+}
 
     private fun updateUIReady() {
         bufferingSpinner.visibility = View.GONE
@@ -1056,8 +1098,9 @@ class NativePlayerActivity : ComponentActivity() {
                 val codecLabel = normalizeCodec(streamCodec)
                 if (codecLabel != "—") append(" • $codecLabel")
             }
-        }
     }
+
+}
 
     /**
      * Auto-select audio and subtitle tracks matching the user's preferred
@@ -1131,6 +1174,15 @@ class NativePlayerActivity : ComponentActivity() {
         if (changed) languagesAutoSelected = true
     }
 
+    private fun updateSeekBarPosition(posMs: Long, durationMs: Long) {
+        if (durationMs > 0) {
+            seekbar.progress = ((posMs * 10_000L) / durationMs).toInt().coerceIn(0, 10_000)
+            currentTime.text = formatMillis(posMs)
+            totalTime.text = formatMillis(durationMs)
+    }
+
+}
+
     private fun updateControlsInfo() {
         sourceLabel.text = "Source: $currentSourceLabel"
         btnPlayPause.setImageResource(
@@ -1154,8 +1206,9 @@ class NativePlayerActivity : ComponentActivity() {
             val tv = v as TextView
             tv.setBackgroundResource(pillBg(selected, tv.isFocused))
             tv.setTextColor(if (selected) getColor(R.color.kb_void) else getColor(R.color.kb_text_hi))
-        }
     }
+
+}
 
     private fun updateSettingsPanelState() {
         applyPillState(settingsBufferAuto, bufferMode == 2)
@@ -1186,8 +1239,9 @@ class NativePlayerActivity : ComponentActivity() {
                 settingsCodec.text = "Codec: $codecLabel"
                 settingsCodec.visibility = View.VISIBLE
             }
-        }
     }
+
+}
 
     // --- Controls Visibility ---
     private fun showControls() {
@@ -1199,6 +1253,10 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     private fun hideControls() {
+        // Stop any active scrubbing
+        scrubDirection = 0
+        scrubHandler.removeCallbacks(scrubRunnable)
+
         controlsVisible = false
         controlsOverlay.visibility = View.GONE
         dismissAllPanels()
@@ -1207,8 +1265,9 @@ class NativePlayerActivity : ComponentActivity() {
             hideSplash()
         } else {
             bufferingSpinner.visibility = View.VISIBLE
-        }
     }
+
+}
 
     private fun updateSubtitleSettings() {
         val sizeLabels = listOf("Small", "Normal", "Large")
@@ -1235,8 +1294,9 @@ class NativePlayerActivity : ComponentActivity() {
                 2 -> { view.setBackgroundColor(0xE5000000.toInt()); view.setPadding(16, 4, 16, 4) }
                 else -> { view.setBackgroundColor(0); view.setPadding(0, 0, 0, 0) }
             }
-        }
     }
+
+}
 
     private fun togglePlayPause() {
         exoPlayer?.let {
@@ -1246,13 +1306,16 @@ class NativePlayerActivity : ComponentActivity() {
             } else {
                 hideControls()
             }
-        }
     }
+
+}
 
     private val autoHideRunnable = Runnable { hideControls() }
 
     private fun scheduleAutoHide() {
         handler.removeCallbacks(autoHideRunnable)
+        // Don't auto-hide when paused — keep overlay visible
+        if (exoPlayer?.isPlaying == false) return
         handler.postDelayed(autoHideRunnable, CONTROLS_HIDE_DELAY_MS)
     }
 
@@ -1439,19 +1502,23 @@ class NativePlayerActivity : ComponentActivity() {
             if (autoPlayNext && !isLiveChannel && season != null && episode != null) {
                 val nextEp = episode!! + 1
                 val maxEps = totalEpisodesInSeason
-                if (maxEps == null || nextEp <= maxEps) {
-                    setResult(RESULT_OK, Intent().apply {
-                        putExtra("player_result_action", "next_episode")
-                        putExtra("next_season", season!!)
-                        putExtra("next_episode", nextEp)
-                        putExtra("next_title", "Episode $nextEp")
-                        putExtra("next_stream_id", episodeStreamId)
-                    })
-                    finish()
+                val (targetSeason, targetEpisode) = if (maxEps != null && nextEp > maxEps) {
+                    (season!! + 1) to 1
+                } else {
+                    season!! to nextEp
                 }
+                setResult(RESULT_OK, Intent().apply {
+                    putExtra("player_result_action", "next_episode")
+                    putExtra("next_season", targetSeason)
+                    putExtra("next_episode", targetEpisode)
+                    putExtra("next_title", "S${targetSeason}E$targetEpisode")
+                    putExtra("next_stream_id", episodeStreamId)
+                })
+                finish()
             }
-        }
     }
+
+}
 
     // --- Position Polling ---
     private val positionRunnable = object : Runnable {
@@ -1477,8 +1544,9 @@ class NativePlayerActivity : ComponentActivity() {
                 )
             }
             handler.postDelayed(this, 1_000L)
-        }
     }
+
+}
 
     private fun startPositionPolling() {
         handler.removeCallbacks(positionRunnable)
@@ -1507,8 +1575,9 @@ class NativePlayerActivity : ComponentActivity() {
                 }
             }
             handler.postDelayed(this, 750L)
-        }
     }
+
+}
 
     private fun startIntroStampPolling() {
         handler.removeCallbacks(introStampRunnable)
@@ -1558,8 +1627,9 @@ class NativePlayerActivity : ComponentActivity() {
                     }
                 }
             }
-        }
     }
+
+}
 
     // --- PiP ---
     private fun enterPipIfEnabled() {
@@ -1567,8 +1637,9 @@ class NativePlayerActivity : ComponentActivity() {
             try {
                 enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build())
             } catch (e: Exception) { Log.w("PLAYER_PIP", "PiP failed", e) }
-        }
     }
+
+}
 
     @Suppress("DEPRECATION")
     override fun onBackPressed() {
@@ -1714,6 +1785,15 @@ private fun resolveMimeType(url: String): String? {
         ".ogg" in path -> MimeTypes.AUDIO_OGG
         ".wav" in path -> MimeTypes.AUDIO_WAV
         else -> null
+    }
+
+    private fun isDescendantOf(view: android.view.View, parent: android.view.View): Boolean {
+        var current: android.view.View? = view
+        while (current != null) {
+            if (current === parent) return true
+            current = current.parent as? android.view.View
+        }
+        return false
     }
 }
 

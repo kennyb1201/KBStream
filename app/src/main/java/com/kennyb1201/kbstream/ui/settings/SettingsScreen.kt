@@ -153,21 +153,25 @@ fun SettingsScreen(
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(bottom = 4.dp)
         )
+        // Buffer mode: pref 0=Balanced, 1=LowLatency, 2=Auto
+        val bufferPrefToIndex = intArrayOf(1, 2, 0)  // pref 0→UI 1, pref 1→UI 2, pref 2→UI 0
+        val bufferIndexToPref = intArrayOf(2, 0, 1)  // UI 0→pref 2, UI 1→pref 0, UI 2→pref 1
+        val selectedBufferIndex = bufferPrefToIndex.getOrElse(bufferMode) { 0 }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("Auto", "Balanced (4K-ready)", "Low Latency").forEachIndexed { index, label ->
                 KBCard(onClick = {
-                    bufferMode = index
-                    AppPreferences.setDefaultBufferMode(context, index)
+                    bufferMode = bufferIndexToPref[index]
+                    AppPreferences.setDefaultBufferMode(context, bufferMode)
                 }) {
-                    PillChip(label, bufferMode == index)
+                    PillChip(label, selectedBufferIndex == index)
                 }
             }
         }
         Spacer(modifier = Modifier.height(2.dp))
         Text(
             text = when (bufferMode) {
-                0 -> "Balanced 15s/60s buffer for movies & series"
-                1 -> "Lower buffer for live IPTV"
+                0 -> "15s/60s buffer \u2014 best for movies & series"
+                1 -> "2.5s/10s buffer \u2014 best for live IPTV"
                 else -> "Auto-detects IPTV vs movies & series"
             },
             color = KBTextLo,
