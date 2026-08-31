@@ -323,16 +323,52 @@ private fun HeroInlineTrailerPlayer(
     }
 
     DisposableEffect(exoPlayer) {
+        val handler = android.os.Handler(
+            android.os.Looper.getMainLooper()
+        )
+
+        // Watchdog: if the trailer doesn't actually start playing
+        // (or gets stuck buffering), bail out to the backdrop so the
+        // hero never stays on a blank grey screen.
+        val watchdog = object : Runnable {
+            override fun run() {
+                val state = exoPlayer.playbackState
+                val playing = exoPlayer.isPlaying
+                if (state != Player.STATE_READY || !playing) {
+                    Log.w(
+                        "HOME_HERO",
+                        "Inline trailer stuck (state=$state playing=$playing); " +
+                            "falling back to backdrop"
+                    )
+                    onEnded()
+                }
+            }
+        }
+
+        var startedPlaying = false
+
         val listener =
             object : Player.Listener {
                 override fun onPlaybackStateChanged(
                     playbackState: Int
                 ) {
-                    if (
-                        playbackState ==
-                        Player.STATE_ENDED
-                    ) {
+                    if (playbackState == Player.STATE_ENDED) {
+                        handler.removeCallbacks(watchdog)
                         onEnded()
+                    } else if (playbackState == Player.STATE_READY && exoPlayer.isPlaying) {
+                        startedPlaying = true
+                        handler.removeCallbacks(watchdog)
+                    } else if (playbackState == Player.STATE_BUFFERING && startedPlaying) {
+                        // Re-buffer mid-playback: give it a few seconds before bailing.
+                        handler.removeCallbacks(watchdog)
+                        handler.postDelayed(watchdog, 5_000L)
+                    }
+                }
+
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    if (isPlaying) {
+                        startedPlaying = true
+                        handler.removeCallbacks(watchdog)
                     }
                 }
 
@@ -344,13 +380,19 @@ private fun HeroInlineTrailerPlayer(
                         "Inline trailer playback failed: ${error.errorCodeName}",
                         error
                     )
+                    handler.removeCallbacks(watchdog)
                     onEnded()
                 }
             }
 
         exoPlayer.addListener(listener)
 
+        // Give the trailer up to 8s to start rendering; if it hasn't,
+        // fall back to the backdrop.
+        handler.postDelayed(watchdog, 8_000L)
+
         onDispose {
+            handler.removeCallbacks(watchdog)
             exoPlayer.removeListener(listener)
             exoPlayer.release()
         }
