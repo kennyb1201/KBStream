@@ -1373,8 +1373,9 @@ class NativePlayerActivity : ComponentActivity() {
 
     private fun togglePlayPause() {
         exoPlayer?.let {
-            it.playWhenReady = !it.isPlaying
-            if (it.isPlaying) {
+            val wasPlaying = it.isPlaying
+            it.playWhenReady = !wasPlaying
+            if (wasPlaying) {
                 // Pausing — keep overlay visible
                 showControls()
                 removeAutoHide()
