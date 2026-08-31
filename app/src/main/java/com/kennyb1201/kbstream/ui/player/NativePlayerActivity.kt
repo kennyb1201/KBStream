@@ -606,6 +606,13 @@ class NativePlayerActivity : ComponentActivity() {
                     title = "S${targetSeason}E$targetEpisode",
                     streamId = episodeStreamId.orEmpty()
                 )
+                // Release the media session synchronously so it is unregistered from the
+                // process-wide session map before the next player activity builds its own
+                // (both use the empty default id and would otherwise collide with
+                // "Session ID must be unique"). The player itself stays alive so onStop's
+                // progress save still runs.
+                mediaSession?.release()
+                mediaSession = null
                 finish()
             }
         }
@@ -920,13 +927,12 @@ class NativePlayerActivity : ComponentActivity() {
         })
 
         mediaSession?.release()
-        // media3 keys sessions by their session ID in a process-wide static map and
-        // defaults to an EMPTY string. Building a second session (e.g. tapping "next
-        // episode" reuses the empty id and throws "Session ID must be unique". Give
-        // every session a unique non-empty id so player-to-player handoffs never collide.
-        mediaSession = MediaSession.Builder(this, player)
-            .setSessionId("kbstream-session-" + System.nanoTime())
-            .build()
+        // media3 keys sessions by their session ID in a process-wide static map, and this
+        // media3 version exposes no public setter (sessions always use the empty default id).
+        // To avoid "Session ID must be unique" when one player finishes and the next starts,
+        // the next-episode paths release this session synchronously BEFORE finishing, so it
+        // is removed from that map before the next player builds its own.
+        mediaSession = MediaSession.Builder(this, player).build()
 
         // Start position polling
         startPositionPolling()
@@ -1610,6 +1616,10 @@ class NativePlayerActivity : ComponentActivity() {
                     title = "S${targetSeason}E$targetEpisode",
                     streamId = episodeStreamId.orEmpty()
                 )
+                // See btnNext: release the media session synchronously before finishing so
+                // the next player activity's session doesn't collide with mine.
+                mediaSession?.release()
+                mediaSession = null
                 finish()
             }
         }
