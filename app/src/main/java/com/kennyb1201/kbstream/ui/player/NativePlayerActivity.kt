@@ -1016,20 +1016,42 @@ class NativePlayerActivity : ComponentActivity() {
 }
 
     // --- UI Updates ---
+    private fun startPulseAnimation() {
+        if (splashClearLogo.animation == null) {
+            val pulse = android.view.animation.AnimationUtils.loadAnimation(this, R.anim.clearlogo_pulse)
+            splashClearLogo.startAnimation(pulse)
+        }
+    }
+
     private fun showSplash() {
         splashContainer.visibility = View.VISIBLE
         bufferingSpinner.visibility = View.GONE
-        // Pulse animation on the clear logo
-        if (splashClearLogo.drawable != null && splashClearLogo.animation == null) {
-            val pulse = android.view.animation.AnimationUtils.loadAnimation(this, R.anim.clearlogo_pulse)
-            splashClearLogo.startAnimation(pulse)
+        // If clear logo is already loaded, start pulse immediately.
+        // Otherwise, start it once Coil finishes loading.
+        if (splashClearLogo.drawable != null) {
+            startPulseAnimation()
+        } else {
+            splashClearLogo.viewTreeObserver.addOnGlobalLayoutListener(
+                object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
+                    override fun onGlobalLayout() {
+                        if (splashClearLogo.drawable != null) {
+                            splashClearLogo.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                            startPulseAnimation()
+                        }
+                    }
+                }
+            )
+            // Fallback: also start animation after a short delay in case layout listener doesn't fire
+            splashClearLogo.postDelayed({ startPulseAnimation() }, 500)
         }
     }
 
     private fun hideSplash() {
         splashClearLogo.clearAnimation()
         splashContainer.visibility = View.GONE
-    }    private fun updateUIBuffering() {
+    }
+
+    private fun updateUIBuffering() {
         // Use the splash overlay (backdrop + pulsing clearlogo) as the loading indicator
         showSplash()
     }
@@ -1217,19 +1239,35 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     private fun applyResizeMode(mode: Int) {
-        // Try PlayerView's setter
-        try { playerView.resizeMode = mode } catch (_: Exception) {}
-        // Also set directly on internal AspectRatioFrameLayout as fallback
         try {
-            val contentFrame = playerView.findViewById<AspectRatioFrameLayout>(
-                androidx.media3.ui.R.id.exo_content_frame
-            )
-            contentFrame?.resizeMode = mode
-            contentFrame?.requestLayout()
-            contentFrame?.invalidate()
+            // 1) Set via PlayerView public API
+            playerView.resizeMode = mode
+
+            // 2) Walk up from the TextureView / SurfaceView to the
+            //    internal AspectRatioFrameLayout and set it there too
+            fun applyToViewTree(v: android.view.View?) {
+                if (v == null) return
+                if (v is AspectRatioFrameLayout) {
+                    v.resizeMode = mode
+                }
+                if (v is android.view.ViewGroup) {
+                    for (i in 0 until v.childCount) applyToViewTree(v.getChildAt(i))
+                }
+            }
+            applyToViewTree(playerView)
+
+            // 3) Try to invoke the private updateTextureViewSize() method
+            //    which actually applies the matrix transform to the TextureView
+            try {
+                val m = playerView.javaClass.getDeclaredMethod("updateTextureViewSize")
+                m.isAccessible = true
+                m.invoke(playerView)
+            } catch (_: Exception) {}
+
+            // 4) Force relayout on everything
+            playerView.requestLayout()
+            playerView.invalidate()
         } catch (_: Exception) {}
-        // Force the PlayerView itself to relayout
-        playerView.requestLayout()
     }
 
     private fun applyPillState(view: TextView, selected: Boolean) {
