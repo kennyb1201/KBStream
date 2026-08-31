@@ -159,10 +159,10 @@ class M3uParser {
 
         value.forEachIndexed { index, char ->
             when {
-                 char == '"' && quote == null -> quote = char
-            char == '\'' && quote == null -> quote = char
-            char == quote -> quote = null
-            char == ',' && quote == null -> return index
+                char == '"' && quote == null -> quote = char
+                char == '\'' && quote == null -> quote = char
+                char == quote -> quote = null
+                char == ',' && quote == null -> return index
             }
         }
 

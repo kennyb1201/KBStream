@@ -576,7 +576,7 @@ private fun HomeHero(
             ?: meta?.releaseInfo
                 ?.let {
                     Regex(
-                        """\b(?:G|PG|PG-13|R|NC-17|TV-Y7|TV-Y|TV-G|TV-PG|TV-14|TV-MA)\b"""
+                        """\b(?:PG-13|NC-17|TV-Y7|TV-Y|TV-G|TV-PG|TV-14|TV-MA|PG|G|R)\b"""
                     )
                         .find(
                             it.uppercase()

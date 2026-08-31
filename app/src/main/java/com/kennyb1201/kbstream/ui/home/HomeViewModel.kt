@@ -2443,7 +2443,7 @@ private suspend fun calculateEpisodesRemaining(
 
         val match =
             Regex(
-            """^(.+?)(?::[sS]?(\d+))(?::[eE]?(\d+))$"""
+                """^(.+?)(?::[sS]?(\d+))(?::[eE]?(\d+))$"""
             ).find(
                 key.trim()
             )

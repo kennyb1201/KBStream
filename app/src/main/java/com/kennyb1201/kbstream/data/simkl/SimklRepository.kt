@@ -1836,7 +1836,7 @@ class SimklRepository(
 
         val match =
             Regex(
-                """s(\d+)(?:e(\d+))?""",
+                """s(\d+)\s*(?:e(\d+))?""",
                 RegexOption.IGNORE_CASE
             )
                 .find(

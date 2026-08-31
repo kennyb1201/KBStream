@@ -415,8 +415,8 @@ private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
         const val GZIP_MAGIC_1 = 0x1f
         const val GZIP_MAGIC_2 = 0x8b
 
-const val DEFAULT_PAST_WINDOW_MS = 2 * 60 * 60 * 1000L
-const val DEFAULT_FUTURE_WINDOW_MS = 18 * 60 * 60 * 1000L
+        const val DEFAULT_PAST_WINDOW_MS = 2 * 60 * 60 * 1000L
+        const val DEFAULT_FUTURE_WINDOW_MS = 18 * 60 * 60 * 1000L
 
         val IMPORT_MUTEX = Mutex()
 
@@ -428,10 +428,10 @@ const val DEFAULT_FUTURE_WINDOW_MS = 18 * 60 * 60 * 1000L
         val OFFSET_4 = Regex("[+-]\\d{4}")
         val OFFSET_WITH_COLON = Regex("[+-]\\d{2}:\\d{2}")
         val BRACKETED_TEXT = Regex("""\[[^\]]*]""")
-val PARENTHESIZED_TEXT = Regex("""\([^)]*\)""")
-val CHANNEL_QUALIFIERS = Regex(
-    """\b(hd|uhd|fhd|sd|4k|1080p|720p|hevc|h265|h264|hdr|aac|fps|usa|us|uk|ca|au)\b"""
-)
+        val PARENTHESIZED_TEXT = Regex("""\([^)]*\)""")
+        val CHANNEL_QUALIFIERS = Regex(
+            """\b(hd|uhd|fhd|sd|4k|1080p|720p|hevc|h265|h264|hdr|aac|fps|usa|us|uk|ca|au)\b"""
+        )
         val NON_ALPHANUMERIC = Regex("""[^a-z0-9]+""")
 
         var dateParseFailureLogsRemaining = MAX_DATE_PARSE_FAILURE_LOGS
