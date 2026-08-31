@@ -332,10 +332,14 @@
                 <SeekBar
                     android:id="@+id/seekbar"
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="6dp"
+                    android:paddingHorizontal="10dp"
+                    android:background="@drawable/seekbar_focus_bg"
                     android:max="10000"
                     android:progressTint="@color/kb_accent"
                     android:thumbTint="@color/kb_accent"
+                    android:splitTrack="false"
                     android:progressBackgroundTint="@color/kb_surface_raised"
                     android:focusable="true"
                     android:focusableInTouchMode="true" />
