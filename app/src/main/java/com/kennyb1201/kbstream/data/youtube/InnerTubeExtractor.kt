@@ -626,10 +626,15 @@ object InnerTubeExtractor {
 
     private fun isUrlReachable(url: String): Boolean =
         runCatching {
+            // Probe with the same client UA + ratebypass the player uses.
+            val uri = Uri.parse(url).buildUpon()
+                .appendQueryParameter("ratebypass", "yes")
+                .build()
             val request = Request.Builder()
-                .url(url)
+                .url(uri.toString())
                 .get()
                 .header("Range", "bytes=0-0")
+                .header("User-Agent", CLIENTS[0].userAgent)
                 .build()
             probeClient.newCall(request).execute().use { response ->
                 response.code == 200 || response.code == 206
