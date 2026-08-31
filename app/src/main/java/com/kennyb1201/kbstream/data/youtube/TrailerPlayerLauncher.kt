@@ -29,8 +29,9 @@ object TrailerPlayerLauncher {
      * without launching any UI.
      *
      * Resolution order:
-     * 1. InnerTube direct player API (primary — most reliable)
-     * 2. NewPipe extractor (NewPipeManager falls back to Piped itself)
+     * 1. Cobalt proxy (solves YouTube's po-token/anti-bot server-side; most reliable)
+     * 2. InnerTube direct player API
+     * 3. NewPipe extractor (NewPipeManager falls back to Piped itself)
      *
      * Resolved sources are cached for 3 hours.
      */
@@ -67,7 +68,20 @@ object TrailerPlayerLauncher {
             sourceCache.remove(videoId)
         }
 
-        // Primary: direct InnerTube player API
+        // Primary: cobalt proxy (handles the po-token / pot challenge for us)
+        if (CobaltTrailerResolver.isConfigured()) {
+            val cobaltSource = CobaltTrailerResolver.resolve(videoId)
+            if (cobaltSource != null) {
+                sourceCache[videoId] = CachedSource(cobaltSource)
+                logResolved("Cobalt", cobaltSource)
+                return Result.success(cobaltSource)
+            }
+            Log.w(TAG, "Cobalt proxy yielded no source; falling back to local extraction")
+        } else {
+            Log.d(TAG, "Cobalt proxy not configured; using local extractors")
+        }
+
+        // Secondary: direct InnerTube player API
         val innerTubeSource = InnerTubeExtractor.extractPlaybackSource(videoId)
         if (innerTubeSource != null) {
             sourceCache[videoId] = CachedSource(innerTubeSource)
