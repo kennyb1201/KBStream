@@ -54,7 +54,7 @@ object TrailerPlayerLauncher {
             )
         }
 
-        Log.d(
+        Log.w(
             TAG,
             "Extracted YouTube video ID: $videoId"
         )
@@ -62,7 +62,7 @@ object TrailerPlayerLauncher {
         // Serve from cache if fresh
         sourceCache[videoId]?.let { cached ->
             if (!cached.isStale) {
-                Log.d(TAG, "Trailer source cache hit for $videoId")
+                Log.w(TAG, "Trailer source cache hit for $videoId")
                 return Result.success(cached.source)
             }
             sourceCache.remove(videoId)
@@ -108,24 +108,34 @@ object TrailerPlayerLauncher {
     private fun logResolved(resolver: String, source: PlayableSource) {
         when (source) {
             is PlayableSource.Muxed -> {
-                Log.d(
+                Log.w(
                     TAG,
-                    "Trailer resolved via $resolver: " +
-                        source.url.take(200)
+                    "Trailer resolved via $resolver: host=" +
+                        originHost(source.url) +
+                        " url=" +
+                        source.url.take(120)
                 )
             }
 
             is PlayableSource.Adaptive -> {
-                Log.d(
+                Log.w(
                     TAG,
-                    "Trailer resolved via $resolver: video=" +
-                        source.videoUrl.take(200) +
-                        " audio=" +
-                        source.audioUrl.take(200)
+                    "Trailer resolved via $resolver: videoHost=" +
+                        originHost(source.videoUrl) +
+                        " audioHost=" +
+                        originHost(source.audioUrl) +
+                        " video=" +
+                        source.videoUrl.take(120)
                 )
             }
         }
     }
+
+    /** Fire TV suppresses debug-level logs, so resolution traces are warnings. */
+    private fun originHost(url: String): String =
+        runCatching {
+            android.net.Uri.parse(url).host
+        }.getOrNull() ?: "?"
 
     suspend fun playTrailer(
         context: Context,
@@ -185,7 +195,7 @@ object TrailerPlayerLauncher {
                 )
             }
 
-        Log.d(
+        Log.w(
             TAG,
             "Launching PlayerActivity for trailer"
         )

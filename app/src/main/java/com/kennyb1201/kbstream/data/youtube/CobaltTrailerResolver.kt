@@ -97,7 +97,9 @@ object CobaltTrailerResolver {
                     // or 'redirect' (direct service URL). 'picker' / 'local-processing'
                     // / 'error' are not usable for direct playback.
                     if (url != null && (status == "tunnel" || status == "redirect")) {
-                        Log.d(TAG, "cobalt status=$status url=" + url.take(140))
+                        // W level: Fire TV suppresses debug-level logs, and this
+                        // line is the proof cobalt responded at all.
+                        Log.w(TAG, "cobalt status=$status url=" + url.take(140))
                         PlayableSource.Muxed(url)
                     } else {
                         Log.w(TAG, "cobalt status=$status without playable url")

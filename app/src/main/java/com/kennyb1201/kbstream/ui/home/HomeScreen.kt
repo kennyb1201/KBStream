@@ -241,6 +241,26 @@ private fun TopActionBar(
     }
 }
 
+/** Human-readable origin of a resolved trailer source (host only, no signed URL). */
+private fun heroSourceOrigin(source: PlayableSource): String =
+    when (source) {
+        is PlayableSource.Muxed ->
+            "muxed host=" +
+                (runCatching {
+                    android.net.Uri.parse(source.url).host
+                }.getOrNull() ?: "?")
+
+        is PlayableSource.Adaptive ->
+            "adaptive videoHost=" +
+                (runCatching {
+                    android.net.Uri.parse(source.videoUrl).host
+                }.getOrNull() ?: "?") +
+                " audioHost=" +
+                (runCatching {
+                    android.net.Uri.parse(source.audioUrl).host
+                }.getOrNull() ?: "?")
+    }
+
 @Composable
 private fun HeroInlineTrailerPlayer(
     source: PlayableSource,
@@ -250,6 +270,13 @@ private fun HeroInlineTrailerPlayer(
     val context = LocalContext.current
 
     val exoPlayer = remember(source) {
+        // Fire TV suppresses debug logs, so surface what the player actually
+        // receives -- this proves whether the source was cobalt or googlevideo.
+        Log.w(
+            "HOME_HERO",
+            "Hero player mounting with source: " + heroSourceOrigin(source)
+        )
+
         // YouTube's googlevideo streams throttle/kill full-range requests;
         // use the chunked data source so resolved trailers actually play.
         val mediaSourceFactory =
@@ -448,10 +475,19 @@ private fun HomeHero(
         resolvedTrailerSource = null
 
         if (trailerPlaying && !trailerKey.isNullOrBlank()) {
+            Log.w(
+                "HOME_HERO",
+                "Resolving hero trailer (trailerPlaying=$trailerPlaying key=$trailerKey)"
+            )
+
             TrailerPlayerLauncher
                 .resolvePlayableUrl(trailerKey)
                 .onSuccess { source ->
                     resolvedTrailerSource = source
+                    Log.w(
+                        "HOME_HERO",
+                        "Hero trailer resolved: " + heroSourceOrigin(source)
+                    )
                 }
                 .onFailure { error ->
                     Log.e(
@@ -460,6 +496,11 @@ private fun HomeHero(
                         error
                     )
                 }
+        } else {
+            Log.w(
+                "HOME_HERO",
+                "Hero trailer skipped (trailerPlaying=$trailerPlaying key=$trailerKey)"
+            )
         }
     }
 
