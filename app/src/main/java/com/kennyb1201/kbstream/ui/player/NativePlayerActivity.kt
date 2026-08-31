@@ -182,6 +182,7 @@ class NativePlayerActivity : ComponentActivity() {
     private var carryPositionMs = 0L
     private var playbackSpeed = 1f
     private var resizeModeIndex = 0
+    private var sessionSeq = 0
     private var subtitleOffsetMs = 0
     private var subtitleSize = 1
     private var subtitleBackground = 0
@@ -920,7 +921,11 @@ class NativePlayerActivity : ComponentActivity() {
         })
 
         mediaSession?.release()
-        mediaSession = MediaSession.Builder(this, player).build()
+        mediaSession = MediaSession.Builder(
+            this,
+            player,
+            "kbstream-player-" + System.currentTimeMillis() + "-" + (sessionSeq++)
+        ).build()
 
         // Start position polling
         startPositionPolling()
@@ -929,7 +934,6 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     private fun recreatePlayer() {
-        scope?.cancel()
         exoPlayer?.release()
         exoPlayer = null
         createPlayer()
@@ -1248,6 +1252,7 @@ class NativePlayerActivity : ComponentActivity() {
                 if (v == null) return
                 if (v is AspectRatioFrameLayout) {
                     v.resizeMode = mode
+                    v.requestLayout()
                 }
                 if (v is android.view.ViewGroup) {
                     for (i in 0 until v.childCount) applyToViewTree(v.getChildAt(i))
@@ -1255,8 +1260,8 @@ class NativePlayerActivity : ComponentActivity() {
             }
             applyToViewTree(playerView)
 
-            // 3) Try to invoke the private updateTextureViewSize() method
-            //    which actually applies the matrix transform to the TextureView
+            // 3) Invoke the private updateTextureViewSize() method which
+            //    actually applies the matrix transform to the TextureView
             try {
                 val m = playerView.javaClass.getDeclaredMethod("updateTextureViewSize")
                 m.isAccessible = true
@@ -1266,6 +1271,22 @@ class NativePlayerActivity : ComponentActivity() {
             // 4) Force relayout on everything
             playerView.requestLayout()
             playerView.invalidate()
+
+            // 5) Re-assert after the next layout pass, in case a pending
+            //    redraw/player transaction reset the transform.
+            handler.postDelayed(
+                {
+                    if (isDestroyed || isFinishing) return@postDelayed
+                    try {
+                        val m = playerView.javaClass.getDeclaredMethod("updateTextureViewSize")
+                        m.isAccessible = true
+                        m.invoke(playerView)
+                        playerView.requestLayout()
+                        playerView.invalidate()
+                    } catch (_: Exception) {}
+                },
+                120L
+            )
         } catch (_: Exception) {}
     }
 
