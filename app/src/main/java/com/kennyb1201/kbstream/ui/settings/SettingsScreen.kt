@@ -56,6 +56,8 @@ fun SettingsScreen(
     var autoSelectStream by remember { mutableStateOf(AppPreferences.getAutoSelectStream(context)) }
     var enableTunneling by remember { mutableStateOf(AppPreferences.getEnableTunneling(context)) }
     var enablePip by remember { mutableStateOf(AppPreferences.getEnablePip(context)) }
+    // Fire TV OS doesn't support PiP for third-party apps; hide the toggle there.
+    val isFireTv = android.os.Build.MANUFACTURER.equals("Amazon", ignoreCase = true)
     var decoderMode by remember { mutableIntStateOf(AppPreferences.getDecoderMode(context)) }
     var aspectRatio by remember { mutableIntStateOf(AppPreferences.getDefaultAspectRatio(context)) }
     var preferredAudioLang by remember { mutableStateOf(AppPreferences.getPreferredAudioLanguage(context)) }
@@ -236,44 +238,46 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        KBCard(
-            onClick = {
-                enablePip = !enablePip
-                AppPreferences.setEnablePip(context, enablePip)
-            },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(KBSurfaceRaised, RoundedCornerShape(8.dp))
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+        if (!isFireTv) {
+            KBCard(
+                onClick = {
+                    enablePip = !enablePip
+                    AppPreferences.setEnablePip(context, enablePip)
+                },
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(KBSurfaceRaised, RoundedCornerShape(8.dp))
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Picture-in-Picture",
+                            color = KBTextHi,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Text(
+                            text = "Auto-enter PiP when pressing Home",
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
                     Text(
-                        text = "Picture-in-Picture",
-                        color = KBTextHi,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Text(
-                        text = "Auto-enter PiP when pressing Home",
-                        color = KBTextLo,
-                        style = MaterialTheme.typography.labelSmall
+                        text = if (enablePip) "ON" else "OFF",
+                        color = if (enablePip) KBVoid else KBTextHi,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier
+                            .background(
+                                if (enablePip) KBAccent else KBSurface,
+                                RoundedCornerShape(6.dp)
+                            )
+                            .padding(horizontal = 14.dp, vertical = 8.dp)
                     )
                 }
-                Text(
-                    text = if (enablePip) "ON" else "OFF",
-                    color = if (enablePip) KBVoid else KBTextHi,
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier
-                        .background(
-                            if (enablePip) KBAccent else KBSurface,
-                            RoundedCornerShape(6.dp)
-                        )
-                        .padding(horizontal = 14.dp, vertical = 8.dp)
-                )
             }
         }
 

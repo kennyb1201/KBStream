@@ -1769,6 +1769,10 @@ class NativePlayerActivity : ComponentActivity() {
         // Back press) - on TVs that dumps the user to the launcher instead of the
         // previous app screen. Only enter PiP for a genuine user-leave (Home/recent).
         if (isFinishing || isDestroyed) return
+        // Fire TV OS does not display PiP windows for third-party apps, and
+        // attempting PiP during navigation is what dumps users to the launcher.
+        // Skip PiP entirely on Amazon devices.
+        if (android.os.Build.MANUFACTURER.equals("Amazon", ignoreCase = true)) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && AppPreferences.getEnablePip(this)) {
             try {
                 enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build())
