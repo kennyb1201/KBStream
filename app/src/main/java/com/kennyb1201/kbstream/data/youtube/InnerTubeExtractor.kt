@@ -3,16 +3,11 @@ package com.kennyb1201.kbstream.data.youtube
 import android.net.Uri
 import android.util.Log
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -585,34 +580,14 @@ object InnerTubeExtractor {
     private suspend fun resolveReachableUrl(url: String): String? {
         if (!url.contains("googlevideo.com")) return url
 
-        val uri = Uri.parse(url)
-        val mn = uri.getQueryParameter("mn") ?: return url
-        val servers = mn.split(",").map { it.trim() }.filter { it.isNotBlank() }
-        if (servers.size < 2) return url
-
-        val candidates = mutableListOf(url)
-        for (server in servers) {
-            val idx = servers.indexOf(server)
-            val host = uri.host ?: return url
-            val altHost = host
-                .replaceFirst(Regex("^rr\\d+---"), "rr${idx + 1}---")
-                .replaceFirst(Regex("sn-[a-z0-9]+-[a-z0-9]+"), server)
-            if (altHost == host) continue
-            candidates += url.replace(host, altHost)
-        }
-
-        val result = CompletableDeferred<String>()
-        val probeScope = CoroutineScope(Dispatchers.IO)
-        candidates.forEach { candidate ->
-            probeScope.launch {
-                if (isUrlReachable(candidate)) result.complete(candidate)
-            }
-        }
-        return try {
-            withTimeoutOrNull(2_000L) { result.await() }
-        } finally {
-            probeScope.cancel()
-        }
+        // YouTube signs every googlevideo stream URL (sig/n/lsig params) for a
+        // specific host. Rewriting the host to a different `mn` node — or even
+        // appending a query param like ratebypass — invalidates that signature
+        // and googlevideo replies 403 to every request. So probe the EXACT URL
+        // we intend to play, byte unchanged, and only use it if it serves bytes.
+        // If it 403s, return null so extractInternal falls back to HLS, then
+        // the progressive (muxed) stream.
+        return if (isUrlReachable(url)) url else null
     }
 
     private val probeClient by lazy {
@@ -626,12 +601,11 @@ object InnerTubeExtractor {
 
     private fun isUrlReachable(url: String): Boolean =
         runCatching {
-            // Probe with the same client UA + ratebypass the player uses.
-            val uri = Uri.parse(url).buildUpon()
-                .appendQueryParameter("ratebypass", "yes")
-                .build()
+            // Probe the exact URL unchanged (same client UA Is the player uses),
+            // requesting only the first byte via a Range header so the signature
+            // stays valid for the actual playback request.
             val request = Request.Builder()
-                .url(uri.toString())
+                .url(url)
                 .get()
                 .header("Range", "bytes=0-0")
                 .header("User-Agent", CLIENTS[0].userAgent)

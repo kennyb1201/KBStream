@@ -920,7 +920,13 @@ class NativePlayerActivity : ComponentActivity() {
         })
 
         mediaSession?.release()
-        mediaSession = MediaSession.Builder(this, player).build()
+        // media3 keys sessions by their session ID in a process-wide static map and
+        // defaults to an EMPTY string. Building a second session (e.g. tapping "next
+        // episode" reuses the empty id and throws "Session ID must be unique". Give
+        // every session a unique non-empty id so player-to-player handoffs never collide.
+        mediaSession = MediaSession.Builder(this, player)
+            .setSessionId("kbstream-session-" + System.nanoTime())
+            .build()
 
         // Start position polling
         startPositionPolling()
