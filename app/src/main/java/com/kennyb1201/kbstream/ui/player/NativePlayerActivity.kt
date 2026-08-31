@@ -1019,9 +1019,15 @@ class NativePlayerActivity : ComponentActivity() {
     private fun showSplash() {
         splashContainer.visibility = View.VISIBLE
         bufferingSpinner.visibility = View.GONE
+        // Pulse animation on the clear logo
+        if (splashClearLogo.drawable != null && splashClearLogo.animation == null) {
+            val pulse = android.view.animation.AnimationUtils.loadAnimation(this, R.anim.clearlogo_pulse)
+            splashClearLogo.startAnimation(pulse)
+        }
     }
 
     private fun hideSplash() {
+        splashClearLogo.clearAnimation()
         splashContainer.visibility = View.GONE
     }
 
