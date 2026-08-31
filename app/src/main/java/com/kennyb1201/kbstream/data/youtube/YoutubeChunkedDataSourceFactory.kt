@@ -10,10 +10,15 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.TransferListener
 
 /**
- * DataSource.Factory that wraps DefaultHttpDataSource and appends YouTube's
- * `&range=start-end` query parameter on each request. YouTube throttles (and
- * kills) connections that try to download full adaptive streams in one shot,
- * but honours chunked range-param requests at full speed.
+ * DataSource.Factory that wraps DefaultHttpDataSource and downloads YouTube
+ * googlevideo streams in ~10 MB chunks, reopening a fresh connection per
+ * chunk. YouTube throttles (and kills) connections that try to download a
+ * whole adaptive stream in one shot, but honours bounded range requests.
+ *
+ * The signed googlevideo URL is left byte-for-byte untouched — appending any
+ * query parameter (e.g. `&range=...`) invalidates the URL signature and gets
+ * a 403. Instead each chunk is requested via the HTTP `Range` header, which
+ * DefaultHttpDataSource derives from DataSpec.position/length.
  *
  * Only activates for googlevideo.com URLs; all other URLs pass through
  * untouched.
@@ -44,7 +49,6 @@ class YoutubeChunkedDataSourceFactory(
         private val chunkSize: Long
     ) : DataSource {
 
-        private var currentUri: Uri? = null
         private var isYouTubeStream = false
         private var totalContentLength = C.LENGTH_UNSET.toLong()
         private var currentChunkStart = 0L
@@ -57,8 +61,7 @@ class YoutubeChunkedDataSourceFactory(
         }
 
         override fun open(dataSpec: DataSpec): Long {
-            val uri = dataSpec.uri
-            val host = uri.host.orEmpty()
+            val host = dataSpec.uri.host.orEmpty()
             isYouTubeStream = host.contains("googlevideo.com")
             if (!isYouTubeStream) {
                 return upstream.open(dataSpec)
@@ -78,21 +81,27 @@ class YoutubeChunkedDataSourceFactory(
             }
             currentChunkEnd = end
 
-            // Append &range=start-end to the URL (YouTube's own range param,
-            // not the HTTP Range header).
-            val rangedUri = spec.uri.buildUpon()
-                .appendQueryParameter("range", "$currentChunkStart-$currentChunkEnd")
-                .build()
-
+            // URL stays untouched (signature). The Range header comes from
+            // position/length: bounded to the chunk when the total is known,
+            // otherwise open-ended.
             val chunkedSpec = spec.buildUpon()
-                .setUri(rangedUri)
-                .setPosition(0) // position within this chunk's response
-                .setLength(C.LENGTH_UNSET.toLong()) // let the server decide
+                .setPosition(currentChunkStart)
+                .setLength(
+                    if (totalContentLength != C.LENGTH_UNSET.toLong()) {
+                        currentChunkEnd - currentChunkStart + 1
+                    } else {
+                        C.LENGTH_UNSET.toLong()
+                    }
+                )
                 .build()
 
             bytesReadInChunk = 0
             upstream.open(chunkedSpec)
-            return if (totalContentLength != C.LENGTH_UNSET.toLong()) totalContentLength else C.LENGTH_UNSET.toLong()
+            return if (totalContentLength != C.LENGTH_UNSET.toLong()) {
+                totalContentLength
+            } else {
+                C.LENGTH_UNSET.toLong()
+            }
         }
 
         override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
@@ -132,11 +141,10 @@ class YoutubeChunkedDataSourceFactory(
             return bytesRead
         }
 
-        override fun getUri(): Uri? = upstream.uri ?: currentUri
+        override fun getUri(): Uri? = upstream.uri
 
         override fun close() {
             upstream.close()
-            currentUri = null
             originalDataSpec = null
         }
     }
