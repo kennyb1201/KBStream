@@ -6,9 +6,9 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import android.content.Context
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
-import coil3.request.crossfade
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import com.kennyb1201.kbstream.work.SimklSyncWorker
 import java.util.concurrent.TimeUnit
@@ -20,8 +20,8 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
         scheduleSimklPeriodicSync()
     }
 
-    override fun newImageLoader(context: coil3.PlatformContext): ImageLoader {
-        return ImageLoader.Builder(this)
+    override fun newImageLoader(context: Context): ImageLoader {
+        return ImageLoader.Builder(context)
             .crossfade(true)
             .components {
                 add(OkHttpNetworkFetcherFactory())

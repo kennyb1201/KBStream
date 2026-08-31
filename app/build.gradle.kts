@@ -126,6 +126,7 @@ implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.26.4")
     implementation("androidx.work:work-runtime-ktx:2.10.1")
 
     implementation("io.coil-kt.coil3:coil-compose:3.0.0")
+    implementation("io.coil-kt.coil3:coil:3.0.0")
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.0.0")
 
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.4")
