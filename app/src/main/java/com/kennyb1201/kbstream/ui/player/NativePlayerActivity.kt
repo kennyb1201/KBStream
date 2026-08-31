@@ -1293,7 +1293,8 @@ class NativePlayerActivity : ComponentActivity() {
 
         controlsVisible = false
         controlsOverlay.visibility = View.GONE
-        seekbarRow.visibility = View.GONE        dismissAllPanels()
+        seekbarRow.visibility = View.GONE
+        dismissAllPanels()
         bufferingSpinner.visibility = View.GONE
         if (exoPlayer?.isPlaying == true) {
             hideSplash()
