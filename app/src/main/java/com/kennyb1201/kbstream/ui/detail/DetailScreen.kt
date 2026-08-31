@@ -105,6 +105,7 @@ import java.text.NumberFormat
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import androidx.compose.material3.CircularProgressIndicator
 
 data class StreamsTarget(
     val contentType: String,
@@ -497,7 +498,15 @@ fun DetailScreen(
                     .fillMaxSize()
                     .padding(24.dp)
             ) {
-                Text("Loading...")
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(
+                        color = KBAccent,
+                        strokeWidth = 3.dp
+                    )
+                }
             }
         }
 
@@ -2491,28 +2500,6 @@ private fun EpisodeCard(
                 verticalArrangement =
                     Arrangement.SpaceBetween
             ) {
-                if (progressFraction > 0f) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(4.dp)
-                            .background(
-                                KBTextLo.copy(alpha = 0.45f),
-                                RoundedCornerShape(2.dp)
-                            )
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth(progressFraction.coerceIn(0f, 1f))
-                                .fillMaxHeight()
-                                .background(
-                                    KBAccent,
-                                    RoundedCornerShape(2.dp)
-                                )
-                        )
-                    }
-                }
-
                 Column {
                     Row(
                         verticalAlignment =
@@ -2672,6 +2659,28 @@ private fun EpisodeCard(
                                 )
                             )
                         }
+                if (progressFraction > 0f) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .background(
+                                KBTextLo.copy(alpha = 0.45f),
+                                RoundedCornerShape(2.dp)
+                            )
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(progressFraction.coerceIn(0f, 1f))
+                                .fillMaxHeight()
+                                .background(
+                                    KBAccent,
+                                    RoundedCornerShape(2.dp)
+                                )
+                        )
+                    }
+                }
+
                 }
             }
         }
@@ -2820,11 +2829,19 @@ private fun EpisodesStatusMessage(
                 vertical = 10.dp
             )
     ) {
-        Text(
-            icon,
-            style =
-                MaterialTheme.typography.bodyMedium
-        )
+        if (icon == "⏳") {
+            CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                color = KBAccent,
+                strokeWidth = 2.dp
+            )
+        } else {
+            Text(
+                icon,
+                style =
+                    MaterialTheme.typography.bodyMedium
+            )
+        }
 
         Text(
             message,

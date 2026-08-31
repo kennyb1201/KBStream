@@ -84,7 +84,8 @@ fun CollectionScreen(
                     item(key = "loading") {
                         CollectionMessagePanel(
                             title = "Loading collection...",
-                            body = "Fetching movies in this collection."
+                            body = "Fetching movies in this collection.",
+                            showSpinner = true
                         )
                     }
                 }
@@ -259,7 +260,8 @@ private fun CollectionMovieRow(
 @Composable
 private fun CollectionMessagePanel(
     title: String,
-    body: String
+    body: String,
+    showSpinner: Boolean = false
 ) {
     Column(
         modifier = Modifier
@@ -268,11 +270,21 @@ private fun CollectionMessagePanel(
             .border(1.dp, KBTextLo.copy(alpha = 0.25f), RoundedCornerShape(16.dp))
             .padding(18.dp)
     ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleMedium,
-            color = KBTextHi
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (showSpinner) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    color = KBAccent,
+                    strokeWidth = 2.dp
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                color = KBTextHi
+            )
+        }
         Text(
             text = body,
             color = KBTextLo,

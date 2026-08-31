@@ -53,6 +53,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import kotlinx.coroutines.launch
+import androidx.compose.material3.CircularProgressIndicator
 
 @OptIn(ExperimentalFoundationApi::class)
 private class ActorBringIntoViewSpec(
@@ -317,7 +318,15 @@ private fun ActorStatusMessage(icon: String, message: String) {
                 .background(KBSurface, RoundedCornerShape(12.dp))
                 .padding(horizontal = 20.dp, vertical = 16.dp)
         ) {
-            Text(icon, style = MaterialTheme.typography.bodyLarge)
+            if (icon == "⏳") {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    color = KBAccent,
+                    strokeWidth = 2.dp
+                )
+            } else {
+                Text(icon, style = MaterialTheme.typography.bodyLarge)
+            }
             Text(
                 message,
                 color = KBTextLo,

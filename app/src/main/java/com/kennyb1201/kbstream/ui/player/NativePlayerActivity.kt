@@ -1029,18 +1029,10 @@ class NativePlayerActivity : ComponentActivity() {
     private fun hideSplash() {
         splashClearLogo.clearAnimation()
         splashContainer.visibility = View.GONE
+    }    private fun updateUIBuffering() {
+        // Use the splash overlay (backdrop + pulsing clearlogo) as the loading indicator
+        showSplash()
     }
-
-    private fun updateUIBuffering() {
-        if (!controlsVisible) {
-            bufferingSpinner.visibility = View.VISIBLE
-        }
-        // Show splash overlay during buffering if backdrop is available
-        if (splashBackdrop.drawable != null || splashClearLogo.drawable != null) {
-            showSplash()
-    }
-
-}
 
     private fun updateUIReady() {
         bufferingSpinner.visibility = View.GONE
@@ -1301,14 +1293,11 @@ class NativePlayerActivity : ComponentActivity() {
 
         controlsVisible = false
         controlsOverlay.visibility = View.GONE
-        seekbarRow.visibility = View.GONE
-        dismissAllPanels()
+        seekbarRow.visibility = View.GONE        dismissAllPanels()
+        bufferingSpinner.visibility = View.GONE
         if (exoPlayer?.isPlaying == true) {
-            bufferingSpinner.visibility = View.GONE
             hideSplash()
-        } else {
-            bufferingSpinner.visibility = View.VISIBLE
-    }
+        }
 
 }
 

@@ -358,7 +358,8 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                 CenterMessage(
                     title = "Loading guide",
                     message = "Fetching playlist and program data...",
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
+                    showSpinner = true
                 )
             }
 
@@ -1352,7 +1353,8 @@ private fun ProgramCard(
 private fun CenterMessage(
     title: String,
     message: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showSpinner: Boolean = false
 ) {
     Box(
         modifier = modifier,
@@ -1364,6 +1366,14 @@ private fun CenterMessage(
                 .background(KBSurface, RoundedCornerShape(16.dp))
                 .padding(horizontal = 22.dp, vertical = 18.dp)
         ) {
+            if (showSpinner) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(24.dp),
+                    color = KBAccent,
+                    strokeWidth = 2.dp
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+            }
             Text(
                 text = title,
                 color = KBTextHi,

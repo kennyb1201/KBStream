@@ -29,6 +29,7 @@ import com.kennyb1201.kbstream.data.tmdb.StudioItem
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.components.PosterCard
+import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -75,7 +76,7 @@ fun TagScreen(
 
             when {
                 isLoading -> {
-                    Text("Loading...")
+                    CircularProgressIndicator(color = KBAccent, strokeWidth = 3.dp)
                 }
 
                 sections.isEmpty() -> {

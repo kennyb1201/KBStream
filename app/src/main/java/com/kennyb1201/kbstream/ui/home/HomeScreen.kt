@@ -1620,14 +1620,17 @@ fun HomeScreen(
                 when {
                     isLoading -> {
                         item(key = "loading") {
-                            Text(
-                                text =
-                                    "Loading catalogs...",
-                                modifier =
-                                    Modifier.padding(
-                                        24.dp
-                                    )
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(24.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    color = KBAccent,
+                                    strokeWidth = 3.dp
+                                )
+                            }
                         }
                     }
 
