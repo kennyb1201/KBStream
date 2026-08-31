@@ -1738,6 +1738,10 @@ class NativePlayerActivity : ComponentActivity() {
 
     // --- PiP ---
     private fun enterPipIfEnabled() {
+        // Never enter PiP while the activity is finishing/destroyed (e.g. during a
+        // Back press) - on TVs that dumps the user to the launcher instead of the
+        // previous app screen. Only enter PiP for a genuine user-leave (Home/recent).
+        if (isFinishing || isDestroyed) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && AppPreferences.getEnablePip(this)) {
             try {
                 enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build())
