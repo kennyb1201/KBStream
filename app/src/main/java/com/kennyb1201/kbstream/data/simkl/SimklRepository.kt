@@ -80,18 +80,11 @@ class SimklRepository(
     }
 
     fun hasToken(): Boolean {
-        val token =
-            getSavedAccessToken()
-
-        Log.e(
-            "SIMKL_REPO",
-            "hasToken check: " +
-                "prefsIsNull=${prefs == null}, " +
-                "tokenIsNullOrBlank=${token.isNullOrBlank()}, " +
-                "instance=${System.identityHashCode(this)}"
-        )
-
-        return !token.isNullOrBlank()
+        // NOTE: deliberately no logging here - this getter is polled on the
+        // UI/main thread several times a second, and logging on every call
+        // flooded logcat so heavily it crashed logd and drowned out real
+        // diagnostics (just like the trailer-cobalt lines here).
+        return !getSavedAccessToken().isNullOrBlank()
     }
 
     fun getSavedAccessToken(): String? {
