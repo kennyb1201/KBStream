@@ -191,7 +191,7 @@
         android:background="@drawable/overlay_gradient_bg"
         android:orientation="vertical"
         android:paddingHorizontal="48dp"
-        android:paddingVertical="32dp"
+        android:paddingVertical="16dp"
         android:visibility="gone"
         android:focusable="true"
         android:focusableInTouchMode="true">
@@ -275,11 +275,11 @@
                 android:id="@+id/overview_text"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
+                android:layout_marginTop="6dp"
                 android:fontFamily="@font/oswald_medium"
                 android:textColor="@color/kb_text_hi"
-                android:textSize="14sp"
-                android:maxLines="3"
+                android:textSize="13sp"
+                android:maxLines="2"
                 android:visibility="gone" />
 
             <!-- Cast section -->
@@ -287,7 +287,7 @@
                 android:id="@+id/cast_section"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
+                android:layout_marginTop="8dp"
                 android:orientation="vertical"
                 android:visibility="gone">
 
@@ -297,8 +297,8 @@
                     android:fontFamily="@font/oswald_medium"
                     android:text="CAST"
                     android:textColor="@color/kb_accent"
-                    android:textSize="11sp"
-                    android:layout_marginBottom="6dp" />
+                    android:textSize="10sp"
+                    android:layout_marginBottom="4dp" />
 
                 <HorizontalScrollView
                     android:layout_width="match_parent"
@@ -335,7 +335,6 @@
                     android:layout_height="48dp"
                     android:layout_marginTop="6dp"
                     android:paddingHorizontal="10dp"
-                    android:background="@drawable/seekbar_focus_bg"
                     android:max="10000"
                     android:progressTint="@color/kb_accent"
                     android:thumbTint="@color/kb_accent"
