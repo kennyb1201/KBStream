@@ -1523,7 +1523,7 @@ fun DetailScreen(
                                 val castItems =
                                     tmdbCast
                                         .distinctBy { it.id }
-                                        .take(15)
+                                        .take(25)
                                         .map {
                                             PeopleRowItem.Person(it)
                                         }

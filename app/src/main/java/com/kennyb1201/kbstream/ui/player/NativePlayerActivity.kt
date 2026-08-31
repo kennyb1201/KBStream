@@ -557,6 +557,9 @@ class NativePlayerActivity : ComponentActivity() {
         btnPlayPause.setOnClickListener { togglePlayPause() }
 
         // Skip intro
+        btnSkipIntro.setOnFocusChangeListener { _, focused ->
+            if (focused) removeAutoHide() else scheduleAutoHide()
+        }
         btnSkipIntro.setOnClickListener {
             val stamp = activeIntroStamp ?: return@setOnClickListener
             val durationMs = exoPlayer?.duration ?: 0L
@@ -1763,6 +1766,15 @@ class NativePlayerActivity : ComponentActivity() {
             else -> error.message?.takeIf { it.isNotBlank() } ?: error.errorCodeName
         }
     }
+
+    private fun isDescendantOf(view: android.view.View, parent: android.view.View): Boolean {
+        var current: android.view.View? = view
+        while (current != null) {
+            if (current === parent) return true
+            current = current.parent as? android.view.View
+        }
+        return false
+    }
 }
 
 // --- Utility Functions (shared with Compose path) ---
@@ -1787,12 +1799,6 @@ private fun resolveMimeType(url: String): String? {
         else -> null
     }
 
-    private fun isDescendantOf(view: android.view.View, parent: android.view.View): Boolean {
-        var current: android.view.View? = view
-        while (current != null) {
-            if (current === parent) return true
-            current = current.parent as? android.view.View
-        }
         return false
     }
 }
