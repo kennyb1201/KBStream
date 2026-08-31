@@ -151,9 +151,7 @@ class MainActivity : ComponentActivity() {
                         AppRoot()
                     }
                 }
-            }
-        }
-    }
+            }            }
     }
 }
 
@@ -800,5 +798,6 @@ fun AppRoot() {
                 playerResultLauncher.launch(intent)
             }
         }
+    }
     }
 }
