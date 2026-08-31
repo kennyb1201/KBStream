@@ -938,12 +938,14 @@ class NativePlayerActivity : ComponentActivity() {
         })
 
         mediaSession?.release()
-        // media3 keys sessions by their session ID in a process-wide static map, and this
-        // media3 version exposes no public setter (sessions always use the empty default id).
-        // To avoid "Session ID must be unique" when one player finishes and the next starts,
-        // the next-episode paths release this session synchronously BEFORE finishing, so it
-        // is removed from that map before the next player builds its own.
-        mediaSession = MediaSession.Builder(this, player).build()
+        // media3 keys sessions by their session ID in a process-wide static map. The real fix
+        // for "Session ID must be unique" is giving every session a unique id, so a freshly
+        // launched player can coexist with a previous one whose session hasn't been released
+        // yet (the old synchronous-release approach was racy and still crashed on this path).
+        mediaSession =
+            MediaSession.Builder(this, player)
+                .setId("kbstream-" + System.nanoTime() + "-" + sessionSequence++)
+                .build()
 
         // Start position polling
         startPositionPolling()
@@ -1886,6 +1888,8 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     companion object {
+
+        private var sessionSequence = 0
 
         private fun isLikelyRetryable(error: PlaybackException): Boolean = when (error.errorCode) {
             PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
