@@ -112,6 +112,11 @@ private data class ResolvedHomeSeriesTarget(
     val episodeRating: Double? = null,
 )
 
+private data class ShowEpisodeTotals(
+    val watched: Int,
+    val total: Int
+)
+
 private sealed interface SimklUpNextResult {
 
     data class Success(
@@ -766,7 +771,80 @@ Log.d(
         .toInt()
         .coerceAtLeast(1)
     }
-    
+
+    /**
+     * Compute the whole-show watched/total episode counts for a local
+     * continue-watching item by counting aired episodes from TMDB season
+     * by season (starting at season 1), mirroring the SIMKL path that
+     * drives the hero's "X of Y episodes watched" display.
+     *
+     * This replaces the prior per-season heuristic that depended on
+     * WatchHistoryEntity.totalEpisodesInSeason, which is null for many
+     * shows and caused the "22 of 32" count to silently disappear.
+     */
+    private suspend fun computeShowEpisodeTotals(
+        tmdbId: Int,
+        parentId: String,
+        localCompletedForParent: Set<Pair<Int, Int>>
+    ): ShowEpisodeTotals? {
+        if (tmdbId <= 0 || localCompletedForParent.isEmpty()) {
+            return null
+        }
+
+        val watchedBySeason =
+            localCompletedForParent.groupBy(
+                { (season, _) -> season },
+                { (_, episode) -> episode }
+            )
+
+        var totalAired = 0
+        var watchedAired = 0
+        var season = 1
+
+        while (season <= MAX_FORWARD_SEASON_LOOKAHEAD) {
+            val seasonEpisodes =
+                try {
+                    tmdbLookupSemaphore.withPermit {
+                        tmdbRepository.getSeasonEpisodes(
+                            tvId = tmdbId,
+                            season = season,
+                            imdbId = parentId
+                        )
+                    }
+                } catch (_: Exception) {
+                    emptyList()
+                }
+
+            if (seasonEpisodes.isEmpty()) {
+                break
+            }
+
+            val watchedThisSeason =
+                watchedBySeason[season].orEmpty()
+
+            for (episode in seasonEpisodes) {
+                if (!isAiredOrUnknown(episode.airDate)) {
+                    continue
+                }
+                totalAired++
+                if (episode.episodeNumber in watchedThisSeason) {
+                    watchedAired++
+                }
+            }
+
+            season++
+        }
+
+        if (totalAired <= 0) {
+            return null
+        }
+
+        return ShowEpisodeTotals(
+            watched = watchedAired.coerceAtMost(totalAired),
+            total = totalAired
+        )
+    }
+
     private suspend fun clearWatchedStateCaches() {
 
         watchedStateMutex.withLock {
@@ -822,6 +900,11 @@ Log.d(
                 emptySet()
             }
 
+        // Whole-show watched/total computed from TMDB aired episodes. Stay
+        // null when we can't resolve TMDB so we fall back to the stored
+        // per-season total below.
+        var tmdbEpisodeTotals: ShowEpisodeTotals? = null
+
         if (
             isEpisodePlayback &&
             entry.season != null && entry.episode != null
@@ -867,6 +950,17 @@ Log.d(
 
                 val tmdbId = tmdbDetail?.id
 
+                tmdbEpisodeTotals =
+                    if (tmdbId != null && tmdbId > 0) {
+                        computeShowEpisodeTotals(
+                            tmdbId = tmdbId,
+                            parentId = parentId,
+                            localCompletedForParent = localCompletedForParent
+                        )
+                    } else {
+                        null
+                    }
+
                 if (tmdbId != null && tmdbId > 0) {
                     // Single season lookup gives us both the episode's
                     // rating and its still image, instead of firing a
@@ -908,19 +1002,16 @@ Log.d(
             }
         }
 
-        val localWatchedCount = localCompletedForParent.size
-        val localEpisodesTotal: Int? = run {
-            val maxSeason = localCompletedForParent.maxOfOrNull { (s, _) -> s }
-                ?: entry.season
-            if (maxSeason != null && maxSeason > 1) {
-                val currentSeasonWatched = localCompletedForParent.count { (s, _) -> s == entry.season }
-                val currentSeasonRemaining = (entry.totalEpisodesInSeason ?: 0) - currentSeasonWatched
-                localWatchedCount + currentSeasonRemaining.coerceAtLeast(0)
-            } else {
-                entry.totalEpisodesInSeason
-            }
-        }
-        val localEpisodesRemaining: Int? = localEpisodesTotal?.let { (it - localWatchedCount).coerceAtLeast(0) }
+        val localWatchedCount =
+            tmdbEpisodeTotals?.watched
+                ?: localCompletedForParent.size
+
+        val localEpisodesTotal: Int? =
+            tmdbEpisodeTotals?.total
+                ?: entry.totalEpisodesInSeason
+
+        val localEpisodesRemaining: Int? =
+            localEpisodesTotal?.let { (it - localWatchedCount).coerceAtLeast(0) }
 
         UpNextItem(
             id = buildString {
