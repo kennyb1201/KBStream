@@ -741,6 +741,8 @@ fun AppRoot() {
                 }
             }
 
+            }
+
             LaunchedEffect(current.url) {
                 val intent = Intent(context, NativePlayerActivity::class.java).apply {
                     putExtra("stream_url", current.url)
@@ -799,7 +801,6 @@ fun AppRoot() {
                 playerResultLauncher.launch(intent)
             }
         }
-    }
     }
     }
 }
