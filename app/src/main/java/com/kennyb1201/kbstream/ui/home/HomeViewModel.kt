@@ -908,6 +908,20 @@ Log.d(
             }
         }
 
+        val localWatchedCount = localCompletedForParent.size
+        val localEpisodesTotal: Int? = run {
+            val maxSeason = localCompletedForParent.maxOfOrNull { (s, _) -> s }
+                ?: entry.season
+            if (maxSeason != null && maxSeason > 1) {
+                val currentSeasonWatched = localCompletedForParent.count { (s, _) -> s == entry.season }
+                val currentSeasonRemaining = (entry.totalEpisodesInSeason ?: 0) - currentSeasonWatched
+                localWatchedCount + currentSeasonRemaining.coerceAtLeast(0)
+            } else {
+                entry.totalEpisodesInSeason
+            }
+        }
+        val localEpisodesRemaining: Int? = localEpisodesTotal?.let { (it - localWatchedCount).coerceAtLeast(0) }
+
         UpNextItem(
             id = buildString {
                 append("history:")
@@ -925,28 +939,9 @@ Log.d(
 
             episodeTitle = entry.episodeTitle?.takeIf { it.isNotBlank() },
             episodeDescription = entry.overview?.takeIf { it.isNotBlank() },
-            episodesWatched = localCompletedForParent.size.takeIf { it > 0 },
-            episodesTotal = run {
-                // Try to figure out the total episode count across all seasons
-                // by looking at the highest season number from completed episodes
-                // plus the current season's total.
-                val maxSeason = localCompletedForParent.maxOfOrNull { (s, _) -> s }
-                    ?: entry.season
-                if (maxSeason != null && maxSeason > 1) {
-                    // We have multi-season data — estimate total as
-                    // (completed across all seasons) + remaining in current season
-                    val currentSeasonWatched = localCompletedForParent.count { (s, _) -> s == entry.season }
-                    val currentSeasonRemaining = (entry.totalEpisodesInSeason ?: 0) - currentSeasonWatched
-                    localCompletedForParent.size + currentSeasonRemaining.coerceAtLeast(0)
-                } else {
-                    entry.totalEpisodesInSeason
-                }
-            },
-            episodesRemaining = run {
-                val total = episodesTotal ?: return@run null
-                val watched = localCompletedForParent.size
-                (total - watched).coerceAtLeast(0)
-            },
+            episodesWatched = localWatchedCount.takeIf { it > 0 },
+            episodesTotal = localEpisodesTotal,
+            episodesRemaining = localEpisodesRemaining,
 
             // Episode-specific TMDB rating.
             // Your UI currently calls this field imdbRating.
