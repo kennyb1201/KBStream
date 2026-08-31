@@ -60,7 +60,7 @@ object CobaltTrailerResolver {
         if (base.isBlank()) return null
 
         return withContext(Dispatchers.IO) {
-            runCatching {
+            try {
                 val payload = JSONObject().apply {
                     put("url", "https://www.youtube.com/watch?v=$videoId")
                     put("downloadMode", "auto")
@@ -104,7 +104,18 @@ object CobaltTrailerResolver {
                         null
                     }
                 }
-            }.getOrNull()
+            } catch (t: Throwable) {
+                // Surface the real failure (connection refused, timeout, cleartext
+                // block, etc.) instead of swallowing it -- it's exactly the log line
+                // needed to tell whether the TV can actually reach the proxy.
+                Log.w(
+                    TAG,
+                    "cobalt request failed at $base: " +
+                        "${t.javaClass.simpleName}: ${t.message}",
+                    t
+                )
+                null
+            }
         }
     }
 }
