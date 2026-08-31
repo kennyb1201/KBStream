@@ -342,7 +342,8 @@
                     android:splitTrack="false"
                     android:progressBackgroundTint="@color/kb_surface_raised"
                     android:focusable="true"
-                    android:focusableInTouchMode="true" />
+                    android:focusableInTouchMode="true"
+                    android:nextFocusDown="@id/btn_play_pause" />
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -386,6 +387,7 @@
                     android:background="@drawable/control_button_bg"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/seekbar"
                     android:padding="8dp"
                     android:scaleType="fitCenter"
                     android:src="@drawable/ic_player_play"
@@ -400,6 +402,7 @@
                     android:background="@drawable/control_button_bg"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/seekbar"
                     android:gravity="center"
                     android:text="⏭"
                     android:textColor="@color/kb_text_hi"

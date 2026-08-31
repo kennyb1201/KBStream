@@ -169,6 +169,14 @@ class NativePlayerActivity : ComponentActivity() {
         }
     }
 
+    // Fires once a D-pad key has been held past the quick-press window, switching
+    // from a fixed 10s jump into continuous accelerated scrubbing.
+    private val scrubHoldStarter = Runnable {
+        if (scrubDirection == 0) return@Runnable
+        scrubStepMs = 1_000L  // Start accelerating from 1s
+        scrubHandler.post(scrubRunnable)
+    }
+
     private var isInPiPMode = false
     private var showSettingsPanel = false
     private var isPickerShowing = false
@@ -661,30 +669,33 @@ class NativePlayerActivity : ComponentActivity() {
             }
         })
 
-        // Hold-to-scrub: DPAD_LEFT/RIGHT on seekbar with acceleration
+        // Quick-press = 10s jump; holding (past 400ms) = accelerated scrubbing.
         seekbar.setOnKeyListener { _, keyCode, event ->
             when (keyCode) {
                 KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                    if (event.action == KeyEvent.ACTION_DOWN) {
-                        if (scrubDirection == 0) {
-                            // Start scrubbing
-                            scrubDirection = if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1
-                            scrubStepMs = 1_000L  // Start at 1 second
-                            scrubHandler.post(scrubRunnable)
-                            removeAutoHide()
+                    when (event.action) {
+                        KeyEvent.ACTION_DOWN -> {
+                            if (event.repeatCount == 0 && scrubDirection == 0) {
+                                scrubDirection = if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1
+                                removeAutoHide()
+                                // Immediate step for a quick press/release
+                                stepSeekBy(10_000L * scrubDirection)
+                                // If still held past the threshold, switch to fast scrubbing
+                                scrubHandler.removeCallbacks(scrubHoldStarter)
+                                scrubHandler.postDelayed(scrubHoldStarter, 400L)
+                            }
+                            true
                         }
-                        true
-                    } else if (event.action == KeyEvent.ACTION_UP) {
-                        // Stop scrubbing
-                        scrubDirection = 0
-                        scrubHandler.removeCallbacks(scrubRunnable)
-                        // Commit final position
-                        val durationMs = exoPlayer?.duration ?: 0L
-                        val posMs = (seekbar.progress.toLong() * durationMs) / 10_000L
-                        exoPlayer?.seekTo(posMs)
-                        scheduleAutoHide()
-                        true
-                    } else false
+                        KeyEvent.ACTION_UP -> {
+                            scrubDirection = 0
+                            scrubHandler.removeCallbacks(scrubHoldStarter)
+                            scrubHandler.removeCallbacks(scrubRunnable)
+                            commitSeekFromBar()
+                            scheduleAutoHide()
+                            true
+                        }
+                        else -> false
+                    }
                 }
                 else -> false
             }
@@ -1229,6 +1240,22 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
 }
+
+    private fun stepSeekBy(deltaMs: Long) {
+        val player = exoPlayer ?: return
+        val duration = player.duration.takeIf { it > 0 } ?: return
+        val newPos = (player.currentPosition + deltaMs).coerceIn(0L, duration)
+        player.seekTo(newPos)
+        updateSeekBarPosition(newPos, duration)
+    }
+
+    private fun commitSeekFromBar() {
+        val durationMs = exoPlayer?.duration ?: 0L
+        if (durationMs > 0) {
+            val posMs = (seekbar.progress.toLong() * durationMs) / 10_000L
+            exoPlayer?.seekTo(posMs)
+        }
+    }
 
     private fun updateControlsInfo() {
         sourceLabel.text = "Source: $currentSourceLabel"
