@@ -22,6 +22,7 @@ object AppPreferences {
     private const val KEY_DEFAULT_SUBTITLE_SIZE = "default_subtitle_size"   // 0=small, 1=normal, 2=large
     private const val KEY_DEFAULT_SUBTITLE_BG = "default_subtitle_bg"       // 0=none, 1=semi, 2=solid
     private const val KEY_AUTO_PLAY_NEXT = "auto_play_next"
+    private const val KEY_AUTO_SELECT_STREAM = "auto_select_stream"
     private const val KEY_FORCE_SOFTWARE_DECODER = "force_software_decoder"
     private const val KEY_ENABLE_TUNNELING = "enable_tunneling"
     private const val KEY_ENABLE_PIP = "enable_pip"
@@ -63,6 +64,14 @@ object AppPreferences {
 
     fun setAutoPlayNext(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_AUTO_PLAY_NEXT, enabled).apply()
+    }
+
+    // ── Auto-select top stream on streams screen
+    fun getAutoSelectStream(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_AUTO_SELECT_STREAM, true)
+
+    fun setAutoSelectStream(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_AUTO_SELECT_STREAM, enabled).apply()
     }
 
     // ── Tunneled playback ────────────────────────────────────────────

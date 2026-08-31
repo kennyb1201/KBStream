@@ -53,6 +53,7 @@ fun SettingsScreen(
     var subtitleSize by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleSize(context)) }
     var subtitleBg by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleBackground(context)) }
     var autoPlayNext by remember { mutableStateOf(AppPreferences.getAutoPlayNext(context)) }
+    var autoSelectStream by remember { mutableStateOf(AppPreferences.getAutoSelectStream(context)) }
     var enableTunneling by remember { mutableStateOf(AppPreferences.getEnableTunneling(context)) }
     var enablePip by remember { mutableStateOf(AppPreferences.getEnablePip(context)) }
     var decoderMode by remember { mutableIntStateOf(AppPreferences.getDecoderMode(context)) }
@@ -139,6 +140,18 @@ fun SettingsScreen(
             onToggle = {
                 autoPlayNext = it
                 AppPreferences.setAutoPlayNext(context, it)
+            }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        ToggleRow(
+            label = "Auto-select Stream",
+            description = "Automatically play the top source when streams load",
+            checked = autoSelectStream,
+            onToggle = {
+                autoSelectStream = it
+                AppPreferences.setAutoSelectStream(context, it)
             }
         )
 

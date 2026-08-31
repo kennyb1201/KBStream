@@ -67,7 +67,7 @@ fun StreamsScreen(
 
     // Auto-play: when streams finish loading and autoplay is on, auto-select the top result
     LaunchedEffect(isLoading, streams) {
-        if (!isLoading && streams.isNotEmpty() && AppPreferences.getAutoPlayNext(context)) {
+        if (!isLoading && streams.isNotEmpty() && AppPreferences.getAutoSelectStream(context)) {
             onStreamSelected(streams.first(), streams)
         }
     }
