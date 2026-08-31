@@ -658,7 +658,14 @@ fun AppRoot() {
                             backdropUrl = current.backdropUrl,
                             clearLogoUrl = current.clearLogoUrl,
                             overview = current.overview,
-                            cast = current.cast
+                            cast = current.cast.map { member ->
+                                TmdbCastMember(
+                                    id = member.id,
+                                    name = member.name,
+                                    character = member.character,
+                                    profilePath = member.profilePath?.removePrefix(TmdbRepository.PROFILE_BASE)
+                                )
+                            }
                         )
                     }
                     "navigate_actor" -> {
