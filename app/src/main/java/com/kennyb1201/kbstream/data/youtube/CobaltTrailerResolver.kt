@@ -51,6 +51,25 @@ object CobaltTrailerResolver {
     fun isConfigured(): Boolean =
         !BuildConfig.TRAILER_PROXY_URL.isBlank()
 
+    /** True if [address] is a dotted-quad private/LAN literal (10.x, 192.168.x, ...). */
+    private fun isPrivateAddress(address: String): Boolean {
+        val parts = address.split('.')
+        if (parts.size != 4) return false
+        val nums = parts.mapNotNull { it.toIntOrNull() }
+        if (nums.size != 4) return false
+        val a = nums[0]
+        val b = nums[1]
+        return when {
+            a == 10 -> true
+            a == 127 -> true
+            a == 169 && b == 254 -> true
+            a == 172 && b in 16..31 -> true
+            a == 192 && b == 168 -> true
+            a == 100 && b in 64..127 -> true
+            else -> false
+        }
+    }
+
     /**
      * Resolves [videoId] to a directly playable source, or null if the proxy
      * is unconfigured or the endpoint did not yield a playable URL.
@@ -58,6 +77,21 @@ object CobaltTrailerResolver {
     suspend fun resolve(videoId: String): PlayableSource? {
         val base = BuildConfig.TRAILER_PROXY_URL.trim().trimEnd('/')
         if (base.isBlank()) return null
+
+        // Trap the classic misconfiguration: a private/LAN address baked into
+        // the build. A TV on a different network can never reach 10.x / 192.168.x
+        // etc., and it fails as a slow 15s connect timeout with no visible cause.
+        val proxyHost = runCatching {
+            java.net.URI(base).host
+        }.getOrNull()
+        if (proxyHost != null && isPrivateAddress(proxyHost)) {
+            Log.e(
+                TAG,
+                "TRAILER_PROXY_URL points at a PRIVATE/LAN address ($proxyHost): " +
+                    "devices on other networks cannot reach it. Use the server's " +
+                    "PUBLIC IP, e.g. http://132.145.137.148:9000"
+            )
+        }
 
         return withContext(Dispatchers.IO) {
             try {
