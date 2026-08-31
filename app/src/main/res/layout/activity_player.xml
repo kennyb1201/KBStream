@@ -164,22 +164,24 @@
         </LinearLayout>
     </LinearLayout>
 
-    <!-- Skip intro/recap/outro button (bottom center) -->
+    <!-- Skip intro/recap/outro button (bottom left) -->
     <TextView
         android:id="@+id/btn_skip_intro"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_gravity="end|bottom"
-        android:layout_marginEnd="48dp"
+        android:layout_gravity="start|bottom"
+        android:layout_marginStart="48dp"
         android:layout_marginBottom="96dp"
-        android:background="@drawable/button_surface_bg"
+        android:background="@drawable/button_accent_bg"
         android:focusable="true"
         android:focusableInTouchMode="true"
         android:fontFamily="@font/oswald_semibold"
-        android:paddingHorizontal="14dp"
-        android:paddingVertical="7dp"
-        android:textColor="@color/kb_text_hi"
-        android:textSize="12sp"                android:visibility="gone" />
+        android:paddingHorizontal="18dp"
+        android:paddingVertical="8dp"
+        android:textColor="@color/kb_accent"
+        android:textSize="13sp"
+        android:textAllCaps="true"
+        android:visibility="gone" />
 
             <!-- Main controls overlay (gradient background, hidden by default) -->
     <LinearLayout
