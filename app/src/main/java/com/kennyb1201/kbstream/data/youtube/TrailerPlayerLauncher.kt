@@ -22,9 +22,7 @@ object TrailerPlayerLauncher {
             get() = System.currentTimeMillis() - cachedAt > CACHE_TTL_MS
     }
 
-    private companion object {
-        const val CACHE_TTL_MS = 3 * 60 * 60 * 1000L // 3 hours
-    }
+    private const val CACHE_TTL_MS = 3 * 60 * 60 * 1000L // 3 hours
 
     /**
      * Resolves a YouTube URL/ID down to a playable stream source

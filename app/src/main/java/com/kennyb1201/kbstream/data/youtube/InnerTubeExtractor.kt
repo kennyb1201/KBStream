@@ -310,7 +310,7 @@ object InnerTubeExtractor {
             return PlayableSource.Muxed(resolvedProgressive)
         }
 
-        null
+        return null
     }
 
     private fun parseFormats(formats: JSONArray?): List<StreamCandidate> {
@@ -593,11 +593,12 @@ object InnerTubeExtractor {
         val candidates = mutableListOf(url)
         for (server in servers) {
             val idx = servers.indexOf(server)
-            val altHost = uri.host
-                ?.replaceFirst(Regex("^rr\\d+---"), "rr${idx + 1}---")
-                ?.replaceFirst(Regex("sn-[a-z0-9]+-[a-z0-9]+"), server)
-            if (altHost == null || altHost == uri.host) continue
-            candidates += url.replace(uri.host, altHost)
+            val host = uri.host ?: return url
+            val altHost = host
+                .replaceFirst(Regex("^rr\\d+---"), "rr${idx + 1}---")
+                .replaceFirst(Regex("sn-[a-z0-9]+-[a-z0-9]+"), server)
+            if (altHost == host) continue
+            candidates += url.replace(host, altHost)
         }
 
         val result = CompletableDeferred<String>()
