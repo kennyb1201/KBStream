@@ -59,6 +59,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
@@ -294,17 +295,21 @@ private fun HeroInlineTrailerPlayer(
             .apply {
                 when (source) {
                     is PlayableSource.Muxed -> {
-                        setMediaItem(
-                            MediaItem.Builder()
-                                .setUri(source.url)
-                                .build()
-                        )
+                        val mediaItem = MediaItem.Builder()
+                            .setUri(source.url)
+                            .apply {
+                                if (source.url.substringBefore('?').endsWith(".m3u8", ignoreCase = true)) {
+                                    setMimeType(MimeTypes.APPLICATION_M3U8)
+                                }
+                            }
+                            .build()
+                        setMediaItem(mediaItem)
                     }
 
                     is PlayableSource.Adaptive -> {
-                        // Adaptive direct googlevideo URLs require byte-range
-                        // reopening that YouTube can reject. Keep this as a
-                        // fallback only; the resolver now prefers HLS/muxed.
+                        // This is only a last-resort source. The resolver prefers
+                        // HLS and muxed streams because signed googlevideo video
+                        // URLs can reject ExoPlayer's later range requests.
                         setMediaItem(MediaItem.fromUri(source.videoUrl))
                     }
                 }
