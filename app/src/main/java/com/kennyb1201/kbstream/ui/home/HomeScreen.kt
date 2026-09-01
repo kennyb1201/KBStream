@@ -417,6 +417,31 @@ private fun HeroInlineTrailerPlayer(
 
 
 @Composable
+private fun HeroClearLogo(
+    url: String,
+    name: String,
+    modifier: Modifier = Modifier
+) {
+    // Hero logos are separate from studio logos. Use a small, explicit list
+    // of known dark TMDB marks rather than recoloring every logo and damaging
+    // colored artwork.
+    val darkLogo = url.substringAfterLast('/').lowercase() in setOf(
+        "j5f5c.jpg",
+        "8k7k2.jpg"
+    )
+
+    AsyncImage(
+        model = ImageRequest.Builder(LocalContext.current)
+            .data(url)
+            .build(),
+        contentDescription = name,
+        contentScale = ContentScale.Fit,
+        colorFilter = if (darkLogo) androidx.compose.ui.graphics.ColorFilter.tint(Color.White) else null,
+        modifier = modifier
+    )
+}
+
+@Composable
 private fun HomeHero(
     preview: MetaPreview,
     meta: Meta?,
@@ -800,17 +825,13 @@ private fun HomeHero(
                 ),
             verticalArrangement = Arrangement.Center
         ) {
-            if (!clearLogo.isNullOrBlank()) {
-                AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(clearLogo)
-                        .build(),
-                    contentDescription = title,
-                    modifier = Modifier
-                        .width(300.dp)
-                        .height(82.dp),
-                    contentScale = ContentScale.Fit
-                )
+            if (!clearLogo.isNullOrBlank()) {                    HeroClearLogo(
+                        url = clearLogo,
+                        name = title,
+                        modifier = Modifier
+                            .width(300.dp)
+                            .height(82.dp)
+                    )
             } else {
                 Text(
                     text = title,
