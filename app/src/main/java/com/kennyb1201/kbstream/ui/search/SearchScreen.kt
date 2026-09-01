@@ -84,8 +84,6 @@ fun SearchScreen(
     }
 
     val totalCount = results.size + actorResults.size + studioResults.size + collectionResults.size
-    val topResult = results.firstOrNull()
-    val remainingResults = if (results.size > 1) results.drop(1) else emptyList()
 
     Box(
         modifier = Modifier
@@ -195,23 +193,7 @@ fun SearchScreen(
                 }
             }
 
-            if (!isLoading && topResult != null) {
-                item(key = "best_match") {
-                    Column {
-                        SectionHeader(title = "Best match")
-                        FeaturedSearchResult(
-                            result = topResult,
-                            watched = viewModel.watchedKey(topResult.id, topResult.type) in watchedKeys,
-                            onClick = {
-                                viewModel.onResultOpened(topResult)
-                                onItemClick(topResult.meta)
-                            }
-                        )
-                    }
-                }
-            }
-
-            if (!isLoading && remainingResults.isNotEmpty()) {
+            if (!isLoading && results.isNotEmpty()) {
                 item(key = "titles_section") {
                     Column {
                         SectionHeader(title = "Titles")
@@ -220,7 +202,7 @@ fun SearchScreen(
                             contentPadding = PaddingValues(vertical = 2.dp)
                         ) {
                             items(
-                                items = remainingResults,
+                                items = results,
                                 key = { result: SearchTitleResult -> result.id }
                             ) { result: SearchTitleResult ->
                                 TitlePosterTile(
@@ -467,95 +449,6 @@ private fun SearchChip(
 }
 
 @Composable
-private fun FeaturedSearchResult(
-    result: SearchTitleResult,
-    watched: Boolean,
-    onClick: () -> Unit
-) {
-    Card(
-        onClick = onClick,
-        colors = CardDefaults.colors(
-            containerColor = KBSurface,
-            contentColor = KBTextHi,
-            focusedContainerColor = KBSurfaceRaised,
-            focusedContentColor = KBTextHi,
-            pressedContainerColor = KBSurfaceRaised,
-            pressedContentColor = KBTextHi
-        ),
-        border = CardDefaults.border(
-            border = Border(BorderStroke(1.dp, KBTextLo.copy(alpha = 0.25f))),
-            focusedBorder = Border(BorderStroke(2.dp, KBAccent))
-        ),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            PosterCard(
-                posterUrl = result.poster,
-                contentDescription = result.name,
-                isWatched = watched,
-                onClick = onClick,
-                modifier = Modifier
-                    .width(100.dp)
-                    .height(150.dp)
-            )
-
-            Column(
-                modifier = Modifier
-                    .padding(start = 12.dp)
-                    .weight(1f)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    TypePill(result.type)
-                    if (watched) {
-                        Text(
-                            text = "WATCHED",
-                            color = KBAccent,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
-
-                Text(
-                    text = result.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = KBTextHi,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 8.dp)
-                )
-
-                val caption = buildString {
-                    result.year?.let { append(it) }
-                    result.rating?.let {
-                        if (isNotEmpty()) append("  ·  ")
-                        append("★ ${String.format("%.1f", it)}")
-                    }
-                }
-
-                if (caption.isNotBlank()) {
-                    Text(
-                        text = caption,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = KBTextLo,
-                        maxLines = 1,
-                        modifier = Modifier.padding(top = 6.dp)
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun TitlePosterTile(
     result: SearchTitleResult,
     watched: Boolean,
@@ -629,8 +522,6 @@ private fun PersonResultCard(
                 .fillMaxWidth()
                 .padding(12.dp)
         ) {
-            TypePill("actor")
-
             Text(
                 text = person.name,
                 style = MaterialTheme.typography.titleMedium,
@@ -689,8 +580,6 @@ private fun StudioResultCard(
                 .fillMaxWidth()
                 .padding(12.dp)
         ) {
-            TypePill("studio")
-
             Text(
                 text = studio.name,
                 style = MaterialTheme.typography.titleMedium,
@@ -750,10 +639,6 @@ private fun CollectionResultCard(
                     .height(192.dp)
             )
 
-            Box(modifier = Modifier.padding(top = 6.dp)) {
-                TypePill("collection")
-            }
-
             Text(
                 text = collection.name,
                 style = MaterialTheme.typography.bodyMedium,
@@ -763,23 +648,6 @@ private fun CollectionResultCard(
                 modifier = Modifier.padding(top = 6.dp)
             )
         }
-    }
-}
-
-@Composable
-private fun TypePill(type: String) {
-    Box(
-        modifier = Modifier
-            .background(KBSurfaceRaised, RoundedCornerShape(999.dp))
-            .border(1.dp, KBAccent.copy(alpha = 0.55f), RoundedCornerShape(999.dp))
-            .padding(horizontal = 8.dp, vertical = 3.dp)
-    ) {
-        Text(
-            text = type.uppercase(),
-            color = KBAccent,
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.SemiBold
-        )
     }
 }
 
