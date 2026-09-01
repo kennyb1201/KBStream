@@ -228,6 +228,7 @@ class NativePlayerActivity : ComponentActivity() {
     private var drmHeaders = emptyMap<String, String>()
     private var externalSubtitleUri: Uri? = null
     private var startPositionMs = 0L
+    private var fromActorReturn = false
 
     /// True once playback has actually started during this player session.
     /// Gates the full splash overlay: it only appears on the very first load,
@@ -236,6 +237,9 @@ class NativePlayerActivity : ComponentActivity() {
     private var historyId = ""
     private var simklScrobbleSent = false
     private var simklSyncJob: kotlinx.coroutines.Job? = null
+    private var simklScrobbleActive = false
+    private var simklScrobblePaused = false
+    private var simklScrobbleJob: kotlinx.coroutines.Job? = null
 
     // IntroDB
     private var introDbStamps = emptyList<IntroDbStamp>()
@@ -338,6 +342,7 @@ class NativePlayerActivity : ComponentActivity() {
         overview = intent.getStringExtra("item_overview")
         episodeTitle = intent.getStringExtra("episode_title")
         startPositionMs = intent.getLongExtra("start_position_ms", 0L)
+        fromActorReturn = intent.getBooleanExtra("from_actor_return", false)
         carryPositionMs = startPositionMs
         streamHeaders = parseHeaders(intent.getStringExtra(EXTRA_HEADERS).orEmpty())
         drmLicenseUrl = intent.getStringExtra(EXTRA_DRM_LICENSE_URL)
@@ -990,6 +995,9 @@ class NativePlayerActivity : ComponentActivity() {
                 if (controlsVisible && !showSettingsPanel && !isPickerShowing) {
                     scheduleAutoHide()
                 }
+                scrobbleSimkl("start")
+            } else {
+                scrobbleSimkl("pause")
             }
         }
 
@@ -1099,11 +1107,11 @@ class NativePlayerActivity : ComponentActivity() {
 
     private fun updateUIBuffering() {
         // Full splash overlay (backdrop + pulsing clearlogo) ONLY for the very
-        // first load of a session that isn't resuming a saved position (e.g.
-        // returning from the actor overlay). Mid-playback rebuffers get the
-        // small spinner instead, so the video is never covered by the splash
-        // once the user has already been watching.
-        if (!hasPlayedOnce && startPositionMs <= 0L) {
+        // first load of a session — including items resuming a saved position.
+        // Never for mid-playback rebuffers (hasPlayedOnce) or when returning
+        // from the actor page (fromActorReturn); those get the small spinner
+        // so the video is never covered once the user has been watching.
+        if (!hasPlayedOnce && !fromActorReturn) {
             showSplash()
         } else {
             hideSplash()
@@ -1163,10 +1171,11 @@ class NativePlayerActivity : ComponentActivity() {
         }
         if (resolvedBackdropUrl != null) {
             splashBackdrop.load(resolvedBackdropUrl)
-            // Show splash initially before video plays — unless we're resuming a
-            // saved position (e.g. returning from the actor overlay), where the
+            // Show splash initially before video plays on every first load —
+            // including items resuming a saved position. Only skip it when
+            // returning from the actor page (fromActorReturn), where the
             // small spinner is enough.
-            if (startPositionMs <= 0L) {
+            if (!fromActorReturn) {
                 showSplash()
             }
         }
@@ -1666,6 +1675,7 @@ class NativePlayerActivity : ComponentActivity() {
 
     // --- Playback Ended ---
     private fun onPlaybackEnded() {
+        scrobbleSimkl("stop", progressOverride = 100.0)
         scope?.launch {
             saveProgress(reason = "ended", forceCompleted = true)
             if (autoPlayNext && !isLiveChannel && season != null && episode != null) {
@@ -1791,12 +1801,55 @@ class NativePlayerActivity : ComponentActivity() {
 
 }
 
+    private fun scrobbleSimkl(action: String, progressOverride: Double? = null) {
+        if (isLiveChannel || parentId.isBlank()) return
+        if (action == "start" && simklScrobbleActive && !simklScrobblePaused) return
+        if (action == "pause" && !simklScrobbleActive) return
+        val player = exoPlayer ?: return
+        val pos = player.currentPosition.coerceAtLeast(0L)
+        val dur = player.duration
+        val progress = progressOverride ?: if (dur > 0 && dur != C.TIME_UNSET) {
+            ((pos.toDouble() / dur.toDouble()) * 100.0).coerceIn(0.0, 100.0)
+        } else 0.0
+        when (action) {
+            "start" -> {
+                simklScrobbleActive = true
+                simklScrobblePaused = false
+            }
+            "pause" -> simklScrobblePaused = true
+            "stop" -> {
+                simklScrobbleActive = false
+                simklScrobblePaused = false
+            }
+            else -> {}
+        }
+        simklScrobbleJob?.cancel()
+        simklScrobbleJob = CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            val ok = runCatching {
+                val simkl = SimklRepository.getInstance(this@NativePlayerActivity)
+                simkl.scrobble(
+                    action = action,
+                    parentId = parentId,
+                    parentType = parentType,
+                    season = season,
+                    episode = episode,
+                    title = itemName,
+                    progress = progress
+                )
+            }.getOrDefault(false)
+            if (!ok && action == "start") {
+                simklScrobbleActive = false
+                Log.e(TAG, "Simkl scrobble start failed; will retry on next play")
+            }
+        }
+    }
+
     private fun syncCompletedToSimkl() {
         if (simklScrobbleSent || parentId.isBlank()) return
         simklScrobbleSent = true
         simklSyncJob?.cancel()
         simklSyncJob = CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-            val result = runCatching {
+            val ok = runCatching {
                 val simkl = SimklRepository.getInstance(this@NativePlayerActivity)
                 when (parentType.lowercase()) {
                     "movie" -> simkl.pushWatchedMovie(imdbId = parentId, title = itemName)
@@ -1804,14 +1857,16 @@ class NativePlayerActivity : ComponentActivity() {
                         val s = season; val e = episode
                         if (s != null && e != null) {
                             simkl.pushWatchedEpisode(showImdbId = parentId, season = s, episode = e, title = itemName)
+                        } else {
+                            false
                         }
                     }
-                    else -> Unit
+                    else -> false
                 }
-            }
-            if (result.isFailure) {
+            }.getOrDefault(false)
+            if (!ok) {
                 simklScrobbleSent = false
-                Log.e(TAG, "Simkl completion sync failed; will retry", result.exceptionOrNull())
+                Log.e(TAG, "Simkl completion sync failed; will retry")
             }
         }
     }
@@ -1876,6 +1931,7 @@ class NativePlayerActivity : ComponentActivity() {
         handler.removeCallbacksAndMessages(null)
         scope?.cancel()
         saveProgressSync(reason = "stop")
+        scrobbleSimkl("stop")
         exoPlayer?.release()
         exoPlayer = null
         mediaSession?.release()

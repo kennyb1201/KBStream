@@ -99,4 +99,22 @@ interface SimklApiService {
         @Body body: SimklHistoryRequest
     ): Response<ResponseBody>
 
+    @POST("scrobble/start")
+    suspend fun scrobbleStart(
+        @Header("Authorization") authorization: String,
+        @Body body: SimklScrobbleRequest
+    ): Response<ResponseBody>
+
+    @POST("scrobble/pause")
+    suspend fun scrobblePause(
+        @Header("Authorization") authorization: String,
+        @Body body: SimklScrobbleRequest
+    ): Response<ResponseBody>
+
+    @POST("scrobble/stop")
+    suspend fun scrobbleStop(
+        @Header("Authorization") authorization: String,
+        @Body body: SimklScrobbleRequest
+    ): Response<ResponseBody>
+
 }

@@ -124,6 +124,7 @@ sealed class Screen {
         val overview: String? = null,
         val cast: List<PlayerCastMember> = emptyList(),
         val startPositionMs: Long,
+        val fromActorReturn: Boolean = false,
         val returnTo: Screen = Home,
         val sources: List<Stream> = emptyList(),
         val streamHeaders: Map<String, String> = emptyMap(),
@@ -717,7 +718,10 @@ fun AppRoot() {
                         if (personId > 0) {
                             screen = Screen.Actor(
                                 personId = personId,
-                                returnTo = current.copy(startPositionMs = resumePos)
+                                returnTo = current.copy(
+                                    startPositionMs = resumePos,
+                                    fromActorReturn = true
+                                )
                             )
                         }
                     }
@@ -785,6 +789,7 @@ fun AppRoot() {
                     current.backdropUrl?.let { putExtra("backdrop_url", it) }
                     current.overview?.let { putExtra("item_overview", it) }
                     putExtra("start_position_ms", current.startPositionMs)
+                    putExtra("from_actor_return", current.fromActorReturn)
                     if (current.streamHeaders.isNotEmpty()) {
                         putExtra("stream_headers", current.streamHeaders.entries.joinToString("\n") { "${it.key}: ${it.value}" })
                     }

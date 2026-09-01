@@ -171,7 +171,8 @@ data class SimklWatchedLookupShow(
 @JsonClass(generateAdapter = true)
 data class SimklPlaybackIdsRef(
     @Json(name = "simkl") val simkl: Int? = null,
-    @Json(name = "imdb") val imdb: String? = null
+    @Json(name = "imdb") val imdb: String? = null,
+    @Json(name = "tmdb") val tmdb: Int? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -253,14 +254,46 @@ data class SimklHistoryRequest(
 @JsonClass(generateAdapter = true)
 data class SimklHistoryMovie(
     @Json(name = "title") val title: String? = null,
-    @Json(name = "ids") val ids: SimklPlaybackIdsRef
+    @Json(name = "ids") val ids: SimklPlaybackIdsRef? = null
 )
 
 @JsonClass(generateAdapter = true)
 data class SimklHistoryShow(
     @Json(name = "title") val title: String? = null,
-    @Json(name = "ids") val ids: SimklPlaybackIdsRef,
+    @Json(name = "ids") val ids: SimklPlaybackIdsRef? = null,
     @Json(name = "seasons") val seasons: List<SimklHistorySeason>? = null
+)
+
+/*
+ * Live scrobble payloads for POST /scrobble/start|pause|stop.
+ * progress is a float 0-100 (Simkl extrapolates between events).
+ * Sending every identifier we have (imdb + tmdb + title) maximizes
+ * the chance Simkl resolves the right item server-side.
+ */
+@JsonClass(generateAdapter = true)
+data class SimklScrobbleRequest(
+    @Json(name = "progress") val progress: Double,
+    @Json(name = "movie") val movie: SimklScrobbleMovie? = null,
+    @Json(name = "show") val show: SimklScrobbleShow? = null,
+    @Json(name = "episode") val episode: SimklScrobbleEpisode? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class SimklScrobbleMovie(
+    @Json(name = "title") val title: String? = null,
+    @Json(name = "ids") val ids: SimklPlaybackIdsRef? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class SimklScrobbleShow(
+    @Json(name = "title") val title: String? = null,
+    @Json(name = "ids") val ids: SimklPlaybackIdsRef? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class SimklScrobbleEpisode(
+    @Json(name = "season") val season: Int? = null,
+    @Json(name = "number") val number: Int? = null
 )
 
 @JsonClass(generateAdapter = true)

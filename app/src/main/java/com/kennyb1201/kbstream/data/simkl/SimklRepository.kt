@@ -352,8 +352,9 @@ class SimklRepository(
             return false
         }
 
-        if (imdbId.isBlank()) {
-            Log.d("SIMKL_REPO", "pushWatchedMovie skipped: blank imdb id")
+        val ids = parsePlaybackIds(imdbId)
+        if (ids == null) {
+            Log.d("SIMKL_REPO", "pushWatchedMovie skipped: unparseable id=$imdbId")
             return false
         }
 
@@ -364,7 +365,7 @@ class SimklRepository(
                     movies = listOf(
                         SimklHistoryMovie(
                             title = title,
-                            ids = SimklPlaybackIdsRef(imdb = imdbId.trim())
+                            ids = ids
                         )
                     )
                 )
@@ -405,6 +406,12 @@ class SimklRepository(
             return false
         }
 
+        val ids = parsePlaybackIds(showImdbId)
+        if (ids == null) {
+            Log.d("SIMKL_REPO", "pushWatchedEpisode skipped: unparseable id=$showImdbId")
+            return false
+        }
+
         return try {
             val response = api.addToWatchedHistory(
                 authorization = bearer(requireAccessToken()),
@@ -412,7 +419,7 @@ class SimklRepository(
                     shows = listOf(
                         SimklHistoryShow(
                             title = title,
-                            ids = SimklPlaybackIdsRef(imdb = showImdbId.trim()),
+                            ids = ids,
                             seasons = listOf(
                                 SimklHistorySeason(
                                     number = season,
@@ -439,6 +446,223 @@ class SimklRepository(
         } catch (e: Exception) {
             Log.e("SIMKL_REPO", "pushWatchedEpisode error: ${e.message}", e)
             false
+        }
+    }
+
+    /*
+     * Live scrobble (POST /scrobble/start|pause|stop). Called from the
+     * player on play/pause/end so Simkl records in-progress playback and
+     * extrapolates the watch between events. Failures are logged, never
+     * thrown, so playback is never blocked by tracking.
+     */
+    suspend fun scrobble(
+        action: String,
+        parentId: String,
+        parentType: String,
+        season: Int? = null,
+        episode: Int? = null,
+        title: String? = null,
+        progress: Double
+    ): Boolean {
+
+        if (!isConfigured() || !hasToken()) {
+            Log.d("SIMKL_REPO", "scrobble/$action skipped: not configured/authenticated")
+            return false
+        }
+
+        val ids = parsePlaybackIds(parentId)
+        if (ids == null) {
+            Log.d("SIMKL_REPO", "scrobble/$action skipped: unparseable id=$parentId")
+            return false
+        }
+
+        val isMovie =
+            parentType.lowercase() == "movie"
+
+        val body =
+            SimklScrobbleRequest(
+                progress = progress,
+                movie =
+                    if (isMovie) {
+                        SimklScrobbleMovie(
+                            title = title,
+                            ids = ids
+                        )
+                    } else {
+                        null
+                    },
+                show =
+                    if (!isMovie) {
+                        SimklScrobbleShow(
+                            title = title,
+                            ids = ids
+                        )
+                    } else {
+                        null
+                    },
+                episode =
+                    if (!isMovie && season != null && episode != null) {
+                        SimklScrobbleEpisode(
+                            season = season,
+                            number = episode
+                        )
+                    } else {
+                        null
+                    }
+            )
+
+        return try {
+            val response =
+                when (action) {
+                    "pause" ->
+                        api.scrobblePause(
+                            authorization =
+                                bearer(
+                                    requireAccessToken()
+                                ),
+
+                            body =
+                                body
+                        )
+
+                    "stop" ->
+                        api.scrobbleStop(
+                            authorization =
+                                bearer(
+                                    requireAccessToken()
+                                ),
+
+                            body =
+                                body
+                        )
+
+                    else ->
+                        api.scrobbleStart(
+                            authorization =
+                                bearer(
+                                    requireAccessToken()
+                                ),
+
+                            body =
+                                body
+                        )
+                }
+
+            if (!response.isSuccessful) {
+                val errorText =
+                    try {
+                        response
+                            .errorBody()
+                            ?.string()
+                    } catch (e: Exception) {
+                        "unreadable: " +
+                            e.message
+                    }
+
+                Log.e(
+                    "SIMKL_REPO",
+                    "scrobble/$action failed " +
+                        "code=${response.code()} " +
+                        "body=$errorText"
+                )
+            } else {
+                Log.d(
+                    "SIMKL_REPO",
+                    "scrobble/$action ok " +
+                        "id=$parentId progress=$progress"
+                )
+            }
+
+            response.isSuccessful
+        } catch (e: Exception) {
+            Log.e(
+                "SIMKL_REPO",
+                "scrobble/$action error: " +
+                    e.message,
+                e
+            )
+
+            false
+        }
+    }
+
+    /*
+     * Normalize a catalog item id into Simkl id refs. Accepts:
+     *   imdb:tt1234567 / tt1234567  -> imdb
+     *   tmdb:123 / 123              -> tmdb
+     *   anything else               -> best-effort imdb passthrough
+     * (movie/show refs may carry both imdb + tmdb; Simkl resolves
+     * whichever identifier it can match server-side.)
+     */
+    private fun parsePlaybackIds(
+        rawId: String
+    ): SimklPlaybackIdsRef? {
+
+        val trimmed =
+            rawId.trim()
+
+        if (
+            trimmed.isBlank()
+        ) {
+            return null
+        }
+
+        return when {
+            trimmed.startsWith(
+                "imdb:",
+                ignoreCase = true
+            ) -> {
+                val value =
+                    trimmed
+                        .substringAfter(":")
+                        .trim()
+
+                if (
+                    value.isBlank()
+                ) {
+                    null
+                } else {
+                    SimklPlaybackIdsRef(
+                        imdb = value
+                    )
+                }
+            }
+
+            trimmed.startsWith(
+                "tmdb:",
+                ignoreCase = true
+            ) -> {
+                val value =
+                    trimmed
+                        .substringAfter(":")
+                        .trim()
+                        .toIntOrNull()
+
+                if (
+                    value == null
+                ) {
+                    null
+                } else {
+                    SimklPlaybackIdsRef(
+                        tmdb = value
+                    )
+                }
+            }
+
+            trimmed.startsWith("tt") ->
+                SimklPlaybackIdsRef(
+                    imdb = trimmed
+                )
+
+            trimmed.toIntOrNull() != null ->
+                SimklPlaybackIdsRef(
+                    tmdb = trimmed.toIntOrNull()
+                )
+
+            else ->
+                SimklPlaybackIdsRef(
+                    imdb = trimmed
+                )
         }
     }
 
