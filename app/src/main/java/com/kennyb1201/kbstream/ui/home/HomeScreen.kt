@@ -64,7 +64,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultRenderersFactory
-import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.MaterialTheme
@@ -88,7 +88,7 @@ import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
-import com.kennyb1201.kbstream.data.youtube.YouTubeStreamDataSourceFactory
+import com.kennyb1201.kbstream.ui.components.YouTubeTrailerPlayer
 import kotlinx.coroutines.delay
 
 private val HomePosterWidth = 124.dp
@@ -277,12 +277,7 @@ private fun HeroInlineTrailerPlayer(
             "Hero player mounting with source: " + heroSourceOrigin(source)
         )
 
-        // Use the YouTube-specific data source that sends the correct
-        // User-Agent and Range headers googlevideo requires.
-        val youTubeDataSourceFactory = YouTubeStreamDataSourceFactory()
-
-        val mediaSourceFactory =
-            ProgressiveMediaSource.Factory(youTubeDataSourceFactory)
+        val mediaSourceFactory = DefaultMediaSourceFactory(context)
 
         val renderersFactory =
             DefaultRenderersFactory(context)
@@ -448,35 +443,17 @@ private fun HomeHero(
     val trailerPlaying =
         !trailerKey.isNullOrBlank() && autoPlayTrailer
 
-    var resolvedTrailerSource by remember(trailerKey) {
-        mutableStateOf<PlayableSource?>(null)
-    }
+    // YouTube embed: the only reliable playback path. Direct googlevideo
+    // URLs fail because the CDN rejects Range requests larger than ~1MB,
+    // and ExoPlayer always requests the full file.
+    val showTrailerEmbed = trailerPlaying && !trailerKey.isNullOrBlank()
 
     LaunchedEffect(trailerPlaying, trailerKey) {
-        resolvedTrailerSource = null
-
-        if (trailerPlaying && !trailerKey.isNullOrBlank()) {
+        if (showTrailerEmbed) {
             Log.w(
                 "HOME_HERO",
-                "Resolving hero trailer (trailerPlaying=$trailerPlaying key=$trailerKey)"
+                "Hero trailer using YouTube embed key=$trailerKey"
             )
-
-            TrailerPlayerLauncher
-                .resolvePlayableUrl(trailerKey)
-                .onSuccess { source ->
-                    resolvedTrailerSource = source
-                    Log.w(
-                        "HOME_HERO",
-                        "Hero trailer resolved: " + heroSourceOrigin(source)
-                    )
-                }
-                .onFailure { error ->
-                    Log.e(
-                        "HOME_HERO",
-                        "Failed to resolve inline trailer source",
-                        error
-                    )
-                }
         } else {
             Log.w(
                 "HOME_HERO",
@@ -743,16 +720,13 @@ private fun HomeHero(
             ) {
             
                 Crossfade(
-    targetState = resolvedTrailerSource,
+    targetState = showTrailerEmbed,
     label = "hero_backdrop_crossfade"
-) { trailerSource ->
-    if (trailerSource != null) {
-        HeroInlineTrailerPlayer(
-            source = trailerSource,
-            modifier = Modifier.fillMaxSize(),
-            onEnded = {
-                resolvedTrailerSource = null
-            }
+) { showEmbed ->
+    if (showEmbed && trailerKey != null) {
+        YouTubeTrailerPlayer(
+            videoId = trailerKey,
+            modifier = Modifier.fillMaxSize()
         )
     } else {
         AsyncImage(
@@ -1792,7 +1766,6 @@ fun HomeScreen(
                                             .onFocusChanged { focusState ->
                                                 if (focusState.isFocused) {
                                                     lastFocusedItemKey = "${meta.type}:${meta.id}"
-                                                    lastPosterFocusRequester = requester
                                                     selectHero(meta)
                                                 }
                                             }
@@ -1812,16 +1785,13 @@ fun HomeScreen(
                                                 } else {
                                                     Modifier
                                                 }
-                                            )
-
-                                        LaunchedEffect(
-                                            lastFocusedItemKey,
-                                            meta.type,
-                                            meta.id
-                                        ) {
-                                            if (
-                                                lastFocusedItemKey == "${meta.type}:${meta.id}"
-                                            ) {
+                                            )                                        // Deferred focus restore: requestFocus() must
+                                        // not run during composition (crashes). A 1-frame
+                                        // delay defers it to after layout.
+                                        val itemKey = "${meta.type}:${meta.id}"
+                                        LaunchedEffect(lastFocusedItemKey) {
+                                            if (lastFocusedItemKey == itemKey) {
+                                                delay(1)
                                                 requester.requestFocus()
                                             }
                                         }
@@ -1836,8 +1806,7 @@ fun HomeScreen(
                                                 .padding(
                                                     end = HomeRailGap
                                                 ),
-                                            contentAlignment =
-                                                Alignment.Center
+                                            contentAlignment = Alignment.Center
                                         ) {
                                             PosterCard(
                                                 posterUrl = meta.poster,

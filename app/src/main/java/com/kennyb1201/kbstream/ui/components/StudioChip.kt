@@ -11,6 +11,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -21,18 +23,14 @@ import androidx.tv.material3.Glow
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
+import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
-import com.kennyb1201.kbstream.ui.studio.TintedBrandLogo
 import com.kennyb1201.kbstream.ui.theme.KBAccent
-import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 
 /**
- * Compact studio/network chip for the detail screen. Renders on the dark
- * surface (no white box) with the same treatment as the studio-screen
- * header: dark logo artwork is recolored white so it reads on dark,
- * colored logos pass through untouched, and the plain name is the
- * fallback when TMDB has no logo art.
+ * Compact studio/network chip for the detail screen.
+ * White background with dark logos — the original look.
  */
 @Composable
 fun StudioChip(
@@ -48,12 +46,12 @@ fun StudioChip(
             shape = cardShape
         ),
         colors = ClickableSurfaceDefaults.colors(
-            containerColor = KBSurfaceRaised,
-            contentColor = KBTextHi,
-            focusedContainerColor = KBSurfaceRaised,
-            focusedContentColor = KBTextHi,
-            pressedContainerColor = KBSurfaceRaised,
-            pressedContentColor = KBTextHi
+            containerColor = Color.White,
+            contentColor = Color.Black,
+            focusedContainerColor = Color.White,
+            focusedContentColor = Color.Black,
+            pressedContainerColor = Color.White,
+            pressedContentColor = Color.Black
         ),
         scale = ClickableSurfaceDefaults.scale(
             focusedScale = 1.08f
@@ -95,10 +93,10 @@ fun StudioChip(
             contentAlignment = Alignment.Center
         ) {
             if (logoPath != null) {
-                TintedBrandLogo(
-                    url = TmdbRepository.LOGO_BASE +
-                        logoPath,
-                    name = name,
+                AsyncImage(
+                    model = TmdbRepository.LOGO_BASE + logoPath,
+                    contentDescription = name,
+                    contentScale = ContentScale.Fit,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(26.dp)
@@ -106,7 +104,7 @@ fun StudioChip(
             } else {
                 Text(
                     text = name,
-                    color = KBTextHi,
+                    color = Color.Black,
                     style =
                         MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Medium,

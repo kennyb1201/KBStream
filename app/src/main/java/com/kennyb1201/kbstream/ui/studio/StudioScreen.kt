@@ -36,6 +36,7 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import coil3.toBitmap
 import com.kennyb1201.kbstream.data.tmdb.StudioItem
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TmdbCompanyDetail
@@ -217,11 +218,22 @@ fun TintedBrandLogo(
             .build(),
         contentDescription = name,
         contentScale = ContentScale.Fit,
-        onSuccess = {
-            // TMDB clear-logos are intended for light artwork surfaces. Use a
-            // white SrcIn tint unconditionally so dark marks remain visible
-            // on the dark TV UI, without converting Coil hardware bitmaps.
-            logoIsDark = true
+        onSuccess = { state ->
+            try {
+                val image = state.result.image
+                // Coil 3 may return a hardware bitmap which crashes on
+                // pixel access. In that case, assume dark (most TMDB logos
+                // are black-on-transparent) and tint white.
+                val bitmap = image.toBitmap()
+                if (bitmap.config == android.graphics.Bitmap.Config.HARDWARE) {
+                    logoIsDark = true
+                } else {
+                    logoIsDark = isDarkArtwork(bitmap)
+                }
+            } catch (_: Throwable) {
+                // Safe fallback: assume dark monochrome artwork
+                logoIsDark = true
+            }
         },
         colorFilter = if (logoIsDark) ColorFilter.tint(Color.White) else null,
         modifier = modifier
