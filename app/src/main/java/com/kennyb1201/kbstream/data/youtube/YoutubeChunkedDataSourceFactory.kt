@@ -185,7 +185,7 @@ class YoutubeChunkedDataSourceFactory(
          * media3 open 403s, so the body here tells us the exact rejection reason.
          */
         private fun runDiagnostics(url: String) {
-            return runCatching {
+            runCatching {
                 val client = okhttp3.OkHttpClient.Builder()
                     .connectTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
                     .readTimeout(6, java.util.concurrent.TimeUnit.SECONDS)

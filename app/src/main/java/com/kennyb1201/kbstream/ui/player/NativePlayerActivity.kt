@@ -54,8 +54,6 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import coil3.load
-import coil3.request.ImageRequest
-import coil3.request.listener
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -422,21 +420,7 @@ class NativePlayerActivity : ComponentActivity() {
                     }
                 if (!profileUrl.isNullOrBlank()) {
                     try {
-                        profileImage.load(
-                            ImageRequest.Builder(this@NativePlayerActivity)
-                                .data(profileUrl)
-                                .listener(
-                                    onSuccess = { _, result ->
-                                        Log.w(
-                                            "NativePlayer",
-                                            "Cast image decoded: " +
-                                                "${result.image.width}x${result.image.height} " +
-                                                "src=$profileUrl"
-                                        )
-                                    }
-                                )
-                                .build()
-                        )
+                        profileImage.load(profileUrl)
                     } catch (e: Exception) {
                         Log.w("NativePlayer", "Failed to load cast image: $profileUrl", e)
                         profileImage.setImageResource(R.drawable.ic_cast_placeholder)
