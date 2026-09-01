@@ -234,6 +234,7 @@ class NativePlayerActivity : ComponentActivity() {
     /// never on mid-playback rebuffers or when returning from the actor overlay.
     private var hasPlayedOnce = false
     private var historyId = ""
+    private var simklScrobbleSent = false
 
     // IntroDB
     private var introDbStamps = emptyList<IntroDbStamp>()
@@ -530,12 +531,15 @@ class NativePlayerActivity : ComponentActivity() {
                     if (inner != null) {
                         for (i in 0 until inner.childCount) {
                             val v = inner.getChildAt(i)
-                            if (v.isFocusable) { v.requestFocus(); break }
+                            if (v.isFocusable) { v.requestFocus(); break                            } else false
                         }
+                        else -> false
                     }
+                    if (!sent) simklScrobbleSent = false
                 }
             }
-        }
+    }
+
         scrim = findViewById(R.id.scrim)
         settingsBufferAuto = findViewById(R.id.btn_buffer_auto)
         settingsBufferBalanced = findViewById(R.id.btn_buffer_balanced)
