@@ -42,8 +42,14 @@ class YoutubeChunkedDataSourceFactory(
     companion object {
         private const val TAG = "YTChunkedDS"
 
-        /** 10 MB chunks – large enough to avoid too many requests, small enough to dodge throttle. */
-        private const val CHUNK_SIZE = 10L * 1024 * 1024
+        /**
+         * 1 MB chunks. Verified empirically against googlevideo (device DIAG
+         * logs): these signed URLs return 403 for range requests of 10 MB (and
+         * for open-ended requests), but 206 for ranges up to 1 MB. Larger
+         * chunks avoid request churn on other hosts, but here they get a hard
+         * 403 — so the chunk stays well inside the proven-safe size.
+         */
+        private const val CHUNK_SIZE = 1L * 1024 * 1024
 
         /** Must match the android_vr client UA used to request the stream. */
         private const val YOUTUBE_USER_AGENT =
@@ -98,7 +104,7 @@ class YoutubeChunkedDataSourceFactory(
             }
             originalDataSpec = dataSpec
             originalUrlString = dataSpec.uri.toString()
-            Log.w(TAG, "Opening YT stream: host=$host params=${dataSpec.uri.queryParameterNames} url=${originalUrlString}")
+            Log.d(TAG, "Opening YT stream: host=$host url=${originalUrlString?.take(160)}")
             currentChunkStart = dataSpec.position
             totalContentLength = dataSpec.length
             return openNextChunk()
@@ -137,12 +143,14 @@ class YoutubeChunkedDataSourceFactory(
 
             bytesReadInChunk = 0
 
-            // Preferred mode first, then degrade on 403.
+            // Proven request first (device DIAG: the clean signed URL with a
+            // <=1MB range returns 206; ratebypass and open-ended modes 403 on
+            // many URLs), then degrade to ratebypass/open-ended fallbacks.
             val attempts = buildList {
-                add(useRateByPass to chunkedRange)
-                if (useRateByPass) add(false to chunkedRange)
-                if (chunkedRange) add(useRateByPass to false)
-                add(false to false)
+                add(false to chunkedRange)
+                add(true to chunkedRange)
+                if (chunkedRange) add(false to false)
+                if (chunkedRange) add(true to false)
             }.distinct()
 
             var last403: HttpDataSource.InvalidResponseCodeException? = null
