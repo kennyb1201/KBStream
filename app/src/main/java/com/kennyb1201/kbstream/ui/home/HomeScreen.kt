@@ -87,8 +87,6 @@ import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
-import androidx.media3.exoplayer.source.MergingMediaSource
-import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import kotlinx.coroutines.delay
 
 private val HomePosterWidth = 124.dp
@@ -267,9 +265,8 @@ private fun HeroInlineTrailerPlayer(
     modifier: Modifier = Modifier,
     onEnded: () -> Unit = {}
 ) {
-    val context = LocalContext.current
+    val context = LocalContext.current    val exoPlayer = remember(source) {
 
-    val exoPlayer = remember(source) {
         // Fire TV suppresses debug logs, so surface what the player actually
         // receives -- this proves whether the source was cobalt or googlevideo.
         Log.w(
@@ -277,12 +274,9 @@ private fun HeroInlineTrailerPlayer(
             "Hero player mounting with source: " + heroSourceOrigin(source)
         )
 
-        // YouTube's googlevideo streams throttle/kill full-range requests;
-        // use the chunked data source so resolved trailers actually play.
-        val mediaSourceFactory =
-            DefaultMediaSourceFactory(
-                com.kennyb1201.kbstream.data.youtube.YoutubeChunkedDataSourceFactory()
-            )
+        // Let Media3 select the native source from the URL. HLS manifests and
+        // ordinary progressive URLs must not go through the googlevideo chunker.
+        val mediaSourceFactory = DefaultMediaSourceFactory(context)
 
         val renderersFactory =
             DefaultRenderersFactory(context)
@@ -307,33 +301,10 @@ private fun HeroInlineTrailerPlayer(
                     }
 
                     is PlayableSource.Adaptive -> {
-                        val chunkedFactory =
-                            com.kennyb1201.kbstream.data.youtube.YoutubeChunkedDataSourceFactory()
-
-                        val videoSource =
-                            ProgressiveMediaSource.Factory(
-                                chunkedFactory
-                            ).createMediaSource(
-                                MediaItem.fromUri(
-                                    source.videoUrl
-                                )
-                            )
-
-                        val audioSource =
-                            ProgressiveMediaSource.Factory(
-                                chunkedFactory
-                            ).createMediaSource(
-                                MediaItem.fromUri(
-                                    source.audioUrl
-                                )
-                            )
-
-                        setMediaSource(
-                            MergingMediaSource(
-                                videoSource,
-                                audioSource
-                            )
-                        )
+                        // Adaptive direct googlevideo URLs require byte-range
+                        // reopening that YouTube can reject. Keep this as a
+                        // fallback only; the resolver now prefers HLS/muxed.
+                        setMediaItem(MediaItem.fromUri(source.videoUrl))
                     }
                 }
 

@@ -271,7 +271,15 @@ object InnerTubeExtractor {
             return null
         }
 
-        // Prefer adaptive video + audio (best quality)
+        // Prefer HLS first. Media3 handles manifest segments, refreshes and
+        // seeking without reopening googlevideo URLs at arbitrary byte offsets.
+        val bestHls = pickBestHls(hlsUrls)
+        if (bestHls != null) {
+            Log.d(TAG, "Using HLS trailer manifest")
+            return PlayableSource.Muxed(bestHls)
+        }
+
+        // Prefer adaptive video + audio (best quality) only when HLS is absent.
         val bestVideo = pickBest(adaptiveVideo, PREFERRED_SEPARATE_CLIENT)
         val bestAudio = pickBest(adaptiveAudio, PREFERRED_SEPARATE_CLIENT)
 
@@ -285,12 +293,6 @@ object InnerTubeExtractor {
             } else {
                 PlayableSource.Muxed(resolvedVideo)
             }
-        }
-
-        // Adaptive failed (403) — fall back to best HLS variant
-        val bestHls = pickBestHls(hlsUrls)
-        if (bestHls != null) {
-            return PlayableSource.Muxed(bestHls)
         }
 
         // Last resort: progressive (combined) stream
