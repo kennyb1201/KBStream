@@ -228,6 +228,11 @@ class NativePlayerActivity : ComponentActivity() {
     private var drmHeaders = emptyMap<String, String>()
     private var externalSubtitleUri: Uri? = null
     private var startPositionMs = 0L
+
+    /// True once playback has actually started during this player session.
+    /// Gates the full splash overlay: it only appears on the very first load,
+    /// never on mid-playback rebuffers or when returning from the actor overlay.
+    private var hasPlayedOnce = false
     private var historyId = ""
 
     // IntroDB
@@ -973,6 +978,7 @@ class NativePlayerActivity : ComponentActivity() {
     private fun createPlayerListener() = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             if (isPlaying) {
+                hasPlayedOnce = true
                 hideSplash()
                 // Resume auto-hide when playback resumes while controls are visible
                 if (controlsVisible && !showSettingsPanel && !isPickerShowing) {
@@ -1086,8 +1092,18 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     private fun updateUIBuffering() {
-        // Use the splash overlay (backdrop + pulsing clearlogo) as the loading indicator
-        showSplash()
+        // Full splash overlay (backdrop + pulsing clearlogo) ONLY for the very
+        // first load of a session that isn't resuming a saved position (e.g.
+        // returning from the actor overlay). Mid-playback rebuffers get the
+        // small spinner instead, so the video is never covered by the splash
+        // once the user has already been watching.
+        if (!hasPlayedOnce && startPositionMs <= 0L) {
+            showSplash()
+        } else {
+            hideSplash()
+            reconnectingContainer.visibility = View.GONE
+            bufferingSpinner.visibility = View.VISIBLE
+        }
     }
 
     private fun updateUIReady() {
@@ -1141,8 +1157,12 @@ class NativePlayerActivity : ComponentActivity() {
         }
         if (resolvedBackdropUrl != null) {
             splashBackdrop.load(resolvedBackdropUrl)
-            // Show splash initially before video plays
-            showSplash()
+            // Show splash initially before video plays — unless we're resuming a
+            // saved position (e.g. returning from the actor overlay), where the
+            // small spinner is enough.
+            if (startPositionMs <= 0L) {
+                showSplash()
+            }
         }
         if (season != null && episode != null) {
             episodeLabel.text = "S${season.toString().padStart(2, '0')} · E${episode.toString().padStart(2, '0')}"

@@ -32,6 +32,7 @@ import com.kennyb1201.kbstream.ui.home.HomeScreen
 import com.kennyb1201.kbstream.ui.iptv.GuideScreen
 import com.kennyb1201.kbstream.ui.iptv.IptvViewModel
 import com.kennyb1201.kbstream.ui.player.NativePlayerActivity
+import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.player.PlayerCastMember
 import android.content.Intent
 import org.json.JSONArray
@@ -725,16 +726,25 @@ fun AppRoot() {
                         }
                     }
                     else -> {
-                        // Normal BACK exit from player — go back to streams screen.
-                        // Mark this target so the streams screen does NOT auto-select
-                        // and relaunch the player (autoplay already fired once).
+                        // Normal BACK exit from player. Mark this target so the
+                        // streams screen never re-auto-selects it.
                         val exitedKey =
                             "${current.parentType}:${current.episodeStreamId}"
                         autoPlayedStreamKeys =
                             (autoPlayedStreamKeys + exitedKey).distinct()
                         if (current.parentType == "channel") {
                             screen = Screen.Guide
+                        } else if (AppPreferences.getAutoSelectStream(context)) {
+                            // Auto-select already picked the top stream, so the
+                            // source picker is redundant — land on the details screen.
+                            screen = Screen.Detail(
+                                current.parentType,
+                                current.parentId,
+                                itemPoster = current.itemPoster
+                            )
                         } else {
+                            // Auto-select is off: the user chose a source manually,
+                            // so return to the picker for that target.
                             screen = Screen.Streams(
                                 target = StreamsTarget(
                                     contentType = current.parentType,
