@@ -91,12 +91,12 @@ fun SearchScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(KBVoid)
-            .padding(horizontal = 24.dp, vertical = 20.dp)
+            .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            contentPadding = PaddingValues(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item(key = "hero") {
                 SearchHero(
@@ -146,7 +146,7 @@ fun SearchScreen(
                     Column {
                         SectionHeader(title = "Trending now")
                         LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
                             contentPadding = PaddingValues(vertical = 2.dp)
                         ) {
                             items(
@@ -216,7 +216,7 @@ fun SearchScreen(
                     Column {
                         SectionHeader(title = "Titles")
                         LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
                             contentPadding = PaddingValues(vertical = 2.dp)
                         ) {
                             items(
@@ -256,25 +256,6 @@ fun SearchScreen(
                 }
             }
 
-            if (!isLoading && collectionResults.isNotEmpty()) {
-                item(key = "collections_rail") {
-                    SearchRail(title = "Collections") {
-                        items(
-                            items = collectionResults,
-                            key = { collection: TmdbSearchCollectionResult -> "collection:${collection.id}" }
-                        ) { collection: TmdbSearchCollectionResult ->
-                            CollectionResultCard(
-                                collection = collection,
-                                onClick = {
-                                    viewModel.onCollectionOpened(collection)
-                                    onCollectionClick?.invoke(collection)
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-
             if (!isLoading && studioResults.isNotEmpty()) {
                 item(key = "studios_rail") {
                     SearchRail(title = "Studios") {
@@ -287,6 +268,25 @@ fun SearchScreen(
                                 onClick = {
                                     viewModel.onStudioOpened(studio)
                                     onStudioClick?.invoke(studio)
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (!isLoading && collectionResults.isNotEmpty()) {
+                item(key = "collections_rail") {
+                    SearchRail(title = "Collections") {
+                        items(
+                            items = collectionResults,
+                            key = { collection: TmdbSearchCollectionResult -> "collection:${collection.id}" }
+                        ) { collection: TmdbSearchCollectionResult ->
+                            CollectionResultCard(
+                                collection = collection,
+                                onClick = {
+                                    viewModel.onCollectionOpened(collection)
+                                    onCollectionClick?.invoke(collection)
                                 }
                             )
                         }
@@ -311,30 +311,30 @@ private fun SearchHero(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(KBSurface, RoundedCornerShape(18.dp))
-            .border(1.dp, KBTextLo.copy(alpha = 0.25f), RoundedCornerShape(18.dp))
-            .padding(18.dp)
+            .background(KBSurface, RoundedCornerShape(16.dp))
+            .border(1.dp, KBTextLo.copy(alpha = 0.25f), RoundedCornerShape(16.dp))
+            .padding(14.dp)
     ) {
         Text(
             text = "Search",
-            style = MaterialTheme.typography.headlineMedium,
+            style = MaterialTheme.typography.titleLarge,
             color = KBTextHi
         )
 
         Row(
             modifier = Modifier
-                .padding(top = 14.dp)
+                .padding(top = 12.dp)
                 .fillMaxWidth()
-                .background(KBSurfaceRaised, RoundedCornerShape(14.dp))
-                .border(1.dp, KBTextLo.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .background(KBSurfaceRaised, RoundedCornerShape(12.dp))
+                .border(1.dp, KBTextLo.copy(alpha = 0.25f), RoundedCornerShape(12.dp))
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 imageVector = Icons.Default.Search,
                 contentDescription = null,
                 tint = KBTextLo,
-                modifier = Modifier.size(22.dp)
+                modifier = Modifier.size(18.dp)
             )
 
             Box(
@@ -346,7 +346,7 @@ private fun SearchHero(
                     Text(
                         text = "Search titles, people, collections...",
                         color = KBTextLo,
-                        style = MaterialTheme.typography.bodyLarge
+                        style = MaterialTheme.typography.bodyMedium
                     )
                 }
 
@@ -356,7 +356,7 @@ private fun SearchHero(
                     singleLine = true,
                     textStyle = TextStyle(
                         color = KBTextHi,
-                        fontSize = MaterialTheme.typography.bodyLarge.fontSize
+                        fontSize = MaterialTheme.typography.bodyMedium.fontSize
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -376,7 +376,7 @@ private fun SearchHero(
                 text = statusText,
                 color = KBAccent,
                 style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(top = 10.dp)
+                modifier = Modifier.padding(top = 8.dp)
             )
         }
 
@@ -393,7 +393,7 @@ private fun SearchHero(
                 },
                 color = KBTextLo,
                 style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(top = 6.dp)
+                modifier = Modifier.padding(top = 5.dp)
             )
         }
     }
@@ -406,7 +406,7 @@ private fun SectionHeader(title: String) {
         style = MaterialTheme.typography.titleMedium,
         color = KBTextHi,
         fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.padding(bottom = 8.dp)
+        modifier = Modifier.padding(bottom = 6.dp)
     )
 }
 
@@ -418,7 +418,7 @@ private fun SearchRail(
     Column {
         SectionHeader(title = title)
         LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
             contentPadding = PaddingValues(vertical = 2.dp)
         ) {
             content()
@@ -460,8 +460,8 @@ private fun SearchChip(
             text = label,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
         )
     }
 }
@@ -491,7 +491,7 @@ private fun FeaturedSearchResult(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(14.dp),
+                .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             PosterCard(
@@ -500,13 +500,13 @@ private fun FeaturedSearchResult(
                 isWatched = watched,
                 onClick = onClick,
                 modifier = Modifier
-                    .width(118.dp)
-                    .height(177.dp)
+                    .width(100.dp)
+                    .height(150.dp)
             )
 
             Column(
                 modifier = Modifier
-                    .padding(start = 14.dp)
+                    .padding(start = 12.dp)
                     .weight(1f)
             ) {
                 Row(
@@ -526,11 +526,11 @@ private fun FeaturedSearchResult(
 
                 Text(
                     text = result.name,
-                    style = MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.titleMedium,
                     color = KBTextHi,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 10.dp)
+                    modifier = Modifier.padding(top = 8.dp)
                 )
 
                 val caption = buildString {
@@ -544,10 +544,10 @@ private fun FeaturedSearchResult(
                 if (caption.isNotBlank()) {
                     Text(
                         text = caption,
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodySmall,
                         color = KBTextLo,
                         maxLines = 1,
-                        modifier = Modifier.padding(top = 8.dp)
+                        modifier = Modifier.padding(top = 6.dp)
                     )
                 }
             }
@@ -562,7 +562,7 @@ private fun TitlePosterTile(
     onClick: () -> Unit
 ) {
     Column(
-        modifier = Modifier.width(142.dp)
+        modifier = Modifier.width(124.dp)
     ) {
         PosterCard(
             posterUrl = result.poster,
@@ -570,17 +570,17 @@ private fun TitlePosterTile(
             isWatched = watched,
             onClick = onClick,
             modifier = Modifier
-                .width(142.dp)
-                .height(213.dp)
+                .width(124.dp)
+                .height(186.dp)
         )
 
         Text(
             text = result.name,
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.bodySmall,
             color = KBTextHi,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 6.dp)
+            modifier = Modifier.padding(top = 5.dp)
         )
 
         val caption = buildString {
@@ -622,12 +622,12 @@ private fun PersonResultCard(
             border = Border(BorderStroke(1.dp, KBTextLo.copy(alpha = 0.25f))),
             focusedBorder = Border(BorderStroke(2.dp, KBAccent))
         ),
-        modifier = Modifier.width(320.dp)
+        modifier = Modifier.width(260.dp)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(14.dp)
+                .padding(12.dp)
         ) {
             TypePill("actor")
 
@@ -637,7 +637,7 @@ private fun PersonResultCard(
                 color = KBTextHi,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 8.dp)
+                modifier = Modifier.padding(top = 6.dp)
             )
 
             val subtitle = buildList {
@@ -652,11 +652,11 @@ private fun PersonResultCard(
             if (subtitle.isNotBlank()) {
                 Text(
                     text = subtitle,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
                     color = KBTextLo,
                     maxLines = 3,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 6.dp)
+                    modifier = Modifier.padding(top = 5.dp)
                 )
             }
         }
@@ -682,12 +682,12 @@ private fun StudioResultCard(
             border = Border(BorderStroke(1.dp, KBTextLo.copy(alpha = 0.25f))),
             focusedBorder = Border(BorderStroke(2.dp, KBAccent))
         ),
-        modifier = Modifier.width(280.dp)
+        modifier = Modifier.width(240.dp)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(14.dp)
+                .padding(12.dp)
         ) {
             TypePill("studio")
 
@@ -697,17 +697,17 @@ private fun StudioResultCard(
                 color = KBTextHi,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 8.dp)
+                modifier = Modifier.padding(top = 6.dp)
             )
 
             studio.originCountry?.takeIf { it.isNotBlank() }?.let { country ->
                 Text(
                     text = country,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
                     color = KBTextLo,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 6.dp)
+                    modifier = Modifier.padding(top = 5.dp)
                 )
             }
         }
@@ -733,12 +733,12 @@ private fun CollectionResultCard(
             border = Border(BorderStroke(1.dp, KBTextLo.copy(alpha = 0.25f))),
             focusedBorder = Border(BorderStroke(2.dp, KBAccent))
         ),
-        modifier = Modifier.width(170.dp)
+        modifier = Modifier.width(150.dp)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp)
+                .padding(10.dp)
         ) {
             PosterCard(
                 posterUrl = collection.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" },
@@ -746,21 +746,21 @@ private fun CollectionResultCard(
                 isWatched = false,
                 onClick = onClick,
                 modifier = Modifier
-                    .width(146.dp)
-                    .height(219.dp)
+                    .width(128.dp)
+                    .height(192.dp)
             )
 
-            Box(modifier = Modifier.padding(top = 8.dp)) {
+            Box(modifier = Modifier.padding(top = 6.dp)) {
                 TypePill("collection")
             }
 
             Text(
                 text = collection.name,
-                style = MaterialTheme.typography.bodyLarge,
+                style = MaterialTheme.typography.bodyMedium,
                 color = KBTextHi,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 8.dp)
+                modifier = Modifier.padding(top = 6.dp)
             )
         }
     }
@@ -772,7 +772,7 @@ private fun TypePill(type: String) {
         modifier = Modifier
             .background(KBSurfaceRaised, RoundedCornerShape(999.dp))
             .border(1.dp, KBAccent.copy(alpha = 0.55f), RoundedCornerShape(999.dp))
-            .padding(horizontal = 9.dp, vertical = 3.dp)
+            .padding(horizontal = 8.dp, vertical = 3.dp)
     ) {
         Text(
             text = type.uppercase(),
@@ -791,9 +791,9 @@ private fun SearchMessagePanel(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(KBSurface, RoundedCornerShape(16.dp))
-            .border(1.dp, KBTextLo.copy(alpha = 0.25f), RoundedCornerShape(16.dp))
-            .padding(18.dp)
+            .background(KBSurface, RoundedCornerShape(14.dp))
+            .border(1.dp, KBTextLo.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
+            .padding(14.dp)
     ) {
         Text(
             text = title,
