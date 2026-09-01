@@ -98,22 +98,33 @@ object CobaltTrailerResolver {
                 val payload = JSONObject().apply {
                     put("url", "https://www.youtube.com/watch?v=$videoId")
                     put("downloadMode", "auto")
+                    // cobalt v11 only attaches its poToken session when the
+                    // requested quality is above 1080p; without it the player
+                    // request goes out anonymous and YouTube rejects it with
+                    // error.api.youtube.api_error / login on flagged IPs.
+                    put("videoQuality", "1440")
                 }.toString()
 
                 // cobalt v10 serves its processing endpoint at the instance root
                 // (POST /) - not /api. It requires Accept: application/json.
+                // Docs (imputnet/cobalt docs/api.md): only Accept, Content-Type
+                // (and optionally User-Agent) are expected on POST / -- browser-like
+                // Origin/Referer signalling can be rejected with 400 by the instance.
                 val request = Request.Builder()
                     .url("$base/")
                     .post(payload.toRequestBody(jsonMediaType))
                     .header("accept", "application/json")
                     .header("user-agent", USER_AGENT)
-                    .header("origin", base)
-                    .header("referer", "$base/")
                     .build()
 
                 httpClient.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
-                        Log.w(TAG, "cobalt endpoint returned ${response.code}")
+                        // Include the response body: cobalt returns a machine-readable
+                        // error code (e.g. {"status":"error","error":{"code":"..."}})
+                        // which identifies the exact rejection reason.
+                        val body = response.body?.string().orEmpty()
+                            .take(500)
+                        Log.w(TAG, "cobalt endpoint returned ${response.code}: $body")
                         return@use null
                     }
 
