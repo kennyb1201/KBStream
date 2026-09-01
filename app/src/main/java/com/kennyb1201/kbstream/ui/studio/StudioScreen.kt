@@ -215,14 +215,12 @@ fun TintedBrandLogo(
         model = ImageRequest.Builder(context)
             .data(url)
             .crossfade(true)
-            .listener(
-                onSuccess = { _, result ->
-                    logoIsDark = isDarkArtwork(result.image.toBitmap())
-                }
-            )
             .build(),
         contentDescription = name,
         contentScale = ContentScale.Fit,
+        onSuccess = { state ->
+            logoIsDark = isDarkArtwork(state.result.image.toBitmap())
+        },
         colorFilter = if (logoIsDark) ColorFilter.tint(Color.White) else null,
         modifier = modifier
     )
