@@ -15,7 +15,7 @@ import androidx.media3.datasource.DefaultHttpDataSource
  * gets 403. This factory sets both as default request properties.
  */
 @OptIn(UnstableApi::class)
-class YouTubeStreamDataSource.Factory : DataSource.Factory {
+class YouTubeStreamDataSourceFactory : DataSource.Factory {
 
     /**
      * The User-Agent string that was used when InnerTube resolved the URL.

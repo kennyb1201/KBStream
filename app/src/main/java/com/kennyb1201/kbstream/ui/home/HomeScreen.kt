@@ -88,7 +88,7 @@ import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
-import com.kennyb1201.kbstream.data.youtube.YouTubeStreamDataSource
+import com.kennyb1201.kbstream.data.youtube.YouTubeStreamDataSourceFactory
 import kotlinx.coroutines.delay
 
 private val HomePosterWidth = 124.dp
@@ -279,7 +279,7 @@ private fun HeroInlineTrailerPlayer(
 
         // Use the YouTube-specific data source that sends the correct
         // User-Agent and Range headers googlevideo requires.
-        val youTubeDataSourceFactory = YouTubeStreamDataSource.Factory()
+        val youTubeDataSourceFactory = YouTubeStreamDataSourceFactory()
 
         val mediaSourceFactory =
             ProgressiveMediaSource.Factory(youTubeDataSourceFactory)
