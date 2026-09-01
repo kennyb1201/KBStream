@@ -235,6 +235,7 @@ class NativePlayerActivity : ComponentActivity() {
     private var hasPlayedOnce = false
     private var historyId = ""
     private var simklScrobbleSent = false
+    private var simklSyncJob: kotlinx.coroutines.Job? = null
 
     // IntroDB
     private var introDbStamps = emptyList<IntroDbStamp>()
@@ -1783,23 +1784,37 @@ class NativePlayerActivity : ComponentActivity() {
             )
             withContext(Dispatchers.IO) { dao.upsert(entry) }
 
-            if (isCompleted && existing?.completedAt == null) {
-                launch(Dispatchers.IO) {
-                    val simkl = SimklRepository(this@NativePlayerActivity)
-                    when (parentType.lowercase()) {
-                        "movie" -> simkl.pushWatchedMovie(imdbId = parentId, title = itemName)
-                        "series", "show", "tv" -> {
-                            val s = season; val e = episode
-                            if (s != null && e != null) {
-                                simkl.pushWatchedEpisode(showImdbId = parentId, season = s, episode = e, title = itemName)
-                            }
-                        }
-                    }
-                }
+            if (isCompleted) {
+                syncCompletedToSimkl()
             }
     }
 
 }
+
+    private fun syncCompletedToSimkl() {
+        if (simklScrobbleSent || parentId.isBlank()) return
+        simklScrobbleSent = true
+        simklSyncJob?.cancel()
+        simklSyncJob = CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            val result = runCatching {
+                val simkl = SimklRepository(this@NativePlayerActivity)
+                when (parentType.lowercase()) {
+                    "movie" -> simkl.pushWatchedMovie(imdbId = parentId, title = itemName)
+                    "series", "show", "tv" -> {
+                        val s = season; val e = episode
+                        if (s != null && e != null) {
+                            simkl.pushWatchedEpisode(showImdbId = parentId, season = s, episode = e, title = itemName)
+                        }
+                    }
+                    else -> Unit
+                }
+            }
+            if (result.isFailure) {
+                simklScrobbleSent = false
+                Log.e(TAG, "Simkl completion sync failed; will retry", result.exceptionOrNull())
+            }
+        }
+    }
 
     // --- PiP ---
     private fun enterPipIfEnabled() {
@@ -1880,6 +1895,7 @@ class NativePlayerActivity : ComponentActivity() {
     private fun saveProgressSync(reason: String, forceCompleted: Boolean = false) {
         val player = exoPlayer ?: return
         if (isLiveChannel || parentId.isBlank() || historyId.isBlank()) return
+        var completed = false
         runBlocking {
             runCatching {
                 val pos = player.currentPosition.coerceAtLeast(0L)
@@ -1888,6 +1904,7 @@ class NativePlayerActivity : ComponentActivity() {
                 if (dur == null) return@runBlocking
                 if (pos < MIN_RESUME_POSITION_MS && !forceCompleted) return@runBlocking
                 val isCompleted = forceCompleted || pos >= (dur * COMPLETION_THRESHOLD_RATIO).toLong()
+                completed = isCompleted
                 val safePos = if (isCompleted) 0L else pos.coerceAtMost(dur)
                 val now = System.currentTimeMillis()
                 val dao = WatchHistoryDatabase.getInstance(this@NativePlayerActivity).watchHistoryDao()
@@ -1905,6 +1922,7 @@ class NativePlayerActivity : ComponentActivity() {
                 withContext(Dispatchers.IO) { dao.upsert(entry) }
             }
         }
+        if (completed) syncCompletedToSimkl()
     }
 
     // --- IntroDb ---
