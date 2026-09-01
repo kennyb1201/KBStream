@@ -158,7 +158,7 @@ class HomeViewModel(
         TmdbRepository(application)
 
     private val tmdbHeroArtworkRepository =
-        TmdbHeroArtworkRepository()
+        TmdbHeroArtworkRepository(application)
 
     private val watchedStatusRepository =
         WatchedStatusRepository(application)
@@ -377,6 +377,47 @@ class HomeViewModel(
                         }
                     }
 
+                    // Resolve the TMDB id up front when the request id already
+                    // carries one, so the hero-artwork call runs in PARALLEL with
+                    // the meta/detail lookups instead of waiting for them. That
+                    // makes the clearlogo land before the user scrolls away on a
+                    // cold start (tt ids still fall back to the detail's id).
+                    val quickTmdbId = when {
+                        requestedId.trim().startsWith("tmdb:", ignoreCase = true) ->
+                            requestedId.trim().substringAfter(":").toIntOrNull()
+
+                        requestedId.trim().toIntOrNull() != null ->
+                            requestedId.trim().toIntOrNull()
+
+                        else -> null
+                    }
+
+                    val artworkDeferred = async {
+                        val artworkTmdbId = quickTmdbId
+                            ?: tmdbDetailDeferred.await()?.id
+
+                        if (artworkTmdbId == null || artworkTmdbId <= 0) {
+                            return@async null
+                        }
+
+                        try {
+                            tmdbHeroArtworkRepository.resolve(
+                                id = "tmdb:$artworkTmdbId",
+                                type = requestedType,
+                                tmdbId = artworkTmdbId
+                            )
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            Log.w(
+                                "HOME_HERO",
+                                "Artwork lookup failed: title=${item.name}, tmdbId=$artworkTmdbId",
+                                e
+                            )
+                            null
+                        }
+                    }
+
                     val resolvedAddonMeta = addonMetaDeferred.await()
                     val resolvedTmdbDetail = tmdbDetailDeferred.await()
 
@@ -401,26 +442,7 @@ class HomeViewModel(
                             else -> resolvedTmdbDetail?.id
                         }
 
-                  val heroArtwork = resolvedTmdbId
-    ?.takeIf { it > 0 }
-    ?.let { tmdbId ->
-        try {
-            tmdbHeroArtworkRepository.resolve(
-                id = "tmdb:$tmdbId",
-                type = requestedType,
-                tmdbId = tmdbId
-            )
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.w(
-                "HOME_HERO",
-                "Artwork lookup failed: title=${item.name}, tmdbId=$tmdbId",
-                e
-            )
-            null
-        }
-    }
+                    val heroArtwork = artworkDeferred.await()
 
 val resolvedLogo = heroArtwork?.logoUrl
     ?.takeIf { it.isNotBlank() }

@@ -107,6 +107,25 @@ class SimklRepository(
             )
         )
 
+    private val completedMovieKeysJsonAdapter:
+        JsonAdapter<List<String>> =
+        moshi.adapter(
+            Types.newParameterizedType(
+                List::class.java,
+                String::class.java
+            )
+        )
+
+    private val completedMovieKeysMutex =
+        Mutex()
+
+    private var cachedCompletedMovieKeys:
+        Set<String>? =
+        null
+
+    private var cachedCompletedMovieKeysFetchedAt =
+        0L
+
     fun isConfigured(): Boolean {
         return clientId.isNotBlank() &&
             clientSecret.isNotBlank()
@@ -137,6 +156,12 @@ class SimklRepository(
         cachedAllShowItemsFetchedAt =
             0L
 
+        cachedCompletedMovieKeys =
+            null
+
+        cachedCompletedMovieKeysFetchedAt =
+            0L
+
         CoroutineScope(
             Dispatchers.IO
         ).launch {
@@ -144,7 +169,8 @@ class SimklRepository(
                 tmdbJsonCacheDao?.deleteByKeys(
                     listOf(
                         ALL_SHOW_ITEMS_DISK_KEY,
-                        CONTINUE_WATCHING_DISK_KEY
+                        CONTINUE_WATCHING_DISK_KEY,
+                        COMPLETED_MOVIES_DISK_KEY
                     )
                 )
             }
@@ -1373,7 +1399,60 @@ class SimklRepository(
             requireAccessToken()
     ): Set<String> {
 
-        val completedResponse =
+        val now =
+            System.currentTimeMillis()
+
+        return completedMovieKeysMutex.withLock {
+
+            val cached =
+                cachedCompletedMovieKeys
+
+            if (
+                cached != null &&
+                now - cachedCompletedMovieKeysFetchedAt <
+                    COMPLETED_MOVIES_TTL_MS
+            ) {
+                return@withLock cached
+            }
+
+            // Disk fallback so a cold start doesn't re-fetch the completed
+            // movie lists before the watched markers can resolve.
+            if (
+                cached == null
+            ) {
+                val diskCached =
+                    readSimklJsonFromDisk(
+                        COMPLETED_MOVIES_DISK_KEY
+                    )
+
+                if (
+                    diskCached != null &&
+                    now - diskCached.updatedAt <
+                        COMPLETED_MOVIES_DISK_TTL_MS
+                ) {
+                    val parsed =
+                        runCatching {
+                            completedMovieKeysJsonAdapter
+                                .fromJson(
+                                    diskCached.json
+                                )
+                                ?.toSet()
+                        }
+                            .getOrNull()
+
+                    if (parsed != null) {
+                        cachedCompletedMovieKeys =
+                            parsed
+
+                        cachedCompletedMovieKeysFetchedAt =
+                            now
+
+                        return@withLock parsed
+                    }
+                }
+            }
+
+            val completedResponse =
             api.getCompletedMovies(
                 authorization =
                     bearer(
@@ -1473,8 +1552,36 @@ class SimklRepository(
                 emptySet()
             }
 
-        return completedKeys +
-            allMovieKeys
+            val merged =
+                completedKeys +
+                    allMovieKeys
+
+            cachedCompletedMovieKeys =
+                merged
+
+            cachedCompletedMovieKeysFetchedAt =
+                now
+
+            runCatching {
+                tmdbJsonCacheDao?.upsert(
+                    TmdbJsonCacheEntity(
+                        key =
+                            COMPLETED_MOVIES_DISK_KEY,
+
+                        json =
+                            completedMovieKeysJsonAdapter
+                                .toJson(
+                                    merged.toList()
+                                ),
+
+                        updatedAt =
+                            now
+                    )
+                )
+            }
+
+            merged
+        }
     }
 
     suspend fun getContinueWatching(
@@ -2396,6 +2503,15 @@ class SimklRepository(
 
         private const val CONTINUE_WATCHING_DISK_KEY =
             "simkl:continue_watching"
+
+        private const val COMPLETED_MOVIES_TTL_MS =
+            15L * 60L * 1000L
+
+        private const val COMPLETED_MOVIES_DISK_TTL_MS =
+            12L * 60L * 60L * 1000L
+
+        private const val COMPLETED_MOVIES_DISK_KEY =
+            "simkl:completed_movies"
 
         private var cachedContinueWatching:
             List<SimklContinueWatchingItem>? =
