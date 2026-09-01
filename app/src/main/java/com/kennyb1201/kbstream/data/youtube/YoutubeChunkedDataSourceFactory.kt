@@ -89,8 +89,12 @@ class YoutubeChunkedDataSourceFactory(
         private var currentChunkStart = 0L
         private var currentChunkEnd = 0L
         private var bytesReadInChunk = 0L
+        private var bytesToSkip = 0L
         private var originalDataSpec: DataSpec? = null
         private var originalUrlString: String? = null
+
+        /** Small buffer used to discard the prefix of a "from-0" response. */
+        private val skipBuffer = ByteArray(8192)
 
         override fun addTransferListener(transferListener: TransferListener) {
             upstream.addTransferListener(transferListener)
@@ -116,16 +120,15 @@ class YoutubeChunkedDataSourceFactory(
             } else {
                 spec.uri
             }
+            // googlevideo only honours Range requests that start at byte 0.
+            // Always request from 0 and skip the prefix we already delivered
+            // in read().
             return spec.buildUpon()
                 .setUri(uri)
-                .setPosition(currentChunkStart)
+                .setPosition(0)
                 .setLength(
                     if (bounded) {
-                        // Always bound by the chunk size, even when the total
-                        // content length is unknown: open-ended googlevideo
-                        // requests are the ones that get 403'd, while bounded
-                        // range requests are honoured.
-                        currentChunkEnd - currentChunkStart + 1
+                        currentChunkEnd + 1   // total bytes from 0 to chunk end
                     } else {
                         C.LENGTH_UNSET.toLong()
                     }
@@ -142,6 +145,7 @@ class YoutubeChunkedDataSourceFactory(
             }
 
             bytesReadInChunk = 0
+            bytesToSkip = currentChunkStart   // skip prefix we already sent
 
             // Order proven by device bisection (see runDiagnostics): the clean
             // signed URL with a capped <=1MB range serves ONLY at offset 0;
@@ -231,6 +235,18 @@ class YoutubeChunkedDataSourceFactory(
         }
 
         override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+            // googlevideo only serves Range requests from byte 0. Skip the
+            // prefix we already delivered to ExoPlayer from previous chunks.
+            while (bytesToSkip > 0) {
+                val toRead = minOf(bytesToSkip, skipBuffer.size.toLong()).toInt()
+                val skipped = upstream.read(skipBuffer, 0, toRead)
+                if (skipped == C.RESULT_END_OF_INPUT) {
+                    bytesToSkip = 0
+                    return C.RESULT_END_OF_INPUT
+                }
+                bytesToSkip -= skipped
+            }
+
             if (!isYouTubeStream || !chunkedRange) {
                 // Not a YouTube stream, or googlevideo only let us start an
                 // open-ended read — just stream it straight through.
