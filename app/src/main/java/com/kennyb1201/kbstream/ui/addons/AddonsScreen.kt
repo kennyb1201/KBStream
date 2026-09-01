@@ -1549,8 +1549,9 @@ private fun pasteFromClipboard(
     context: android.content.Context,
     onPasted: (String) -> Unit
 ) {
-    val clipboard =
-        context.getSystemService(ClipboardManager) ?: return
+    // `::class.java` is required: getSystemService's Class overload
+    // takes a class literal, not a bare class name expression.
+    val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
 
     val text = runCatching {
         clipboard.primaryClip
