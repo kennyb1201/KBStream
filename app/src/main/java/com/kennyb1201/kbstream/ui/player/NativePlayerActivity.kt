@@ -295,7 +295,18 @@ class NativePlayerActivity : ComponentActivity() {
         controlsOverlay.setOnKeyListener { _, keyCode, event ->
             if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
             when (keyCode) {
-                KeyEvent.KEYCODE_BACK -> { dismissAllPanels(); hideControls(); true }
+                KeyEvent.KEYCODE_BACK -> {
+                    // Only consume Back when there's actually something to
+                    // dismiss (a panel, the settings sheet, or visible
+                    // controls). Otherwise let it fall through to
+                    // onBackPressed so a Back press always exits the player
+                    // instead of being silently swallowed.
+                    if (isPickerShowing || showSettingsPanel || controlsVisible) {
+                        dismissAllPanels(); hideControls(); true
+                    } else {
+                        false
+                    }
+                }
                 KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> { true }
                 else -> false
             }
@@ -1785,6 +1796,14 @@ class NativePlayerActivity : ComponentActivity() {
 
     @Suppress("DEPRECATION")
     override fun onBackPressed() {
+        // If the loading splash (pulsing clearlogo) is still up, the stream
+        // hasn't started playing yet. Treat Back as an immediate exit request
+        // instead of routing it through the controls/panel handling - a user
+        // stuck on the splash must always be able to leave with one press.
+        if (::splashContainer.isInitialized && splashContainer.visibility == View.VISIBLE) {
+            super.onBackPressed()
+            return
+        }
         when {
             isPickerShowing -> { dismissPicker(); showControls(); return }
             showSettingsPanel -> { dismissSettingsPanel(); showControls(); return }
