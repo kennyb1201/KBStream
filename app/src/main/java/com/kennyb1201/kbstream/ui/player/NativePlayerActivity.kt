@@ -54,6 +54,8 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import coil3.load
+import coil3.request.ImageRequest
+import coil3.request.listener
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -414,13 +416,27 @@ class NativePlayerActivity : ComponentActivity() {
                     ?.let { path ->
                         when {
                             path.startsWith("http://") || path.startsWith("https://") -> path
-                            path.startsWith("/") -> "https://image.tmdb.org/t/p/w342$path"
-                            else -> "https://image.tmdb.org/t/p/w342/$path"
+                            path.startsWith("/") -> "https://image.tmdb.org/t/p/original$path"
+                            else -> "https://image.tmdb.org/t/p/original/$path"
                         }
                     }
                 if (!profileUrl.isNullOrBlank()) {
                     try {
-                        profileImage.load(profileUrl)
+                        profileImage.load(
+                            ImageRequest.Builder(this@NativePlayerActivity)
+                                .data(profileUrl)
+                                .listener(
+                                    onSuccess = { _, result ->
+                                        Log.w(
+                                            "NativePlayer",
+                                            "Cast image decoded: " +
+                                                "${result.image.width}x${result.image.height} " +
+                                                "src=$profileUrl"
+                                        )
+                                    }
+                                )
+                                .build()
+                        )
                     } catch (e: Exception) {
                         Log.w("NativePlayer", "Failed to load cast image: $profileUrl", e)
                         profileImage.setImageResource(R.drawable.ic_cast_placeholder)

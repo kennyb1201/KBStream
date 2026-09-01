@@ -649,7 +649,7 @@ class TmdbRepository(context: Context) {
     }
 
     companion object {
-        const val PROFILE_BASE = "https://image.tmdb.org/t/p/w342"
+        const val PROFILE_BASE = "https://image.tmdb.org/t/p/original"
         const val BACKDROP_BASE = "https://image.tmdb.org/t/p/original"
         const val POSTER_BASE = "https://image.tmdb.org/t/p/w500"
         const val LOGO_BASE = "https://image.tmdb.org/t/p/w780"
