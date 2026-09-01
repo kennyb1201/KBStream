@@ -23,9 +23,13 @@ import androidx.media3.datasource.TransferListener
  *  - and range vs. open-ended requests, which googlevideo does not always
  *    allow for every stream (it 403s range requests on some URLs).
  *
- * To stay robust we try, in order: bounded-range + ratebypass, open-ended +
- * ratebypass, bounded-range without ratebypass, then plain open-ended. All
- * requests keep the signed URL otherwise byte-for-byte intact.
+ * googlevideo 403s many streams when requested open-ended (no Range header)
+ * while honouring bounded range requests, so we ALWAYS attempt a bounded
+ * range first — even when the total content length is unknown (we chunk by
+ * a fixed size and advance). To stay robust we try, in order: bounded-range +
+ * ratebypass, bounded-range without ratebypass, open-ended + ratebypass,
+ * then plain open-ended. All requests keep the signed URL otherwise
+ * byte-for-byte intact.
  *
  * Only activates for googlevideo.com URLs; other URLs pass through untouched.
  */
@@ -96,7 +100,11 @@ class YoutubeChunkedDataSourceFactory(
                 .setUri(uri)
                 .setPosition(currentChunkStart)
                 .setLength(
-                    if (bounded && totalContentLength != C.LENGTH_UNSET.toLong()) {
+                    if (bounded) {
+                        // Always bound by the chunk size, even when the total
+                        // content length is unknown: open-ended googlevideo
+                        // requests are the ones that get 403'd, while bounded
+                        // range requests are honoured.
                         currentChunkEnd - currentChunkStart + 1
                     } else {
                         C.LENGTH_UNSET.toLong()
