@@ -143,13 +143,17 @@ class YoutubeChunkedDataSourceFactory(
 
             bytesReadInChunk = 0
 
-            // Proven request first (device DIAG: the clean signed URL with a
-            // <=1MB range returns 206; ratebypass and open-ended modes 403 on
-            // many URLs), then degrade to ratebypass/open-ended fallbacks.
+            // Order proven by device bisection (see runDiagnostics): the clean
+            // signed URL with a capped <=1MB range serves ONLY at offset 0;
+            // capped ranges at later offsets return 403. Mid-stream the server
+            // still honours an open-ended range from the current position, so
+            // try clean-bounded first (offset 0 case), then clean open-ended,
+            // then ratebypass variants as a last resort (mutating the URL can
+            // corrupt the signature).
             val attempts = buildList {
                 add(false to chunkedRange)
-                add(true to chunkedRange)
                 if (chunkedRange) add(false to false)
+                add(true to chunkedRange)
                 if (chunkedRange) add(true to false)
             }.distinct()
 
@@ -188,9 +192,10 @@ class YoutubeChunkedDataSourceFactory(
 
         /**
          * Debug-only: replays the failing URL through a plain OkHttpClient with
-         * four different Range styles and logs each response code + body. The
-         * extractor's probe (Range bytes=0-0, raw OkHttp) succeeds while every
-         * media3 open 403s, so the body here tells us the exact rejection reason.
+         * different Range styles and logs each response code + body. Device
+         * bisection so far: capped ranges succeed at offset 0 (0-0, 0-1M) but
+         * 403 at 10M span and at later offsets. These probes add the missing
+         * offset cases: open-ended from 0 and from the current chunk position.
          */
         private fun runDiagnostics(url: String) {
             runCatching {
@@ -198,11 +203,14 @@ class YoutubeChunkedDataSourceFactory(
                     .connectTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
                     .readTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
                     .build()
+                val pos = currentChunkStart
                 val probes = listOf(
                     "plain-get" to null,
                     "range-0-0" to "bytes=0-0",
                     "range-0-1M" to "bytes=0-1048575",
-                    "range-0-10M" to "bytes=0-10485759"
+                    "range-0-10M" to "bytes=0-10485759",
+                    "range-0-openpos" to "bytes=0-$pos",
+                    "range-pos-open" to "bytes=$pos-"
                 )
                 for ((label, range) in probes) {
                     val rb = okhttp3.Request.Builder().url(url).get()
@@ -247,13 +255,10 @@ class YoutubeChunkedDataSourceFactory(
                     }
                 }
 
-                return try {
-                    openNextChunk()
-                    upstream.read(buffer, offset, length)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to open next chunk at $currentChunkStart: ${e.message}")
-                    C.RESULT_END_OF_INPUT
-                }
+                // Never mask a failed mid-stream open as end-of-input: that
+                // silently truncates playback. Surface the real cause.
+                openNextChunk()
+                return upstream.read(buffer, offset, length)
             }
 
             bytesReadInChunk += bytesRead
