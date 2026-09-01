@@ -17,15 +17,12 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
@@ -34,9 +31,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
-import coil3.request.ImageRequest
-import coil3.request.crossfade
-import coil3.toBitmap
 import com.kennyb1201.kbstream.data.tmdb.StudioItem
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TmdbCompanyDetail
@@ -143,7 +137,7 @@ private fun StudioHeader(
             // straight on the dark surface and recolor dark (black) artwork to
             // white so it reads. Light/colored logos pass through untouched —
             // the tint only kicks in when the sampled artwork is dark.
-            TintedBrandLogo(
+            BrandLogo(
                 url = logoUrl,
                 name = name,
                 modifier = Modifier
@@ -203,65 +197,18 @@ private fun StudioHeader(
  * Public so the detail screen's studio/network chips share the same logic.
  */
 @Composable
-fun TintedBrandLogo(
+@Composable
+fun BrandLogo(
     url: String,
     name: String,
     modifier: Modifier = Modifier
 ) {
-    var logoIsDark by remember(url) { mutableStateOf(false) }
-    val context = LocalContext.current
-
     AsyncImage(
-        model = ImageRequest.Builder(context)
-            .data(url)
-            .crossfade(true)
-            .build(),
+        model = url,
         contentDescription = name,
         contentScale = ContentScale.Fit,
-        onSuccess = { state ->
-            try {
-                val image = state.result.image
-                // Requesting software bitmaps above makes pixel sampling safe.
-                // Only dark monochrome artwork is recolored; colored logos
-                // such as DC Studios remain untouched.
-                logoIsDark = isDarkArtwork(image.toBitmap())
-            } catch (_: Throwable) {
-                // Safe fallback: assume dark monochrome artwork
-                logoIsDark = true
-            }
-        },
-        colorFilter = if (logoIsDark) ColorFilter.tint(Color.White) else null,
         modifier = modifier
     )
-}
-
-/** Retained for callers that need to classify ordinary software bitmaps. */
-fun isDarkArtwork(bitmap: android.graphics.Bitmap): Boolean {
-    val sample =
-        android.graphics.Bitmap.createScaledBitmap(bitmap, 48, 24, true)
-    var sum = 0L
-    var saturationSum = 0L
-    var count = 0L
-    for (y in 0 until sample.height) {
-        for (x in 0 until sample.width) {
-            val px = sample.getPixel(x, y)
-            val alpha = (px ushr 24) and 0xFF
-            if (alpha > 20) {
-                val r = (px ushr 16) and 0xFF
-                val g = (px ushr 8) and 0xFF
-                val b = px and 0xFF
-                // Relative luminance (Rec. 709), 0..255.
-                sum += (0.2126f * r + 0.7152f * g + 0.0722f * b).toLong()
-                saturationSum += (maxOf(r, g, b) - minOf(r, g, b)).toLong()
-                count++
-            }
-        }
-    }
-    if (sample !== bitmap) sample.recycle()
-    if (count == 0L) return false
-    val averageLuminance = sum / count
-    val averageSaturation = saturationSum / count
-    return averageLuminance < 148L && averageSaturation < 42L
 }
 
 @Composable

@@ -99,7 +99,7 @@ fun StudioChip(
                     contentScale = ContentScale.Fit,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(26.dp)
+                        .height(30.dp)
                 )
             } else {
                 Text(
