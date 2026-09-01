@@ -1138,7 +1138,7 @@ private fun CompactUpNextCard(
     }
 
     PosterCard(
-        posterUrl = item.episodeThumbnail ?: item.poster ?: "",
+        posterUrl = item.episodeThumbnail ?: item.backdrop ?: item.poster ?: "",
         contentDescription = item.title,
         isWatched = false,
         onClick = onClick,

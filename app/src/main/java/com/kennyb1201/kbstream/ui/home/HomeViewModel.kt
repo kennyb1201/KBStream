@@ -79,9 +79,9 @@ data class UpNextItem(
     val runtimeMinutes: Int? = null,
     val remainingMinutes: Int? = null,
     val episodesRemaining: Int? = null,
-    val episodesWatched: Int? = null,
-val episodesTotal: Int? = null,
+    val episodesWatched: Int? = null,    val episodesTotal: Int? = null,
     val episodeThumbnail: String? = null,
+    val backdrop: String? = null,
 
     val subtitle: String? = null,
     val progressPercent: Float? = null,
@@ -808,6 +808,7 @@ Log.d(
 
         var episodeRating: Double? = null
         var episodeThumbnail: String? = null
+        var backdropUrl: String? = null
 
         // Cache completed episode keys per show so we only query the
         // DAO once per parentId instead of once per history row.
@@ -875,6 +876,11 @@ Log.d(
                             null
                         }
                     }
+
+                backdropUrl =
+                    tmdbDetail?.backdropPath
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { "https://image.tmdb.org/t/p/w780$it" }
 
                 val tmdbId = tmdbDetail?.id
 
@@ -981,6 +987,7 @@ Log.d(
             tmdbRating = null,
             imdbRating = episodeRating,
             episodeThumbnail = episodeThumbnail,
+            backdrop = backdropUrl,
 
             runtimeMinutes =
                 if (entry.durationMs > 0L) {
@@ -1234,6 +1241,7 @@ Log.d(
         var tmdbRating: Double? = null
         var episodeThumbnail: String? = null
         var episodeRating: Double? = null
+        var backdropUrl: String? = null
         var runtimeMinutes: Int? = null
         var episodesWatched: Int? = null
 var episodesTotal: Int? = null
@@ -1254,8 +1262,7 @@ var episodesTotal: Int? = null
         
 
         val needsTmdbLookup =
-            posterUrl.isNullOrBlank() ||
-                item.mediaType == "series"
+            true
 
         if (needsTmdbLookup) {
 
@@ -1290,6 +1297,11 @@ var episodesTotal: Int? = null
 
             // Populate display metadata from TMDB.
             if (detail != null) {
+
+                backdropUrl =
+                    detail.backdropPath
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { "https://image.tmdb.org/t/p/w780$it" }
 
                 showTitle =
                     if (item.mediaType == "series") {
@@ -1519,6 +1531,9 @@ episodesTotal =
 
             episodeThumbnail =
                 episodeThumbnail,
+
+            backdrop =
+                backdropUrl,
 
             runtimeMinutes =
                 runtimeMinutes,
