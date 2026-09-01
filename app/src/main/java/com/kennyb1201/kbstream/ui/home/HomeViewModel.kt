@@ -633,7 +633,15 @@ Log.d(
     private fun observeAddonChanges() {
         viewModelScope.launch {
             addonManager.installedAddons.collectLatest {
-                loadRailsInternal(forceRefresh = true)
+                // Rebuild rails immediately when addon/catalog settings change
+                // (reorder, show/hide, add/remove) without clearing the catalog
+                // cache, so the new order/visibility shows up right away from
+                // the in-memory cache instead of a slow full network refetch.
+                // The manual REFRESH paths still pass clearCatalogCache = true.
+                loadRailsInternal(
+                    forceRefresh = true,
+                    clearCatalogCache = false
+                )
             }
         }
     }
@@ -2740,7 +2748,8 @@ private suspend fun calculateEpisodesRemaining(
     )
 
     private suspend fun loadRailsInternal(
-        forceRefresh: Boolean
+        forceRefresh: Boolean,
+        clearCatalogCache: Boolean = forceRefresh
     ) {
 
         if (
@@ -2756,7 +2765,7 @@ private suspend fun calculateEpisodesRemaining(
         _error.value =
             null
 
-        if (forceRefresh) {
+        if (clearCatalogCache) {
             repository.clearCatalogCache()
         }
 
@@ -2781,6 +2790,16 @@ private suspend fun calculateEpisodesRemaining(
                     addonManager
                         .getHomeCatalogConfigurations()
                         .asSequence()
+                        // Some manifests (e.g. AIOStreams) list the same catalog
+                        // more than once; dedupe so Home never builds two rails
+                        // with the same UI key (duplicate LazyColumn keys crash
+                        // the rail list, which is why catalogs showed in the
+                        // add-on screen but never appeared on Home).
+                        .distinctBy { configuration ->
+                            configuration.addonId + "::" +
+                                configuration.catalog.type.trim().lowercase() + "::" +
+                                configuration.catalog.id.trim().lowercase()
+                        }
                         .mapNotNull { configuration ->
 
                             val addon =

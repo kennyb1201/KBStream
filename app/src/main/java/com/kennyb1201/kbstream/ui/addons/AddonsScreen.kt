@@ -32,6 +32,8 @@ import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.KeyboardDoubleArrowDown
+import androidx.compose.material.icons.filled.KeyboardDoubleArrowUp
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -76,10 +78,17 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 
+/** Actions for reordering a catalog within its addon. */
+private enum class CatalogMoveAction {
+    TOP,
+    UP,
+    DOWN,
+    BOTTOM
+}
+
 @Composable
 fun AddonsScreen(
     onBack: () -> Unit,
-    onOpenCatalogManager: () -> Unit,
     viewModel: AddonsViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
     val context = LocalContext.current
@@ -150,8 +159,6 @@ fun AddonsScreen(
                     enabled = !refreshing && !isLoading,
                     onClick = viewModel::refreshAllManifests
                 )
-                Spacer(modifier = Modifier.width(8.dp))
-                ActionButton(label = "CATALOGS", onClick = onOpenCatalogManager)
                 Spacer(modifier = Modifier.width(8.dp))
                 ActionButton(
                     label = "ADD",
@@ -284,6 +291,21 @@ fun AddonsScreen(
                                         catalogId,
                                         showOnHome
                                     )
+                                },
+                                onMoveCatalog = { catalogId, action ->
+                                    when (action) {
+                                        CatalogMoveAction.TOP ->
+                                            viewModel.moveCatalogToTop(selectedAddon.id, catalogId)
+
+                                        CatalogMoveAction.UP ->
+                                            viewModel.moveCatalogUp(selectedAddon.id, catalogId)
+
+                                        CatalogMoveAction.DOWN ->
+                                            viewModel.moveCatalogDown(selectedAddon.id, catalogId)
+
+                                        CatalogMoveAction.BOTTOM ->
+                                            viewModel.moveCatalogToBottom(selectedAddon.id, catalogId)
+                                    }
                                 }
                             )
                         }
@@ -460,7 +482,8 @@ private fun AddonDetails(
     onOpenManifest: () -> Unit,
     onRefresh: () -> Unit,
     onRemove: () -> Unit,
-    onToggleCatalog: (catalogId: String, showOnHome: Boolean) -> Unit
+    onToggleCatalog: (catalogId: String, showOnHome: Boolean) -> Unit,
+    onMoveCatalog: (catalogId: String, action: CatalogMoveAction) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -533,20 +556,26 @@ private fun AddonDetails(
                 modifier = Modifier.padding(bottom = 6.dp)
             )
 
-            addon.catalogs
-                .sortedBy { it.order }
-                .forEach { catalog ->
-                    CatalogToggleRow(
-                        catalog = catalog,
-                        onToggle = {
-                            onToggleCatalog(
-                                catalog.id,
-                                !catalog.showOnHome
-                            )
-                        }
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                }
+            val sortedCatalogs =
+                addon.catalogs.sortedBy { it.order }
+
+            sortedCatalogs.forEachIndexed { index, catalog ->
+                CatalogToggleRow(
+                    catalog = catalog,
+                    isFirst = index == 0,
+                    isLast = index == sortedCatalogs.lastIndex,
+                    onToggle = {
+                        onToggleCatalog(
+                            catalog.id,
+                            !catalog.showOnHome
+                        )
+                    },
+                    onMove = { action ->
+                        onMoveCatalog(catalog.id, action)
+                    }
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+            }
         }
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -897,7 +926,10 @@ private fun AddonTileLetter(
 @Composable
 private fun CatalogToggleRow(
     catalog: ManifestCatalog,
-    onToggle: () -> Unit
+    isFirst: Boolean,
+    isLast: Boolean,
+    onToggle: () -> Unit,
+    onMove: (CatalogMoveAction) -> Unit
 ) {
     KBCard(
         onClick = onToggle,
@@ -907,7 +939,7 @@ private fun CatalogToggleRow(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 9.dp)
+                .padding(horizontal = 12.dp, vertical = 7.dp)
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -930,8 +962,85 @@ private fun CatalogToggleRow(
                 text = if (catalog.showOnHome) "ON HOME" else "HIDDEN",
                 color = if (catalog.showOnHome) KBAccent else KBTextLo,
                 style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(end = 12.dp)
             )
+
+            CatalogMoveButton(
+                icon = Icons.Filled.KeyboardDoubleArrowUp,
+                contentDescription = "Move to top",
+                enabled = !isFirst,
+                onClick = { onMove(CatalogMoveAction.TOP) }
+            )
+            CatalogMoveButton(
+                icon = Icons.Filled.ArrowUpward,
+                contentDescription = "Move up",
+                enabled = !isFirst,
+                onClick = { onMove(CatalogMoveAction.UP) }
+            )
+            CatalogMoveButton(
+                icon = Icons.Filled.ArrowDownward,
+                contentDescription = "Move down",
+                enabled = !isLast,
+                onClick = { onMove(CatalogMoveAction.DOWN) }
+            )
+            CatalogMoveButton(
+                icon = Icons.Filled.KeyboardDoubleArrowDown,
+                contentDescription = "Move to bottom",
+                enabled = !isLast,
+                onClick = { onMove(CatalogMoveAction.BOTTOM) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun CatalogMoveButton(
+    icon: ImageVector,
+    contentDescription: String,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    val buttonModifier = Modifier
+        .padding(start = 6.dp)
+        .size(34.dp)
+
+    if (enabled) {
+        KBCard(
+            onClick = onClick,
+            modifier = buttonModifier
+        ) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.fillMaxSize()
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = contentDescription,
+                    tint = KBTextHi,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    } else {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            colors = SurfaceDefaults.colors(
+                containerColor = KBSurface.copy(alpha = 0.50f),
+                contentColor = KBTextLo.copy(alpha = 0.40f)
+            ),
+            modifier = buttonModifier
+        ) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.fillMaxSize()
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = contentDescription,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
         }
     }
 }

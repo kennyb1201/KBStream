@@ -1751,8 +1751,11 @@ fun HomeScreen(
                     else -> {
                         itemsIndexed(
                             items = rails,
-                            key = { _, rail ->
-                                "${rail.addonName}:" +
+                            // Index prefix guarantees uniqueness even if two
+                            // rails ever share addon/catalog/type.
+                            key = { railIndex, rail ->
+                                "$railIndex|" +
+                                    "${rail.addonName}:" +
                                     "${rail.catalogName}:" +
                                     "${rail.type}"
                             }

@@ -80,7 +80,8 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                     customName = existing?.customName,
                     version = manifest.version,
                     description = manifest.description,
-                    types = manifest.types
+                    types = manifest.types,
+                    logo = manifest.logo ?: manifest.icon
                 )
 
                 val updated = if (existing == null) {
@@ -179,6 +180,62 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         catalogId: String
     ) {
         moveCatalog(addonId, catalogId, 1)
+    }
+
+    /**
+     * Move a catalog to the top of its addon.
+     */
+    fun moveCatalogToTop(
+        addonId: String,
+        catalogId: String
+    ) {
+        val addon = _addons.value.firstOrNull { it.id == addonId }
+            ?: return
+
+        val sorted = addon.catalogs
+            .sortedBy { it.order }
+            .toMutableList()
+
+        val index = sorted.indexOfFirst { it.id == catalogId }
+        if (index <= 0) return
+
+        val catalog = sorted.removeAt(index)
+        sorted.add(0, catalog)
+
+        saveCatalogs(
+            addonId = addonId,
+            catalogs = sorted.mapIndexed { newIndex, item ->
+                item.copy(order = newIndex)
+            }
+        )
+    }
+
+    /**
+     * Move a catalog to the bottom of its addon.
+     */
+    fun moveCatalogToBottom(
+        addonId: String,
+        catalogId: String
+    ) {
+        val addon = _addons.value.firstOrNull { it.id == addonId }
+            ?: return
+
+        val sorted = addon.catalogs
+            .sortedBy { it.order }
+            .toMutableList()
+
+        val index = sorted.indexOfFirst { it.id == catalogId }
+        if (index == -1 || index == sorted.lastIndex) return
+
+        val catalog = sorted.removeAt(index)
+        sorted.add(catalog)
+
+        saveCatalogs(
+            addonId = addonId,
+            catalogs = sorted.mapIndexed { newIndex, item ->
+                item.copy(order = newIndex)
+            }
+        )
     }
 
     /**
@@ -316,10 +373,16 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         // Append catalogs that are new in the refreshed manifest.
+        // Some addons (e.g. AIOStreams) list the same catalog more than once
+        // in their manifest — dedupe by (type, id) so Home never builds two
+        // rails with the same key (duplicate LazyColumn keys crash the rail
+        // list, which is why catalogs showed in the add-on screen but never
+        // appeared on Home).
+        val seen = mutableSetOf<String>()
         newCatalogs.forEach { catalog ->
             val key = catalogKey(catalog.type, catalog.id)
 
-            if (oldByKey[key] == null) {
+            if (oldByKey[key] == null && seen.add(key)) {
                 result += catalog.copy(
                     showOnHome = true
                 )
@@ -367,7 +430,8 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                             ),
                             version = manifest.version,
                             description = manifest.description,
-                            types = manifest.types
+                            types = manifest.types,
+                            logo = manifest.logo ?: manifest.icon
                         )
                     } catch (_: Exception) {
                         failureCount++
@@ -425,7 +489,8 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                                 resources = manifest.resources,
                                 version = manifest.version,
                                 description = manifest.description,
-                                types = manifest.types
+                                types = manifest.types,
+                                logo = manifest.logo ?: manifest.icon
                             )
                         } else {
                             old

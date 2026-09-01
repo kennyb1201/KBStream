@@ -24,7 +24,6 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbCastMember
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.actor.ActorScreen
 import com.kennyb1201.kbstream.ui.addons.AddonsScreen
-import com.kennyb1201.kbstream.ui.addons.CatalogManagerScreen
 import com.kennyb1201.kbstream.ui.collection.CollectionScreen
 import com.kennyb1201.kbstream.ui.detail.DetailScreen
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
@@ -51,8 +50,6 @@ sealed class Screen {
     object Home : Screen()
 
     object Addons : Screen()
-
-    object CatalogManager : Screen()
 
     object Search : Screen()
 
@@ -192,9 +189,6 @@ fun AppRoot() {
     ) {
         screen = when (val current = screen) {
 
-            is Screen.CatalogManager ->
-                Screen.Addons
-
             is Screen.Addons ->
                 Screen.Settings
 
@@ -283,19 +277,6 @@ fun AppRoot() {
             AddonsScreen(
                 onBack = {
                     screen = Screen.Home
-                },
-
-                onOpenCatalogManager = {
-                    screen = Screen.CatalogManager
-                }
-            )
-        }
-
-        is Screen.CatalogManager -> {
-
-            CatalogManagerScreen(
-                onBack = {
-                    screen = Screen.Addons
                 }
             )
         }
