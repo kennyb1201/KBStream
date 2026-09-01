@@ -3,8 +3,12 @@ package com.kennyb1201.kbstream.data.tmdb
 import android.content.Context
 import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.cache.ImdbResolutionEntity
+import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheDao
+import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
+import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -55,9 +59,34 @@ class TmdbRepository(context: Context) {
 
     private val database = WatchHistoryDatabase.getInstance(context)
     private val imdbResolutionDao = database.imdbResolutionDao()
+    private val tmdbJsonCacheDao: TmdbJsonCacheDao = database.tmdbJsonCacheDao()
 
     private val detailCache = mutableMapOf<String, Pair<Long, TmdbDetail?>>()
     private val detailCacheTtlMs = 12L * 60L * 60L * 1000L
+    private val detailCacheDiskTtlMs = 30L * 24L * 60L * 60L * 1000L
+
+    private val seasonEpisodesCache = mutableMapOf<String, Pair<Long, List<ResolvedEpisode>>>()
+    private val seasonEpisodesCacheTtlMs = 12L * 60L * 60L * 1000L
+    private val seasonEpisodesDiskTtlMs = 7L * 24L * 60L * 60L * 1000L
+
+    private val detailJsonAdapter: JsonAdapter<TmdbDetail> =
+        moshi.adapter(TmdbDetail::class.java)
+
+    private val seasonEpisodesJsonAdapter: JsonAdapter<List<ResolvedEpisode>> =
+        moshi.adapter(
+            Types.newParameterizedType(
+                List::class.java,
+                ResolvedEpisode::class.java
+            )
+        )
+
+    private val genresJsonAdapter: JsonAdapter<List<TmdbGenre>> =
+        moshi.adapter(
+            Types.newParameterizedType(
+                List::class.java,
+                TmdbGenre::class.java
+            )
+        )
 
     private val imdbResolutionMemoryCache = mutableMapOf<String, Pair<Long, String?>>()
     private val imdbResolutionTtlMs = 30L * 24L * 60L * 60L * 1000L
@@ -66,9 +95,11 @@ class TmdbRepository(context: Context) {
     private var tvGenresCache: List<TmdbGenre>? = null
 
     private val cachePruned = AtomicBoolean(false)
+    private val jsonCachePruned = AtomicBoolean(false)
 
     init {
         pruneImdbCacheOnce()
+        pruneJsonCacheOnce()
     }
 
     private fun pruneImdbCacheOnce() {
@@ -77,6 +108,17 @@ class TmdbRepository(context: Context) {
             CoroutineScope(Dispatchers.IO).launch {
                 runCatching {
                     imdbResolutionDao.deleteOlderThan(cutoff)
+                }
+            }
+        }
+    }
+
+    private fun pruneJsonCacheOnce() {
+        if (jsonCachePruned.compareAndSet(false, true)) {
+            val cutoff = System.currentTimeMillis() - 30L * 24L * 60L * 60L * 1000L
+            CoroutineScope(Dispatchers.IO).launch {
+                runCatching {
+                    tmdbJsonCacheDao.deleteOlderThan(cutoff)
                 }
             }
         }
@@ -98,14 +140,41 @@ class TmdbRepository(context: Context) {
     suspend fun fetchEnrichedMetaCached(imdbId: String, type: String): TmdbDetail? {
         val key = "${normalizeType(type)}:$imdbId"
         val now = System.currentTimeMillis()
-        val cached = detailCache[key]
 
+        // In-memory TTL cache (fast path for the current session).
+        val cached = detailCache[key]
         if (cached != null && now - cached.first < detailCacheTtlMs) {
             return cached.second
         }
 
+        // Disk cache so resolved metadata survives restarts.
+        val diskKey = "detail:$key"
+        val diskCached = runCatching {
+            tmdbJsonCacheDao.getByKey(diskKey)
+        }.getOrNull()
+        if (diskCached != null && now - diskCached.updatedAt < detailCacheDiskTtlMs) {
+            val parsed = runCatching {
+                detailJsonAdapter.fromJson(diskCached.json)
+            }.getOrNull()
+            if (parsed != null) {
+                detailCache[key] = now to parsed
+                return parsed
+            }
+        }
+
         val result = runCatching { fetchEnrichedMeta(imdbId, type) }.getOrNull()
         detailCache[key] = now to result
+        if (result != null) {
+            runCatching {
+                tmdbJsonCacheDao.upsert(
+                    TmdbJsonCacheEntity(
+                        key = diskKey,
+                        json = detailJsonAdapter.toJson(result),
+                        updatedAt = now
+                    )
+                )
+            }
+        }
         return result
     }
 
@@ -176,17 +245,52 @@ class TmdbRepository(context: Context) {
     suspend fun getMovieGenres(): List<TmdbGenre> {
         if (apiKey.isBlank()) return emptyList()
         movieGenresCache?.let { return it }
+        readGenresFromDisk("movie")?.let {
+            movieGenresCache = it
+            return it
+        }
         return runCatching { api.getMovieGenreList(apiKey).genres }
             .getOrDefault(emptyList())
             .also { movieGenresCache = it }
+            .also { writeGenresToDisk("movie", it) }
     }
 
     suspend fun getTvGenres(): List<TmdbGenre> {
         if (apiKey.isBlank()) return emptyList()
         tvGenresCache?.let { return it }
+        readGenresFromDisk("tv")?.let {
+            tvGenresCache = it
+            return it
+        }
         return runCatching { api.getTvGenreList(apiKey).genres }
             .getOrDefault(emptyList())
             .also { tvGenresCache = it }
+            .also { writeGenresToDisk("tv", it) }
+    }
+
+    private suspend fun readGenresFromDisk(key: String): List<TmdbGenre>? {
+        val now = System.currentTimeMillis()
+        val diskCached = runCatching {
+            tmdbJsonCacheDao.getByKey("genres:$key")
+        }.getOrNull()
+        if (diskCached != null && now - diskCached.updatedAt < detailCacheDiskTtlMs) {
+            return runCatching {
+                genresJsonAdapter.fromJson(diskCached.json)
+            }.getOrNull()
+        }
+        return null
+    }
+
+    private suspend fun writeGenresToDisk(key: String, genres: List<TmdbGenre>) {
+        runCatching {
+            tmdbJsonCacheDao.upsert(
+                TmdbJsonCacheEntity(
+                    key = "genres:$key",
+                    json = genresJsonAdapter.toJson(genres),
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+        }
     }
 
     suspend fun getCollection(collectionId: Int): TmdbCollectionDetail? {
@@ -203,9 +307,35 @@ class TmdbRepository(context: Context) {
             throw IllegalStateException("TMDB API key is missing")
         }
 
+        // Continue-watching resolution scans many seasons per show (and does so
+        // once per history/Simkl row), so cache each (show, season) lookup in
+        // memory with a TTL instead of hitting TMDB every time.
+        val key = "$tvId:$season:$imdbId"
+        val now = System.currentTimeMillis()
+        val cached = seasonEpisodesCache[key]
+
+        if (cached != null && now - cached.first < seasonEpisodesCacheTtlMs) {
+            return cached.second
+        }
+
+        // Disk cache so the season scans also survive restarts.
+        val diskKey = "season:$key"
+        val diskCached = runCatching {
+            tmdbJsonCacheDao.getByKey(diskKey)
+        }.getOrNull()
+        if (diskCached != null && now - diskCached.updatedAt < seasonEpisodesDiskTtlMs) {
+            val parsed = runCatching {
+                seasonEpisodesJsonAdapter.fromJson(diskCached.json)
+            }.getOrNull()
+            if (parsed != null) {
+                seasonEpisodesCache[key] = now to parsed
+                return parsed
+            }
+        }
+
         val seasonDetail = api.getSeasonDetail(tvId, season, apiKey)
 
-        return seasonDetail.episodes.map { ep ->
+        val episodes = seasonDetail.episodes.map { ep ->
             ResolvedEpisode(
                 streamId = "$imdbId:$season:${ep.episodeNumber}",
                 episodeNumber = ep.episodeNumber,
@@ -219,6 +349,18 @@ class TmdbRepository(context: Context) {
                 voteAverage = ep.voteAverage
             )
         }
+
+        seasonEpisodesCache[key] = now to episodes
+        runCatching {
+            tmdbJsonCacheDao.upsert(
+                TmdbJsonCacheEntity(
+                    key = diskKey,
+                    json = seasonEpisodesJsonAdapter.toJson(episodes),
+                    updatedAt = now
+                )
+            )
+        }
+        return episodes
     }
 
     suspend fun getEpisodeRating(
@@ -244,13 +386,51 @@ class TmdbRepository(context: Context) {
     suspend fun getDetailByTmdbId(tmdbId: Int, type: String): TmdbDetail? {
         if (apiKey.isBlank()) return null
 
-        return runCatching {
+        val key = "${normalizeType(type)}:tmdb:$tmdbId"
+        val now = System.currentTimeMillis()
+
+        // In-memory TTL cache (fast path for the current session).
+        val cached = detailCache[key]
+        if (cached != null && now - cached.first < detailCacheTtlMs) {
+            return cached.second
+        }
+
+        // Disk cache so resolved metadata survives restarts.
+        val diskKey = "detail:$key"
+        val diskCached = runCatching {
+            tmdbJsonCacheDao.getByKey(diskKey)
+        }.getOrNull()
+        if (diskCached != null && now - diskCached.updatedAt < detailCacheDiskTtlMs) {
+            val parsed = runCatching {
+                detailJsonAdapter.fromJson(diskCached.json)
+            }.getOrNull()
+            if (parsed != null) {
+                detailCache[key] = now to parsed
+                return parsed
+            }
+        }
+
+        val result = runCatching {
             if (normalizeType(type) == "series") {
                 api.getTv(tmdbId, apiKey)
             } else {
                 api.getMovie(tmdbId, apiKey)
             }
         }.getOrNull()
+
+        detailCache[key] = now to result
+        if (result != null) {
+            runCatching {
+                tmdbJsonCacheDao.upsert(
+                    TmdbJsonCacheEntity(
+                        key = diskKey,
+                        json = detailJsonAdapter.toJson(result),
+                        updatedAt = now
+                    )
+                )
+            }
+        }
+        return result
     }
 
     suspend fun getByCompany(companyId: Int): List<StudioSection> =
