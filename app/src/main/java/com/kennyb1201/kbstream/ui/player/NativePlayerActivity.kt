@@ -52,6 +52,7 @@ import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
+import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import coil3.load
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -78,6 +79,7 @@ private const val MAX_RETRY_ATTEMPTS = 6
 private val RETRY_BACKOFF_MS = listOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 30_000L)
 private val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 private const val CONTROLS_HIDE_DELAY_MS = 6_000L
+private const val NEXT_UP_COUNTDOWN_SECONDS = 5
 
 class NativePlayerActivity : ComponentActivity() {
 
@@ -141,6 +143,14 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var btnOffsetPlus: TextView
     private lateinit var castSection: LinearLayout
     private lateinit var castRow: LinearLayout
+    private lateinit var nextUpPanel: LinearLayout
+    private lateinit var nextUpThumb: ImageView
+    private lateinit var nextUpShowTitle: TextView
+    private lateinit var nextUpEpisodeLabel: TextView
+    private lateinit var nextUpEpisodeTitle: TextView
+    private lateinit var btnNextPlay: TextView
+    private lateinit var btnNextDismiss: TextView
+    private lateinit var nextUpCountdown: TextView
 
     // Player
     private var exoPlayer: ExoPlayer? = null
@@ -252,6 +262,28 @@ class NativePlayerActivity : ComponentActivity() {
     private var episodeTitle: String? = null
     private var preferredAudioLang = ""
     private var preferredSubtitleLang = ""
+
+    // "Up next" popup state
+    private var pendingNextSeason: Int? = null
+    private var pendingNextEpisode: Int? = null
+    private var pendingNextEpisodeName: String? = null
+    private var nextUpCountdownRemaining = 0
+    private val nextUpCountdownHandler = Handler(Looper.getMainLooper())
+    private val nextUpCountdownRunnable = object : Runnable {
+        override fun run() {
+            nextUpCountdownRemaining--
+            if (nextUpCountdownRemaining <= 0) {
+                launchNextEpisode(
+                    pendingNextSeason ?: return,
+                    pendingNextEpisode ?: return,
+                    pendingNextEpisodeName
+                )
+            } else {
+                nextUpCountdown.text = "Playing next in $nextUpCountdownRemaining"
+                nextUpCountdownHandler.postDelayed(this, 1_000L)
+            }
+        }
+    }
 
     // Scopes
     private var scope: CoroutineScope? = null
@@ -569,6 +601,17 @@ class NativePlayerActivity : ComponentActivity() {
         btnOffsetPlus = findViewById(R.id.btn_offset_plus)
         castSection = findViewById(R.id.cast_section)
         castRow = findViewById(R.id.cast_row)
+        nextUpPanel = findViewById(R.id.next_up_panel)
+        nextUpThumb = findViewById(R.id.next_up_thumb)
+        nextUpShowTitle = findViewById(R.id.next_up_show_title)
+        nextUpEpisodeLabel = findViewById(R.id.next_up_episode_label)
+        nextUpEpisodeTitle = findViewById(R.id.next_up_episode_title)
+        btnNextPlay = findViewById(R.id.btn_next_play)
+        btnNextDismiss = findViewById(R.id.btn_next_dismiss)
+        nextUpCountdown = findViewById(R.id.next_up_countdown)
+
+        applyPillState(btnNextPlay, true)
+        applyPillState(btnNextDismiss, false)
 
         pickerList.layoutManager = LinearLayoutManager(this)
         pickerList.isFocusable = true
@@ -626,32 +669,20 @@ class NativePlayerActivity : ComponentActivity() {
 
         // Overlay control buttons
         btnNext.setOnClickListener {
-            if (season != null && episode != null) {
-                val nextEp = episode!! + 1
-                val maxEps = totalEpisodesInSeason
-                val (targetSeason, targetEpisode) = if (maxEps != null && nextEp > maxEps) {
-                    // End of season — jump to next season episode 1
-                    (season!! + 1) to 1
-                } else {
-                    season!! to nextEp
-                }
-                NextEpisodeResult.pendingNextEpisode = NextEpisodeResult.PendingNext(
-                    season = targetSeason,
-                    episode = targetEpisode,
-                    title = "S${targetSeason}E$targetEpisode",
-                    streamId = episodeStreamId.orEmpty()
-                )
-                // Release the media session synchronously so it is unregistered from the
-                // process-wide session map before the next player activity builds its own
-                // (both use the empty default id and would otherwise collide with
-                // "Session ID must be unique"). The player itself stays alive so onStop's
-                // progress save still runs.
-                mediaSession?.release()
-                mediaSession = null
-                finish()
-            }
+            val target = nextEpisodeTarget() ?: return@setOnClickListener
+            launchNextEpisode(target.first, target.second)
         }
         btnSource.setOnClickListener { showPicker(PickerMode.SOURCE) }
+
+        // "Up next" popup buttons
+        btnNextPlay.setOnClickListener {
+            launchNextEpisode(
+                pendingNextSeason ?: return@setOnClickListener,
+                pendingNextEpisode ?: return@setOnClickListener,
+                pendingNextEpisodeName
+            )
+        }
+        btnNextDismiss.setOnClickListener { finish() }
         btnSource.setOnFocusChangeListener { _, focused -> if (focused) removeAutoHide() else scheduleAutoHide() }
         btnAudio.setOnClickListener { showPicker(PickerMode.AUDIO) }
         btnAudio.setOnFocusChangeListener { _, focused -> if (focused) removeAutoHide() else scheduleAutoHide() }
@@ -1678,27 +1709,132 @@ class NativePlayerActivity : ComponentActivity() {
         scrobbleSimkl("stop", progressOverride = 100.0)
         scope?.launch {
             saveProgress(reason = "ended", forceCompleted = true)
-            if (autoPlayNext && !isLiveChannel && season != null && episode != null) {
-                val nextEp = episode!! + 1
-                val maxEps = totalEpisodesInSeason
-                val (targetSeason, targetEpisode) = if (maxEps != null && nextEp > maxEps) {
-                    (season!! + 1) to 1
-                } else {
-                    season!! to nextEp
-                }
-                NextEpisodeResult.pendingNextEpisode = NextEpisodeResult.PendingNext(
-                    season = targetSeason,
-                    episode = targetEpisode,
-                    title = "S${targetSeason}E$targetEpisode",
-                    streamId = episodeStreamId.orEmpty()
-                )
-                // See btnNext: release the media session synchronously before finishing so
-                // the next player activity's session doesn't collide with mine.
-                mediaSession?.release()
-                mediaSession = null
-                finish()
+            // Series episodes show the "Up next" popup; movies/live just end.
+            val target = nextEpisodeTarget()
+            if (target != null) {
+                showNextUpPanel(target.first, target.second)
             }
         }
+    }
+
+    // --- Up Next ---
+    private fun nextEpisodeTarget(): Pair<Int, Int>? {
+        val s = season ?: return null
+        val e = episode ?: return null
+        val nextEp = e + 1
+        val maxEps = totalEpisodesInSeason
+        return if (maxEps != null && nextEp > maxEps) {
+            // End of season — jump to next season episode 1
+            (s + 1) to 1
+        } else {
+            s to nextEp
+        }
+    }
+
+    /**
+     * Builds the stream id for the next episode. Stremio stream ids are
+     * "<imdb>:<season>:<episode>", so take the prefix of the current episode's
+     * id and swap in the target season/episode. Reusing the current id (as
+     * before) made auto-next re-fetch and replay the SAME episode.
+     */
+    private fun nextStreamId(targetSeason: Int, targetEpisode: Int): String {
+        val current = episodeStreamId.orEmpty()
+        val prefix = current
+            .substringBeforeLast(':')
+            .substringBeforeLast(':')
+        return if (prefix.isNotBlank()) {
+            "$prefix:$targetSeason:$targetEpisode"
+        } else {
+            "$parentId:$targetSeason:$targetEpisode"
+        }
+    }
+
+    private fun showNextUpPanel(targetSeason: Int, targetEpisode: Int) {
+        pendingNextSeason = targetSeason
+        pendingNextEpisode = targetEpisode
+        pendingNextEpisodeName = null
+
+        nextUpShowTitle.text = itemName
+        nextUpEpisodeLabel.text = "Season $targetSeason • Episode $targetEpisode"
+        nextUpEpisodeTitle.text = "S${targetSeason}E$targetEpisode"
+        nextUpCountdown.text = ""
+
+        // Thumbnail: the show's artwork first, swapped for the episode still
+        // once TMDB returns it.
+        val initialThumb = backdropUrl ?: itemPoster
+        if (!initialThumb.isNullOrBlank()) {
+            try {
+                nextUpThumb.load(initialThumb)
+            } catch (_: Exception) {
+            }
+        } else {
+            nextUpThumb.setImageDrawable(null)
+        }
+
+        nextUpPanel.visibility = View.VISIBLE
+        btnNextPlay.requestFocus()
+
+        if (autoPlayNext) {
+            nextUpCountdownRemaining = NEXT_UP_COUNTDOWN_SECONDS
+            nextUpCountdown.text = "Playing next in $nextUpCountdownRemaining"
+            nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
+            nextUpCountdownHandler.postDelayed(nextUpCountdownRunnable, 1_000L)
+        } else {
+            nextUpCountdownRemaining = 0
+            nextUpCountdown.text = "PLAY NEXT to continue, or press BACK to exit"
+        }
+
+        // Best effort: fetch the next episode's name + still from TMDB so the
+        // popup shows real episode details instead of just S#E#.
+        scope?.launch {
+            val nextEp = withContext(Dispatchers.IO) {
+                val repo = TmdbRepository(this@NativePlayerActivity)
+                val detail = runCatching {
+                    repo.fetchEnrichedMetaCached(parentId, "series")
+                }.getOrNull()
+                val tmdbId = detail?.id ?: return@withContext null
+                val episodes = runCatching {
+                    repo.getSeasonEpisodes(tmdbId, targetSeason, parentId)
+                }.getOrNull()
+                episodes?.firstOrNull { it.episodeNumber == targetEpisode }
+            }
+            if (nextEp != null && nextUpPanel.visibility == View.VISIBLE) {
+                pendingNextEpisodeName = nextEp.name
+                nextUpEpisodeTitle.text = nextEp.name ?: "S${targetSeason}E$targetEpisode"
+                val still = nextEp.thumbnail
+                if (!still.isNullOrBlank()) {
+                    try {
+                        nextUpThumb.load(still)
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+        }
+    }
+
+    private fun launchNextEpisode(
+        targetSeason: Int,
+        targetEpisode: Int,
+        episodeName: String? = null
+    ) {
+        nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
+        val label = buildString {
+            append("S${targetSeason}E$targetEpisode")
+            if (!episodeName.isNullOrBlank()) append(" • $episodeName")
+        }
+        NextEpisodeResult.pendingNextEpisode = NextEpisodeResult.PendingNext(
+            season = targetSeason,
+            episode = targetEpisode,
+            title = label,
+            streamId = nextStreamId(targetSeason, targetEpisode)
+        )
+        // Release the media session synchronously so it is unregistered from the
+        // process-wide session map before the next player activity builds its own
+        // (both would otherwise collide with "Session ID must be unique"). The
+        // player itself stays alive so onStop's progress save still runs.
+        mediaSession?.release()
+        mediaSession = null
+        finish()
     }
 
     // --- Position Polling ---
@@ -1929,6 +2065,7 @@ class NativePlayerActivity : ComponentActivity() {
         // Release session & player early so the next NativePlayerActivity
         // doesn't collide with a stale MediaSession ID.
         handler.removeCallbacksAndMessages(null)
+        nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
         scope?.cancel()
         saveProgressSync(reason = "stop")
         scrobbleSimkl("stop")
@@ -1941,6 +2078,7 @@ class NativePlayerActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacksAndMessages(null)
+        nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
         scope?.cancel()
         exoPlayer?.release()
         exoPlayer = null

@@ -968,4 +968,116 @@
         android:focusable="true"
         android:visibility="gone" />
 
+    <!-- Up next panel (shown when an episode finishes) -->
+    <LinearLayout
+        android:id="@+id/next_up_panel"
+        android:layout_width="640dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:background="@drawable/panel_bg"
+        android:orientation="horizontal"
+        android:padding="22dp"
+        android:visibility="gone">
+
+        <ImageView
+            android:id="@+id/next_up_thumb"
+            android:layout_width="288dp"
+            android:layout_height="162dp"
+            android:background="@color/kb_surface"
+            android:contentDescription="Next episode thumbnail"
+            android:scaleType="centerCrop" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="20dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/next_up_kicker"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="@font/oswald_medium"
+                android:letterSpacing="0.18"
+                android:text="UP NEXT"
+                android:textColor="@color/kb_accent"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/next_up_show_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:ellipsize="end"
+                android:fontFamily="@font/oswald_medium"
+                android:maxLines="1"
+                android:textColor="@color/kb_text_hi"
+                android:textSize="24sp" />
+
+            <TextView
+                android:id="@+id/next_up_episode_label"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:fontFamily="@font/oswald_medium"
+                android:textColor="@color/kb_accent"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/next_up_episode_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="3dp"
+                android:ellipsize="end"
+                android:fontFamily="@font/oswald_medium"
+                android:maxLines="1"
+                android:textColor="@color/kb_text_lo"
+                android:textSize="14sp" />
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/btn_next_play"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:fontFamily="@font/oswald_semibold"
+                    android:paddingHorizontal="20dp"
+                    android:paddingVertical="9dp"
+                    android:text="PLAY NEXT"
+                    android:textAllCaps="true"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:id="@+id/btn_next_dismiss"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:fontFamily="@font/oswald_semibold"
+                    android:paddingHorizontal="20dp"
+                    android:paddingVertical="9dp"
+                    android:text="EXIT"
+                    android:textAllCaps="true"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/next_up_countdown"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:fontFamily="@font/oswald_medium"
+                android:textColor="@color/kb_text_lo"
+                android:textSize="11sp" />
+        </LinearLayout>
+    </LinearLayout>
+
 </FrameLayout>
