@@ -542,7 +542,11 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                     manifest.description,
 
                 types =
-                    manifest.types
+                    manifest.types,
+
+                logo =
+                    manifest.logo
+                        ?: manifest.icon
             )
 
         val index =

@@ -35,6 +35,7 @@ class AddonRepository {
     private val moshi =
         Moshi.Builder()
             .add(KotlinJsonAdapterFactory())
+            .add(ManifestResourcesAdapterFactory)
             .build()
 
     private val logging =

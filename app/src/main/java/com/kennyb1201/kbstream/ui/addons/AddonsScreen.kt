@@ -49,6 +49,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -56,6 +57,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Border
+import coil3.compose.SubcomposeAsyncImage
+import coil3.request.ImageRequest
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Glow
 import androidx.tv.material3.MaterialTheme
@@ -92,6 +95,8 @@ fun AddonsScreen(
     var showRenamePanel by remember { mutableStateOf(false) }
     var showRemoveConfirm by remember { mutableStateOf(false) }
     var filterQuery by remember { mutableStateOf("") }
+    var showFilterDialog by remember { mutableStateOf(false) }
+    var filterDraft by remember { mutableStateOf("") }
 
     val selectedAddon = addons.firstOrNull { it.id == selectedId }
 
@@ -191,7 +196,10 @@ fun AddonsScreen(
             } else {
                 AddonFilterField(
                     query = filterQuery,
-                    onQueryChange = { filterQuery = it }
+                    onClick = {
+                        filterDraft = filterQuery
+                        showFilterDialog = true
+                    }
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))
@@ -282,6 +290,23 @@ fun AddonsScreen(
                 }
             }
         }
+    }
+
+    if (showFilterDialog) {
+        FilterAddonsDialog(
+            query = filterDraft,
+            onQueryChange = { filterDraft = it },
+            onApply = {
+                filterQuery = filterDraft.trim()
+                showFilterDialog = false
+            },
+            onClear = {
+                filterQuery = ""
+                filterDraft = ""
+                showFilterDialog = false
+            },
+            onDismiss = { showFilterDialog = false }
+        )
     }
 
     if (showAddPanel) {
@@ -375,6 +400,7 @@ private fun AddonListCard(
         ) {
             AddonTile(
                 name = addon.displayName,
+                logoUrl = addon.logo,
                 size = 42.dp,
                 fontSize = 20.sp
             )
@@ -447,6 +473,7 @@ private fun AddonDetails(
         ) {
             AddonTile(
                 name = addon.displayName,
+                logoUrl = addon.logo,
                 size = 56.dp,
                 fontSize = 26.sp
             )
@@ -792,6 +819,7 @@ private val AddonPresets = listOf(
 @Composable
 private fun AddonTile(
     name: String,
+    logoUrl: String?,
     size: androidx.compose.ui.unit.Dp,
     fontSize: androidx.compose.ui.unit.TextUnit
 ) {
@@ -816,13 +844,53 @@ private fun AddonTile(
             .background(color),
         contentAlignment = Alignment.Center
     ) {
-        Text(
-            text = initial,
-            color = Color.White,
-            fontSize = fontSize,
-            fontWeight = FontWeight.Bold
-        )
+        if (logoUrl.isNullOrBlank()) {
+            // No icon in the manifest — fall back to the initial letter.
+            AddonTileLetter(
+                initial = initial,
+                fontSize = fontSize
+            )
+        } else {
+            // Use the addon's icon in place of the letter. The letter only
+            // shows while the image loads or if it fails to load.
+            SubcomposeAsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(logoUrl)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = name,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(size * 0.16f),
+                loading = {
+                    AddonTileLetter(
+                        initial = initial,
+                        fontSize = fontSize
+                    )
+                },
+                error = {
+                    AddonTileLetter(
+                        initial = initial,
+                        fontSize = fontSize
+                    )
+                }
+            )
+        }
     }
+}
+
+@Composable
+private fun AddonTileLetter(
+    initial: String,
+    fontSize: androidx.compose.ui.unit.TextUnit
+) {
+    Text(
+        text = initial,
+        color = Color.White,
+        fontSize = fontSize,
+        fontWeight = FontWeight.Bold
+    )
 }
 
 @Composable
@@ -870,56 +938,89 @@ private fun CatalogToggleRow(
 @Composable
 private fun AddonFilterField(
     query: String,
-    onQueryChange: (String) -> Unit
+    onClick: () -> Unit
 ) {
-    var focused by remember { mutableStateOf(false) }
-
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(KBSurfaceRaised.copy(alpha = 0.80f))
-            .border(
-                1.dp,
-                if (focused) KBAccent.copy(alpha = 0.72f)
-                else KBTextLo.copy(alpha = 0.20f),
-                RoundedCornerShape(12.dp)
-            )
-            .onFocusChanged { focused = it.isFocused }
-            .padding(horizontal = 14.dp, vertical = 10.dp)
+    KBCard(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth()
     ) {
-        Icon(
-            imageVector = Icons.Default.Search,
-            contentDescription = null,
-            tint = KBTextLo,
-            modifier = Modifier.size(18.dp)
-        )
-
-        Box(
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
-                .padding(start = 10.dp)
-                .weight(1f)
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp)
         ) {
-            if (query.isBlank()) {
+            Icon(
+                imageVector = Icons.Default.Search,
+                contentDescription = null,
+                tint = KBTextLo,
+                modifier = Modifier.size(18.dp)
+            )
+
+            Text(
+                text = query.ifBlank { "Filter add-ons by name, id, or resource" },
+                color = if (query.isBlank()) KBTextLo else KBTextHi,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .padding(start = 10.dp)
+                    .weight(1f)
+            )
+
+            if (query.isNotBlank()) {
                 Text(
-                    text = "Filter add-ons by name, id, or resource",
-                    color = KBTextLo,
-                    style = MaterialTheme.typography.bodyMedium
+                    text = "FILTERING",
+                    color = KBAccent,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold
                 )
             }
+        }
+    }
+}
 
-            BasicTextField(
-                value = query,
-                onValueChange = onQueryChange,
-                singleLine = true,
-                textStyle = TextStyle(
-                    color = KBTextHi,
-                    fontSize = MaterialTheme.typography.bodyMedium.fontSize
-                ),
-                cursorBrush = SolidColor(KBAccent),
-                modifier = Modifier.fillMaxWidth()
+@Composable
+private fun FilterAddonsDialog(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onApply: () -> Unit,
+    onClear: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .width(620.dp)
+                .background(KBSurface, RoundedCornerShape(18.dp))
+                .border(1.dp, KBAccent.copy(alpha = 0.38f), RoundedCornerShape(18.dp))
+                .padding(22.dp)
+        ) {
+            Text(
+                text = "FILTER ADD-ONS",
+                color = KBAccent,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold
             )
+            Text(
+                text = "Filter by name, id, or resource.",
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(top = 4.dp, bottom = 14.dp)
+            )
+            UrlField(query, onQueryChange, "Filter add-ons")
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.padding(top = 16.dp)
+            ) {
+                ActionButton(
+                    label = "APPLY",
+                    enabled = query.trim().isNotEmpty(),
+                    onClick = onApply
+                )
+                ActionButton(label = "CLEAR", onClick = onClear)
+                ActionButton(label = "CANCEL", onClick = onDismiss)
+            }
         }
     }
 }

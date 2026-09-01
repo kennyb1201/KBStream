@@ -1,7 +1,13 @@
 package com.kennyb1201.kbstream.data.addon
 
 import com.squareup.moshi.Json
+import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.JsonClass
+import com.squareup.moshi.JsonQualifier
+import com.squareup.moshi.JsonReader
+import com.squareup.moshi.JsonWriter
+import com.squareup.moshi.Moshi
+import java.lang.reflect.Type
 
 @JsonClass(generateAdapter = true)
 data class MetaPreview(
@@ -113,10 +119,73 @@ data class AddonManifest(
     val name: String,
     val version: String? = null,
     val description: String? = null,
+
+    /**
+     * Stremio manifests may list each resource as either a plain string
+     * ("catalog") or an object ({"name": "catalog", "idPrefixes": [...]};
+     * AIOStreams and other addons use the object form). [ManifestResources]
+     * normalizes both forms to plain names.
+     */
+    @ManifestResources
     val resources: List<String> = emptyList(),
+
     val types: List<String> = emptyList(),
-    val catalogs: List<ManifestCatalog> = emptyList()
+    val catalogs: List<ManifestCatalog> = emptyList(),
+    val logo: String? = null,
+    val icon: String? = null
 )
+
+/**
+ * Marks a list whose entries may be Stremio resource strings or resource
+ * objects, so [ManifestResourcesAdapter] can normalize them.
+ */
+@Retention(AnnotationRetention.RUNTIME)
+@JsonQualifier
+annotation class ManifestResources
+
+/**
+ * Parses a Stremio manifest "resources" array whose entries may be either
+ * strings or objects, returning every entry's name string.
+ */
+class ManifestResourcesAdapter : JsonAdapter<List<String>>() {
+
+    override fun fromJson(reader: JsonReader): List<String>? {
+        if (reader.peek() == JsonReader.Token.NULL) {
+            return reader.nextNull()
+        }
+        val raw = reader.readJsonValue() as? List<*> ?: return emptyList()
+        return raw.mapNotNull { entry ->
+            when (entry) {
+                is String -> entry
+                is Map<*, *> -> entry["name"] as? String
+                else -> null
+            }
+        }
+    }
+
+    override fun toJson(writer: JsonWriter, value: List<String>?) {
+        writer.jsonValue(value)
+    }
+}
+
+/**
+ * Moshi factory that only intercepts fields annotated [ManifestResources], so
+ * every other List field keeps its normal adapter.
+ */
+object ManifestResourcesAdapterFactory : JsonAdapter.Factory {
+
+    override fun create(
+        type: Type,
+        annotations: Set<Annotation>,
+        moshi: Moshi
+    ): JsonAdapter<*>? {
+        return if (annotations.any { it is ManifestResources }) {
+            ManifestResourcesAdapter()
+        } else {
+            null
+        }
+    }
+}
 
 /**
  * Installed addon configuration.
@@ -139,7 +208,12 @@ data class InstalledAddon(
      */
     val version: String? = null,
     val description: String? = null,
-    val types: List<String> = emptyList()
+    val types: List<String> = emptyList(),
+
+    /**
+     * Addon logo/icon URL from the manifest, used for the tile artwork.
+     */
+    val logo: String? = null
 ) {
     val displayName: String
         get() = customName
