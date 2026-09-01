@@ -214,6 +214,7 @@ fun TintedBrandLogo(
     AsyncImage(
         model = ImageRequest.Builder(context)
             .data(url)
+            .allowHardware(false)
             .crossfade(true)
             .build(),
         contentDescription = name,
@@ -221,15 +222,10 @@ fun TintedBrandLogo(
         onSuccess = { state ->
             try {
                 val image = state.result.image
-                // Coil 3 may return a hardware bitmap which crashes on
-                // pixel access. In that case, assume dark (most TMDB logos
-                // are black-on-transparent) and tint white.
-                val bitmap = image.toBitmap()
-                if (bitmap.config == android.graphics.Bitmap.Config.HARDWARE) {
-                    logoIsDark = true
-                } else {
-                    logoIsDark = isDarkArtwork(bitmap)
-                }
+                // Requesting software bitmaps above makes pixel sampling safe.
+                // Only dark monochrome artwork is recolored; colored logos
+                // such as DC Studios remain untouched.
+                logoIsDark = isDarkArtwork(image.toBitmap())
             } catch (_: Throwable) {
                 // Safe fallback: assume dark monochrome artwork
                 logoIsDark = true
@@ -245,6 +241,7 @@ fun isDarkArtwork(bitmap: android.graphics.Bitmap): Boolean {
     val sample =
         android.graphics.Bitmap.createScaledBitmap(bitmap, 48, 24, true)
     var sum = 0L
+    var saturationSum = 0L
     var count = 0L
     for (y in 0 until sample.height) {
         for (x in 0 until sample.width) {
@@ -256,13 +253,16 @@ fun isDarkArtwork(bitmap: android.graphics.Bitmap): Boolean {
                 val b = px and 0xFF
                 // Relative luminance (Rec. 709), 0..255.
                 sum += (0.2126f * r + 0.7152f * g + 0.0722f * b).toLong()
+                saturationSum += (maxOf(r, g, b) - minOf(r, g, b)).toLong()
                 count++
             }
         }
     }
     if (sample !== bitmap) sample.recycle()
     if (count == 0L) return false
-    return sum / count < 148L
+    val averageLuminance = sum / count
+    val averageSaturation = saturationSum / count
+    return averageLuminance < 148L && averageSaturation < 42L
 }
 
 @Composable

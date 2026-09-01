@@ -43,6 +43,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -75,6 +76,7 @@ import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Surface
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import coil3.toBitmap
 import com.kennyb1201.kbstream.data.tmdb.displaySeasonEpisodeCount
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.addon.Meta
@@ -422,23 +424,51 @@ private fun HeroClearLogo(
     name: String,
     modifier: Modifier = Modifier
 ) {
-    // Hero logos are separate from studio logos. Use a small, explicit list
-    // of known dark TMDB marks rather than recoloring every logo and damaging
-    // colored artwork.
-    val darkLogo = url.substringAfterLast('/').lowercase() in setOf(
-        "j5f5c.jpg",
-        "8k7k2.jpg"
-    )
+    var logoIsDark by remember(url) { mutableStateOf(false) }
 
     AsyncImage(
         model = ImageRequest.Builder(LocalContext.current)
             .data(url)
+            .allowHardware(false)
             .build(),
         contentDescription = name,
         contentScale = ContentScale.Fit,
-        colorFilter = if (darkLogo) androidx.compose.ui.graphics.ColorFilter.tint(Color.White) else null,
+        onSuccess = { state ->
+            logoIsDark = runCatching {
+                isDarkMonochromeArtwork(state.result.image.toBitmap())
+            }.getOrDefault(false)
+        },
+        colorFilter = if (logoIsDark) ColorFilter.tint(Color.White) else null,
         modifier = modifier
     )
+}
+
+private fun isDarkMonochromeArtwork(bitmap: android.graphics.Bitmap): Boolean {
+    val sample = android.graphics.Bitmap.createScaledBitmap(bitmap, 48, 24, true)
+    var luminanceSum = 0L
+    var saturationSum = 0L
+    var count = 0L
+
+    for (y in 0 until sample.height) {
+        for (x in 0 until sample.width) {
+            val pixel = sample.getPixel(x, y)
+            val alpha = (pixel ushr 24) and 0xFF
+            if (alpha > 20) {
+                val red = (pixel ushr 16) and 0xFF
+                val green = (pixel ushr 8) and 0xFF
+                val blue = pixel and 0xFF
+                luminanceSum +=
+                    (0.2126f * red + 0.7152f * green + 0.0722f * blue).toLong()
+                saturationSum += (maxOf(red, green, blue) - minOf(red, green, blue)).toLong()
+                count++
+            }
+        }
+    }
+
+    if (sample !== bitmap) sample.recycle()
+    if (count == 0L) return false
+
+    return luminanceSum / count < 148L && saturationSum / count < 42L
 }
 
 @Composable
