@@ -1373,6 +1373,10 @@ fun HomeScreen(
         mutableStateOf<FocusRequester?>(null)
     }
 
+    var lastFocusedItemKey by remember {
+        mutableStateOf<String?>(null)
+    }
+
     val firstHomeItem = remember(rails) {
         rails.asSequence()
             .flatMap {
@@ -1777,6 +1781,8 @@ fun HomeScreen(
                                             .height(HomePosterHeight)
                                             .onFocusChanged { focusState ->
                                                 if (focusState.isFocused) {
+                                                    lastFocusedItemKey = "${meta.type}:${meta.id}"
+                                                    lastPosterFocusRequester = requester
                                                     selectHero(meta)
                                                 }
                                             }
@@ -1797,6 +1803,18 @@ fun HomeScreen(
                                                     Modifier
                                                 }
                                             )
+
+                                        LaunchedEffect(
+                                            lastFocusedItemKey,
+                                            meta.type,
+                                            meta.id
+                                        ) {
+                                            if (
+                                                lastFocusedItemKey == "${meta.type}:${meta.id}"
+                                            ) {
+                                                requester.requestFocus()
+                                            }
+                                        }
 
                                         Box(
                                             modifier = Modifier

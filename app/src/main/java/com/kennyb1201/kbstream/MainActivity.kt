@@ -66,7 +66,8 @@ sealed class Screen {
         val type: String,
         val id: String,
         val pendingTarget: StreamsTarget? = null,
-        val itemPoster: String? = null
+        val itemPoster: String? = null,
+        val returnTo: Screen = Home
     ) : Screen()
 
     data class Actor(
@@ -98,6 +99,7 @@ sealed class Screen {
     data class Streams(
         val target: StreamsTarget,
         val parentId: String,
+        val returnTo: Screen = Home,
         val parentType: String,
         val itemPoster: String?,
         val backdropUrl: String? = null,
@@ -122,6 +124,7 @@ sealed class Screen {
         val overview: String? = null,
         val cast: List<PlayerCastMember> = emptyList(),
         val startPositionMs: Long,
+        val returnTo: Screen = Home,
         val sources: List<Stream> = emptyList(),
         val streamHeaders: Map<String, String> = emptyMap(),
         val totalEpisodesInSeason: Int? = null,
@@ -198,23 +201,14 @@ fun AppRoot() {
                 if (current.parentType == "channel") {
                     Screen.Guide
                 } else {
-                    Screen.Detail(
-                        current.parentType,
-                        current.parentId,
-                        itemPoster = current.itemPoster
-                    )
+                    current.returnTo
                 }
 
             is Screen.Streams ->
                 if (current.parentType == "channel") {
                     Screen.Guide
                 } else {
-                    Screen.Detail(
-                        current.parentType,
-                        current.parentId,
-                        current.target,
-                        current.itemPoster
-                    )
+                    current.returnTo
                 }
 
             is Screen.Actor ->
@@ -242,7 +236,8 @@ fun AppRoot() {
                 onItemClick = { meta: MetaPreview ->
                     screen = Screen.Detail(
                         meta.type,
-                        meta.id
+                        meta.id,
+                        returnTo = Screen.Home
                     )
                 },
 
@@ -255,7 +250,8 @@ fun AppRoot() {
                         meta.type,
                         meta.id,
                         target,
-                        poster ?: meta.poster
+                        poster ?: meta.poster,
+                        Screen.Home
                     )
                 },
 
@@ -311,7 +307,8 @@ fun AppRoot() {
 
                     screen = Screen.Detail(
                         meta.type,
-                        meta.id
+                        meta.id,
+                        returnTo = Screen.Search
                     )
                 },
 
@@ -403,7 +400,8 @@ fun AppRoot() {
                         sources = listOf(
                             directSource
                         ),
-                        streamHeaders = channel.headers
+                        streamHeaders = channel.headers,
+                        returnTo = Screen.Guide
                     )
                 }
             )
@@ -419,12 +417,11 @@ fun AppRoot() {
 
                 onNavigateDetail = {
                         type,
-                        id ->
-
-                    screen = Screen.Detail(
-                        type,
-                        id
-                    )
+                        id ->                        screen = Screen.Detail(
+                            type,
+                            id,
+                            returnTo = current
+                        )
                 },
 
                 onNavigateActor = { personId ->
@@ -476,6 +473,7 @@ fun AppRoot() {
                     screen = Screen.Streams(
                         target = target,
                         parentId = parentId,
+                        returnTo = current,
                         parentType = parentType,
                         itemPoster = poster,
                         backdropUrl = backdropUrl,
@@ -494,12 +492,11 @@ fun AppRoot() {
 
                 onNavigateDetail = {
                         type,
-                        id ->
-
-                    screen = Screen.Detail(
-                        type,
-                        id
-                    )
+                        id ->                        screen = Screen.Detail(
+                            type,
+                            id,
+                            returnTo = current
+                        )
                 }
             )
         }
@@ -513,12 +510,11 @@ fun AppRoot() {
 
                 onNavigateDetail = {
                         type,
-                        id ->
-
-                    screen = Screen.Detail(
-                        type,
-                        id
-                    )
+                        id ->                        screen = Screen.Detail(
+                            type,
+                            id,
+                            returnTo = current
+                        )
                 }
             )
         }
@@ -533,12 +529,11 @@ fun AppRoot() {
 
                 onNavigateDetail = {
                         type,
-                        id ->
-
-                    screen = Screen.Detail(
-                        type,
-                        id
-                    )
+                        id ->                        screen = Screen.Detail(
+                            type,
+                            id,
+                            returnTo = current
+                        )
                 }
             )
         }
@@ -552,12 +547,11 @@ fun AppRoot() {
 
                 onNavigateDetail = {
                         type,
-                        id ->
-
-                    screen = Screen.Detail(
-                        type,
-                        id
-                    )
+                        id ->                        screen = Screen.Detail(
+                            type,
+                            id,
+                            returnTo = current
+                        )
                 }
             )
         }
@@ -632,6 +626,7 @@ fun AppRoot() {
                             },
                             startPositionMs =
                                 current.target.resumePositionMs,
+                            returnTo = current.returnTo,
                             sources = allSources,
                             totalEpisodesInSeason =
                                 current.target.totalEpisodesInSeason,
@@ -652,11 +647,10 @@ fun AppRoot() {
             ) { result ->
                 // Check shared state first (more reliable than activity results)
                 val next = com.kennyb1201.kbstream.ui.player.NextEpisodeResult.consume()
-                if (next != null) {
-                    screen = Screen.Streams(
-                        target = StreamsTarget(
-                            contentType = current.parentType,
-                            streamId = next.streamId,
+                if (next != null) {                        screen = Screen.Streams(
+                            target = StreamsTarget(
+                                contentType = current.parentType,
+                                streamId = next.streamId,
                             title = next.title,
                             displayName = current.itemName,
                             season = next.season,
@@ -665,6 +659,7 @@ fun AppRoot() {
                             totalEpisodesInSeason = current.totalEpisodesInSeason
                         ),
                         parentId = current.parentId,
+                        returnTo = current.returnTo,
                         parentType = current.parentType,
                         itemPoster = current.itemPoster,
                         backdropUrl = current.backdropUrl,
@@ -699,9 +694,10 @@ fun AppRoot() {
                                     resumePositionMs = 0L,
                                     totalEpisodesInSeason = current.totalEpisodesInSeason
                                 ),
-                                parentId = current.parentId,
-                                parentType = current.parentType,
-                                itemPoster = current.itemPoster,
+                            parentId = current.parentId,
+                            returnTo = current.returnTo,
+                            parentType = current.parentType,
+                            itemPoster = current.itemPoster,
                                 backdropUrl = current.backdropUrl,
                                 clearLogoUrl = current.clearLogoUrl,
                                 overview = current.overview,
@@ -735,13 +731,7 @@ fun AppRoot() {
                         if (current.parentType == "channel") {
                             screen = Screen.Guide
                         } else if (AppPreferences.getAutoSelectStream(context)) {
-                            // Auto-select already picked the top stream, so the
-                            // source picker is redundant — land on the details screen.
-                            screen = Screen.Detail(
-                                current.parentType,
-                                current.parentId,
-                                itemPoster = current.itemPoster
-                            )
+                            screen = current.returnTo
                         } else {
                             // Auto-select is off: the user chose a source manually,
                             // so return to the picker for that target.
@@ -756,9 +746,10 @@ fun AppRoot() {
                                     resumePositionMs = current.startPositionMs,
                                     totalEpisodesInSeason = current.totalEpisodesInSeason
                                 ),
-                                parentId = current.parentId,
-                                parentType = current.parentType,
-                                itemPoster = current.itemPoster,
+                            parentId = current.parentId,
+                            returnTo = current.returnTo,
+                            parentType = current.parentType,
+                            itemPoster = current.itemPoster,
                                 clearLogoUrl = current.clearLogoUrl,
                                 overview = current.overview,
                                 cast = current.cast.map { member ->
