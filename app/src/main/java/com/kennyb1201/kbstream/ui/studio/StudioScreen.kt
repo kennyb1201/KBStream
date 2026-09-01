@@ -197,7 +197,6 @@ private fun StudioHeader(
  * Public so the detail screen's studio/network chips share the same logic.
  */
 @Composable
-@Composable
 fun BrandLogo(
     url: String,
     name: String,
