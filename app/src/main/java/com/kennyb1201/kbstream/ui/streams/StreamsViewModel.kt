@@ -19,7 +19,7 @@ import kotlinx.coroutines.withTimeout
 
 class StreamsViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = AddonRepository()
-    private val addonManager = AddonManager(application)
+    private val addonManager = AddonManager.getInstance(application)
 
     private companion object {
         const val TAG = "KBStream"

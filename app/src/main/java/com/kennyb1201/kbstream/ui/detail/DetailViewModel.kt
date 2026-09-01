@@ -46,7 +46,7 @@ fun computeEpisodeWatched(
 
 class DetailViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = AddonRepository()
-    private val addonManager = AddonManager(application)
+    private val addonManager = AddonManager.getInstance(application)
     private val tmdbRepository = TmdbRepository(application)
     private val simklRepository = SimklRepository.getInstance(application)
     private val historyDao = WatchHistoryDatabase.getInstance(application).watchHistoryDao()
@@ -316,14 +316,48 @@ for (metaAddon in metaAddons) {
     if (resolvedMeta != null) break
 }
 
-_meta.value = resolvedMeta
+if (resolvedMeta != null) {
+    _meta.value = resolvedMeta
+} else {
+    // Every meta add-on failed (down, removed, or network error). Fall back
+    // to the TMDB data we already fetched so the detail screen still renders
+    // instead of going blank, and only surface an error if TMDB failed too.
+    val fallbackDetail = tmdbDetailResult.getOrNull()
 
-if (resolvedMeta == null) {
+    if (fallbackDetail != null) {
+        _meta.value = Meta(
+            id = id,
+            type = normalizedType,
+            name = fallbackDetail.name
+                ?: fallbackDetail.title
+                ?: id,
+            poster = fallbackDetail.posterPath?.let {
+                TmdbRepository.POSTER_BASE + it
+            },
+            background = fallbackDetail.backdropPath?.let {
+                TmdbRepository.BACKDROP_BASE + it
+            },
+            description = fallbackDetail.overview,
+            releaseInfo = fallbackDetail.releaseDate
+                ?.takeIf { it.isNotBlank() }
+                ?.take(4),
+            imdbRating = fallbackDetail.voteAverage?.let {
+                "%.1f".format(it)
+            }
+        )
+    }
+
     Log.e(
         "KBStream",
         "detail meta unresolved type=$normalizedType id=$id",
         lastMetaError
     )
+
+    if (_meta.value == null) {
+        _error.value =
+            "Couldn't load details for this title. " +
+                "Check that your add-ons are reachable, then try again."
+    }
 }
 
                 tmdbDetailResult.onSuccess { detail ->

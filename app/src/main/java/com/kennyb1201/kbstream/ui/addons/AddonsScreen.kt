@@ -1,9 +1,11 @@
 package com.kennyb1201.kbstream.ui.addons
 
 import android.content.ActivityNotFoundException
+import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
@@ -30,6 +32,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardDoubleArrowDown
@@ -39,6 +42,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,6 +54,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -485,10 +490,11 @@ private fun AddonDetails(
     onToggleCatalog: (catalogId: String, showOnHome: Boolean) -> Unit,
     onMoveCatalog: (catalogId: String, action: CatalogMoveAction) -> Unit
 ) {
+    val catalogScrollState = rememberScrollState()
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
             .padding(18.dp)
     ) {
         Row(
@@ -546,57 +552,11 @@ private fun AddonDetails(
         DetailLine("TYPES", addon.types.joinToString(", ").ifBlank { "—" })
         DetailLine("CATALOGS", addon.catalogs.size.toString())
 
-        if (addon.catalogs.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(14.dp))
-            Text(
-                text = "CATALOGS ON HOME",
-                color = KBTextLo,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(bottom = 6.dp)
-            )
-
-            val sortedCatalogs =
-                addon.catalogs.sortedBy { it.order }
-
-            sortedCatalogs.forEachIndexed { index, catalog ->
-                CatalogToggleRow(
-                    catalog = catalog,
-                    isFirst = index == 0,
-                    isLast = index == sortedCatalogs.lastIndex,
-                    onToggle = {
-                        onToggleCatalog(
-                            catalog.id,
-                            !catalog.showOnHome
-                        )
-                    },
-                    onMove = { action ->
-                        onMoveCatalog(catalog.id, action)
-                    }
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-            }
-        }
-
+        // Action buttons stay pinned above the catalog list so they're always
+        // reachable even with dozens of catalogs.
         Spacer(modifier = Modifier.height(12.dp))
         Text(
-            text = "MANIFEST",
-            color = KBTextLo,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold
-        )
-        Text(
-            text = addon.manifestUrl,
-            color = KBTextHi,
-            style = MaterialTheme.typography.bodySmall,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 4.dp)
-        )
-
-        Spacer(modifier = Modifier.height(14.dp))
-        Text(
-            text = "ORDER",
+            text = "ADD-ON ACTIONS",
             color = KBTextLo,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
@@ -620,14 +580,7 @@ private fun AddonDetails(
             )
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
-        Text(
-            text = "MANAGE",
-            color = KBTextLo,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(bottom = 6.dp)
-        )
+        Spacer(modifier = Modifier.height(6.dp))
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth()
@@ -639,34 +592,96 @@ private fun AddonDetails(
                 modifier = Modifier.weight(1f)
             )
             SmallAction(
-                label = "MANIFEST",
+                label = "OPEN URL",
                 icon = Icons.Filled.OpenInNew,
                 onClick = onOpenManifest,
                 modifier = Modifier.weight(1f)
             )
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
-        SmallAction(
-            label = if (refreshing) "REFRESHING..." else "REFRESH ADD-ON",
-            icon = Icons.Filled.Refresh,
-            enabled = !refreshing,
-            onClick = onRefresh,
+        Spacer(modifier = Modifier.height(6.dp))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth()
-        )
+        ) {
+            SmallAction(
+                label = if (refreshing) "REFRESHING..." else "REFRESH",
+                icon = Icons.Filled.Refresh,
+                enabled = !refreshing,
+                onClick = onRefresh,
+                modifier = Modifier.weight(1f)
+            )
+            ActionButton(
+                label = "REMOVE",
+                icon = Icons.Filled.Delete,
+                onClick = onRemove,
+                modifier = Modifier.weight(1f),
+                horizontalPadding = 14.dp
+            )
+        }
 
-        Spacer(modifier = Modifier.height(12.dp))
-        ActionButton(
-            label = "REMOVE ADD-ON",
-            icon = Icons.Filled.Delete,
-            onClick = onRemove,
-            modifier = Modifier.fillMaxWidth(),
-            horizontalPadding = 14.dp,
-            verticalPadding = 11.dp,
-            textStyle = MaterialTheme.typography.titleSmall
-        )
+        if (addon.catalogs.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(14.dp))
+            Text(
+                text = "CATALOGS ON HOME",
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
 
-        Spacer(modifier = Modifier.height(8.dp))
+            // Only the catalog list scrolls; header + actions stay put.
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(catalogScrollState)
+            ) {
+                val sortedCatalogs =
+                    addon.catalogs.sortedBy { it.order }
+
+                sortedCatalogs.forEachIndexed { index, catalog ->
+                    CatalogToggleRow(
+                        catalog = catalog,
+                        isFirst = index == 0,
+                        isLast = index == sortedCatalogs.lastIndex,
+                        onToggle = {
+                            onToggleCatalog(
+                                catalog.id,
+                                !catalog.showOnHome
+                            )
+                        },
+                        onMove = { action ->
+                            onMoveCatalog(catalog.id, action)
+                        }
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                }
+            }
+        } else {
+            Spacer(modifier = Modifier.weight(1f))
+            Text(
+                text = "This add-on has no catalogs.",
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+        Text(
+            text = "MANIFEST",
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold
+        )
+        Text(
+            text = addon.manifestUrl,
+            color = KBTextHi,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 4.dp)
+        )
     }
 }
 
@@ -931,66 +946,75 @@ private fun CatalogToggleRow(
     onToggle: () -> Unit,
     onMove: (CatalogMoveAction) -> Unit
 ) {
-    KBCard(
-        onClick = onToggle,
+    // The toggle card and the four arrow buttons are SIBLINGS, not nested:
+    // nested clickables inside a TV focusable card can't be reached with a
+    // D-pad (the outer card swallows focus), so arrows must be peers of the
+    // toggle card to stay focusable.
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth()
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 7.dp)
+        KBCard(
+            onClick = onToggle,
+            modifier = Modifier.weight(1f)
         ) {
-            Column(modifier = Modifier.weight(1f)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 7.dp)
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = catalog.name.ifBlank { catalog.id },
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = catalog.type.uppercase(),
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1
+                    )
+                }
+
                 Text(
-                    text = catalog.name.ifBlank { catalog.id },
-                    color = KBTextHi,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = catalog.type.uppercase(),
-                    color = KBTextLo,
+                    text = if (catalog.showOnHome) "ON HOME" else "HIDDEN",
+                    color = if (catalog.showOnHome) KBAccent else KBTextLo,
                     style = MaterialTheme.typography.labelSmall,
-                    maxLines = 1
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(start = 10.dp)
                 )
             }
-
-            Text(
-                text = if (catalog.showOnHome) "ON HOME" else "HIDDEN",
-                color = if (catalog.showOnHome) KBAccent else KBTextLo,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(end = 12.dp)
-            )
-
-            CatalogMoveButton(
-                icon = Icons.Filled.KeyboardDoubleArrowUp,
-                contentDescription = "Move to top",
-                enabled = !isFirst,
-                onClick = { onMove(CatalogMoveAction.TOP) }
-            )
-            CatalogMoveButton(
-                icon = Icons.Filled.ArrowUpward,
-                contentDescription = "Move up",
-                enabled = !isFirst,
-                onClick = { onMove(CatalogMoveAction.UP) }
-            )
-            CatalogMoveButton(
-                icon = Icons.Filled.ArrowDownward,
-                contentDescription = "Move down",
-                enabled = !isLast,
-                onClick = { onMove(CatalogMoveAction.DOWN) }
-            )
-            CatalogMoveButton(
-                icon = Icons.Filled.KeyboardDoubleArrowDown,
-                contentDescription = "Move to bottom",
-                enabled = !isLast,
-                onClick = { onMove(CatalogMoveAction.BOTTOM) }
-            )
         }
+
+        CatalogMoveButton(
+            icon = Icons.Filled.KeyboardDoubleArrowUp,
+            contentDescription = "Move to top",
+            enabled = !isFirst,
+            onClick = { onMove(CatalogMoveAction.TOP) }
+        )
+        CatalogMoveButton(
+            icon = Icons.Filled.ArrowUpward,
+            contentDescription = "Move up",
+            enabled = !isFirst,
+            onClick = { onMove(CatalogMoveAction.UP) }
+        )
+        CatalogMoveButton(
+            icon = Icons.Filled.ArrowDownward,
+            contentDescription = "Move down",
+            enabled = !isLast,
+            onClick = { onMove(CatalogMoveAction.DOWN) }
+        )
+        CatalogMoveButton(
+            icon = Icons.Filled.KeyboardDoubleArrowDown,
+            contentDescription = "Move to bottom",
+            enabled = !isLast,
+            onClick = { onMove(CatalogMoveAction.BOTTOM) }
+        )
     }
 }
 
@@ -1221,6 +1245,40 @@ private fun AddAddonDialog(
     onAdd: () -> Unit,
     onAddPreset: (String) -> Unit
 ) {
+    var phoneReceived by remember { mutableStateOf(false) }
+    val pairPort = remember { mutableStateOf(0) }
+
+    // LAN pairing server: lets a phone browser send the manifest URL to the
+    // TV so it doesn't have to be typed with the remote. Only lives while
+    // this dialog is open.
+    val phoneServer = remember {
+        PhoneUrlServer(
+            onUrlReceived = onUrlChange,
+            onReceived = { phoneReceived = true }
+        )
+    }
+
+    DisposableEffect(Unit) {
+        // Binding failure (rare) shouldn't crash the dialog — the UI just
+        // shows the same-Wi-Fi hint instead of a pairing URL.
+        runCatching { phoneServer.start() }
+        pairPort.value = phoneServer.port
+        onDispose { phoneServer.stop() }
+    }
+
+    val tvIp = remember { localIpv4Address() }
+    val pairUrl =
+        if (tvIp != null && pairPort.value > 0) {
+            "http://$tvIp:${pairPort.value}"
+        } else {
+            null
+        }
+    val qrBitmap = remember(pairUrl) {
+        pairUrl?.let { qrcodeBitmap(it, 256) }
+    }
+
+    val context = LocalContext.current
+
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
@@ -1241,7 +1299,88 @@ private fun AddAddonDialog(
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(top = 4.dp, bottom = 14.dp)
             )
-            UrlField(url, onUrlChange, "https://example.com/manifest.json")
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                UrlField(
+                    value = url,
+                    onValueChange = onUrlChange,
+                    placeholder = "https://example.com/manifest.json",
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                ActionButton(
+                    label = "PASTE",
+                    icon = Icons.Filled.ContentPaste,
+                    enabled = !isLoading,
+                    onClick = {
+                        pasteFromClipboard(context) { pasted ->
+                            onUrlChange(pasted)
+                        }
+                    }
+                )
+            }
+
+            if (pairUrl != null) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(KBSurfaceRaised, RoundedCornerShape(12.dp))
+                        .border(1.dp, KBAccent.copy(alpha = 0.32f), RoundedCornerShape(12.dp))
+                        .padding(12.dp)
+                ) {
+                    if (qrBitmap != null) {
+                        Image(
+                            bitmap = qrBitmap.asImageBitmap(),
+                            contentDescription = "Pairing QR code",
+                            modifier = Modifier
+                                .size(120.dp)
+                                .background(Color.White, RoundedCornerShape(8.dp))
+                                .padding(6.dp)
+                        )
+                    }
+
+                    Column(
+                        modifier = Modifier
+                            .padding(start = 14.dp)
+                            .weight(1f)
+                    ) {
+                        Text(
+                            text = "SEND FROM PHONE",
+                            color = KBAccent,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = if (phoneReceived) {
+                                "URL received — press ADD to install."
+                            } else {
+                                "Scan the code (or open the address) on your phone, paste the manifest URL, then press Send."
+                            },
+                            color = if (phoneReceived) KBAccent else KBTextLo,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                        Text(
+                            text = pairUrl,
+                            color = KBTextHi,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+                    }
+                }
+            } else {
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = "Connect this TV and your phone to the same Wi-Fi to use \u201cSend from phone\u201d.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
 
             Text(
                 text = "QUICK-ADD",
@@ -1363,7 +1502,8 @@ private fun ConfirmRemoveDialog(
 private fun UrlField(
     value: String,
     onValueChange: (String) -> Unit,
-    placeholder: String
+    placeholder: String,
+    modifier: Modifier = Modifier.fillMaxWidth()
 ) {
     var focused by remember { mutableStateOf(false) }
 
@@ -1376,8 +1516,7 @@ private fun UrlField(
             fontSize = MaterialTheme.typography.bodyLarge.fontSize
         ),
         cursorBrush = SolidColor(KBAccent),
-        modifier = Modifier
-            .fillMaxWidth()
+        modifier = modifier
             .clip(RoundedCornerShape(12.dp))
             .background(KBSurfaceRaised)
             .border(
@@ -1399,6 +1538,31 @@ private fun UrlField(
             innerTextField()
         }
     )
+}
+
+/**
+ * Reads plain text from the system clipboard (the TV leanback keyboard has
+ * no paste action, so the ADD dialog gets an explicit PASTE button). Returns
+ * null silently when the clipboard is empty/unreadable.
+ */
+private fun pasteFromClipboard(
+    context: android.content.Context,
+    onPasted: (String) -> Unit
+) {
+    val clipboard =
+        context.getSystemService(ClipboardManager) ?: return
+
+    val text = runCatching {
+        clipboard.primaryClip
+            ?.takeIf { it.itemCount > 0 }
+            ?.getItemAt(0)
+            ?.text
+            ?.toString()
+    }.getOrNull()
+
+    text?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?.let(onPasted)
 }
 
 private fun openManifest(

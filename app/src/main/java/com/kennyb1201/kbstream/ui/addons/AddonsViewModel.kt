@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.addon.AddonManager
+import com.kennyb1201.kbstream.data.addon.AddonManifest
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.data.addon.ManifestCatalog
@@ -14,7 +15,10 @@ import kotlinx.coroutines.launch
 
 class AddonsViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val addonManager = AddonManager(application)
+    // Use the shared singleton so catalog changes are seen instantly by
+    // HomeViewModel's watcher (a fresh AddonManager would hold a stale
+    // StateFlow and Home would never pick up reorder/show-hide changes).
+    private val addonManager = AddonManager.getInstance(application)
     private val repository = AddonRepository()
 
     private val _addons = MutableStateFlow<List<InstalledAddon>>(emptyList())
@@ -63,6 +67,16 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
 
             try {
                 val manifest = repository.fetchManifest(cleanUrl)
+
+                // Reject pages that aren't really Stremio add-ons (e.g. a
+                // website's PWA manifest) instead of storing an empty add-on.
+                if (!manifest.isUsableAddonManifest()) {
+                    _error.value =
+                        "That URL doesn't look like a Stremio add-on manifest " +
+                            "(no resources or catalogs found)."
+                    return@launch
+                }
+
                 val current = addonManager.getInstalledAddons()
                 val existing = current.firstOrNull { it.id == manifest.id }
 
@@ -401,6 +415,15 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         return "${type.trim().lowercase()}::${id.trim().lowercase()}"
     }
 
+    /**
+     * A real Stremio add-on manifest declares at least one resource or
+     * catalog. Pages that fail both (like a website's PWA manifest, which
+     * has no Stremio fields) should never be stored as an add-on.
+     */
+    private fun AddonManifest.isUsableAddonManifest(): Boolean {
+        return resources.isNotEmpty() || catalogs.isNotEmpty()
+    }
+
     fun refreshAllManifests() {
         if (_refreshing.value) return
 
@@ -418,6 +441,15 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                 val refreshed = current.map { old ->
                     try {
                         val manifest = repository.fetchManifest(old.manifestUrl)
+
+                        // Guard: if the URL now serves something that isn't a
+                        // usable add-on (e.g. the add-on moved and a website
+                        // manifest is returned), keep the old stored config
+                        // rather than wiping resources/catalogs.
+                        if (!manifest.isUsableAddonManifest()) {
+                            failureCount++
+                            return@map old
+                        }
 
                         successCount++
 
@@ -476,6 +508,13 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
 
             try {
                 val manifest = repository.fetchManifest(addon.manifestUrl)
+
+                if (!manifest.isUsableAddonManifest()) {
+                    _error.value =
+                        "Manifest doesn't look like a Stremio add-on " +
+                            "(no resources or catalogs) — kept the saved config."
+                    return@launch
+                }
 
                 addonManager.saveInstalledAddons(
                     addonManager.getInstalledAddons().map { old ->
