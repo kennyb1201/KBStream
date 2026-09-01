@@ -64,7 +64,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultRenderersFactory
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.MaterialTheme
@@ -88,6 +88,7 @@ import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
+import com.kennyb1201.kbstream.data.youtube.YouTubeStreamDataSource
 import kotlinx.coroutines.delay
 
 private val HomePosterWidth = 124.dp
@@ -276,9 +277,12 @@ private fun HeroInlineTrailerPlayer(
             "Hero player mounting with source: " + heroSourceOrigin(source)
         )
 
-        // Let Media3 select the native source from the URL. HLS manifests and
-        // ordinary progressive URLs must not go through the googlevideo chunker.
-        val mediaSourceFactory = DefaultMediaSourceFactory(context)
+        // Use the YouTube-specific data source that sends the correct
+        // User-Agent and Range headers googlevideo requires.
+        val youTubeDataSourceFactory = YouTubeStreamDataSource.Factory()
+
+        val mediaSourceFactory =
+            ProgressiveMediaSource.Factory(youTubeDataSourceFactory)
 
         val renderersFactory =
             DefaultRenderersFactory(context)
