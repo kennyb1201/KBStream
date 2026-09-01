@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -71,6 +72,11 @@ fun SearchScreen(
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val recentSearches by viewModel.recentSearches.collectAsStateWithLifecycle()
+    val trendingResults by viewModel.trendingResults.collectAsStateWithLifecycle()
+
+    LaunchedEffect(Unit) {
+        viewModel.loadTrending()
+    }
 
     DisposableEffect(Unit) {
         onDispose {
@@ -136,11 +142,34 @@ fun SearchScreen(
                 }
             }
 
-            if (query.isBlank() && recentSearches.isEmpty()) {
+            if (query.isBlank() && trendingResults.isNotEmpty()) {
+                item(key = "trending_section") {
+                    Column {
+                        SectionHeader(title = "Trending now")
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                            contentPadding = PaddingValues(vertical = 2.dp)
+                        ) {
+                            items(
+                                items = trendingResults,
+                                key = { result: SearchTitleResult -> result.id }
+                            ) { result: SearchTitleResult ->
+                                TitlePosterTile(
+                                    result = result,
+                                    watched = false,
+                                    onClick = { onItemClick(result.meta) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (query.isBlank() && recentSearches.isEmpty() && trendingResults.isEmpty()) {
                 item(key = "empty_idle") {
                     SearchMessagePanel(
                         title = "Search",
-                        body = "Start typing to search across titles, actors, collections, and studios."
+                        body = "Start typing to search across titles, actors, collections, and studios — or browse what's trending below."
                     )
                 }
             }

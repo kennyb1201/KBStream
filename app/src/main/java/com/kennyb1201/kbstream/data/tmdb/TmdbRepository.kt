@@ -94,6 +94,10 @@ class TmdbRepository(context: Context) {
     private var movieGenresCache: List<TmdbGenre>? = null
     private var tvGenresCache: List<TmdbGenre>? = null
 
+    private var trendingCache:
+        Pair<Long, List<Pair<String, TmdbSearchTitleResult>>>? =
+        null
+
     private val cachePruned = AtomicBoolean(false)
     private val jsonCachePruned = AtomicBoolean(false)
 
@@ -259,6 +263,32 @@ class TmdbRepository(context: Context) {
         if (apiKey.isBlank()) return emptyList()
         return runCatching { api.searchTv(query, apiKey).results }
             .getOrDefault(emptyList())
+    }
+
+    /*
+     * Weekly trending titles for the search screen's idle state. Tagged with
+     * the type ("movie"/"series") since trending/movie and trending/tv don't
+     * reliably carry media_type on every result. Memory-cached briefly so the
+     * idle state doesn't re-hit TMDB on every screen visit.
+     */
+    suspend fun getTrendingTitles(): List<Pair<String, TmdbSearchTitleResult>> {
+        if (apiKey.isBlank()) return emptyList()
+
+        val now = System.currentTimeMillis()
+        trendingCache?.let { (fetchedAt, items) ->
+            if (now - fetchedAt < TRENDING_CACHE_TTL_MS) {
+                return items
+            }
+        }
+
+        val movies = runCatching { api.getTrendingMovies(apiKey).results }
+            .getOrDefault(emptyList())
+        val tv = runCatching { api.getTrendingTv(apiKey).results }
+            .getOrDefault(emptyList())
+
+        val merged = movies.map { "movie" to it } + tv.map { "series" to it }
+        trendingCache = now to merged
+        return merged
     }
 
     suspend fun getMovieGenres(): List<TmdbGenre> {
@@ -910,5 +940,6 @@ class TmdbRepository(context: Context) {
         const val POSTER_BASE = "https://image.tmdb.org/t/p/w500"
         const val LOGO_BASE = "https://image.tmdb.org/t/p/original"
         private const val MAX_IMDB_DISK_AGE_MS = 90L * 24L * 60L * 60L * 1000L
+        private const val TRENDING_CACHE_TTL_MS = 30L * 60L * 1000L
     }
 }

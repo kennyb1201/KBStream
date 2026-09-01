@@ -140,33 +140,35 @@ class TmdbHeroArtworkRepository(
             .get()
             .build()
 
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) return null
+        return runCatching {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@use null
 
-            val json = response.body?.string().orEmpty()
-            val images = imagesAdapter.fromJson(json) ?: return null
+                val json = response.body?.string().orEmpty()
+                val images = imagesAdapter.fromJson(json) ?: return@use null
 
-            val backdrop = images.backdrops
-                .firstOrNull { !it.filePath.isNullOrBlank() }
-                ?.filePath
-                ?.let { TmdbRepository.BACKDROP_BASE + it }
+                val backdrop = images.backdrops
+                    .firstOrNull { !it.filePath.isNullOrBlank() }
+                    ?.filePath
+                    ?.let { TmdbRepository.BACKDROP_BASE + it }
 
-            val logo = images.logos
-                .filter { !it.filePath.isNullOrBlank() }
-                .sortedWith(
-                    compareByDescending<TmdbImage> { it.iso6391 == "en" }
-                        .thenByDescending { it.voteAverage ?: 0.0 }
-                        .thenByDescending { it.width ?: 0 }
+                val logo = images.logos
+                    .filter { !it.filePath.isNullOrBlank() }
+                    .sortedWith(
+                        compareByDescending<TmdbImage> { it.iso6391 == "en" }
+                            .thenByDescending { it.voteAverage ?: 0.0 }
+                            .thenByDescending { it.width ?: 0 }
+                    )
+                    .firstOrNull()
+                    ?.filePath
+                    ?.let { TmdbRepository.LOGO_BASE + it }
+
+                HeroArtwork(
+                    backdropUrl = backdrop,
+                    logoUrl = logo
                 )
-                .firstOrNull()
-                ?.filePath
-                ?.let { TmdbRepository.LOGO_BASE + it }
-
-            HeroArtwork(
-                backdropUrl = backdrop,
-                logoUrl = logo
-            )
-        }
+            }
+        }.getOrNull()
     }
 
     @JsonClass(generateAdapter = true)

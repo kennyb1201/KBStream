@@ -93,6 +93,14 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
     val collectionResults: StateFlow<List<TmdbSearchCollectionResult>> =
         _collectionResults.asStateFlow()
 
+    private val _trendingResults =
+        MutableStateFlow<List<SearchTitleResult>>(
+            emptyList()
+        )
+
+    val trendingResults: StateFlow<List<SearchTitleResult>> =
+        _trendingResults.asStateFlow()
+
     private val _recentSearches =
         MutableStateFlow<List<String>>(
             emptyList()
@@ -226,6 +234,8 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
                 val studioResults = studioDeferred.await()
                 val collectionResults = collectionDeferred.await()
 
+                // Cap result counts so the list stays instantly scrollable
+                // even for very broad queries (e.g. one-letter searches).
                 _results.value =
                     mergeTitles(
                         query = normalized,
@@ -233,9 +243,10 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
                         tv = tmdbTv,
                         addonResults = addonTitles
                     )
-                _actorResults.value = personResults.distinctBy { it.id }
-                _studioResults.value = studioResults.distinctBy { it.id }
-                _collectionResults.value = collectionResults.distinctBy { it.id }
+                        .take(MAX_TITLE_RESULTS)
+                _actorResults.value = personResults.distinctBy { it.id }.take(MAX_PERSON_RESULTS)
+                _studioResults.value = studioResults.distinctBy { it.id }.take(MAX_STUDIO_RESULTS)
+                _collectionResults.value = collectionResults.distinctBy { it.id }.take(MAX_COLLECTION_RESULTS)
             } catch (e: Exception) {
                 Log.e("KBStream", "Search failed", e)
                 _results.value = emptyList()
@@ -380,6 +391,59 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
             )
     }
 
+    /*
+     * Loads weekly trending titles for the idle (blank query) state. The
+     * repository short-caches the TMDB response, so re-entering the screen
+     * doesn't refetch.
+     */
+    fun loadTrending() {
+        if (_trendingResults.value.isNotEmpty()) return
+
+        viewModelScope.launch {
+            val raw =
+                runCatching {
+                    tmdbRepository.getTrendingTitles()
+                }
+                    .onFailure { e ->
+                        Log.e("KBStream", "Trending load failed", e)
+                    }
+                    .getOrDefault(emptyList())
+
+            _trendingResults.value =
+                raw.mapNotNull { (type, result) ->
+                    val name =
+                        result.name?.takeIf { it.isNotBlank() }
+                            ?: result.title?.takeIf { it.isNotBlank() }
+                            ?: return@mapNotNull null
+
+                    val id = "tmdb:${result.id}"
+                    val poster =
+                        result.posterPath
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { TmdbRepository.POSTER_BASE + it }
+
+                    SearchTitleResult(
+                        id = id,
+                        type = type,
+                        name = name,
+                        poster = poster,
+                        year = (
+                            result.releaseDate
+                                ?: result.firstAirDate
+                            )?.take(4)?.toIntOrNull(),
+                        rating = result.voteAverage?.takeIf { it > 0.0 },
+                        meta = MetaPreview(
+                            id = id,
+                            type = type,
+                            name = name,
+                            poster = poster
+                        )
+                    )
+                }
+                    .take(MAX_TRENDING_RESULTS)
+        }
+    }
+
     fun onResultOpened(result: SearchTitleResult) {
         commitSearch()
     }
@@ -451,6 +515,11 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         const val KEY_RECENT_SEARCHES = "recent_searches"
         const val RECENT_SEARCHES_SEPARATOR = "\u0001"
         const val MAX_RECENT_SEARCHES = 10
+        const val MAX_TITLE_RESULTS = 24
+        const val MAX_PERSON_RESULTS = 12
+        const val MAX_STUDIO_RESULTS = 8
+        const val MAX_COLLECTION_RESULTS = 8
+        const val MAX_TRENDING_RESULTS = 20
         const val SEARCH_DEBOUNCE_MS = 300L
     }
 }
