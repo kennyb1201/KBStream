@@ -78,7 +78,7 @@ fun CollectionScreen(
                 CollectionHero(
                     name = detail?.name ?: collectionName,
                     overview = detail?.overview,
-                    posterUrl = detail?.posterPath?.let { "https://image.tmdb.org/t/p/w342$it" }
+                    posterUrl = detail?.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
                 )
             }
 
@@ -223,7 +223,7 @@ private fun CollectionMovieRow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             PosterCard(
-                posterUrl = part.posterPath?.let { "https://image.tmdb.org/t/p/w342$it" },
+                posterUrl = part.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" },
                 contentDescription = part.title ?: part.name ?: "Collection movie",
                 isWatched = false,
                 onClick = onClick,

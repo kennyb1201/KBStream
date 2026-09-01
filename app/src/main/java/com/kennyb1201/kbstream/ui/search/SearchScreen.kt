@@ -682,7 +682,7 @@ private fun CollectionResultCard(
                 .padding(12.dp)
         ) {
             PosterCard(
-                posterUrl = collection.posterPath?.let { "https://image.tmdb.org/t/p/w342$it" },
+                posterUrl = collection.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" },
                 contentDescription = collection.name,
                 isWatched = false,
                 onClick = onClick,
