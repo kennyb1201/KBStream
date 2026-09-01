@@ -99,6 +99,7 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import com.kennyb1201.kbstream.ui.components.StudioChip
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.NumberFormat
@@ -1690,7 +1691,7 @@ fun DetailScreen(
                                         networks,
                                         key = { it.id }
                                     ) { n ->
-                                        StudioCard(
+                                        StudioChip(
                                             name = n.name,
                                             logoPath = n.logoPath,
                                             onClick = {
@@ -1741,7 +1742,7 @@ fun DetailScreen(
                                         companies,
                                         key = { it.id }
                                     ) { c ->
-                                        StudioCard(
+                                        StudioChip(
                                             name = c.name,
                                             logoPath = c.logoPath,
                                             onClick = {

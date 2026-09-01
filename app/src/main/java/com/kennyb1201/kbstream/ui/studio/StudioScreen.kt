@@ -1,6 +1,5 @@
 package com.kennyb1201.kbstream.ui.studio
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,18 +14,18 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
@@ -37,6 +36,7 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import coil3.toBitmap
 import com.kennyb1201.kbstream.data.tmdb.StudioItem
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TmdbCompanyDetail
@@ -139,29 +139,17 @@ private fun StudioHeader(
         modifier = Modifier.padding(bottom = 16.dp)
     ) {
         if (!logoUrl.isNullOrBlank()) {
-            // Most TMDB company/network logos are dark artwork drawn for light
-            // surfaces (the detail screen's white studio chips prove it), so
-            // they'd vanish on the dark page. Match that chip: white tile,
-            // logo fitted inside.
-            Box(
-                contentAlignment = Alignment.Center,
+            // No white chip: like Nuvio/Coral-style TV UIs, render the logo
+            // straight on the dark surface and recolor dark (black) artwork to
+            // white so it reads. Light/colored logos pass through untouched —
+            // the tint only kicks in when the sampled artwork is dark.
+            TintedBrandLogo(
+                url = logoUrl,
+                name = name,
                 modifier = Modifier
                     .width(480.dp)
                     .height(120.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(Color.White)
-                    .padding(horizontal = 24.dp, vertical = 12.dp)
-            ) {
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(logoUrl)
-                        .crossfade(true)
-                        .build(),
-                    contentDescription = name,
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
+            )
         } else {
             Text(
                 text = name,
@@ -203,6 +191,66 @@ private fun StudioHeader(
             }
         }
     }
+}
+
+/**
+ * Brand logo rendered for a dark surface. Sample the decoded artwork's
+ * luminance; when it is a dark mark (black/gray logo drawn for light
+ * backgrounds — the TMDB company/network default), recolor it white via
+ * SrcIn tint, which preserves the alpha and turns the mark into a white
+ * silhouette — the look Nuvio/Coral TV interfaces use. Light/colored logos
+ * pass through unchanged (the Netflix N, Disney castle, etc. stay colored).
+ * Public so the detail screen's studio/network chips share the same logic.
+ */
+@Composable
+fun TintedBrandLogo(
+    url: String,
+    name: String,
+    modifier: Modifier = Modifier
+) {
+    var logoIsDark by remember(url) { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    AsyncImage(
+        model = ImageRequest.Builder(context)
+            .data(url)
+            .crossfade(true)
+            .listener(
+                onSuccess = { _, result ->
+                    logoIsDark = isDarkArtwork(result.image.toBitmap())
+                }
+            )
+            .build(),
+        contentDescription = name,
+        contentScale = ContentScale.Fit,
+        colorFilter = if (logoIsDark) ColorFilter.tint(Color.White) else null,
+        modifier = modifier
+    )
+}
+
+/** True when the non-transparent pixels are predominantly dark (black/gray mark). */
+fun isDarkArtwork(bitmap: android.graphics.Bitmap): Boolean {
+    val sample =
+        android.graphics.Bitmap.createScaledBitmap(bitmap, 48, 24, true)
+    var sum = 0L
+    var count = 0L
+    for (y in 0 until sample.height) {
+        for (x in 0 until sample.width) {
+            val px = sample.getPixel(x, y)
+            val alpha = (px ushr 24) and 0xFF
+            if (alpha > 20) {
+                val r = (px ushr 16) and 0xFF
+                val g = (px ushr 8) and 0xFF
+                val b = px and 0xFF
+                // Relative luminance (Rec. 709), 0..255.
+                sum += (0.2126f * r + 0.7152f * g + 0.0722f * b).toLong()
+                count++
+            }
+        }
+    }
+    if (sample !== bitmap) sample.recycle()
+    if (count == 0L) return false
+    return sum / count < 148L
 }
 
 @Composable
