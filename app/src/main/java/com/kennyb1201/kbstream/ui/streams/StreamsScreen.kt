@@ -58,6 +58,7 @@ fun StreamsScreen(
     episode: Int?,
     backdropUrl: String?,
     clearLogoUrl: String?,
+    suppressAutoSelect: Boolean = false,
     onStreamSelected: (selected: Stream, allSources: List<Stream>) -> Unit,
     viewModel: StreamsViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
@@ -65,9 +66,12 @@ fun StreamsScreen(
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
-    // Auto-play: when streams finish loading and autoplay is on, auto-select the top result
+    // Auto-play: when streams finish loading and autoplay is on, auto-select the
+    // top result. Fire only once per target: after the user backs out of the
+    // player, MainActivity marks this target as already-played and passes
+    // suppressAutoSelect=true so the player isn't relaunched in a loop.
     LaunchedEffect(isLoading, streams) {
-        if (!isLoading && streams.isNotEmpty() && AppPreferences.getAutoSelectStream(context)) {
+        if (!isLoading && streams.isNotEmpty() && !suppressAutoSelect && AppPreferences.getAutoSelectStream(context)) {
             onStreamSelected(streams.first(), streams)
         }
     }

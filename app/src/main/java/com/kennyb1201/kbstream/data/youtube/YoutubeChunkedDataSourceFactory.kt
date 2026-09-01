@@ -84,6 +84,7 @@ class YoutubeChunkedDataSourceFactory(
         private var currentChunkEnd = 0L
         private var bytesReadInChunk = 0L
         private var originalDataSpec: DataSpec? = null
+        private var originalUrlString: String? = null
 
         override fun addTransferListener(transferListener: TransferListener) {
             upstream.addTransferListener(transferListener)
@@ -96,6 +97,8 @@ class YoutubeChunkedDataSourceFactory(
                 return upstream.open(dataSpec)
             }
             originalDataSpec = dataSpec
+            originalUrlString = dataSpec.uri.toString()
+            Log.w(TAG, "Opening YT stream: host=$host params=${dataSpec.uri.queryParameterNames} url=${originalUrlString}")
             currentChunkStart = dataSpec.position
             totalContentLength = dataSpec.length
             return openNextChunk()
@@ -166,8 +169,49 @@ class YoutubeChunkedDataSourceFactory(
                 }
             }
 
+            // Every mode 403'd with the media3 stack. Run a raw-OkHttp bisection
+            // against the untouched signed URL (same as the extractor's probe that
+            // PASSED) so we can see exactly what googlevideo rejects and why.
+            runDiagnostics(originalUrlString ?: spec.uri.toString())
+
             throw last403
                 ?: IllegalStateException("Failed to open YouTube stream (no mode succeeded)")
+        }
+
+        /**
+         * Debug-only: replays the failing URL through a plain OkHttpClient with
+         * four different Range styles and logs each response code + body. The
+         * extractor's probe (Range bytes=0-0, raw OkHttp) succeeds while every
+         * media3 open 403s, so the body here tells us the exact rejection reason.
+         */
+        private fun runDiagnostics(url: String) {
+            return runCatching {
+                val client = okhttp3.OkHttpClient.Builder()
+                    .connectTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
+                    .build()
+                val probes = listOf(
+                    "plain-get" to null,
+                    "range-0-0" to "bytes=0-0",
+                    "range-0-1M" to "bytes=0-1048575",
+                    "range-0-10M" to "bytes=0-10485759"
+                )
+                for ((label, range) in probes) {
+                    val rb = okhttp3.Request.Builder().url(url).get()
+                    rb.header("User-Agent", YOUTUBE_USER_AGENT)
+                    if (range != null) rb.header("Range", range)
+                    client.newCall(rb.build()).execute().use { resp ->
+                        val body = resp.peekBody(400).string().take(400)
+                        val loc = resp.header("Location")
+                        Log.w(
+                            TAG,
+                            "DIAG[$label] code=${resp.code} msg=${resp.message} loc=$loc body=$body"
+                        )
+                    }
+                }
+            }.onFailure { e ->
+                Log.w(TAG, "DIAG failed: ${e.message}")
+            }
         }
 
         override fun read(buffer: ByteArray, offset: Int, length: Int): Int {

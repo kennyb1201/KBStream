@@ -11,6 +11,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -160,6 +161,17 @@ fun AppRoot() {
 
     var screen by remember {
         mutableStateOf<Screen>(Screen.Home)
+    }
+
+    // Guard against the autoplay loop: StreamsScreen auto-selects the top
+    // stream once, which navigates to the player. When the user backs OUT of
+    // the player, the return-to-streams navigation re-runs the streams loader,
+    // whose autoplay would otherwise relaunch the player immediately — trapping
+    // the user in player -> back -> loading -> player. Remember the target that
+    // has already auto-played and skip autoplay for it from then on (a manual
+    // source pick still works; a fresh target still autoplays).
+    var autoPlayedStreamKeys by rememberSaveable {
+        mutableStateOf(listOf<String>())
     }
 
     val context = LocalContext.current
@@ -564,6 +576,10 @@ fun AppRoot() {
                 )
             }
 
+            val streamKey =
+                "${current.target.contentType}:" +
+                    current.target.streamId
+
             StreamsScreen(
                 title = current.target.title,
                 displayName = current.target.displayName,
@@ -571,6 +587,8 @@ fun AppRoot() {
                 episode = current.target.episode,
                 backdropUrl = current.backdropUrl,
                 clearLogoUrl = current.clearLogoUrl,
+                suppressAutoSelect =
+                    streamKey in autoPlayedStreamKeys,
 
                 onStreamSelected = {
                         stream,
@@ -707,7 +725,13 @@ fun AppRoot() {
                         }
                     }
                     else -> {
-                        // Normal BACK exit from player — go back to streams screen
+                        // Normal BACK exit from player — go back to streams screen.
+                        // Mark this target so the streams screen does NOT auto-select
+                        // and relaunch the player (autoplay already fired once).
+                        val exitedKey =
+                            "${current.parentType}:${current.episodeStreamId}"
+                        autoPlayedStreamKeys =
+                            (autoPlayedStreamKeys + exitedKey).distinct()
                         if (current.parentType == "channel") {
                             screen = Screen.Guide
                         } else {
