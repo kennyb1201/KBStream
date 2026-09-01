@@ -265,7 +265,8 @@ private fun HeroInlineTrailerPlayer(
     modifier: Modifier = Modifier,
     onEnded: () -> Unit = {}
 ) {
-    val context = LocalContext.current    val exoPlayer = remember(source) {
+    val context = LocalContext.current
+    val exoPlayer = remember(source) {
 
         // Fire TV suppresses debug logs, so surface what the player actually
         // receives -- this proves whether the source was cobalt or googlevideo.
