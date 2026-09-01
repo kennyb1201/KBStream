@@ -62,10 +62,11 @@ class YoutubeChunkedDataSourceFactory(
             OkHttpClient.Builder()
                 .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
                 .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                .followRedirects(true)
+                .followSslRedirects(true)
                 .build()
         )
             .setUserAgent(YOUTUBE_USER_AGENT)
-            .setAllowCrossProtocolRedirects(true)
             .createDataSource()
         return YoutubeChunkedDataSource(upstream, chunkSizeBytes)
     }
