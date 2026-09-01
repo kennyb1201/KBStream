@@ -1150,11 +1150,9 @@ class SimklRepository(
 
         if (
             !forceRefresh &&
-            !cachedContinueWatching
-                .isNullOrEmpty()
+            cachedContinueWatching != null
         ) {
-            return cachedContinueWatching
-                .orEmpty()
+            return cachedContinueWatching.orEmpty()
         }
 
         try {

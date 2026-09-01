@@ -1127,14 +1127,9 @@ Log.d(
             return SimklUpNextResult.NotConfigured
         }
 
-        return try {
-
-            val raw =
+        return try {                val raw =
                 simklRepository
                     .getContinueWatching()
-                    .take(
-                        MAX_SIMKL_UP_NEXT_ITEMS
-                    )
 
             val lookupSemaphore =
                 Semaphore(
