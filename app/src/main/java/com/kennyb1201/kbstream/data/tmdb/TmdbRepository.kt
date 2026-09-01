@@ -637,30 +637,60 @@ class TmdbRepository(context: Context) {
         getInitialNetworkSections(networkId)
 
     /**
-     * Best transparent clear-logo for a studio/network, or null when TMDB has
-     * none. Prefers an English logo, then the highest-voted, widest one.
+     * Best transparent clear-logo for a studio or network, or null when TMDB
+     * has none. Networks live in a different TMDB ID space than companies, so
+     * the correct endpoint is used per type (company first as a fallback).
+     * Prefers an English logo, then the highest-voted, widest one.
      */
-    suspend fun getCompanyLogoUrl(companyId: Int): String? {
+    suspend fun getEntityLogoUrl(entityId: Int, isNetwork: Boolean): String? {
         if (apiKey.isBlank()) return null
-        return runCatching {
-            api.getCompanyImages(companyId, apiKey)
-                .logos
-                .filter { !it.filePath.isNullOrBlank() }
+
+        suspend fun fetchLogos(company: Boolean): List<TmdbCompanyLogo> = runCatching {
+            if (company) {
+                api.getCompanyImages(entityId, apiKey).logos
+            } else if (isNetwork) {
+                api.getNetworkImages(entityId, apiKey).logos
+            } else {
+                emptyList()
+            }
+        }.getOrDefault(emptyList())
+
+        suspend fun pickBestLogo(logos: List<TmdbCompanyLogo>): String? =
+            logos.filter { !it.filePath.isNullOrBlank() }
                 .sortedWith(
                     compareByDescending<TmdbCompanyLogo> { it.iso6391 == "en" }
+                        .thenByDescending { it.iso6391 == null }
                         .thenByDescending { it.voteAverage ?: 0.0 }
                         .thenByDescending { it.width ?: 0 }
                 )
                 .firstOrNull()
                 ?.filePath
                 ?.let { TmdbRepository.LOGO_BASE + it }
-        }.getOrNull()
+
+        if (isNetwork) {
+            // Primary: the network's own logos. Fallback: same id as a company
+            // (some entries exist in both spaces).
+            return pickBestLogo(fetchLogos(company = false))
+                ?: pickBestLogo(fetchLogos(company = true))
+        }
+        return pickBestLogo(fetchLogos(company = true))
     }
 
-    /** Company metadata (description, headquarters, origin country). */
-    suspend fun getCompanyDetail(companyId: Int): TmdbCompanyDetail? {
+    /** Company/network metadata (description, headquarters, origin country). */
+    suspend fun getEntityDetail(entityId: Int, isNetwork: Boolean): TmdbCompanyDetail? {
         if (apiKey.isBlank()) return null
-        return runCatching { api.getCompanyDetail(companyId, apiKey) }.getOrNull()
+
+        if (isNetwork) {
+            // Networks have their own endpoint; fall back to the company shape.
+            val networkDetail = runCatching {
+                api.getNetworkDetail(entityId, apiKey)
+            }.getOrNull()
+            if (networkDetail != null && !networkDetail.name.isNullOrBlank()) {
+                return networkDetail
+            }
+            return runCatching { api.getCompanyDetail(entityId, apiKey) }.getOrNull()
+        }
+        return runCatching { api.getCompanyDetail(entityId, apiKey) }.getOrNull()
     }
 
     private fun imdbResolutionKey(tmdbId: Int, type: String): String {

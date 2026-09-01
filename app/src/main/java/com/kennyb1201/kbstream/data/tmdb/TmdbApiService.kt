@@ -196,4 +196,18 @@ suspend fun searchCollection(
         @Path("id") id: Int,
         @Query("api_key") apiKey: String
     ): TmdbCompanyDetail
+
+    // Networks are a separate TMDB ID space from companies, so they need
+    // their own endpoints (a network id is NOT a valid company id).
+    @GET("network/{id}/images")
+    suspend fun getNetworkImages(
+        @Path("id") id: Int,
+        @Query("api_key") apiKey: String
+    ): TmdbCompanyImages
+
+    @GET("network/{id}")
+    suspend fun getNetworkDetail(
+        @Path("id") id: Int,
+        @Query("api_key") apiKey: String
+    ): TmdbCompanyDetail
 }

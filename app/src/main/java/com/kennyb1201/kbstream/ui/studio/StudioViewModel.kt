@@ -103,17 +103,17 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             _logoUrl.value = null
             _companyInfo.value = null
 
-            // Clear logo + company blurb for the header (works for both
-            // studios and networks — TMDB networks are companies).
+            // Clear logo + blurb for the header. Networks use their own TMDB
+            // endpoints (a network id is not a company id), so route by type.
             try {
-                _logoUrl.value = tmdbRepository.getCompanyLogoUrl(id)
+                _logoUrl.value = tmdbRepository.getEntityLogoUrl(id, isNetwork)
             } catch (e: Exception) {
                 Log.w("STUDIO_VM", "Logo lookup failed for id=$id", e)
             }
             try {
-                _companyInfo.value = tmdbRepository.getCompanyDetail(id)
+                _companyInfo.value = tmdbRepository.getEntityDetail(id, isNetwork)
             } catch (e: Exception) {
-                Log.w("STUDIO_VM", "Company detail failed for id=$id", e)
+                Log.w("STUDIO_VM", "Entity detail failed for id=$id", e)
             }
 
             try {
