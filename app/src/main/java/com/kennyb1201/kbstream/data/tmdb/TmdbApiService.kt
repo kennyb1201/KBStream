@@ -173,6 +173,18 @@ suspend fun searchCollection(
     @Query("api_key") apiKey: String
 ): TmdbSearchCollectionResponse
 
+    @GET("search/movie")
+    suspend fun searchMovie(
+        @Query("query") query: String,
+        @Query("api_key") apiKey: String
+    ): TmdbSearchTitleResponse
+
+    @GET("search/tv")
+    suspend fun searchTv(
+        @Query("query") query: String,
+        @Query("api_key") apiKey: String
+    ): TmdbSearchTitleResponse
+
     @GET("genre/movie/list")
     suspend fun getMovieGenreList(
         @Query("api_key") apiKey: String

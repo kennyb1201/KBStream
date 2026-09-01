@@ -242,6 +242,25 @@ class TmdbRepository(context: Context) {
             .getOrDefault(emptyList())
     }
 
+    /*
+     * TMDB-native title search. This is the primary title source for the
+     * search screen so it works without any add-on installed (e.g. Cinemeta);
+     * add-on catalog search is only a supplement layered on top by the
+     * ViewModel. Split into movies/TV (not multi-search) so every result
+     * carries a reliable type.
+     */
+    suspend fun searchMovies(query: String): List<TmdbSearchTitleResult> {
+        if (apiKey.isBlank()) return emptyList()
+        return runCatching { api.searchMovie(query, apiKey).results }
+            .getOrDefault(emptyList())
+    }
+
+    suspend fun searchTv(query: String): List<TmdbSearchTitleResult> {
+        if (apiKey.isBlank()) return emptyList()
+        return runCatching { api.searchTv(query, apiKey).results }
+            .getOrDefault(emptyList())
+    }
+
     suspend fun getMovieGenres(): List<TmdbGenre> {
         if (apiKey.isBlank()) return emptyList()
         movieGenresCache?.let { return it }

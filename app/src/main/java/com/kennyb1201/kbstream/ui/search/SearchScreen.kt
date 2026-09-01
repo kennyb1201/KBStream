@@ -12,12 +12,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -27,7 +32,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -168,11 +172,11 @@ fun SearchScreen(
                     Column {
                         SectionHeader(title = "Best match")
                         FeaturedSearchResult(
-                            meta = topResult,
+                            result = topResult,
                             watched = viewModel.watchedKey(topResult.id, topResult.type) in watchedKeys,
                             onClick = {
                                 viewModel.onResultOpened(topResult)
-                                onItemClick(topResult)
+                                onItemClick(topResult.meta)
                             }
                         )
                     }
@@ -183,15 +187,20 @@ fun SearchScreen(
                 item(key = "titles_section") {
                     Column {
                         SectionHeader(title = "Titles")
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            remainingResults.forEach { meta ->
-                                val watched = viewModel.watchedKey(meta.id, meta.type) in watchedKeys
-                                SearchResultRow(
-                                    meta = meta,
-                                    watched = watched,
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                            contentPadding = PaddingValues(vertical = 2.dp)
+                        ) {
+                            items(
+                                items = remainingResults,
+                                key = { result: SearchTitleResult -> result.id }
+                            ) { result: SearchTitleResult ->
+                                TitlePosterTile(
+                                    result = result,
+                                    watched = viewModel.watchedKey(result.id, result.type) in watchedKeys,
                                     onClick = {
-                                        viewModel.onResultOpened(meta)
-                                        onItemClick(meta)
+                                        viewModel.onResultOpened(result)
+                                        onItemClick(result.meta)
                                     }
                                 )
                             }
@@ -284,32 +293,46 @@ private fun SearchHero(
             color = KBTextHi
         )
 
-        Box(
+        Row(
             modifier = Modifier
                 .padding(top = 14.dp)
                 .fillMaxWidth()
                 .background(KBSurfaceRaised, RoundedCornerShape(14.dp))
                 .border(1.dp, KBTextLo.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
-                .padding(horizontal = 14.dp, vertical = 12.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            if (query.isBlank()) {
-                Text(
-                    text = "Search titles, people, collections...",
-                    color = KBTextLo,
-                    style = MaterialTheme.typography.bodyLarge
+            Icon(
+                imageVector = Icons.Default.Search,
+                contentDescription = null,
+                tint = KBTextLo,
+                modifier = Modifier.size(22.dp)
+            )
+
+            Box(
+                modifier = Modifier
+                    .padding(start = 12.dp)
+                    .weight(1f)
+            ) {
+                if (query.isBlank()) {
+                    Text(
+                        text = "Search titles, people, collections...",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                }
+
+                BasicTextField(
+                    value = query,
+                    onValueChange = onQueryChanged,
+                    singleLine = true,
+                    textStyle = TextStyle(
+                        color = KBTextHi,
+                        fontSize = MaterialTheme.typography.bodyLarge.fontSize
+                    ),
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
-
-            BasicTextField(
-                value = query,
-                onValueChange = onQueryChanged,
-                singleLine = true,
-                textStyle = TextStyle(
-                    color = KBTextHi,
-                    fontSize = MaterialTheme.typography.bodyLarge.fontSize
-                ),
-                modifier = Modifier.fillMaxWidth()
-            )
         }
 
         val statusText = when {
@@ -417,7 +440,7 @@ private fun SearchChip(
 
 @Composable
 private fun FeaturedSearchResult(
-    meta: MetaPreview,
+    result: SearchTitleResult,
     watched: Boolean,
     onClick: () -> Unit
 ) {
@@ -444,8 +467,8 @@ private fun FeaturedSearchResult(
             verticalAlignment = Alignment.CenterVertically
         ) {
             PosterCard(
-                posterUrl = meta.poster,
-                contentDescription = meta.name,
+                posterUrl = result.poster,
+                contentDescription = result.name,
                 isWatched = watched,
                 onClick = onClick,
                 modifier = Modifier
@@ -456,71 +479,13 @@ private fun FeaturedSearchResult(
             Column(
                 modifier = Modifier
                     .padding(start = 14.dp)
-                    .fillMaxWidth()
-            ) {
-                TypePill(meta.type)
-
-                Text(
-                    text = meta.name,
-                    style = MaterialTheme.typography.titleLarge,
-                    color = KBTextHi,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 10.dp)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun SearchResultRow(
-    meta: MetaPreview,
-    watched: Boolean,
-    onClick: () -> Unit
-) {
-    Card(
-        onClick = onClick,
-        colors = CardDefaults.colors(
-            containerColor = KBSurface,
-            contentColor = KBTextHi,
-            focusedContainerColor = KBSurfaceRaised,
-            focusedContentColor = KBTextHi,
-            pressedContainerColor = KBSurfaceRaised,
-            pressedContentColor = KBTextHi
-        ),
-        border = CardDefaults.border(
-            border = Border(BorderStroke(1.dp, KBTextLo.copy(alpha = 0.25f))),
-            focusedBorder = Border(BorderStroke(2.dp, KBAccent))
-        ),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            PosterCard(
-                posterUrl = meta.poster,
-                contentDescription = meta.name,
-                isWatched = watched,
-                onClick = onClick,
-                modifier = Modifier
-                    .width(92.dp)
-                    .height(138.dp)
-            )
-
-            Column(
-                modifier = Modifier
-                    .padding(start = 12.dp)
                     .weight(1f)
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    TypePill(meta.type)
+                    TypePill(result.type)
                     if (watched) {
                         Text(
                             text = "WATCHED",
@@ -532,14 +497,80 @@ private fun SearchResultRow(
                 }
 
                 Text(
-                    text = meta.name,
-                    style = MaterialTheme.typography.titleMedium,
+                    text = result.name,
+                    style = MaterialTheme.typography.titleLarge,
                     color = KBTextHi,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 8.dp)
+                    modifier = Modifier.padding(top = 10.dp)
                 )
+
+                val caption = buildString {
+                    result.year?.let { append(it) }
+                    result.rating?.let {
+                        if (isNotEmpty()) append("  ·  ")
+                        append("★ ${String.format("%.1f", it)}")
+                    }
+                }
+
+                if (caption.isNotBlank()) {
+                    Text(
+                        text = caption,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = KBTextLo,
+                        maxLines = 1,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun TitlePosterTile(
+    result: SearchTitleResult,
+    watched: Boolean,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier.width(142.dp)
+    ) {
+        PosterCard(
+            posterUrl = result.poster,
+            contentDescription = result.name,
+            isWatched = watched,
+            onClick = onClick,
+            modifier = Modifier
+                .width(142.dp)
+                .height(213.dp)
+        )
+
+        Text(
+            text = result.name,
+            style = MaterialTheme.typography.bodyMedium,
+            color = KBTextHi,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 6.dp)
+        )
+
+        val caption = buildString {
+            result.year?.let { append(it) }
+            result.rating?.let {
+                if (isNotEmpty()) append("  ·  ")
+                append("★ ${String.format("%.1f", it)}")
+            }
+        }
+
+        if (caption.isNotBlank()) {
+            Text(
+                text = caption,
+                style = MaterialTheme.typography.bodySmall,
+                color = KBTextLo,
+                maxLines = 1,
+                modifier = Modifier.padding(top = 2.dp)
+            )
         }
     }
 }

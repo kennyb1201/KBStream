@@ -434,6 +434,24 @@ data class TmdbSearchCollectionResponse(
 )
 
 @JsonClass(generateAdapter = true)
+data class TmdbSearchTitleResult(
+    val id: Int,
+    val title: String? = null,
+    val name: String? = null,
+    @Json(name = "poster_path") val posterPath: String? = null,
+    @Json(name = "backdrop_path") val backdropPath: String? = null,
+    @Json(name = "release_date") val releaseDate: String? = null,
+    @Json(name = "first_air_date") val firstAirDate: String? = null,
+    @Json(name = "vote_average") val voteAverage: Double? = null,
+    @Json(name = "media_type") val mediaType: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class TmdbSearchTitleResponse(
+    val results: List<TmdbSearchTitleResult> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
 data class TmdbGenreListResponse(
     val genres: List<TmdbGenre> = emptyList()
 )
