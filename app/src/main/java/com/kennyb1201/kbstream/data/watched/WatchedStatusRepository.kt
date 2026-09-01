@@ -22,7 +22,7 @@ class WatchedStatusRepository(
 ) {
 
     private val simklRepository =
-        SimklRepository(context)
+        SimklRepository.getInstance(context)
 
     private val database =
         WatchHistoryDatabase.getInstance(

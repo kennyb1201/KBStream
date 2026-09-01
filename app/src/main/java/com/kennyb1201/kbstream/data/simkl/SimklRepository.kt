@@ -3,8 +3,16 @@ package com.kennyb1201.kbstream.data.simkl
 import android.content.Context
 import android.util.Log
 import com.kennyb1201.kbstream.BuildConfig
+import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheDao
+import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheEntity
+import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
+import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
@@ -74,6 +82,31 @@ class SimklRepository(
     private var cachedAllShowItemsFetchedAt =
         0L
 
+    private val tmdbJsonCacheDao:
+        TmdbJsonCacheDao? =
+        context
+            ?.applicationContext
+            ?.let {
+                WatchHistoryDatabase
+                    .getInstance(it)
+                    .tmdbJsonCacheDao()
+            }
+
+    private val allShowsJsonAdapter:
+        JsonAdapter<SimklAllShowsResponse> =
+        moshi.adapter(
+            SimklAllShowsResponse::class.java
+        )
+
+    private val continueWatchingJsonAdapter:
+        JsonAdapter<List<SimklContinueWatchingItem>> =
+        moshi.adapter(
+            Types.newParameterizedType(
+                List::class.java,
+                SimklContinueWatchingItem::class.java
+            )
+        )
+
     fun isConfigured(): Boolean {
         return clientId.isNotBlank() &&
             clientSecret.isNotBlank()
@@ -103,6 +136,19 @@ class SimklRepository(
 
         cachedAllShowItemsFetchedAt =
             0L
+
+        CoroutineScope(
+            Dispatchers.IO
+        ).launch {
+            runCatching {
+                tmdbJsonCacheDao?.deleteByKeys(
+                    listOf(
+                        ALL_SHOW_ITEMS_DISK_KEY,
+                        CONTINUE_WATCHING_DISK_KEY
+                    )
+                )
+            }
+        }
 
         prefs
             ?.edit()
@@ -727,6 +773,44 @@ class SimklRepository(
                 return@withLock cached
             }
 
+            // Disk fallback so a cold start doesn't re-download the entire
+            // library (hundreds of shows with full episode data) before the
+            // Continue Watching rail can resolve anything.
+            if (
+                !forceRefresh &&
+                cached == null
+            ) {
+                val diskCached =
+                    readSimklJsonFromDisk(
+                        ALL_SHOW_ITEMS_DISK_KEY
+                    )
+
+                if (
+                    diskCached != null &&
+                    now - diskCached.updatedAt <
+                        ALL_SHOW_ITEMS_DISK_TTL_MS
+                ) {
+                    val parsed =
+                        runCatching {
+                            allShowsJsonAdapter
+                                .fromJson(
+                                    diskCached.json
+                                )
+                        }
+                            .getOrNull()
+
+                    if (parsed != null) {
+                        cachedAllShowItems =
+                            parsed
+
+                        cachedAllShowItemsFetchedAt =
+                            now
+
+                        return@withLock parsed
+                    }
+                }
+            }
+
             val response =
                 try {
                     api.getAllShowItems(
@@ -790,6 +874,24 @@ class SimklRepository(
                 cachedAllShowItemsFetchedAt =
                     now
 
+                runCatching {
+                    tmdbJsonCacheDao?.upsert(
+                        TmdbJsonCacheEntity(
+                            key =
+                                ALL_SHOW_ITEMS_DISK_KEY,
+
+                            json =
+                                allShowsJsonAdapter
+                                    .toJson(
+                                        body
+                                    ),
+
+                            updatedAt =
+                                now
+                        )
+                    )
+                }
+
                 Log.e(
                     "SIMKL_REPO",
                     "all-show cache refreshed: " +
@@ -799,6 +901,17 @@ class SimklRepository(
 
             body ?: cached
         }
+    }
+
+    private suspend fun readSimklJsonFromDisk(
+        key: String
+    ): TmdbJsonCacheEntity? {
+        return runCatching {
+            tmdbJsonCacheDao?.getByKey(
+                key
+            )
+        }
+            .getOrNull()
     }
 
     suspend fun getCompletedMovieImdbIds(
@@ -1153,6 +1266,41 @@ class SimklRepository(
             cachedContinueWatching != null
         ) {
             return cachedContinueWatching.orEmpty()
+        }
+
+        // Disk fallback so the rail renders immediately on a cold start
+        // instead of waiting for playback + watching-shows network calls.
+        if (
+            !forceRefresh &&
+            cachedContinueWatching == null
+        ) {
+            val diskCached =
+                readSimklJsonFromDisk(
+                    CONTINUE_WATCHING_DISK_KEY
+                )
+
+            if (
+                diskCached != null &&
+                System.currentTimeMillis() -
+                    diskCached.updatedAt <
+                    CONTINUE_WATCHING_DISK_TTL_MS
+            ) {
+                val parsed =
+                    runCatching {
+                        continueWatchingJsonAdapter
+                            .fromJson(
+                                diskCached.json
+                            )
+                    }
+                        .getOrNull()
+
+                if (parsed != null) {
+                    cachedContinueWatching =
+                        parsed
+
+                    return parsed
+                }
+            }
         }
 
         try {
@@ -1524,6 +1672,24 @@ class SimklRepository(
 
             cachedContinueWatching =
                 result
+
+            runCatching {
+                tmdbJsonCacheDao?.upsert(
+                    TmdbJsonCacheEntity(
+                        key =
+                            CONTINUE_WATCHING_DISK_KEY,
+
+                        json =
+                            continueWatchingJsonAdapter
+                                .toJson(
+                                    result
+                                ),
+
+                        updatedAt =
+                            System.currentTimeMillis()
+                    )
+                )
+            }
 
             return result
 
@@ -1964,6 +2130,25 @@ class SimklRepository(
 
     companion object {
 
+        @Volatile
+        private var INSTANCE:
+            SimklRepository? = null
+
+        fun getInstance(
+            context: Context
+        ): SimklRepository {
+            return INSTANCE
+                ?: synchronized(this) {
+                    INSTANCE
+                        ?: SimklRepository(
+                            context.applicationContext
+                        )
+                            .also {
+                                INSTANCE = it
+                            }
+                }
+        }
+
         private const val PREFS_NAME =
             "simkl_auth"
 
@@ -1975,6 +2160,18 @@ class SimklRepository(
 
         private const val ALL_SHOW_ITEMS_TTL_MS =
             15L * 60L * 1000L
+
+        private const val ALL_SHOW_ITEMS_DISK_TTL_MS =
+            12L * 60L * 60L * 1000L
+
+        private const val CONTINUE_WATCHING_DISK_TTL_MS =
+            6L * 60L * 60L * 1000L
+
+        private const val ALL_SHOW_ITEMS_DISK_KEY =
+            "simkl:all_show_items"
+
+        private const val CONTINUE_WATCHING_DISK_KEY =
+            "simkl:continue_watching"
 
         private var cachedContinueWatching:
             List<SimklContinueWatchingItem>? =

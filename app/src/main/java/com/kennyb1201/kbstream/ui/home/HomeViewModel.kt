@@ -152,7 +152,7 @@ class HomeViewModel(
             .watchHistoryDao()
 
     private val simklRepository =
-        SimklRepository(application)
+        SimklRepository.getInstance(application)
 
     private val tmdbRepository =
         TmdbRepository(application)

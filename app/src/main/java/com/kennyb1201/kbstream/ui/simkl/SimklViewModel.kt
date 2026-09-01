@@ -15,7 +15,7 @@ import kotlinx.coroutines.launch
 
 class SimklViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val repository = SimklRepository(application.applicationContext)
+    private val repository = SimklRepository.getInstance(application.applicationContext)
     private val watchedStatusRepository = WatchedStatusRepository(application.applicationContext)
     private val historyDao = WatchHistoryDatabase
         .getInstance(application.applicationContext)
@@ -172,7 +172,7 @@ class SimklViewModel(application: Application) : AndroidViewModel(application) {
                 statusMessage = "Refreshing Simkl data..."
             )
 
-            runCatching { repository.getContinueWatching() }
+            runCatching { repository.getContinueWatching(forceRefresh = true) }
                 .onSuccess { items ->
                     runCatching { repository.markWatchedActivitySynced() }
 

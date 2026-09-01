@@ -15,4 +15,7 @@ interface TmdbJsonCacheDao {
 
     @Query("DELETE FROM tmdb_json_cache WHERE updatedAt < :minUpdatedAt")
     suspend fun deleteOlderThan(minUpdatedAt: Long)
+
+    @Query("DELETE FROM tmdb_json_cache WHERE key IN (:keys)")
+    suspend fun deleteByKeys(keys: List<String>)
 }

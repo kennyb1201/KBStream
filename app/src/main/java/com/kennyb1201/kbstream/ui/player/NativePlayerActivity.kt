@@ -1797,7 +1797,7 @@ class NativePlayerActivity : ComponentActivity() {
         simklSyncJob?.cancel()
         simklSyncJob = CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             val result = runCatching {
-                val simkl = SimklRepository(this@NativePlayerActivity)
+                val simkl = SimklRepository.getInstance(this@NativePlayerActivity)
                 when (parentType.lowercase()) {
                     "movie" -> simkl.pushWatchedMovie(imdbId = parentId, title = itemName)
                     "series", "show", "tv" -> {
