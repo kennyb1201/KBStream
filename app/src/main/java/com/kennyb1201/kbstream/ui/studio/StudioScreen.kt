@@ -214,7 +214,6 @@ fun TintedBrandLogo(
     AsyncImage(
         model = ImageRequest.Builder(context)
             .data(url)
-            .allowHardware(false)
             .crossfade(true)
             .build(),
         contentDescription = name,

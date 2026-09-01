@@ -429,7 +429,6 @@ private fun HeroClearLogo(
     AsyncImage(
         model = ImageRequest.Builder(LocalContext.current)
             .data(url)
-            .allowHardware(false)
             .build(),
         contentDescription = name,
         contentScale = ContentScale.Fit,
