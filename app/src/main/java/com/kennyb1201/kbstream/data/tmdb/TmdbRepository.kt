@@ -636,6 +636,33 @@ class TmdbRepository(context: Context) {
     suspend fun getByNetwork(networkId: Int): List<StudioSection> =
         getInitialNetworkSections(networkId)
 
+    /**
+     * Best transparent clear-logo for a studio/network, or null when TMDB has
+     * none. Prefers an English logo, then the highest-voted, widest one.
+     */
+    suspend fun getCompanyLogoUrl(companyId: Int): String? {
+        if (apiKey.isBlank()) return null
+        return runCatching {
+            api.getCompanyImages(companyId, apiKey)
+                .logos
+                .filter { !it.filePath.isNullOrBlank() }
+                .sortedWith(
+                    compareByDescending<TmdbCompanyLogo> { it.iso6391 == "en" }
+                        .thenByDescending { it.voteAverage ?: 0.0 }
+                        .thenByDescending { it.width ?: 0 }
+                )
+                .firstOrNull()
+                ?.filePath
+                ?.let { TmdbRepository.LOGO_BASE + it }
+        }.getOrNull()
+    }
+
+    /** Company metadata (description, headquarters, origin country). */
+    suspend fun getCompanyDetail(companyId: Int): TmdbCompanyDetail? {
+        if (apiKey.isBlank()) return null
+        return runCatching { api.getCompanyDetail(companyId, apiKey) }.getOrNull()
+    }
+
     private fun imdbResolutionKey(tmdbId: Int, type: String): String {
         return "${normalizeType(type)}::$tmdbId"
     }

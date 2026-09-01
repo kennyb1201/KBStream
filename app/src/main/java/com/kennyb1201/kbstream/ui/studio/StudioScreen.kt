@@ -22,12 +22,19 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
+import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.tmdb.StudioItem
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
+import com.kennyb1201.kbstream.data.tmdb.TmdbCompanyDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -48,6 +55,8 @@ fun StudioScreen(
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
     val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
     val pagingStates by viewModel.pagingStates.collectAsStateWithLifecycle()
+    val logoUrl by viewModel.logoUrl.collectAsStateWithLifecycle()
+    val companyInfo by viewModel.companyInfo.collectAsStateWithLifecycle()
 
     val firstItemFocusRequester = remember { FocusRequester() }
 
@@ -68,10 +77,10 @@ fun StudioScreen(
             .padding(24.dp)
     ) {
         Column {
-            Text(
-                text = name,
-                style = MaterialTheme.typography.displayLarge,
-                modifier = Modifier.padding(bottom = 16.dp)
+            StudioHeader(
+                name = name,
+                logoUrl = logoUrl,
+                info = companyInfo
             )
 
             when {
@@ -109,6 +118,70 @@ fun StudioScreen(
                             Box(modifier = Modifier.height(24.dp))
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StudioHeader(
+    name: String,
+    logoUrl: String?,
+    info: TmdbCompanyDetail?
+) {
+    Column(
+        modifier = Modifier.padding(bottom = 16.dp)
+    ) {
+        if (!logoUrl.isNullOrBlank()) {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(logoUrl)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = name,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .width(480.dp)
+                    .height(140.dp)
+            )
+        } else {
+            Text(
+                text = name,
+                style = MaterialTheme.typography.displayLarge
+            )
+        }
+
+        // Studio/network blurb + location, shown under the logo (or name).
+        val description = info?.description
+            ?.takeIf { it.isNotBlank() }
+        val location = listOfNotNull(
+            info?.headquarters?.takeIf { it.isNotBlank() },
+            info?.originCountry?.takeIf { it.isNotBlank() }
+        ).joinToString(" · ")
+
+        if (!description.isNullOrBlank() || location.isNotBlank()) {
+            Column(
+                modifier = Modifier.padding(top = 6.dp)
+            ) {
+                if (!description.isNullOrBlank()) {
+                    Text(
+                        text = description,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = KBTextLo,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(end = 24.dp)
+                    )
+                }
+
+                if (location.isNotBlank()) {
+                    Text(
+                        text = location,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = KBAccent,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
                 }
             }
         }

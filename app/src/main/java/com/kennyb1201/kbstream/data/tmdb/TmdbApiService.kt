@@ -182,4 +182,18 @@ suspend fun searchCollection(
     suspend fun getTvGenreList(
         @Query("api_key") apiKey: String
     ): TmdbGenreListResponse
+
+    // ---- Studio / network screen support ----
+
+    @GET("company/{id}/images")
+    suspend fun getCompanyImages(
+        @Path("id") id: Int,
+        @Query("api_key") apiKey: String
+    ): TmdbCompanyImages
+
+    @GET("company/{id}")
+    suspend fun getCompanyDetail(
+        @Path("id") id: Int,
+        @Query("api_key") apiKey: String
+    ): TmdbCompanyDetail
 }

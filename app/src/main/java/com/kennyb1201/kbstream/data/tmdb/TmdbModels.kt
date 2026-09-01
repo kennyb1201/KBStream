@@ -41,6 +41,30 @@ data class TmdbCredits(
 )
 
 @JsonClass(generateAdapter = true)
+data class TmdbCompanyImages(
+    val id: Int = 0,
+    val logos: List<TmdbCompanyLogo> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class TmdbCompanyLogo(
+    @Json(name = "file_path") val filePath: String? = null,
+    @Json(name = "iso_639_1") val iso6391: String? = null,
+    @Json(name = "vote_average") val voteAverage: Double? = null,
+    val width: Int? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class TmdbCompanyDetail(
+    val id: Int = 0,
+    val name: String? = null,
+    val description: String? = null,
+    val headquarters: String? = null,
+    @Json(name = "origin_country") val originCountry: String? = null,
+    @Json(name = "logo_path") val logoPath: String? = null
+)
+
+@JsonClass(generateAdapter = true)
 data class TmdbVideo(
     val key: String,
     val site: String,

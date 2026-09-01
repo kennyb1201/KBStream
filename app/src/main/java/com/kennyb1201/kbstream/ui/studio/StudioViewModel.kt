@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TagRailPage
+import com.kennyb1201.kbstream.data.tmdb.TmdbCompanyDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.async
@@ -40,6 +41,12 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _pagingStates = MutableStateFlow<Map<String, StudioRailPagingState>>(emptyMap())
     val pagingStates: StateFlow<Map<String, StudioRailPagingState>> = _pagingStates.asStateFlow()
+
+    private val _logoUrl = MutableStateFlow<String?>(null)
+    val logoUrl: StateFlow<String?> = _logoUrl.asStateFlow()
+
+    private val _companyInfo = MutableStateFlow<TmdbCompanyDetail?>(null)
+    val companyInfo: StateFlow<TmdbCompanyDetail?> = _companyInfo.asStateFlow()
 
     // Reactive watched keys pipeline combining resolved IDs with the repository's hot update flow
     val watchedKeys: StateFlow<Set<String>> = combine(
@@ -93,6 +100,21 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             _sections.value = emptyList()
             _resolvedIds.value = emptyMap()
             _pagingStates.value = emptyMap()
+            _logoUrl.value = null
+            _companyInfo.value = null
+
+            // Clear logo + company blurb for the header (works for both
+            // studios and networks — TMDB networks are companies).
+            try {
+                _logoUrl.value = tmdbRepository.getCompanyLogoUrl(id)
+            } catch (e: Exception) {
+                Log.w("STUDIO_VM", "Logo lookup failed for id=$id", e)
+            }
+            try {
+                _companyInfo.value = tmdbRepository.getCompanyDetail(id)
+            } catch (e: Exception) {
+                Log.w("STUDIO_VM", "Company detail failed for id=$id", e)
+            }
 
             try {
                 val result = if (isNetwork) {
