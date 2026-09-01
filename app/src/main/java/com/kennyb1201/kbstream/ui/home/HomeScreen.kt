@@ -1806,18 +1806,7 @@ fun HomeScreen(
                                                 } else {
                                                     Modifier
                                                 }
-                                            )                                        // Deferred focus restore: requestFocus() must
-                                        // not run during composition (crashes). A 1-frame
-                                        // delay defers it to after layout.
-                                        val itemKey = "${meta.type}:${meta.id}"
-                                        LaunchedEffect(lastFocusedItemKey) {
-                                            if (lastFocusedItemKey == itemKey) {
-                                                delay(1)
-                                                requester.requestFocus()
-                                            }
-                                        }
-
-                                        Box(
+                                            )                                        Box(
                                             modifier = Modifier
                                                 .width(HomePosterWidth)
                                                 .height(

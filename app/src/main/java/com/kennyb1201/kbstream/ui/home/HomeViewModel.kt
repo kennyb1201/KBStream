@@ -2970,8 +2970,8 @@ private suspend fun calculateEpisodesRemaining(
     ) {
 
         val baseUrl = TOP_TODAY_MANIFEST_URL
-    .substringBefore("/manifest.json")
-    .removeSuffix("/")
+            .substringBefore("/manifest.json")
+            .removeSuffix("/")
 
         TOP_TODAY_CATALOGS
             .forEach {
