@@ -1836,7 +1836,9 @@ fun HomeScreen(
                                                 } else {
                                                     Modifier
                                                 }
-                                            )                                        Box(
+                                            )
+
+                                        Box(
                                             modifier = Modifier
                                                 .width(HomePosterWidth)
                                                 .height(
