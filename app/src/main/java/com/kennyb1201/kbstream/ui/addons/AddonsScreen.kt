@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -53,6 +54,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Glow
@@ -61,6 +63,7 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.addon.InstalledAddon
+import com.kennyb1201.kbstream.data.addon.ManifestCatalog
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -88,8 +91,22 @@ fun AddonsScreen(
     var showAddPanel by remember { mutableStateOf(false) }
     var showRenamePanel by remember { mutableStateOf(false) }
     var showRemoveConfirm by remember { mutableStateOf(false) }
+    var filterQuery by remember { mutableStateOf("") }
 
     val selectedAddon = addons.firstOrNull { it.id == selectedId }
+
+    val filteredAddons = remember(addons, filterQuery) {
+        val q = filterQuery.trim().lowercase()
+        if (q.isEmpty()) {
+            addons
+        } else {
+            addons.filter { addon ->
+                addon.displayName.lowercase().contains(q) ||
+                    addon.id.lowercase().contains(q) ||
+                    addon.resources.any { it.lowercase().contains(q) }
+            }
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -172,6 +189,13 @@ fun AddonsScreen(
                     modifier = Modifier.fillMaxSize()
                 )
             } else {
+                AddonFilterField(
+                    query = filterQuery,
+                    onQueryChange = { filterQuery = it }
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                     modifier = Modifier.weight(1f).fillMaxWidth()
@@ -184,20 +208,36 @@ fun AddonsScreen(
                         shape = RoundedCornerShape(16.dp),
                         modifier = Modifier.weight(0.55f).fillMaxHeight()
                     ) {
-                        LazyColumn(
-                            contentPadding = PaddingValues(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(7.dp),
-                            modifier = Modifier.fillMaxSize().focusGroup()
-                        ) {
-                            items(items = addons, key = { addon -> addon.id }) { addon ->
-                                AddonListCard(
-                                    addon = addon,
-                                    selected = addon.id == selectedId,
-                                    onClick = {
-                                        selectedId = addon.id
-                                        renameText = addon.customName ?: addon.name
-                                    }
+                        if (filteredAddons.isEmpty()) {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "No add-ons match the filter",
+                                    color = KBTextLo,
+                                    style = MaterialTheme.typography.bodyMedium
                                 )
+                            }
+                        } else {
+                            LazyColumn(
+                                contentPadding = PaddingValues(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(7.dp),
+                                modifier = Modifier.fillMaxSize().focusGroup()
+                            ) {
+                                items(
+                                    items = filteredAddons,
+                                    key = { addon -> addon.id }
+                                ) { addon ->
+                                    AddonListCard(
+                                        addon = addon,
+                                        selected = addon.id == selectedId,
+                                        onClick = {
+                                            selectedId = addon.id
+                                            renameText = addon.customName ?: addon.name
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
@@ -228,7 +268,14 @@ fun AddonsScreen(
                                     }
                                 },
                                 onRefresh = { viewModel.refreshManifest(selectedAddon.id) },
-                                onRemove = { showRemoveConfirm = true }
+                                onRemove = { showRemoveConfirm = true },
+                                onToggleCatalog = { catalogId, showOnHome ->
+                                    viewModel.setCatalogShowOnHome(
+                                        selectedAddon.id,
+                                        catalogId,
+                                        showOnHome
+                                    )
+                                }
                             )
                         }
                     }
@@ -248,6 +295,11 @@ fun AddonsScreen(
             },
             onAdd = {
                 viewModel.addAddon(urlInput)
+                showAddPanel = false
+                urlInput = ""
+            },
+            onAddPreset = { presetUrl ->
+                viewModel.addAddon(presetUrl)
                 showAddPanel = false
                 urlInput = ""
             }
@@ -315,26 +367,58 @@ private fun AddonListCard(
         ),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
-            Text(
-                text = addon.displayName,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+            AddonTile(
+                name = addon.displayName,
+                size = 42.dp,
+                fontSize = 20.sp
             )
-            Text(
-                text = addon.resources
-                    .map { it.uppercase() }
-                    .joinToString("  •  ")
-                    .ifBlank { "NO RESOURCES" },
-                style = MaterialTheme.typography.labelSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 3.dp)
-            )
+
+            Column(
+                modifier = Modifier
+                    .padding(start = 12.dp)
+                    .weight(1f)
+            ) {
+                Text(
+                    text = addon.displayName,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = addon.resources
+                        .map { it.uppercase() }
+                        .joinToString("  •  ")
+                        .ifBlank { "NO RESOURCES" },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = KBTextLo,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 3.dp)
+                )
+            }
+
+            if (addon.catalogs.isNotEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .background(KBAccent.copy(alpha = 0.16f), RoundedCornerShape(999.dp))
+                        .border(1.dp, KBAccent.copy(alpha = 0.45f), RoundedCornerShape(999.dp))
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                ) {
+                    Text(
+                        text = "${addon.catalogs.size} CATALOG${if (addon.catalogs.size == 1) "" else "S"}",
+                        color = KBAccent,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
         }
     }
 }
@@ -348,7 +432,8 @@ private fun AddonDetails(
     onRename: () -> Unit,
     onOpenManifest: () -> Unit,
     onRefresh: () -> Unit,
-    onRemove: () -> Unit
+    onRemove: () -> Unit,
+    onToggleCatalog: (catalogId: String, showOnHome: Boolean) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -356,23 +441,40 @@ private fun AddonDetails(
             .verticalScroll(rememberScrollState())
             .padding(18.dp)
     ) {
-        Text(
-            text = addon.displayName,
-            color = KBTextHi,
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
-        )
-
-        if (addon.customName != null) {
-            Text(
-                text = "CUSTOM NAME",
-                color = KBAccent,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(top = 3.dp)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            AddonTile(
+                name = addon.displayName,
+                size = 56.dp,
+                fontSize = 26.sp
             )
+
+            Column(
+                modifier = Modifier
+                    .padding(start = 14.dp)
+                    .weight(1f)
+            ) {
+                Text(
+                    text = addon.displayName,
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                if (addon.customName != null) {
+                    Text(
+                        text = "CUSTOM NAME",
+                        color = KBAccent,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 3.dp)
+                    )
+                }
+            }
         }
 
         addon.description?.takeIf { it.isNotBlank() }?.let {
@@ -382,7 +484,7 @@ private fun AddonDetails(
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 8.dp)
+                modifier = Modifier.padding(top = 10.dp)
             )
         }
 
@@ -392,6 +494,32 @@ private fun AddonDetails(
         DetailLine("RESOURCES", addon.resources.joinToString(", ").ifBlank { "—" })
         DetailLine("TYPES", addon.types.joinToString(", ").ifBlank { "—" })
         DetailLine("CATALOGS", addon.catalogs.size.toString())
+
+        if (addon.catalogs.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(14.dp))
+            Text(
+                text = "CATALOGS ON HOME",
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+
+            addon.catalogs
+                .sortedBy { it.order }
+                .forEach { catalog ->
+                    CatalogToggleRow(
+                        catalog = catalog,
+                        onToggle = {
+                            onToggleCatalog(
+                                catalog.id,
+                                !catalog.showOnHome
+                            )
+                        }
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                }
+        }
 
         Spacer(modifier = Modifier.height(12.dp))
         Text(
@@ -645,6 +773,157 @@ private fun SmallAction(
     }
 }
 
+private val AddonTileColors = listOf(
+    Color(0xFF3D6B99),
+    Color(0xFF8A5A99),
+    Color(0xFF4C7A6B),
+    Color(0xFF997A4C),
+    Color(0xFF9A5A4C),
+    Color(0xFF4C6B99),
+    Color(0xFF6B4C99),
+    Color(0xFF99705A)
+)
+
+private val AddonPresets = listOf(
+    "Cinemeta" to "https://v3-cinemeta.strem.io/manifest.json",
+    "WatchHub" to "https://watchhub.strem.fun/manifest.json"
+)
+
+@Composable
+private fun AddonTile(
+    name: String,
+    size: androidx.compose.ui.unit.Dp,
+    fontSize: androidx.compose.ui.unit.TextUnit
+) {
+    val initial =
+        remember(name) {
+            name.trim()
+                .firstOrNull()
+                ?.uppercase()
+                ?: "?"
+        }
+
+    val color =
+        remember(name) {
+            val hash = name.hashCode().let { if (it < 0) -it else it }
+            AddonTileColors[hash % AddonTileColors.size]
+        }
+
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(RoundedCornerShape(12.dp))
+            .background(color),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = initial,
+            color = Color.White,
+            fontSize = fontSize,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+@Composable
+private fun CatalogToggleRow(
+    catalog: ManifestCatalog,
+    onToggle: () -> Unit
+) {
+    KBCard(
+        onClick = onToggle,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 9.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = catalog.name.ifBlank { catalog.id },
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = catalog.type.uppercase(),
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1
+                )
+            }
+
+            Text(
+                text = if (catalog.showOnHome) "ON HOME" else "HIDDEN",
+                color = if (catalog.showOnHome) KBAccent else KBTextLo,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+@Composable
+private fun AddonFilterField(
+    query: String,
+    onQueryChange: (String) -> Unit
+) {
+    var focused by remember { mutableStateOf(false) }
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(KBSurfaceRaised.copy(alpha = 0.80f))
+            .border(
+                1.dp,
+                if (focused) KBAccent.copy(alpha = 0.72f)
+                else KBTextLo.copy(alpha = 0.20f),
+                RoundedCornerShape(12.dp)
+            )
+            .onFocusChanged { focused = it.isFocused }
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+    ) {
+        Icon(
+            imageVector = Icons.Default.Search,
+            contentDescription = null,
+            tint = KBTextLo,
+            modifier = Modifier.size(18.dp)
+        )
+
+        Box(
+            modifier = Modifier
+                .padding(start = 10.dp)
+                .weight(1f)
+        ) {
+            if (query.isBlank()) {
+                Text(
+                    text = "Filter add-ons by name, id, or resource",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+
+            BasicTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                singleLine = true,
+                textStyle = TextStyle(
+                    color = KBTextHi,
+                    fontSize = MaterialTheme.typography.bodyMedium.fontSize
+                ),
+                cursorBrush = SolidColor(KBAccent),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
 @Composable
 private fun StatusBanner(
     text: String,
@@ -728,12 +1007,13 @@ private fun AddAddonDialog(
     isLoading: Boolean,
     onUrlChange: (String) -> Unit,
     onDismiss: () -> Unit,
-    onAdd: () -> Unit
+    onAdd: () -> Unit,
+    onAddPreset: (String) -> Unit
 ) {
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
-                .width(720.dp)
+                .width(760.dp)
                 .background(KBSurface, RoundedCornerShape(18.dp))
                 .border(1.dp, KBAccent.copy(alpha = 0.38f), RoundedCornerShape(18.dp))
                 .padding(22.dp)
@@ -745,12 +1025,33 @@ private fun AddAddonDialog(
                 fontWeight = FontWeight.SemiBold
             )
             Text(
-                text = "Paste the add-on's manifest.json URL.",
+                text = "Paste the add-on's manifest.json URL — or quick-add a popular one below.",
                 color = KBTextLo,
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(top = 4.dp, bottom = 14.dp)
             )
             UrlField(url, onUrlChange, "https://example.com/manifest.json")
+
+            Text(
+                text = "QUICK-ADD",
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(top = 16.dp, bottom = 8.dp)
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                AddonPresets.forEach { (name, presetUrl) ->
+                    ActionButton(
+                        label = name,
+                        icon = Icons.Filled.Add,
+                        enabled = !isLoading,
+                        onClick = { onAddPreset(presetUrl) }
+                    )
+                }
+            }
+
             Row(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.padding(top = 16.dp)
