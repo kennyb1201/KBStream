@@ -100,7 +100,6 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.components.StudioChip
-import com.kennyb1201.kbstream.ui.studio.BrandLogo
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.NumberFormat
@@ -719,26 +718,21 @@ fun DetailScreen(
                             horizontal = 24.dp
                         )
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (!clearLogoUrl.isNullOrBlank()) {
-                                BrandLogo(
-                                    url = clearLogoUrl,
-                                    name = displayName,
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .height(68.dp)
-                                )
-                                Spacer(modifier = Modifier.width(18.dp))
-                            }
+                        if (!clearLogoUrl.isNullOrBlank()) {
+                            AsyncImage(
+                                model = clearLogoUrl,
+                                contentDescription = displayName,
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(68.dp)
+                            )
+                        } else {
                             Text(
-                                text = displayName,
+                                displayName,
                                 style = MaterialTheme.typography.headlineLarge,
                                 maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f)
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }

@@ -3,6 +3,9 @@ package com.kennyb1201.kbstream.ui.studio
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
@@ -22,9 +25,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -129,60 +130,53 @@ private fun StudioHeader(
     logoUrl: String?,
     info: TmdbCompanyDetail?
 ) {
-    Column(
-        modifier = Modifier.padding(bottom = 16.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 16.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.Top
     ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = if (info?.let { it.name.isNullOrBlank() } == false) {
+                    info.name.orEmpty()
+                } else {
+                    name
+                },
+                style = MaterialTheme.typography.displayLarge
+            )
+
+            Text(
+                text = if (info?.description != null) "Production Company" else "Network",
+                style = MaterialTheme.typography.titleMedium,
+                color = KBTextLo,
+                modifier = Modifier.padding(top = 2.dp)
+            )
+
+            val location = listOfNotNull(
+                info?.originCountry?.takeIf { it.isNotBlank() },
+                info?.headquarters?.takeIf { it.isNotBlank() }
+            ).joinToString(" · ")
+            if (location.isNotBlank()) {
+                Text(
+                    text = location,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = KBAccent,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+        }
+
         if (!logoUrl.isNullOrBlank()) {
-            // No white chip: like Nuvio/Coral-style TV UIs, render the logo
-            // straight on the dark surface and recolor dark (black) artwork to
-            // white so it reads. Light/colored logos pass through untouched —
-            // the tint only kicks in when the sampled artwork is dark.
             BrandLogo(
                 url = logoUrl,
                 name = name,
                 modifier = Modifier
-                    .width(480.dp)
-                    .height(120.dp)
+                    .width(360.dp)
+                    .height(150.dp)
+                    .padding(start = 24.dp)
             )
-        } else {
-            Text(
-                text = name,
-                style = MaterialTheme.typography.displayLarge
-            )
-        }
-
-        // Studio/network blurb + location, shown under the logo (or name).
-        val description = info?.description
-            ?.takeIf { it.isNotBlank() }
-        val location = listOfNotNull(
-            info?.headquarters?.takeIf { it.isNotBlank() },
-            info?.originCountry?.takeIf { it.isNotBlank() }
-        ).joinToString(" · ")
-
-        if (!description.isNullOrBlank() || location.isNotBlank()) {
-            Column(
-                modifier = Modifier.padding(top = 6.dp)
-            ) {
-                if (!description.isNullOrBlank()) {
-                    Text(
-                        text = description,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = KBTextLo,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(end = 24.dp)
-                    )
-                }
-
-                if (location.isNotBlank()) {
-                    Text(
-                        text = location,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = KBAccent,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-                }
-            }
         }
     }
 }
