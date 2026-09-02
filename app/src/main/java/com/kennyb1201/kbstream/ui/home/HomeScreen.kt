@@ -67,6 +67,7 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.MaterialTheme
@@ -95,7 +96,7 @@ import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
-import com.kennyb1201.kbstream.ui.components.YouTubeTrailerPlayer
+import com.kennyb1201.kbstream.data.youtube.YoutubeChunkedDataSourceFactory
 import kotlinx.coroutines.delay
 
 private val HomePosterWidth = 124.dp
@@ -284,7 +285,17 @@ private fun HeroInlineTrailerPlayer(
             "Hero player mounting with source: " + heroSourceOrigin(source)
         )
 
-        val mediaSourceFactory = DefaultMediaSourceFactory(context)
+        // googlevideo signed URLs 403 unless the request carries the same
+        // YouTube client User-Agent that resolved them and uses bounded
+        // range requests. YoutubeChunkedDataSourceFactory handles that for
+        // googlevideo hosts (1 MB chunks via OkHttp, ratebypass fallbacks)
+        // and passes every other host straight through - the same stack the
+        // full player uses for HLS and progressive playback.
+        val mediaSourceFactory =
+            DefaultMediaSourceFactory(
+                YoutubeChunkedDataSourceFactory(),
+                DefaultExtractorsFactory()
+            )
 
         val renderersFactory =
             DefaultRenderersFactory(context)
@@ -502,17 +513,43 @@ private fun HomeHero(
     val trailerPlaying =
         !trailerKey.isNullOrBlank() && autoPlayTrailer
 
-    // YouTube embed: the only reliable playback path. Direct googlevideo
-    // URLs fail because the CDN rejects Range requests larger than ~1MB,
-    // and ExoPlayer always requests the full file.
-    val showTrailerEmbed = trailerPlaying && !trailerKey.isNullOrBlank()
+    // Inline ExoPlayer is the only hero trailer path. The YouTube web
+    // embed was tried but renders a grey screen with audio + subtitles on
+    // some TVs and has no reliable end-of-video signal. ExoPlayer shares
+    // the main player's proven stack (OkHttp + the youtube client UA +
+    // bounded range requests via YoutubeChunkedDataSourceFactory), renders
+    // no subtitles, and reports ENDED so the hero returns to the backdrop.
+    var resolvedTrailerSource by remember(trailerKey) {
+        mutableStateOf<PlayableSource?>(null)
+    }
 
     LaunchedEffect(trailerPlaying, trailerKey) {
-        if (showTrailerEmbed) {
+        resolvedTrailerSource = null
+
+        if (trailerPlaying && !trailerKey.isNullOrBlank()) {
             Log.w(
                 "HOME_HERO",
-                "Hero trailer using YouTube embed key=$trailerKey"
+                "Resolving hero trailer key=$trailerKey"
             )
+
+            TrailerPlayerLauncher
+                .resolvePlayableUrl(trailerKey)
+                .onSuccess { source ->
+                    resolvedTrailerSource = source
+                    Log.w(
+                        "HOME_HERO",
+                        "Hero trailer resolved: " +
+                            heroSourceOrigin(source)
+                    )
+                }
+                .onFailure { error ->
+                    Log.e(
+                        "HOME_HERO",
+                        "Failed to resolve hero trailer, " +
+                            "keeping backdrop",
+                        error
+                    )
+                }
         } else {
             Log.w(
                 "HOME_HERO",
@@ -697,7 +734,7 @@ private fun HomeHero(
             val prefix =
                 when (item.badge) {
                     UpNextBadge.CONTINUE_WATCHING ->
-                        "Continue Watching"
+                        "Resume"
 
                     UpNextBadge.NEXT_UP ->
                         "Next Up"
@@ -779,13 +816,19 @@ private fun HomeHero(
             ) {
             
                 Crossfade(
-    targetState = showTrailerEmbed,
+    targetState = resolvedTrailerSource,
     label = "hero_backdrop_crossfade"
-) { showEmbed ->
-    if (showEmbed && trailerKey != null) {
-        YouTubeTrailerPlayer(
-            videoId = trailerKey,
-            modifier = Modifier.fillMaxSize()
+) { trailerSource ->
+    if (trailerSource != null) {
+        HeroInlineTrailerPlayer(
+            source = trailerSource,
+            modifier = Modifier.fillMaxSize(),
+            onEnded = {
+                // Video finished (or the watchdog gave up on a stuck
+                // player): drop the source so the hero crossfades back
+                // to the backdrop.
+                resolvedTrailerSource = null
+            }
         )
     } else {
         AsyncImage(
@@ -1120,7 +1163,7 @@ private fun CompactUpNextCard(
 
     val displayBadge = when (item.badge) {
         UpNextBadge.CONTINUE_WATCHING ->
-            "CONTINUE"
+            "RESUME"
 
         UpNextBadge.NEXT_UP ->
             "NEXT UP"
@@ -1758,7 +1801,7 @@ fun HomeScreen(
                                                 item.badge
                                             ) {
                                                 UpNextBadge.CONTINUE_WATCHING ->
-                                                    "CONTINUE"
+                                                    "RESUME"
 
                                                 UpNextBadge.NEXT_UP ->
                                                     "NEXT UP"

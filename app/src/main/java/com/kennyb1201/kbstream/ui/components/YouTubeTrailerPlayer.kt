@@ -61,6 +61,7 @@ fun YouTubeTrailerPlayer(
                         "&controls=0" +
                         "&rel=0" +
                         "&iv_load_policy=3" +
+                        "&cc_load_policy=0" +
                         "&modestbranding=1"
 
                 val html = """
