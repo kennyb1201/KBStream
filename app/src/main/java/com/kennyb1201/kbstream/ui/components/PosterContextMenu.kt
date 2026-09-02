@@ -74,6 +74,7 @@ data class PosterContextAction(
 @Composable
 fun PosterContextMenu(
     title: String,
+    subtitle: String? = null,
     actions: List<PosterContextAction>,
     onDismiss: () -> Unit
 ) {
@@ -208,6 +209,20 @@ fun PosterContextMenu(
                     overflow = TextOverflow.Ellipsis
                 )
 
+                subtitle
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { sub ->
+                        Text(
+                            text = sub,
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
+
                 Spacer(
                     modifier = Modifier.height(16.dp)
                 )
@@ -219,7 +234,6 @@ fun PosterContextMenu(
 
                     ContextMenuActionRow(
                         label = action.label,
-                        description = action.description,
                         isDestructive = action.isDestructive,
                         focusRequester = if (index == 0) {
                             firstRowFocusRequester
@@ -244,7 +258,6 @@ fun PosterContextMenu(
 @Composable
 private fun ContextMenuActionRow(
     label: String,
-    description: String?,
     isDestructive: Boolean,
     focusRequester: FocusRequester?,
     onClick: () -> Unit,
@@ -322,23 +335,6 @@ private fun ContextMenuActionRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-
-            description
-                ?.takeIf { it.isNotBlank() }
-                ?.let { desc ->
-                    Text(
-                        text = desc,
-                        color = if (focused) {
-                            Color.White.copy(alpha = 0.72f)
-                        } else {
-                            KBTextLo
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 2.dp)
-                    )
-                }
         }
     }
 }

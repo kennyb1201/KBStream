@@ -2010,6 +2010,22 @@ fun HomeScreen(
         continueWatchingMenu?.let { menuItem ->
             PosterContextMenu(
                 title = menuItem.title,
+                subtitle = buildString {
+                    val seasonEpisode = listOfNotNull(
+                        menuItem.season?.let { "S%02d".format(it) },
+                        menuItem.episode?.let { "E%02d".format(it) }
+                    ).joinToString(" · ")
+                    if (seasonEpisode.isNotBlank()) {
+                        append(seasonEpisode)
+                    }
+                    menuItem.episodeTitle
+                        ?.trim()
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { episodeName ->
+                            if (isNotEmpty()) append(" · ")
+                            append(episodeName)
+                        }
+                }.ifBlank { null },
                 actions = listOf(
                     PosterContextAction(
                         label = "Go to Details",
