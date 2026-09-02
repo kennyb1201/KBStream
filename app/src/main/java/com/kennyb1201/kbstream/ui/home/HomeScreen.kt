@@ -1471,6 +1471,16 @@ fun HomeScreen(
         continueWatchingMenu = item
     }
 
+    // Long-press menu on regular poster rails (movies/series catalogs).
+    var posterMenu by remember {
+        mutableStateOf<PosterMenuTarget?>(null)
+    }
+
+    fun dismissPosterMenu() {
+        posterMenu = null
+        lastPosterFocusRequester?.requestFocus()
+    }
+
     fun selectHero(
         item: MetaPreview
     ) {
@@ -1919,6 +1929,14 @@ fun HomeScreen(
                                                     selectHero(meta)
                                                     onItemClick(meta)
                                                 },
+                                                onLongClick = {
+                                                    lastPosterFocusRequester =
+                                                        requester
+                                                    posterMenu =
+                                                        PosterMenuTarget(
+                                                            meta
+                                                        )
+                                                },
                                                 modifier = posterModifier,
                                                 onPosterError = { throwable ->
                                                     Log.e(
@@ -2025,6 +2043,137 @@ fun HomeScreen(
                     dismissContinueWatchingMenu()
                 }
             )
+        }
+
+        // Long-press menu for regular poster rails (movies/series catalogs).
+        posterMenu?.let { target ->
+            PosterActionMenu(
+                meta = target.meta,
+                onGoToDetails = {
+                    posterMenu = null
+                    selectHero(target.meta)
+                    onItemClick(target.meta)
+                },
+                onMarkWatched = {
+                    posterMenu = null
+                    viewModel.markAsWatched(target.meta)
+                    lastPosterFocusRequester?.requestFocus()
+                },
+                onDismiss = {
+                    dismissPosterMenu()
+                }
+            )
+        }
+    }
+}
+
+/**
+ * Target for the long-press menu on a regular poster rail card.
+ */
+private data class PosterMenuTarget(
+    val meta: MetaPreview
+)
+
+/**
+ * Long-press menu for a catalog poster: Go to Details and Mark as Watched.
+ */
+@Composable
+private fun PosterActionMenu(
+    meta: MetaPreview,
+    onGoToDetails: () -> Unit,
+    onMarkWatched: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val firstRowFocusRequester = remember {
+        FocusRequester()
+    }
+
+    val dialogShape = RoundedCornerShape(20.dp)
+
+    // Dismiss on system Back.
+    BackHandler {
+        onDismiss()
+    }
+
+    LaunchedEffect(Unit) {
+        runCatching {
+            firstRowFocusRequester.requestFocus()
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.60f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            onClick = onDismiss,
+            shape = dialogShape,
+            colors = ClickableSurfaceDefaults.colors(
+                containerColor = Color(0xFF101820).copy(alpha = 0.97f),
+                contentColor = KBTextHi,
+                focusedContainerColor = Color(0xFF101820).copy(alpha = 0.97f),
+                focusedContentColor = KBTextHi
+            ),
+            scale = ClickableSurfaceDefaults.scale(
+                scale = 1f,
+                focusedScale = 1f
+            ),
+            border = ClickableSurfaceDefaults.border(
+                border = Border(
+                    border = BorderStroke(
+                        1.dp,
+                        Color.White.copy(alpha = 0.10f)
+                    ),
+                    shape = dialogShape
+                ),
+                focusedBorder = Border(
+                    border = BorderStroke(
+                        1.dp,
+                        Color.White.copy(alpha = 0.10f)
+                    ),
+                    shape = dialogShape
+                )
+            ),
+            modifier = Modifier
+                .width(380.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(22.dp)
+            ) {
+                Text(
+                    text = meta.name,
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                Spacer(
+                    modifier = Modifier.height(16.dp)
+                )
+
+                ContinueWatchingMenuRow(
+                    label = "Go to Details",
+                    description = "Open this title's detail page",
+                    focusRequester = firstRowFocusRequester,
+                    onClick = onGoToDetails,
+                    onDismiss = onDismiss
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                ContinueWatchingMenuRow(
+                    label = "Mark as Watched",
+                    description = "Show this title as watched",
+                    onClick = onMarkWatched,
+                    onDismiss = onDismiss
+                )
+            }
         }
     }
 }

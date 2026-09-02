@@ -416,6 +416,62 @@ class SimklRepository(
         }
     }
 
+    /*
+     * Outbound scrobble: record a WHOLE show as watched (POST
+     * /sync/history). Sending a show with no seasons array makes Simkl
+     * implicitly auto-fill every episode as watched — the documented
+     * "mark whole show watched" behavior. Used by the poster long-press
+     * "Mark as Watched". Failures are logged, never thrown.
+     */
+    suspend fun pushWatchedShow(
+        showImdbId: String,
+        title: String? = null,
+        tmdbId: Int? = null
+    ): Boolean {
+
+        if (!isConfigured() || !hasToken()) {
+            Log.d("SIMKL_REPO", "pushWatchedShow skipped: not configured/authenticated")
+            return false
+        }
+
+        val ids = parsePlaybackIds(showImdbId, tmdbId)
+        if (ids == null) {
+            Log.d("SIMKL_REPO", "pushWatchedShow skipped: unparseable id=$showImdbId")
+            return false
+        }
+
+        return try {
+            val response = api.addToWatchedHistory(
+                authorization = bearer(requireAccessToken()),
+                body = SimklHistoryRequest(
+                    shows = listOf(
+                        SimklHistoryShow(
+                            title = title,
+                            ids = ids,
+                            seasons = null
+                        )
+                    )
+                )
+            )
+
+            if (!response.isSuccessful) {
+                val errorText = try {
+                    response.errorBody()?.string()
+                } catch (e: Exception) {
+                    "unreadable: ${e.message}"
+                }
+                Log.e("SIMKL_REPO", "pushWatchedShow failed code=${response.code()} body=$errorText")
+            } else {
+                Log.d("SIMKL_REPO", "pushWatchedShow ok show=$showImdbId")
+            }
+
+            response.isSuccessful
+        } catch (e: Exception) {
+            Log.e("SIMKL_REPO", "pushWatchedShow error: ${e.message}", e)
+            false
+        }
+    }
+
     suspend fun pushWatchedEpisode(
         showImdbId: String,
         season: Int,

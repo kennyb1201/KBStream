@@ -51,6 +51,19 @@ class WatchedStatusRepository(
         Mutex()
 
     /*
+     * Persistent local "Mark as Watched" overrides, stored as a
+     * SharedPreferences string set of watched keys ("movie::tt123456").
+     * These win over the remote-derived SIMKL state so a title the user
+     * manually marked stays marked even after remote refreshes, and they
+     * survive app restarts without a database migration.
+     */
+    private val overridesPrefs =
+        context.getSharedPreferences(
+            "kbstream_watched_overrides",
+            Context.MODE_PRIVATE
+        )
+
+    /*
      * Only one preload may refresh SIMKL sets at a time. This avoids:
      * - duplicate full-library SIMKL fetches
      * - stale completion overwriting newer marker state
@@ -435,9 +448,21 @@ class WatchedStatusRepository(
         val showImdbIds =
             remoteSnapshot.second
 
+        val localOverrideKeys =
+            localWatchedOverrideKeys()
+
         val resolvedEntities =
             needsLookup.map {
                 (id, normalizedType) ->
+
+                val key =
+                    cacheKey(
+                        id,
+                        normalizedType
+                    )
+
+                val manuallyWatched =
+                    key in localOverrideKeys
 
                 val watched =
                     when (
@@ -455,7 +480,8 @@ class WatchedStatusRepository(
                                     "imdb:$id" in
                                     movieKeys
 
-                            localWatched ||
+                            manuallyWatched ||
+                                localWatched ||
                                 simklWatched
                         }
 
@@ -464,7 +490,8 @@ class WatchedStatusRepository(
                              * Membership-only lookup:
                              * no individual network call.
                              */
-                            id in showImdbIds
+                            manuallyWatched ||
+                                id in showImdbIds
                         }
 
                         else ->
@@ -896,6 +923,115 @@ class WatchedStatusRepository(
         return "${normalizeType(type)}::${id.trim()}"
     }
 
+    private fun localWatchedOverrideKeys():
+        Set<String> =
+        overridesPrefs
+            .getStringSet(
+                KEY_WATCHED_OVERRIDES,
+                emptySet()
+            )
+            .orEmpty()
+
+    /**
+     * Long-press "Mark as Watched": writes a persistent local override so
+     * the poster badge shows immediately and survives restarts/remote
+     * refreshes. Key format matches the rest of the watched pipeline
+     * ("{normalizedType}::{id}"). When SIMKL is connected, the mark is
+     * ALSO pushed to the user's Simkl history — movies directly, series
+     * as a whole show (Simkl auto-fills every episode). Push failures
+     * are logged and never block the local mark.
+     */
+    suspend fun markWatchedLocal(
+        id: String,
+        type: String
+    ) {
+        val normalizedId =
+            id.trim()
+
+        if (
+            normalizedId.isBlank()
+        ) {
+            return
+        }
+
+        val normalizedType =
+            normalizeType(
+                type
+            )
+
+        val key =
+            cacheKey(
+                normalizedId,
+                normalizedType
+            )
+
+        val now =
+            System.currentTimeMillis()
+
+        val updatedKeys =
+            (localWatchedOverrideKeys()
+                .toMutableSet()
+                .apply {
+                    add(key)
+                })
+
+        overridesPrefs
+            .edit()
+            .putStringSet(
+                KEY_WATCHED_OVERRIDES,
+                updatedKeys
+            )
+            .apply()
+
+        cacheMutex.withLock {
+            cache[key] =
+                now to true
+        }
+
+        _watchedStateVersion.value =
+            now
+
+        WatchStateBus.notifyChanged(
+            key,
+            true
+        )
+
+        Log.d(
+            "WATCHED_REPO",
+            "Local watched override added: $key"
+        )
+
+        // Mirror to SIMKL when connected. pushWatchedMovie / pushWatchedShow
+        // already swallow their own failures; the extra guard keeps a
+        // surprise throw from ever undoing the local mark above.
+        if (
+            simklRepository.isConfigured() &&
+            simklRepository.hasToken()
+        ) {
+            try {
+                when (
+                    normalizedType
+                ) {
+                    "movie" ->
+                        simklRepository.pushWatchedMovie(
+                            normalizedId
+                        )
+
+                    "series" ->
+                        simklRepository.pushWatchedShow(
+                            normalizedId
+                        )
+                }
+            } catch (e: Exception) {
+                Log.e(
+                    "WATCHED_REPO",
+                    "SIMKL mark-watched push failed for $key",
+                    e
+                )
+            }
+        }
+    }
+
     private fun normalizeType(
         type: String
     ): String {
@@ -916,6 +1052,9 @@ class WatchedStatusRepository(
     }
 
     companion object {
+
+        private const val KEY_WATCHED_OVERRIDES =
+            "watched_overrides"
 
         private const val CACHE_TTL_MS =
             6L * 60L * 60L * 1000L

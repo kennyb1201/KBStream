@@ -708,6 +708,40 @@ Log.d(
         }
     }
 
+    /**
+     * Long-press "Mark as Watched" on a catalog poster: writes a persistent
+     * local watched override so the poster badge shows immediately and stays
+     * marked even when remote (SIMKL) state doesn't know about it.
+     */
+    fun markAsWatched(meta: MetaPreview) {
+
+        val id = meta.id.trim()
+
+        if (id.isBlank()) {
+            return
+        }
+
+        viewModelScope.launch {
+
+            runCatching {
+
+                watchedStatusRepository.markWatchedLocal(
+                    id,
+                    meta.type
+                )
+
+            }.onFailure { e ->
+
+                Log.e(
+                    "HOME_WATCHED",
+                    "Failed to mark watched: " +
+                        "${meta.name} ($id)",
+                    e
+                )
+            }
+        }
+    }
+
     fun refreshAllHomeData() {
 
         viewModelScope.launch {
