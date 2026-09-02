@@ -225,6 +225,12 @@ class NativePlayerActivity : ComponentActivity() {
     private var season: Int? = null
     private var episode: Int? = null
     private var episodeStreamId: String? = null
+
+    // Lazily-resolved TMDB id for the current parent (any id flavor: imdb,
+    // tmdb:, tvdb:, bare numeric). Needed so Simkl scrobbling/history work
+    // for TVDB-sourced titles, which Simkl can only match via TMDB.
+    private var resolvedParentTmdbId: Int? = null
+
     private var itemName = ""
     private var itemPoster: String? = null
     private var clearLogoUrl: String? = null
@@ -1789,10 +1795,7 @@ class NativePlayerActivity : ComponentActivity() {
         scope?.launch {
             val nextEp = withContext(Dispatchers.IO) {
                 val repo = TmdbRepository(this@NativePlayerActivity)
-                val detail = runCatching {
-                    repo.fetchEnrichedMetaCached(parentId, "series")
-                }.getOrNull()
-                val tmdbId = detail?.id ?: return@withContext null
+                val tmdbId = resolveParentTmdbId() ?: return@withContext null
                 val episodes = runCatching {
                     repo.getSeasonEpisodes(tmdbId, targetSeason, parentId)
                 }.getOrNull()
@@ -1937,6 +1940,25 @@ class NativePlayerActivity : ComponentActivity() {
 
 }
 
+    /**
+     * Resolves (once, lazily) the TMDB id for the current parent regardless
+     * of the raw id flavor (imdb / tmdb: / tvdb: / bare numeric). Simkl can
+     * only match shows/movies by imdb or tmdb id, so TVDB-sourced titles
+     * scrobble via this resolved id instead of being silently dropped.
+     */
+    private suspend fun resolveParentTmdbId(): Int? {
+        if (resolvedParentTmdbId == null && parentId.isNotBlank()) {
+            resolvedParentTmdbId = withContext(Dispatchers.IO) {
+                runCatching {
+                    TmdbRepository(this@NativePlayerActivity)
+                        .fetchEnrichedMetaCached(parentId, parentType)
+                        ?.id
+                }.getOrNull()
+            }
+        }
+        return resolvedParentTmdbId
+    }
+
     private fun scrobbleSimkl(action: String, progressOverride: Double? = null) {
         if (isLiveChannel || parentId.isBlank()) return
         if (action == "start" && simklScrobbleActive && !simklScrobblePaused) return
@@ -1963,6 +1985,7 @@ class NativePlayerActivity : ComponentActivity() {
         simklScrobbleJob = CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             val ok = runCatching {
                 val simkl = SimklRepository.getInstance(this@NativePlayerActivity)
+                val tmdbId = resolveParentTmdbId()
                 simkl.scrobble(
                     action = action,
                     parentId = parentId,
@@ -1970,7 +1993,8 @@ class NativePlayerActivity : ComponentActivity() {
                     season = season,
                     episode = episode,
                     title = itemName,
-                    progress = progress
+                    progress = progress,
+                    tmdbId = tmdbId
                 )
             }.getOrDefault(false)
             if (!ok && action == "start") {
@@ -1987,12 +2011,13 @@ class NativePlayerActivity : ComponentActivity() {
         simklSyncJob = CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             val ok = runCatching {
                 val simkl = SimklRepository.getInstance(this@NativePlayerActivity)
+                val tmdbId = resolveParentTmdbId()
                 when (parentType.lowercase()) {
-                    "movie" -> simkl.pushWatchedMovie(imdbId = parentId, title = itemName)
+                    "movie" -> simkl.pushWatchedMovie(imdbId = parentId, title = itemName, tmdbId = tmdbId)
                     "series", "show", "tv" -> {
                         val s = season; val e = episode
                         if (s != null && e != null) {
-                            simkl.pushWatchedEpisode(showImdbId = parentId, season = s, episode = e, title = itemName)
+                            simkl.pushWatchedEpisode(showImdbId = parentId, season = s, episode = e, title = itemName, tmdbId = tmdbId)
                         } else {
                             false
                         }

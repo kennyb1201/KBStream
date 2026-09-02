@@ -128,18 +128,73 @@ class TmdbRepository(context: Context) {
         }
     }
 
-    suspend fun fetchEnrichedMeta(imdbId: String, type: String): TmdbDetail? {
+    /**
+     * Resolves raw Stremio-style ids to a full TMDB detail record.
+     *
+     * Catalogs don't just hand out Imdb ids: AIOStreams and search emit
+     * "tmdb:12345", TVDB-sourced addons (AIOMetadata, BingeCat) emit
+     * "tvdb:12345", some catalogs emit bare numeric ids, and history rows
+     * can carry an episode suffix ("tt1234:1:2"). Only the show-level
+     * id matters here, and each flavor is resolved accordingly:
+     *  - tmdb:/bare-numeric -> fetch {tv|movie}/{id} directly
+     *  - tvdb:             -> TMDB /find with external_source=tvdb_id
+     *  - else (tt...)      -> TMDB /find with external_source=imdb_id
+     */
+    suspend fun fetchEnrichedMeta(rawId: String, type: String): TmdbDetail? {
         if (apiKey.isBlank()) return null
 
-        val found = api.find(imdbId, apiKey)
-        return if (normalizeType(type) == "series") {
-            val tmdbId = found.tvResults.firstOrNull()?.id ?: return null
-            api.getTv(tmdbId, apiKey)
+        val normalizedType = normalizeType(type)
+        val trimmed = rawId.trim()
+        val lower = trimmed.lowercase()
+
+        // Episode-suffixed ids only arrive from history rows; keep the prefix.
+        val tmdbId = when {
+            lower.startsWith("tmdb:") ->
+                trimmed.substringAfter(':').substringBefore(':').trim().toIntOrNull()
+            trimmed.all(Char::isDigit) -> trimmed.toIntOrNull()
+            else -> null
+        }
+        if (tmdbId != null) {
+            return fetchDetailByTmdbId(tmdbId, normalizedType)
+        }
+
+        return if (lower.startsWith("tvdb:")) {
+            val tvdbId = trimmed.substringAfter(':').substringBefore(':').trim()
+            if (tvdbId.isBlank()) null else findAndFetch(tvdbId, "tvdb_id", normalizedType)
         } else {
-            val tmdbId = found.movieResults.firstOrNull()?.id ?: return null
-            api.getMovie(tmdbId, apiKey)
+            val imdbId = trimmed.substringBefore(':')
+            if (imdbId.isBlank()) null else findAndFetch(imdbId, "imdb_id", normalizedType)
         }
     }
+
+    private suspend fun findAndFetch(
+        externalId: String,
+        externalSource: String,
+        normalizedType: String
+    ): TmdbDetail? {
+        val found =
+            runCatching { api.find(externalId, apiKey, externalSource) }.getOrNull()
+                ?: return null
+        val tmdbId =
+            if (normalizedType == "series") {
+                found.tvResults.firstOrNull()?.id
+            } else {
+                found.movieResults.firstOrNull()?.id
+            } ?: return null
+        return fetchDetailByTmdbId(tmdbId, normalizedType)
+    }
+
+    private suspend fun fetchDetailByTmdbId(
+        tmdbId: Int,
+        normalizedType: String
+    ): TmdbDetail? =
+        runCatching {
+            if (normalizedType == "series") {
+                api.getTv(tmdbId, apiKey)
+            } else {
+                api.getMovie(tmdbId, apiKey)
+            }
+        }.getOrNull()
 
     suspend fun fetchEnrichedMetaCached(imdbId: String, type: String): TmdbDetail? {
         val key = "${normalizeType(type)}:$imdbId"

@@ -370,7 +370,8 @@ class SimklRepository(
      */
     suspend fun pushWatchedMovie(
         imdbId: String,
-        title: String? = null
+        title: String? = null,
+        tmdbId: Int? = null
     ): Boolean {
 
         if (!isConfigured() || !hasToken()) {
@@ -378,7 +379,7 @@ class SimklRepository(
             return false
         }
 
-        val ids = parsePlaybackIds(imdbId)
+        val ids = parsePlaybackIds(imdbId, tmdbId)
         if (ids == null) {
             Log.d("SIMKL_REPO", "pushWatchedMovie skipped: unparseable id=$imdbId")
             return false
@@ -419,7 +420,8 @@ class SimklRepository(
         showImdbId: String,
         season: Int,
         episode: Int,
-        title: String? = null
+        title: String? = null,
+        tmdbId: Int? = null
     ): Boolean {
 
         if (!isConfigured() || !hasToken()) {
@@ -432,7 +434,7 @@ class SimklRepository(
             return false
         }
 
-        val ids = parsePlaybackIds(showImdbId)
+        val ids = parsePlaybackIds(showImdbId, tmdbId)
         if (ids == null) {
             Log.d("SIMKL_REPO", "pushWatchedEpisode skipped: unparseable id=$showImdbId")
             return false
@@ -488,7 +490,8 @@ class SimklRepository(
         season: Int? = null,
         episode: Int? = null,
         title: String? = null,
-        progress: Double
+        progress: Double,
+        tmdbId: Int? = null
     ): Boolean {
 
         if (!isConfigured() || !hasToken()) {
@@ -496,7 +499,7 @@ class SimklRepository(
             return false
         }
 
-        val ids = parsePlaybackIds(parentId)
+        val ids = parsePlaybackIds(parentId, tmdbId)
         if (ids == null) {
             Log.d("SIMKL_REPO", "scrobble/$action skipped: unparseable id=$parentId")
             return false
@@ -595,7 +598,7 @@ class SimklRepository(
                 Log.d(
                     "SIMKL_REPO",
                     "scrobble/$action ok " +
-                        "id=$parentId progress=$progress"
+                        "id=$parentId tmdb=$tmdbId progress=$progress"
                 )
             }
 
@@ -616,12 +619,16 @@ class SimklRepository(
      * Normalize a catalog item id into Simkl id refs. Accepts:
      *   imdb:tt1234567 / tt1234567  -> imdb
      *   tmdb:123 / 123              -> tmdb
+     *   tvdb:123 (unknown flavors)  -> tmdb (when resolvedTmdbId is known)
      *   anything else               -> best-effort imdb passthrough
      * (movie/show refs may carry both imdb + tmdb; Simkl resolves
-     * whichever identifier it can match server-side.)
+     * whichever identifier it can match server-side. A server-resolved
+     * TMDB id wins over anything derived from the raw string, which is what
+     * makes TVDB-sourced titles scrobble correctly.)
      */
     private fun parsePlaybackIds(
-        rawId: String
+        rawId: String,
+        resolvedTmdbId: Int? = null
     ): SimklPlaybackIdsRef? {
 
         val trimmed =
@@ -633,63 +640,53 @@ class SimklRepository(
             return null
         }
 
-        return when {
-            trimmed.startsWith(
-                "imdb:",
-                ignoreCase = true
-            ) -> {
-                val value =
+        val lower =
+            trimmed.lowercase()
+
+        var imdb: String? = null
+        var tmdb: Int? = resolvedTmdbId
+
+        when {
+            lower.startsWith("imdb:") ->
+                imdb =
                     trimmed
                         .substringAfter(":")
                         .trim()
+                        .takeIf { it.isNotBlank() }
 
-                if (
-                    value.isBlank()
-                ) {
-                    null
-                } else {
-                    SimklPlaybackIdsRef(
-                        imdb = value
-                    )
-                }
-            }
+            lower.startsWith("tt") ->
+                imdb = trimmed.substringBefore(':')
 
-            trimmed.startsWith(
-                "tmdb:",
-                ignoreCase = true
-            ) -> {
-                val value =
-                    trimmed
-                        .substringAfter(":")
-                        .trim()
-                        .toIntOrNull()
+            lower.startsWith("tmdb:") ->
+                tmdb =
+                    tmdb
+                        ?: trimmed
+                            .substringAfter(":")
+                            .trim()
+                            .toIntOrNull()
 
-                if (
-                    value == null
-                ) {
-                    null
-                } else {
-                    SimklPlaybackIdsRef(
-                        tmdb = value
-                    )
-                }
-            }
-
-            trimmed.startsWith("tt") ->
-                SimklPlaybackIdsRef(
-                    imdb = trimmed
-                )
-
-            trimmed.toIntOrNull() != null ->
-                SimklPlaybackIdsRef(
-                    tmdb = trimmed.toIntOrNull()
-                )
+            trimmed.all(Char::isDigit) ->
+                tmdb =
+                    tmdb
+                        ?: trimmed.toIntOrNull()
 
             else ->
-                SimklPlaybackIdsRef(
-                    imdb = trimmed
-                )
+                // Best-effort passthrough for unknown flavors; the resolved
+                // tmdb above (when present) is the reliable identifier.
+                imdb = trimmed
         }
+
+        if (
+            imdb == null &&
+            tmdb == null
+        ) {
+            return null
+        }
+
+        return SimklPlaybackIdsRef(
+            imdb = imdb,
+            tmdb = tmdb
+        )
     }
 
     fun forceClearWatchedActivitySync() {
