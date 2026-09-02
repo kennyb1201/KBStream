@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -40,6 +41,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardDoubleArrowDown
 import androidx.compose.material.icons.filled.KeyboardDoubleArrowUp
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -82,6 +84,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Text
+import com.kennyb1201.kbstream.data.addon.CatalogConfiguration
 import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.data.addon.ManifestCatalog
 import com.kennyb1201.kbstream.ui.components.KBCard
@@ -112,6 +115,7 @@ fun AddonsScreen(
     val refreshing by viewModel.refreshing.collectAsState()
     val error by viewModel.error.collectAsState()
     val status by viewModel.status.collectAsState()
+    val catalogConfigurations by viewModel.catalogConfigurations.collectAsState()
 
     var urlInput by remember { mutableStateOf("") }
     var selectedId by remember { mutableStateOf<String?>(null) }
@@ -122,6 +126,9 @@ fun AddonsScreen(
     var filterQuery by remember { mutableStateOf("") }
     var showFilterDialog by remember { mutableStateOf(false) }
     var filterDraft by remember { mutableStateOf("") }
+    var showCatalogManager by remember { mutableStateOf(false) }
+    var renameCatalogTarget by remember { mutableStateOf<CatalogConfiguration?>(null) }
+    var renameCatalogDraft by remember { mutableStateOf("") }
 
     val selectedAddon = addons.firstOrNull { it.id == selectedId }
 
@@ -179,6 +186,12 @@ fun AddonsScreen(
                     label = "ADD",
                     icon = Icons.Filled.Add,
                     onClick = { showAddPanel = true }
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                ActionButton(
+                    label = "CATALOGS",
+                    icon = Icons.Filled.List,
+                    onClick = { showCatalogManager = true }
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 ActionButton(label = "BACK", onClick = onBack)
@@ -389,6 +402,88 @@ fun AddonsScreen(
                 viewModel.removeAddon(selectedAddon.id)
                 selectedId = null
                 showRemoveConfirm = false
+            }
+        )
+    }
+
+    if (showCatalogManager) {
+        CatalogManagerDialog(
+            configurations = catalogConfigurations,
+            onToggle = { config, show ->
+                viewModel.setCatalogShowOnHome(
+                    config.addonId,
+                    config.catalog.type,
+                    config.catalog.id,
+                    show
+                )
+            },
+            onMove = { config, action ->
+                when (action) {
+                    CatalogMoveAction.TOP ->
+                        viewModel.moveCatalogGlobalToPosition(
+                            config.addonId,
+                            config.catalog.type,
+                            config.catalog.id,
+                            0
+                        )
+
+                    CatalogMoveAction.UP ->
+                        viewModel.moveCatalogGlobal(
+                            config.addonId,
+                            config.catalog.type,
+                            config.catalog.id,
+                            -1
+                        )
+
+                    CatalogMoveAction.DOWN ->
+                        viewModel.moveCatalogGlobal(
+                            config.addonId,
+                            config.catalog.type,
+                            config.catalog.id,
+                            1
+                        )
+
+                    CatalogMoveAction.BOTTOM ->
+                        viewModel.moveCatalogGlobalToPosition(
+                            config.addonId,
+                            config.catalog.type,
+                            config.catalog.id,
+                            (catalogConfigurations.size - 1).coerceAtLeast(0)
+                        )
+                }
+            },
+            onRename = { config ->
+                renameCatalogDraft = config.catalog.displayName
+                renameCatalogTarget = config
+            },
+            onDismiss = { showCatalogManager = false }
+        )
+    }
+
+    renameCatalogTarget?.let { target ->
+        RenameCatalogDialog(
+            currentName = renameCatalogDraft,
+            hasCustomName = target.catalog.customName != null,
+            onNameChange = { renameCatalogDraft = it },
+            onDismiss = { renameCatalogTarget = null },
+            onSave = {
+                if (renameCatalogDraft.trim().isNotEmpty()) {
+                    viewModel.renameCatalog(
+                        target.addonId,
+                        target.catalog.type,
+                        target.catalog.id,
+                        renameCatalogDraft
+                    )
+                }
+                renameCatalogTarget = null
+            },
+            onReset = {
+                viewModel.clearCatalogName(
+                    target.addonId,
+                    target.catalog.type,
+                    target.catalog.id
+                )
+                renameCatalogTarget = null
             }
         )
     }
@@ -878,17 +973,6 @@ private fun SmallAction(
     }
 }
 
-private val AddonTileColors = listOf(
-    Color(0xFF3D6B99),
-    Color(0xFF8A5A99),
-    Color(0xFF4C7A6B),
-    Color(0xFF997A4C),
-    Color(0xFF9A5A4C),
-    Color(0xFF4C6B99),
-    Color(0xFF6B4C99),
-    Color(0xFF99705A)
-)
-
 private val AddonPresets = listOf(
     "Cinemeta" to "https://v3-cinemeta.strem.io/manifest.json",
     "WatchHub" to "https://watchhub.strem.fun/manifest.json"
@@ -909,17 +993,11 @@ private fun AddonTile(
                 ?: "?"
         }
 
-    val color =
-        remember(name) {
-            val hash = name.hashCode().let { if (it < 0) -it else it }
-            AddonTileColors[hash % AddonTileColors.size]
-        }
-
     Box(
         modifier = Modifier
             .size(size)
             .clip(RoundedCornerShape(12.dp))
-            .background(color),
+            .background(Color.Black),
         contentAlignment = Alignment.Center
     ) {
         if (logoUrl.isNullOrBlank()) {
@@ -999,7 +1077,7 @@ private fun CatalogToggleRow(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = catalog.name.ifBlank { catalog.id },
+                        text = catalog.displayName.ifBlank { catalog.id },
                         color = KBTextHi,
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium,
@@ -1667,5 +1745,251 @@ private fun openManifest(
         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
     } catch (_: ActivityNotFoundException) {
         onFailure()
+    }
+}
+
+@Composable
+private fun CatalogManagerDialog(
+    configurations: List<CatalogConfiguration>,
+    onToggle: (CatalogConfiguration, Boolean) -> Unit,
+    onMove: (CatalogConfiguration, CatalogMoveAction) -> Unit,
+    onRename: (CatalogConfiguration) -> Unit,
+    onDismiss: () -> Unit
+) {
+    BackHandler(onBack = onDismiss)
+
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .width(980.dp)
+                .height(700.dp)
+                .background(KBVoid, RoundedCornerShape(18.dp))
+                .border(1.dp, KBAccent.copy(alpha = 0.38f), RoundedCornerShape(18.dp))
+                .padding(20.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "CATALOG MANAGER",
+                        color = KBAccent,
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "Rename, reorder, and toggle catalog rails. Changes apply to Home instantly.",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(top = 3.dp)
+                    )
+                }
+                ActionButton(label = "DONE", onClick = onDismiss)
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            if (configurations.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "No catalogs installed — add an add-on first.",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            } else {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    itemsIndexed(
+                        items = configurations,
+                        key = { _, config ->
+                            "${config.addonId}::${config.catalog.type}::${config.catalog.id}"
+                        }
+                    ) { index, config ->
+                        CatalogManagerRow(
+                            config = config,
+                            position = index,
+                            total = configurations.size,
+                            onToggle = {
+                                onToggle(config, !config.catalog.showOnHome)
+                            },
+                            onRename = { onRename(config) },
+                            onMove = { action -> onMove(config, action) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CatalogManagerRow(
+    config: CatalogConfiguration,
+    position: Int,
+    total: Int,
+    onToggle: () -> Unit,
+    onRename: () -> Unit,
+    onMove: (CatalogMoveAction) -> Unit
+) {
+    KBCard(
+        onClick = onToggle,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 7.dp)
+        ) {
+            Text(
+                text = (position + 1).toString(),
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.width(26.dp)
+            )
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(end = 8.dp)
+            ) {
+                Text(
+                    text = config.catalog.displayName.ifBlank { config.catalog.id },
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "${config.catalog.type} · ${config.addonName}",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 1.dp)
+                )
+            }
+
+            ActionButton(
+                label = if (config.catalog.showOnHome) "ON" else "OFF",
+                onClick = onToggle,
+                modifier = Modifier.width(52.dp),
+                horizontalPadding = 8.dp,
+                verticalPadding = 6.dp
+            )
+            Spacer(modifier = Modifier.width(5.dp))
+            ActionButton(
+                label = "RENAME",
+                icon = Icons.Filled.Edit,
+                onClick = onRename,
+                modifier = Modifier.width(108.dp),
+                horizontalPadding = 8.dp,
+                verticalPadding = 6.dp
+            )
+            Spacer(modifier = Modifier.width(5.dp))
+            ActionButton(
+                label = "TOP",
+                enabled = position > 0,
+                onClick = { onMove(CatalogMoveAction.TOP) },
+                modifier = Modifier.width(56.dp),
+                horizontalPadding = 6.dp,
+                verticalPadding = 6.dp
+            )
+            Spacer(modifier = Modifier.width(5.dp))
+            ActionButton(
+                label = "UP",
+                enabled = position > 0,
+                onClick = { onMove(CatalogMoveAction.UP) },
+                modifier = Modifier.width(56.dp),
+                horizontalPadding = 6.dp,
+                verticalPadding = 6.dp
+            )
+            Spacer(modifier = Modifier.width(5.dp))
+            ActionButton(
+                label = "DOWN",
+                enabled = position < total - 1,
+                onClick = { onMove(CatalogMoveAction.DOWN) },
+                modifier = Modifier.width(66.dp),
+                horizontalPadding = 6.dp,
+                verticalPadding = 6.dp
+            )
+            Spacer(modifier = Modifier.width(5.dp))
+            ActionButton(
+                label = "BOTTOM",
+                enabled = position < total - 1,
+                onClick = { onMove(CatalogMoveAction.BOTTOM) },
+                modifier = Modifier.width(80.dp),
+                horizontalPadding = 6.dp,
+                verticalPadding = 6.dp
+            )
+        }
+    }
+}
+
+@Composable
+private fun RenameCatalogDialog(
+    currentName: String,
+    hasCustomName: Boolean,
+    onNameChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onSave: () -> Unit,
+    onReset: () -> Unit
+) {
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    // Same escape hatch as the rename/ADD dialogs: BACK clears focus and
+    // hides the IME before dismissing so the leanback keyboard can never
+    // trap the user.
+    BackHandler {
+        focusManager.clearFocus()
+        keyboardController?.hide()
+        onDismiss()
+    }
+
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .width(620.dp)
+                .background(KBSurface, RoundedCornerShape(18.dp))
+                .border(1.dp, KBAccent.copy(alpha = 0.38f), RoundedCornerShape(18.dp))
+                .padding(22.dp)
+        ) {
+            Text(
+                text = "RENAME CATALOG",
+                color = KBAccent,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = "Change the rail name shown on Home.",
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(top = 4.dp, bottom = 14.dp)
+            )
+            UrlField(currentName, onNameChange, "Catalog name")
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.padding(top = 16.dp)
+            ) {
+                ActionButton(
+                    label = "SAVE",
+                    enabled = currentName.trim().isNotEmpty(),
+                    onClick = onSave
+                )
+                if (hasCustomName) {
+                    ActionButton(label = "RESET NAME", onClick = onReset)
+                }
+                ActionButton(label = "CANCEL", onClick = onDismiss)
+            }
+        }
     }
 }

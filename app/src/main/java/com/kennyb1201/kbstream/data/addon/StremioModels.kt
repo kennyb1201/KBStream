@@ -110,8 +110,17 @@ data class ManifestCatalog(
 
     val showOnHome: Boolean = true,
 
-    val order: Int = 0
-)
+    val order: Int = 0,
+
+    /**
+     * User-facing display-name override set from the catalog manager.
+     * When null the manifest name is used.
+     */
+    val customName: String? = null
+) {
+    val displayName: String
+        get() = customName ?: name
+}
 
 @JsonClass(generateAdapter = true)
 data class AddonManifest(

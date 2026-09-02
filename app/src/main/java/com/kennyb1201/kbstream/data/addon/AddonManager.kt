@@ -434,6 +434,57 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
     }
 
     /**
+     * Set (or clear, with null) the user-facing display name of one
+     * catalog. Global order, visibility and every other setting are
+     * untouched.
+     */
+    fun setCatalogCustomName(
+        addonId: String,
+        catalogType: String,
+        catalogId: String,
+        name: String?
+    ) {
+
+        val updated =
+            getInstalledAddons()
+                .map { addon ->
+
+                    if (
+                        addon.id != addonId
+                    ) {
+                        return@map addon
+                    }
+
+                    addon.copy(
+                        catalogs =
+                            addon.catalogs.map { catalog ->
+
+                                if (
+                                    catalog.type == catalogType &&
+                                    catalog.id == catalogId
+                                ) {
+                                    catalog.copy(
+                                        customName =
+                                            name?.trim()
+                                                ?.takeIf {
+                                                    it.isNotBlank()
+                                                }
+                                    )
+                                } else {
+                                    catalog
+                                }
+                            }
+                    )
+                }
+
+        saveInstalledAddons(
+            updated
+        )
+
+        refreshAddons()
+    }
+
+    /**
      * Replace an addon manifest while preserving
      * KBStream-specific catalog settings.
      *

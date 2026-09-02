@@ -2868,7 +2868,7 @@ private suspend fun calculateEpisodesRemaining(
                                 baseUrl = baseUrl,
                                 catalogId = configuration.catalog.id,
                                 catalogType = configuration.catalog.type,
-                                catalogRawName = configuration.catalog.name
+                                catalogRawName = configuration.catalog.displayName
                             )
                         }
                         .toList()

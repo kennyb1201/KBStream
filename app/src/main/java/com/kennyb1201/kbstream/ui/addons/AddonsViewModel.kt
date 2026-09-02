@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonManifest
 import com.kennyb1201.kbstream.data.addon.AddonRepository
+import com.kennyb1201.kbstream.data.addon.CatalogConfiguration
 import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.data.addon.ManifestCatalog
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,6 +24,16 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _addons = MutableStateFlow<List<InstalledAddon>>(emptyList())
     val addons: StateFlow<List<InstalledAddon>> = _addons.asStateFlow()
+
+    /**
+     * Every catalog across every addon in one global order — the exact
+     * sequence the catalog manager edits and Home renders.
+     */
+    private val _catalogConfigurations =
+        MutableStateFlow<List<CatalogConfiguration>>(emptyList())
+
+    val catalogConfigurations: StateFlow<List<CatalogConfiguration>> =
+        _catalogConfigurations.asStateFlow()
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -42,6 +53,8 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
 
     fun refresh() {
         _addons.value = addonManager.getInstalledAddons()
+        _catalogConfigurations.value =
+            addonManager.getCatalogConfigurations()
     }
 
     fun clearError() {
@@ -156,7 +169,30 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * Enable/disable a catalog on the KBStream home screen.
+     * Enable/disable a catalog on the KBStream home screen, keyed by
+     * (type, id) — used by the catalog manager so same-named catalogs of
+     * different types never collide.
+     */
+    fun setCatalogShowOnHome(
+        addonId: String,
+        catalogType: String,
+        catalogId: String,
+        showOnHome: Boolean
+    ) {
+        updateAddonCatalogs(addonId) { catalogs ->
+            catalogs.map {
+                if (it.type == catalogType && it.id == catalogId) {
+                    it.copy(showOnHome = showOnHome)
+                } else {
+                    it
+                }
+            }
+        }
+    }
+
+    /**
+     * Enable/disable a catalog on the KBStream home screen (id-only,
+     * used by the add-on details pane).
      */
     fun setCatalogShowOnHome(
         addonId: String,
@@ -271,6 +307,74 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         )
 
         _status.value = "Catalog order restored"
+    }
+
+    /**
+     * Move a catalog one step in the global rail order (across addons).
+     */
+    fun moveCatalogGlobal(
+        addonId: String,
+        catalogType: String,
+        catalogId: String,
+        delta: Int
+    ) {
+        addonManager.moveCatalog(addonId, catalogType, catalogId, delta)
+        refresh()
+    }
+
+    /**
+     * Move a catalog to an absolute position in the global rail order.
+     */
+    fun moveCatalogGlobalToPosition(
+        addonId: String,
+        catalogType: String,
+        catalogId: String,
+        targetIndex: Int
+    ) {
+        addonManager.moveCatalogToPosition(
+            addonId,
+            catalogType,
+            catalogId,
+            targetIndex
+        )
+        refresh()
+    }
+
+    /**
+     * Rename a catalog rail as shown on Home.
+     */
+    fun renameCatalog(
+        addonId: String,
+        catalogType: String,
+        catalogId: String,
+        name: String
+    ) {
+        addonManager.setCatalogCustomName(
+            addonId,
+            catalogType,
+            catalogId,
+            name
+        )
+        refresh()
+        _status.value = "Catalog renamed"
+    }
+
+    /**
+     * Drop a catalog's custom name and fall back to the manifest name.
+     */
+    fun clearCatalogName(
+        addonId: String,
+        catalogType: String,
+        catalogId: String
+    ) {
+        addonManager.setCatalogCustomName(
+            addonId,
+            catalogType,
+            catalogId,
+            null
+        )
+        refresh()
+        _status.value = "Manifest name restored"
     }
 
     private fun moveCatalog(

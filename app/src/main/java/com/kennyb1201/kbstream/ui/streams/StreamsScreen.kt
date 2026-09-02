@@ -72,7 +72,13 @@ fun StreamsScreen(
     // suppressAutoSelect=true so the player isn't relaunched in a loop.
     LaunchedEffect(isLoading, streams) {
         if (!isLoading && streams.isNotEmpty() && !suppressAutoSelect && AppPreferences.getAutoSelectStream(context)) {
-            onStreamSelected(streams.first(), streams)
+            // Skip dead placeholder streams (blank URLs) at the top of the
+            // list — picking one would silently do nothing and look like
+            // auto-select is broken.
+            val top = streams.firstOrNull { !it.url.isNullOrBlank() }
+            if (top != null) {
+                onStreamSelected(top, streams)
+            }
         }
     }
 

@@ -265,6 +265,13 @@ class NativePlayerActivity : ComponentActivity() {
     private var enableTunneling = false
     private var bufferMode = 0
     private var autoPlayNext = false
+
+    // Playback-ended fallback state (see detectStallEndedFallback): some
+    // sources never emit STATE_ENDED, and these fields de-duplicate the
+    // completion path across the real listener and the poller fallback.
+    private var playbackEndedHandled = false
+    private var lastPolledPos = -1L
+    private var posStallTicks = 0
     private var episodeTitle: String? = null
     private var preferredAudioLang = ""
     private var preferredSubtitleLang = ""
@@ -992,6 +999,11 @@ class NativePlayerActivity : ComponentActivity() {
 
         player.addListener(createPlayerListener())
         player.addAnalyticsListener(createAnalyticsListener())
+
+        // New media: re-arm the ended fallback for this playback session.
+        playbackEndedHandled = false
+        lastPolledPos = -1L
+        posStallTicks = 0
 
         exoPlayer = player
         playerView.player = player
@@ -1862,6 +1874,17 @@ class NativePlayerActivity : ComponentActivity() {
                 btnPlayPause.setImageResource(
                     if (player.isPlaying) R.drawable.ic_player_pause else R.drawable.ic_player_play
                 )
+
+                // Some sources (broken HLS tails, streams with wrong or unset
+                // durations) never emit STATE_ENDED: the picture goes black but
+                // the clock keeps counting and auto-next never triggers. Detect
+                // that state here so completion is handled exactly like a real
+                // ENDED event.
+                detectStallEndedFallback(
+                    player,
+                    pos,
+                    dur
+                )
             }
             handler.postDelayed(this, 1_000L)
     }
@@ -1871,6 +1894,62 @@ class NativePlayerActivity : ComponentActivity() {
     private fun startPositionPolling() {
         handler.removeCallbacks(positionRunnable)
         handler.post(positionRunnable)
+    }
+
+    /**
+     * Completion fallback for media that never fires [Player.STATE_ENDED].
+     * Triggered from the 1s position poller:
+     *
+     * - position has reached the declared duration, or
+     * - the player reports isPlaying but the position has not advanced for
+     *   two consecutive ticks (2s) — a frozen tail, not a buffering pause
+     *   (rebuffers flip isPlaying off, which resets the stall counter).
+     *
+     * Stops the clock and routes through onPlaybackEnded so the Up Next popup
+     * and auto-next chain run exactly as they would after a real ENDED event.
+     */
+    private fun detectStallEndedFallback(
+        player: Player,
+        pos: Long,
+        dur: Long
+    ) {
+        if (playbackEndedHandled || isLiveChannel) return
+
+        if (player.playbackState == Player.STATE_ENDED) {
+            // Belt-and-braces: the listener normally handles this; only act if
+            // it somehow missed the event.
+            playbackEndedHandled = true
+            onPlaybackEnded()
+            return
+        }
+
+        if (!player.isPlaying) {
+            // Paused or rebuffering — never a completion signal.
+            lastPolledPos = -1L
+            posStallTicks = 0
+            return
+        }
+
+        val reachedDuration =
+            dur > 0 && dur != C.TIME_UNSET &&
+                pos >= dur - 1_000L
+
+        val advanced = pos > lastPolledPos
+        lastPolledPos = pos
+
+        if (reachedDuration || !advanced) {
+            posStallTicks++
+        } else {
+            posStallTicks = 0
+        }
+
+        if (reachedDuration || posStallTicks >= 2) {
+            playbackEndedHandled = true
+            // Freeze the clock: without this the counter keeps climbing on a
+            // black frame while ENDED never arrives.
+            player.pause()
+            onPlaybackEnded()
+        }
     }
 
     // --- Intro Stamp Polling ---
