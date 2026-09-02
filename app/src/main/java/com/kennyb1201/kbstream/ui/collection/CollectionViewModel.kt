@@ -112,18 +112,18 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
         if (unique.isEmpty()) return
 
         try {
-            val resolvedTriples = supervisorScope {
+            val resolvedPairs = supervisorScope {
                 unique.map { tmdbId ->
                     async {
                         val imdbId = runCatching {
                             tmdbRepository.resolveImdbId(tmdbId, "movie")
                         }.getOrNull()
-                        Triple(tmdbId, imdbId)
+                        Pair(tmdbId, imdbId)
                     }
                 }.map { it.await() }
             }
 
-            val resolved = resolvedTriples.filter { (_, imdbId) ->
+            val resolved = resolvedPairs.filter { (_, imdbId) ->
                 !imdbId.isNullOrBlank()
             }
 
