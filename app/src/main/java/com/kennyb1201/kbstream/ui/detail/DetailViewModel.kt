@@ -805,6 +805,158 @@ if (resolvedMeta != null) {
         }
     }
 
+    /**
+     * Long-press "Mark as Watched" on an episode card: marks exactly one
+     * episode locally and on SIMKL (reuses the season machinery with a
+     * single-episode list).
+     */
+    fun markEpisodeWatched(
+        season: Int,
+        episode: Int
+    ) {
+        markSeasonWatched(
+            season = season,
+            episodeNumbers = listOf(episode)
+        )
+    }
+
+    /**
+     * Long-press "Mark as Unwatched" on an episode card: clears exactly one
+     * episode locally and on SIMKL, leaving the rest of the season alone.
+     */
+    fun markEpisodeUnwatched(
+        season: Int,
+        episode: Int
+    ) {
+        markSpecificEpisodesUnwatched(
+            season = season,
+            episodeNumbers = listOf(episode)
+        )
+    }
+
+    /**
+     * Long-press "Mark Previous as Watched" on an episode card: marks every
+     * episode before the pressed one in the same season (1..episode-1).
+     */
+    fun markPreviousWatched(
+        season: Int,
+        episode: Int
+    ) {
+        if (episode <= 1) return
+        markSeasonWatched(
+            season = season,
+            episodeNumbers = (1 until episode).toList()
+        )
+    }
+
+    /**
+     * Long-press "Mark Previous as Unwatched" on an episode card: clears
+     * every episode before the pressed one in the same season.
+     */
+    fun markPreviousUnwatched(
+        season: Int,
+        episode: Int
+    ) {
+        if (episode <= 1) return
+        markSpecificEpisodesUnwatched(
+            season = season,
+            episodeNumbers = (1 until episode).toList()
+        )
+    }
+
+    /**
+     * Shared core for un-marking an arbitrary set of episodes: deletes the
+     * matching local completed rows, drops the derived watched keys / SIMKL
+     * pairs from memory so the badges clear instantly, and mirrors the
+     * removal to SIMKL when connected.
+     */
+    private fun markSpecificEpisodesUnwatched(
+        season: Int,
+        episodeNumbers: List<Int>
+    ) {
+        val parentId = imdbId
+        if (parentId.isBlank() || season < 0) return
+
+        val validEpisodes =
+            episodeNumbers.filter { it > 0 }.distinct()
+        if (validEpisodes.isEmpty()) return
+
+        viewModelScope.launch {
+            val showName =
+                _meta.value?.name?.ifBlank {
+                    _tmdbDetail.value?.name
+                        ?: _tmdbDetail.value?.title
+                        ?: ""
+                } ?: _tmdbDetail.value?.name
+                ?: _tmdbDetail.value?.title
+                ?: ""
+            val showTmdbId =
+                _tmdbDetail.value?.id
+
+            // 1. Local: drop the completed row(s) for each targeted episode.
+            validEpisodes.forEach { episode ->
+                runCatching {
+                    historyDao.deleteCompletedForParentSeasonEpisode(
+                        parentId = parentId,
+                        season = season,
+                        episode = episode
+                    )
+                }.onFailure { e ->
+                    Log.e(
+                        "KBStream",
+                        "markSpecificEpisodesUnwatched delete failed s=$season e=$episode",
+                        e
+                    )
+                }
+            }
+
+            // 2. Optimistic in-memory state so badges clear instantly.
+            val removeKeys =
+                validEpisodes.mapNotNull { episode ->
+                    WatchedEpisodeState.buildEpisodeKey(
+                        parentId = parentId,
+                        season = season,
+                        episode = episode
+                    )
+                }.toSet()
+            _watchedEpisodeKeys.value =
+                _watchedEpisodeKeys.value - removeKeys
+
+            val removePairs =
+                validEpisodes.map { episode ->
+                    season to episode
+                }.toSet()
+            _simklWatchedEpisodes.value =
+                _simklWatchedEpisodes.value - removePairs
+            _simklSeriesWatched.value =
+                _simklWatchedEpisodes.value.isNotEmpty()
+
+            // 3. Mirror to SIMKL when connected.
+            if (
+                simklRepository.isConfigured() &&
+                simklRepository.hasToken()
+            ) {
+                runCatching {
+                    simklRepository.removeWatchedSeason(
+                        showImdbId = parentId,
+                        season = season,
+                        episodes = validEpisodes,
+                        title = showName.takeIf {
+                            it.isNotBlank()
+                        },
+                        tmdbId = showTmdbId
+                    )
+                }.onFailure { e ->
+                    Log.e(
+                        "KBStream",
+                        "markSpecificEpisodesUnwatched simkl failed s=$season",
+                        e
+                    )
+                }
+            }
+        }
+    }
+
     suspend fun resolveImdbId(tmdbId: Int, type: String): String? =
         tmdbRepository.resolveImdbId(tmdbId, type.lowercase())
 }

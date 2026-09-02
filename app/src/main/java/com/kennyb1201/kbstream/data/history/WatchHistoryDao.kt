@@ -94,6 +94,21 @@ fun observeContinueWatchingParents(): Flow<List<WatchHistoryEntity>>
     )
     suspend fun deleteCompletedForParentSeason(parentId: String, season: Int)
 
+    @Query(
+        """
+        DELETE FROM watch_history
+        WHERE parentId = :parentId
+          AND season = :season
+          AND episode = :episode
+          AND isCompleted = 1
+        """
+    )
+    suspend fun deleteCompletedForParentSeasonEpisode(
+        parentId: String,
+        season: Int,
+        episode: Int
+    )
+
     @Query("DELETE FROM watch_history")
     suspend fun clearAll()
 }

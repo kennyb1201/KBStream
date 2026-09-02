@@ -147,6 +147,15 @@ private data class SeasonMenuTarget(
     val episodeNumbers: List<Int>
 )
 
+private data class EpisodeMenuTarget(
+    val season: Int,
+    val episode: Int,
+    val episodeTitle: String?,
+    val seasonEpisodeNumbers: List<Int>,
+    val streamId: String,
+    val overview: String?
+)
+
 private data class DetailFactItem(
     val label: String,
     val value: String
@@ -229,6 +238,25 @@ fun DetailScreen(
     fun dismissSeasonMenu() {
         seasonMenu = null
         lastSeasonFocusRequester?.requestFocus()
+    }
+
+    // Long-press context menu for the episode cards (mark this / previous /
+    // whole season, or play manually).
+    var episodeMenu by remember {
+        mutableStateOf<EpisodeMenuTarget?>(
+            null
+        )
+    }
+
+    var lastEpisodeFocusRequester by remember {
+        mutableStateOf<FocusRequester?>(
+            null
+        )
+    }
+
+    fun dismissEpisodeMenu() {
+        episodeMenu = null
+        lastEpisodeFocusRequester?.requestFocus()
     }
 
     var userManuallyChangedSeason by remember { mutableStateOf(false) }
@@ -1589,6 +1617,37 @@ fun DetailScreen(
                                                                 tmdbDetail?.credits?.cast.orEmpty()
                                                             )
                                                         },
+                                                        onLongClick = {
+                                                            val seasonForMenu =
+                                                                effectiveSeason
+                                                            if (
+                                                                seasonForMenu !=
+                                                                null
+                                                            ) {
+                                                                lastEpisodeFocusRequester =
+                                                                    focusRequester
+                                                                episodeMenu =
+                                                                    EpisodeMenuTarget(
+                                                                        season =
+                                                                            seasonForMenu,
+                                                                        episode =
+                                                                            ep.episodeNumber,
+                                                                        episodeTitle =
+                                                                            ep.name,
+                                                                        seasonEpisodeNumbers =
+                                                                            episodes
+                                                                                .map {
+                                                                                    it.episodeNumber
+                                                                                }
+                                                                                .distinct()
+                                                                                .sorted(),
+                                                                        streamId =
+                                                                            ep.streamId,
+                                                                        overview =
+                                                                            ep.overview
+                                                                    )
+                                                            }
+                                                        },
                                                         modifier = Modifier
                                                             .focusRequester(
                                                                 focusRequester
@@ -2344,6 +2403,177 @@ fun DetailScreen(
                         }
                     )
                 }
+
+                episodeMenu?.let { target ->
+                    val seasonWatchedSet =
+                        WatchedEpisodeState
+                            .effectiveWatchedEpisodesForSeason(
+                                parentId = id,
+                                season = target.season,
+                                simklWatchedEpisodes =
+                                    simklWatchedEpisodes,
+                                watchedEpisodeKeys =
+                                    watchedEpisodeKeys
+                            )
+                    val isEpisodeWatched =
+                        target.episode in seasonWatchedSet
+                    val isSeasonWatched =
+                        target.seasonEpisodeNumbers.isNotEmpty() &&
+                            target.seasonEpisodeNumbers.all {
+                                it in seasonWatchedSet
+                            }
+
+                    val menuActions =
+                        buildList {
+                            add(
+                                PosterContextAction(
+                                    label = if (isEpisodeWatched) {
+                                        "Mark as Unwatched"
+                                    } else {
+                                        "Mark as Watched"
+                                    }
+                                ) {
+                                    val selected = target
+                                    episodeMenu = null
+                                    if (isEpisodeWatched) {
+                                        viewModel.markEpisodeUnwatched(
+                                            selected.season,
+                                            selected.episode
+                                        )
+                                    } else {
+                                        viewModel.markEpisodeWatched(
+                                            selected.season,
+                                            selected.episode
+                                        )
+                                    }
+                                    lastEpisodeFocusRequester?.requestFocus()
+                                }
+                            )
+
+                            if (target.episode > 1) {
+                                add(
+                                    PosterContextAction(
+                                        label = if (isEpisodeWatched) {
+                                            "Mark Previous as Unwatched"
+                                        } else {
+                                            "Mark Previous as Watched"
+                                        }
+                                    ) {
+                                        val selected = target
+                                        episodeMenu = null
+                                        if (isEpisodeWatched) {
+                                            viewModel.markPreviousUnwatched(
+                                                selected.season,
+                                                selected.episode
+                                            )
+                                        } else {
+                                            viewModel.markPreviousWatched(
+                                                selected.season,
+                                                selected.episode
+                                            )
+                                        }
+                                        lastEpisodeFocusRequester?.requestFocus()
+                                    }
+                                )
+                            }
+
+                            add(
+                                PosterContextAction(
+                                    label = if (isSeasonWatched) {
+                                        "Mark Season as Unwatched"
+                                    } else {
+                                        "Mark Season as Watched"
+                                    }
+                                ) {
+                                    val selected = target
+                                    episodeMenu = null
+                                    if (isSeasonWatched) {
+                                        viewModel.markSeasonUnwatched(
+                                            selected.season,
+                                            selected.seasonEpisodeNumbers
+                                        )
+                                    } else {
+                                        viewModel.markSeasonWatched(
+                                            selected.season,
+                                            selected.seasonEpisodeNumbers
+                                        )
+                                    }
+                                    lastEpisodeFocusRequester?.requestFocus()
+                                }
+                            )
+
+                            add(
+                                PosterContextAction(
+                                    label = "Play Manually"
+                                ) {
+                                    val selected = target
+                                    episodeMenu = null
+                                    val hasResumeHere =
+                                        resumeInfo
+                                            ?.episodeStreamId ==
+                                            selected.streamId
+
+                                    val epSuffix =
+                                        selected.episodeTitle?.let {
+                                            " • $it"
+                                        } ?: ""
+
+                                    val playTarget =
+                                        StreamsTarget(
+                                            contentType = "series",
+                                            streamId =
+                                                selected.streamId,
+                                            title =
+                                                "$displayName S${selected.season} E${selected.episode}$epSuffix",
+                                            displayName =
+                                                displayName,
+                                            season =
+                                                selected.season,
+                                            episode =
+                                                selected.episode,
+                                            resumePositionMs =
+                                                if (
+                                                    hasResumeHere
+                                                ) {
+                                                    resumeInfo
+                                                        ?.positionMs
+                                                        ?: 0L
+                                                } else {
+                                                    0L
+                                                },
+                                            totalEpisodesInSeason =
+                                                selected
+                                                    .seasonEpisodeNumbers
+                                                    .size
+                                        )
+
+                                    onNavigateStreams(
+                                        playTarget,
+                                        id,
+                                        type,
+                                        m.poster,
+                                        backdropUrl,
+                                        clearLogoUrl,
+                                        selected.overview
+                                            ?: m.description,
+                                        tmdbDetail?.credits?.cast
+                                            .orEmpty()
+                                    )
+                                }
+                            )
+                        }
+
+                    PosterContextMenu(
+                        title = target.episodeTitle
+                            ?.ifBlank { null }
+                            ?: "Episode ${target.episode}",
+                        subtitle = "S${target.season.toString().padStart(2, '0')} · E${target.episode.toString().padStart(2, '0')}",
+                        actions = menuActions,
+                        onDismiss = {
+                            dismissEpisodeMenu()
+                        }
+                    )
+                }
             }
         }
     }
@@ -2822,6 +3052,7 @@ private fun EpisodeCard(
     ep: ResolvedEpisode,
     isWatched: Boolean,
     onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     fallbackImageUrl: String? = null,
     progressFraction: Float = 0f
@@ -2843,6 +3074,7 @@ private fun EpisodeCard(
         contentDescription = ep.name ?: "",
         isWatched = isWatched,
         onClick = onClick,
+        onLongClick = onLongClick,
         modifier = modifier
             .width(260.dp)
             .height(170.dp)
