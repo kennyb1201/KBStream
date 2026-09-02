@@ -1761,11 +1761,11 @@ private fun CatalogManagerDialog(
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
-                .width(980.dp)
-                .height(700.dp)
+                .width(780.dp)
+                .fillMaxHeight(0.85f)
                 .background(KBVoid, RoundedCornerShape(18.dp))
                 .border(1.dp, KBAccent.copy(alpha = 0.38f), RoundedCornerShape(18.dp))
-                .padding(20.dp)
+                .padding(18.dp)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -1775,20 +1775,20 @@ private fun CatalogManagerDialog(
                     Text(
                         text = "CATALOG MANAGER",
                         color = KBAccent,
-                        style = MaterialTheme.typography.headlineSmall,
+                        style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "Rename, reorder, and toggle catalog rails. Changes apply to Home instantly.",
+                        text = "Rename, reorder, and toggle rails. Changes are instant.",
                         color = KBTextLo,
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(top = 3.dp)
                     )
                 }
                 ActionButton(label = "DONE", onClick = onDismiss)
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             if (configurations.isEmpty()) {
                 Box(
@@ -1796,7 +1796,7 @@ private fun CatalogManagerDialog(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "No catalogs installed — add an add-on first.",
+                        text = "No catalogs installed.",
                         color = KBTextLo,
                         style = MaterialTheme.typography.bodyMedium
                     )
@@ -1804,7 +1804,7 @@ private fun CatalogManagerDialog(
             } else {
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize().focusGroup()
                 ) {
                     itemsIndexed(
                         items = configurations,
@@ -1838,97 +1838,105 @@ private fun CatalogManagerRow(
     onRename: () -> Unit,
     onMove: (CatalogMoveAction) -> Unit
 ) {
-    KBCard(
-        onClick = onToggle,
-        modifier = Modifier.fillMaxWidth()
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(KBSurface)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
+        // Line 1: position + name + ON/OFF toggle
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 7.dp)
+            modifier = Modifier.fillMaxWidth()
         ) {
             Text(
                 text = (position + 1).toString(),
                 color = KBTextLo,
-                style = MaterialTheme.typography.labelMedium,
-                modifier = Modifier.width(26.dp)
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.width(24.dp)
             )
 
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(end = 8.dp)
-            ) {
-                Text(
-                    text = config.catalog.displayName.ifBlank { config.catalog.id },
-                    color = KBTextHi,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = "${config.catalog.type} · ${config.addonName}",
-                    color = KBTextLo,
-                    style = MaterialTheme.typography.labelSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 1.dp)
-                )
-            }
+            Text(
+                text = config.catalog.displayName.ifBlank { config.catalog.id },
+                color = KBTextHi,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).padding(end = 6.dp)
+            )
 
             ActionButton(
                 label = if (config.catalog.showOnHome) "ON" else "OFF",
                 onClick = onToggle,
-                modifier = Modifier.width(52.dp),
-                horizontalPadding = 8.dp,
-                verticalPadding = 6.dp
+                modifier = Modifier.width(50.dp),
+                horizontalPadding = 6.dp,
+                verticalPadding = 5.dp
             )
-            Spacer(modifier = Modifier.width(5.dp))
+        }
+
+        // Line 2: type + addon subtitle + action buttons
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 4.dp)
+        ) {
+            Text(
+                text = "${config.catalog.type} · ${config.addonName}",
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(end = 8.dp)
+            )
+
             ActionButton(
                 label = "RENAME",
                 icon = Icons.Filled.Edit,
                 onClick = onRename,
-                modifier = Modifier.width(108.dp),
-                horizontalPadding = 8.dp,
-                verticalPadding = 6.dp
+                modifier = Modifier.width(82.dp),
+                horizontalPadding = 6.dp,
+                verticalPadding = 5.dp
             )
-            Spacer(modifier = Modifier.width(5.dp))
+            Spacer(modifier = Modifier.width(4.dp))
             ActionButton(
                 label = "TOP",
                 enabled = position > 0,
                 onClick = { onMove(CatalogMoveAction.TOP) },
-                modifier = Modifier.width(56.dp),
-                horizontalPadding = 6.dp,
-                verticalPadding = 6.dp
+                modifier = Modifier.width(46.dp),
+                horizontalPadding = 4.dp,
+                verticalPadding = 5.dp
             )
-            Spacer(modifier = Modifier.width(5.dp))
+            Spacer(modifier = Modifier.width(4.dp))
             ActionButton(
                 label = "UP",
                 enabled = position > 0,
                 onClick = { onMove(CatalogMoveAction.UP) },
-                modifier = Modifier.width(56.dp),
-                horizontalPadding = 6.dp,
-                verticalPadding = 6.dp
+                modifier = Modifier.width(46.dp),
+                horizontalPadding = 4.dp,
+                verticalPadding = 5.dp
             )
-            Spacer(modifier = Modifier.width(5.dp))
+            Spacer(modifier = Modifier.width(4.dp))
             ActionButton(
                 label = "DOWN",
                 enabled = position < total - 1,
                 onClick = { onMove(CatalogMoveAction.DOWN) },
-                modifier = Modifier.width(66.dp),
-                horizontalPadding = 6.dp,
-                verticalPadding = 6.dp
+                modifier = Modifier.width(52.dp),
+                horizontalPadding = 4.dp,
+                verticalPadding = 5.dp
             )
-            Spacer(modifier = Modifier.width(5.dp))
+            Spacer(modifier = Modifier.width(4.dp))
             ActionButton(
-                label = "BOTTOM",
+                label = "BTM",
                 enabled = position < total - 1,
                 onClick = { onMove(CatalogMoveAction.BOTTOM) },
-                modifier = Modifier.width(80.dp),
-                horizontalPadding = 6.dp,
-                verticalPadding = 6.dp
+                modifier = Modifier.width(46.dp),
+                horizontalPadding = 4.dp,
+                verticalPadding = 5.dp
             )
         }
     }

@@ -78,7 +78,9 @@ import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import coil3.request.allowHardware
 import coil3.request.crossfade
+import coil3.size.Size
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbCastMember
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
@@ -668,7 +670,8 @@ fun DetailScreen(
                     model = remember(backdropUrl) {
                         ImageRequest.Builder(context)
                             .data(backdropUrl)
-                            .crossfade(true)
+                            .size(Size(1280, 720))
+                            .allowHardware(true)
                             .build()
                     },
                     contentDescription = displayName,
@@ -2199,7 +2202,9 @@ private fun CastCard(
         member.profilePath
     ) {
         member.profilePath?.let {
-            TmdbRepository.PROFILE_BASE + it
+            // w342 gives enough pixels for the 88dp circle + 1.08f focus
+            // scale without looking grainy on high-density TV panels.
+            "https://image.tmdb.org/t/p/w342$it"
         }
     }
 
