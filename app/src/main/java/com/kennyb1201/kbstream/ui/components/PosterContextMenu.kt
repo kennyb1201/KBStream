@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -82,10 +83,27 @@ fun PosterContextMenu(
         FocusRequester()
     }
 
+    // Focus anchor for the overlay itself: a plain 1x1 focusable spacer that
+    // is composed in the same frame as the scrim, so requesting focus on it
+    // reliably pulls focus off the poster behind the overlay while the
+    // action rows are still attaching. While it (or any row) holds focus,
+    // the enclosing focusGroup bounds every directional press to the menu,
+    // so the D-pad can never reach the dimmed rails behind it. Once the
+    // first row reports focus the anchor stops being focusable so it cannot
+    // trap edge navigation itself.
+    val overlayFocusRequester = remember {
+        FocusRequester()
+    }
+
     // True once the first action row reports it actually holds focus. Used by
     // the LaunchedEffect below to keep re-requesting until focus really lands
     // inside the menu instead of assuming the very first request succeeded.
     var firstActionFocused by remember {
+        mutableStateOf(false)
+    }
+
+    // True while the invisible overlay anchor holds focus (Phase 1 below).
+    var overlayAnchorFocused by remember {
         mutableStateOf(false)
     }
 
@@ -99,15 +117,32 @@ fun PosterContextMenu(
     }
 
     LaunchedEffect(Unit) {
-        // The rows were just added to the composition; if the very first
-        // requestFocus fires before the focus tree has attached them it can
-        // silently no-op and leave focus on the poster behind the scrim.
-        // Retry until the first row really is focused (or the menu is gone),
-        // so a D-pad press right after opening can never escape the overlay.
         if (actions.isEmpty()) {
             return@LaunchedEffect
         }
-        repeat(20) {
+
+        // Phase 1: land focus inside the overlay immediately. The anchor
+        // spacer is a plain focusable already attached to the composition,
+        // so this reliably steals focus from the poster behind the scrim
+        // within a frame or two (unlike the rows, whose focus tree attach
+        // can race the first request).
+        repeat(10) {
+            runCatching {
+                overlayFocusRequester.requestFocus()
+            }
+            if (overlayAnchorFocused) {
+                break
+            }
+            kotlinx.coroutines.delay(16L)
+        }
+
+        // Phase 2: move focus onto the first action row. The rows were just
+        // added to the composition; if the request fires before the focus
+        // tree has attached them it can silently no-op and leave focus on
+        // the anchor (still safely inside the group). Retry until the first
+        // row really is focused (or the menu is gone), so a D-pad press
+        // right after opening can never escape the overlay.
+        repeat(40) {
             runCatching {
                 firstRowFocusRequester.requestFocus()
             }
@@ -154,6 +189,24 @@ fun PosterContextMenu(
             },
         contentAlignment = Alignment.Center
     ) {
+        // Invisible focus anchor: gives the overlay a focused node the moment
+        // it appears, so directional presses are bounded by the focusGroup
+        // even during the frame(s) before the action rows attach. Drops out
+        // of the focus tree once the first row has focus.
+        Spacer(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .size(1.dp)
+                .focusProperties {
+                    canFocus = !firstActionFocused
+                }
+                .focusRequester(overlayFocusRequester)
+                .onFocusChanged { focusState ->
+                    overlayAnchorFocused =
+                        focusState.isFocused
+                }
+        )
+
         Surface(
             onClick = onDismiss,
             shape = ClickableSurfaceDefaults.shape(

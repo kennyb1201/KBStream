@@ -100,7 +100,14 @@ data class UpNextItem(
      * prefix). Non-history items (SIMKL) leave it null. Long-press Remove
      * uses it to fall back when parentId is unavailable.
      */
-    val historyRowId: String? = null
+    val historyRowId: String? = null,
+
+    /**
+     * Simkl /sync/playback session id when this card came from a paused
+     * Simkl playback session. Long-press Remove deletes the session so the
+     * card stops reappearing from the remote Continue Watching feed.
+     */
+    val playbackId: Int? = null
 )
 
 private data class ResolvedHomeSeriesTarget(
@@ -694,8 +701,8 @@ Log.d(
                 // Simkl-backed cards come back from the remote Continue
                 // Watching feed on every load (and after a restart) unless
                 // the title is also removed from Simkl history. Mirror the
-                // local delete with the matching DELETE /sync/history call;
-                // the repository clears its Continue Watching snapshot so the
+                // local delete with POST /sync/history/remove; the
+                // repository clears its Continue Watching snapshot so the
                 // refresh below sees the updated remote state.
                 if (
                     simklRepository.isConfigured() &&
@@ -724,6 +731,17 @@ Log.d(
                             "title=${item.title} " +
                             "result=$removedFromSimkl"
                     )
+
+                    // Playback-sourced cards (paused mid-title) live in a
+                    // separate Simkl playback table - removing history alone
+                    // does not clear the paused session, so the card would
+                    // keep reappearing from the remote feed. Drop the
+                    // session explicitly so it stays gone after a restart.
+                    item.playbackId?.let { playbackId ->
+                        simklRepository.deletePlaybackSession(
+                            playbackId
+                        )
+                    }
                 }
 
                 _refreshTrigger.value += 1
@@ -1796,7 +1814,10 @@ episodesTotal =
                 resolvedStartPositionMs,
 
             recencyTimestamp =
-                recencyTimestamp
+                recencyTimestamp,
+
+            playbackId =
+                item.playbackId
         )
     }
 

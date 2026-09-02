@@ -135,6 +135,14 @@ data class SimklWatchingDetailedEpisode(
 
 data class SimklContinueWatchingItem(
     val id: String,
+
+    /**
+     * Raw /sync/playback session id when this item came from a paused
+     * playback session (source == "playback"). Lets "Remove from Continue
+     * Watching" delete the session so the title stops reappearing from the
+     * remote feed; null for watchlist-sourced items.
+     */
+    val playbackId: Int? = null,
     val imdbId: String?,
     val tmdbId: Int?,
     val simklId: Int?,

@@ -473,10 +473,10 @@ class SimklRepository(
     }
 
     /*
-     * Outbound "mark unwatched": DELETE /sync/history for a whole movie.
-     * Called from the poster long-press "Mark as Unwatched" menu action so
-     * the title leaves the user's Simkl history when it is unmarked locally.
-     * Failures are logged, never thrown.
+     * Outbound "mark unwatched": POST /sync/history/remove for a whole
+     * movie. Called from the poster long-press "Mark as Unwatched" menu
+     * action so the title leaves the user's Simkl history when it is
+     * unmarked locally. Failures are logged, never thrown.
      */
     suspend fun removeWatchedMovie(
         imdbId: String,
@@ -496,7 +496,7 @@ class SimklRepository(
         }
 
         return try {
-            val response = api.deleteFromWatchedHistory(
+            val response = api.removeFromWatchedHistory(
                 authorization = bearer(requireAccessToken()),
                 body = SimklHistoryRequest(
                     movies = listOf(
@@ -540,9 +540,9 @@ class SimklRepository(
     }
 
     /*
-     * Outbound "mark unwatched": DELETE /sync/history for a WHOLE show.
-     * Sending the show with no seasons array removes every episode of it
-     * from the user's Simkl history at once, the mirror of
+     * Outbound "mark unwatched": POST /sync/history/remove for a WHOLE
+     * show. Sending the show with no seasons array removes every episode of
+     * it from the user's Simkl history at once, the mirror of
      * [pushWatchedShow]. Failures are logged, never thrown.
      */
     suspend fun removeWatchedShow(
@@ -563,7 +563,7 @@ class SimklRepository(
         }
 
         return try {
-            val response = api.deleteFromWatchedHistory(
+            val response = api.removeFromWatchedHistory(
                 authorization = bearer(requireAccessToken()),
                 body = SimklHistoryRequest(
                     shows = listOf(
@@ -759,9 +759,9 @@ class SimklRepository(
     }
 
     /*
-     * Outbound "mark a whole season unwatched": DELETE /sync/history with
-     * one season listing every episode number, so Simkl removes exactly
-     * that season's episodes from history while other seasons stay.
+     * Outbound "mark a whole season unwatched": POST /sync/history/remove
+     * with one season listing every episode number, so Simkl removes
+     * exactly that season's episodes from history while other seasons stay.
      * The mirror of [pushWatchedSeason]. Failures are logged, never thrown.
      */
     suspend fun removeWatchedSeason(
@@ -790,7 +790,7 @@ class SimklRepository(
         }
 
         return try {
-            val response = api.deleteFromWatchedHistory(
+            val response = api.removeFromWatchedHistory(
                 authorization = bearer(requireAccessToken()),
                 body = SimklHistoryRequest(
                     shows = listOf(
@@ -830,6 +830,72 @@ class SimklRepository(
             response.isSuccessful
         } catch (e: Exception) {
             Log.e("SIMKL_REPO", "removeWatchedSeason error: ${e.message}", e)
+            false
+        }
+    }
+
+    /*
+     * Outbound "Remove from Continue Watching" for Simkl-backed cards:
+     * deletes the paused playback session (the progress record behind the
+     * Continue Watching feed) so the title stops coming back from the
+     * remote feed even though watch history is stored separately. Used
+     * together with the history removals above. Failures are logged, never
+     * thrown.
+     */
+    suspend fun deletePlaybackSession(
+        playbackId: Int?
+    ): Boolean {
+
+        if (
+            !isConfigured() ||
+            !hasToken() ||
+            playbackId == null ||
+            playbackId <= 0
+        ) {
+            Log.d(
+                "SIMKL_REPO",
+                "deletePlaybackSession skipped: " +
+                    "no valid playback id=$playbackId"
+            )
+            return false
+        }
+
+        return try {
+            val response = api.deletePlaybackSession(
+                id = playbackId,
+                authorization = bearer(requireAccessToken())
+            )
+
+            if (!response.isSuccessful) {
+                val errorText = try {
+                    response.errorBody()?.string()
+                } catch (e: Exception) {
+                    "unreadable: ${e.message}"
+                }
+                Log.e(
+                    "SIMKL_REPO",
+                    "deletePlaybackSession failed " +
+                        "code=${response.code()} body=$errorText"
+                )
+            } else {
+                // Drop the Continue Watching snapshot so the next rail
+                // refresh sees the updated remote state instead of
+                // resurrecting the deleted session from the stale copy.
+                clearContinueWatchingCache()
+
+                Log.d(
+                    "SIMKL_REPO",
+                    "deletePlaybackSession ok id=$playbackId"
+                )
+            }
+
+            response.isSuccessful
+        } catch (e: Exception) {
+            Log.e(
+                "SIMKL_REPO",
+                "deletePlaybackSession error: ${e.message}",
+                e
+            )
             false
         }
     }
@@ -2057,6 +2123,9 @@ class SimklRepository(
                                 id =
                                     "movie-$simklId",
 
+                                playbackId =
+                                    item.id,
+
                                 imdbId =
                                     imdbId,
 
@@ -2140,6 +2209,9 @@ class SimklRepository(
                             SimklContinueWatchingItem(
                                 id =
                                     "show-$simklId",
+
+                                playbackId =
+                                    item.id,
 
                                 imdbId =
                                     imdbId,

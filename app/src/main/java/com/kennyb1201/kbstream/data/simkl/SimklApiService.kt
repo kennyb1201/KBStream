@@ -3,8 +3,8 @@ package com.kennyb1201.kbstream.data.simkl
 import okhttp3.ResponseBody
 import retrofit2.Response
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
-import retrofit2.http.HTTP
 import retrofit2.http.Header
 import retrofit2.http.POST
 import retrofit2.http.Path
@@ -101,15 +101,29 @@ interface SimklApiService {
     ): Response<ResponseBody>
 
     /*
-     * Outbound "mark unwatched" (DELETE /sync/history). Retrofit's @DELETE
-     * cannot carry a body, so this uses @HTTP with hasBody = true. Sending
-     * the same movie/show payload with no seasons deletes the whole title
-     * from the user's Simkl history, which un-watches it there.
+     * Outbound "mark unwatched" (POST /sync/history/remove). Simkl's
+     * supported way to undo a watched mark; DELETE /sync/history is not
+     * handled and silently leaves the item in history. Sending the same
+     * movie/show payload with no seasons removes the whole title from the
+     * user's Simkl history, which un-watches it there.
      */
-    @HTTP(method = "DELETE", path = "sync/history", hasBody = true)
-    suspend fun deleteFromWatchedHistory(
+    @POST("sync/history/remove")
+    suspend fun removeFromWatchedHistory(
         @Header("Authorization") authorization: String,
         @Body body: SimklHistoryRequest
+    ): Response<ResponseBody>
+
+    /*
+     * Outbound "Remove from Continue Watching" for Simkl-backed cards:
+     * DELETE /sync/playback/{id} drops the paused playback session (the
+     * progress record behind the Continue Watching feed) so the title stops
+     * coming back from the remote feed. 204 on success; 404 when the
+     * session is already gone.
+     */
+    @DELETE("sync/playback/{id}")
+    suspend fun deletePlaybackSession(
+        @Path("id") id: Int,
+        @Header("Authorization") authorization: String
     ): Response<ResponseBody>
 
     @POST("scrobble/start")
