@@ -4,6 +4,7 @@ import okhttp3.ResponseBody
 import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.HTTP
 import retrofit2.http.Header
 import retrofit2.http.POST
 import retrofit2.http.Path
@@ -95,6 +96,18 @@ interface SimklApiService {
 
     @POST("sync/history")
     suspend fun addToWatchedHistory(
+        @Header("Authorization") authorization: String,
+        @Body body: SimklHistoryRequest
+    ): Response<ResponseBody>
+
+    /*
+     * Outbound "mark unwatched" (DELETE /sync/history). Retrofit's @DELETE
+     * cannot carry a body, so this uses @HTTP with hasBody = true. Sending
+     * the same movie/show payload with no seasons deletes the whole title
+     * from the user's Simkl history, which un-watches it there.
+     */
+    @HTTP(method = "DELETE", path = "sync/history", hasBody = true)
+    suspend fun deleteFromWatchedHistory(
         @Header("Authorization") authorization: String,
         @Body body: SimklHistoryRequest
     ): Response<ResponseBody>

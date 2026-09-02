@@ -276,6 +276,68 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
             else -> null
         }
 
+    /**
+     * Long-press "Mark as Watched" on an actor credit poster: resolves the
+     * TMDB id to an IMDB id, records the persistent local watched override
+     * (mirrored to SIMKL when connected) and caches the resolution so the
+     * rail badge updates reactively.
+     */
+    fun markAsWatched(
+        tmdbId: Int,
+        mediaType: String
+    ) {
+        viewModelScope.launch {
+            val normalizedType = normalizeMediaType(mediaType) ?: return@launch
+            val lookup = creditLookupKey(tmdbId, normalizedType)
+            val imdbId = _resolvedCreditIds.value[lookup]
+                ?: runCatching {
+                    tmdbRepository.resolveImdbId(tmdbId, normalizedType)
+                }.getOrNull()
+                    ?: return@launch
+
+            if (_resolvedCreditIds.value[lookup] == null) {
+                _resolvedCreditIds.value = _resolvedCreditIds.value + (lookup to imdbId)
+            }
+
+            runCatching {
+                watchedStatusRepository.markWatchedLocal(imdbId, normalizedType)
+            }.onFailure { e ->
+                Log.e("ACTOR_WATCHED", "markAsWatched failed tmdb=$tmdbId", e)
+            }
+        }
+    }
+
+    /**
+     * Long-press "Mark as Unwatched" on an actor credit poster: resolves the
+     * TMDB id to an IMDB id, removes the persistent local watched override
+     * (mirrored as a Simkl history delete when connected) and caches the
+     * resolution so the rail badge updates reactively.
+     */
+    fun markUnwatched(
+        tmdbId: Int,
+        mediaType: String
+    ) {
+        viewModelScope.launch {
+            val normalizedType = normalizeMediaType(mediaType) ?: return@launch
+            val lookup = creditLookupKey(tmdbId, normalizedType)
+            val imdbId = _resolvedCreditIds.value[lookup]
+                ?: runCatching {
+                    tmdbRepository.resolveImdbId(tmdbId, normalizedType)
+                }.getOrNull()
+                    ?: return@launch
+
+            if (_resolvedCreditIds.value[lookup] == null) {
+                _resolvedCreditIds.value = _resolvedCreditIds.value + (lookup to imdbId)
+            }
+
+            runCatching {
+                watchedStatusRepository.markUnwatchedLocal(imdbId, normalizedType)
+            }.onFailure { e ->
+                Log.e("ACTOR_WATCHED", "markUnwatched failed tmdb=$tmdbId", e)
+            }
+        }
+    }
+
     suspend fun resolveImdbId(tmdbId: Int, type: String): String? =
         tmdbRepository.resolveImdbId(tmdbId, type)
 }

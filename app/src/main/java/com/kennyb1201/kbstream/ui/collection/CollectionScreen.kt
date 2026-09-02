@@ -27,9 +27,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.Border
 import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
@@ -38,7 +43,12 @@ import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.tmdb.TmdbCollectionDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbCollectionPart
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import coil3.compose.AsyncImage
+import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.PosterCard
+import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.PosterContextMenu
+import com.kennyb1201.kbstream.ui.components.WatchedCheckBadge
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -50,16 +60,34 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 fun CollectionScreen(
     collectionId: Int,
     collectionName: String,
-    repository: TmdbRepository,
-    onNavigateDetail: (type: String, id: String) -> Unit
+    onNavigateDetail: (type: String, id: String) -> Unit,
+    viewModel: CollectionViewModel = viewModel()
 ) {
-    var collection by remember { mutableStateOf<TmdbCollectionDetail?>(null) }
-    var isLoading by remember { mutableStateOf(true) }
+    val collection by viewModel.collection.collectAsStateWithLifecycle()
+    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
+    val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
+
+    // Long-press context menu for collection part rows.
+    var menuPart by remember {
+        mutableStateOf<TmdbCollectionPart?>(
+            null
+        )
+    }
+
+    var lastPartFocusRequester by remember {
+        mutableStateOf<FocusRequester?>(
+            null
+        )
+    }
+
+    fun dismissPartMenu() {
+        menuPart = null
+        lastPartFocusRequester?.requestFocus()
+    }
 
     LaunchedEffect(collectionId) {
-        isLoading = true
-        collection = runCatching { repository.getCollection(collectionId) }.getOrNull()
-        isLoading = false
+        viewModel.load(collectionId)
     }
 
     val detail = collection
@@ -125,15 +153,105 @@ fun CollectionScreen(
                         items = detail.parts.sortedBy { it.releaseDate ?: "9999-99-99" },
                         key = { part: TmdbCollectionPart -> "collection_part:${part.id}" }
                     ) { part: TmdbCollectionPart ->
+                        // Focus requester for restoring focus after the
+                        // long-press menu dismisses.
+                        val requester = remember(
+                            part.id
+                        ) {
+                            FocusRequester()
+                        }
+
+                        val watched =
+                            resolvedIds[
+                                viewModel.lookupKey(part.id, "movie")
+                            ]?.let { imdbId ->
+                                viewModel.watchedKey(
+                                    imdbId,
+                                    "movie"
+                                ) in watchedKeys
+                            } == true
+
                         CollectionMovieRow(
                             part = part,
+                            isWatched = watched,
                             onClick = {
-                                onNavigateDetail("movie", part.id.toString())
-                            }
+                                onNavigateDetail(
+                                    "movie",
+                                    part.id.toString()
+                                )
+                            },
+                            onLongClick = {
+                                lastPartFocusRequester =
+                                    requester
+                                menuPart = part
+                            },
+                            modifier = Modifier
+                                .focusRequester(requester)
                         )
                     }
                 }
             }
+        }
+
+        // Long-press context menu for collection part rows.
+        menuPart?.let { part ->
+            // Same lookup the row badge uses, so the toggle matches what the
+            // poster currently shows.
+            val isWatched =
+                resolvedIds[
+                    viewModel.lookupKey(
+                        part.id,
+                        "movie"
+                    )
+                ]?.let { imdbId ->
+                    viewModel.watchedKey(
+                        imdbId,
+                        "movie"
+                    ) in watchedKeys
+                } == true
+
+            PosterContextMenu(
+                title = part.title
+                    ?: part.name
+                    ?: "",
+                actions = listOf(
+                    PosterContextAction(
+                        label = "Go to Details",
+                        description = "Open this movie's detail page"
+                    ) {
+                        val selected = part
+                        menuPart = null
+                        onNavigateDetail(
+                            "movie",
+                            selected.id.toString()
+                        )
+                    },
+                    PosterContextAction(
+                        label = if (isWatched) {
+                            "Mark as Unwatched"
+                        } else {
+                            "Mark as Watched"
+                        },
+                        description = if (isWatched) {
+                            "Clear watched status on this device and Simkl"
+                        } else {
+                            "Show this movie as watched"
+                        }
+                    ) {
+                        val selected = part
+                        menuPart = null
+                        if (isWatched) {
+                            viewModel.markUnwatched(selected.id)
+                        } else {
+                            viewModel.markAsWatched(selected.id)
+                        }
+                        lastPartFocusRequester?.requestFocus()
+                    }
+                ),
+                onDismiss = {
+                    dismissPartMenu()
+                }
+            )
         }
     }
 }
@@ -198,23 +316,19 @@ private fun CollectionHero(
 @Composable
 private fun CollectionMovieRow(
     part: TmdbCollectionPart,
-    onClick: () -> Unit
+    isWatched: Boolean,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
 ) {
-    Card(
+    // KBCard is the row's single focusable/clickable surface so the D-pad
+    // always lands on one node - long-press (hold Select) opens the context
+    // menu, short press navigates. The poster is drawn inline (not wrapped
+    // in its own PosterCard) to avoid nested focusables in the same row.
+    KBCard(
         onClick = onClick,
-        colors = CardDefaults.colors(
-            containerColor = KBSurface,
-            contentColor = KBTextHi,
-            focusedContainerColor = KBSurfaceRaised,
-            focusedContentColor = KBTextHi,
-            pressedContainerColor = KBSurfaceRaised,
-            pressedContentColor = KBTextHi
-        ),
-        border = CardDefaults.border(
-            border = Border(BorderStroke(1.dp, KBTextLo.copy(alpha = 0.25f))),
-            focusedBorder = Border(BorderStroke(2.dp, KBAccent))
-        ),
-        modifier = Modifier.fillMaxWidth()
+        onLongClick = onLongClick,
+        modifier = modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier
@@ -222,15 +336,34 @@ private fun CollectionMovieRow(
                 .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            PosterCard(
-                posterUrl = part.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" },
-                contentDescription = part.title ?: part.name ?: "Collection movie",
-                isWatched = false,
-                onClick = onClick,
+            Box(
                 modifier = Modifier
                     .width(92.dp)
                     .height(138.dp)
-            )
+                    .background(KBSurface, RoundedCornerShape(8.dp))
+            ) {
+                val posterUrl = part.posterPath
+                    ?.let { "https://image.tmdb.org/t/p/w500$it" }
+
+                if (!posterUrl.isNullOrBlank()) {
+                    AsyncImage(
+                        model = posterUrl,
+                        contentDescription = part.title
+                            ?: part.name
+                            ?: "Collection movie",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+
+                if (isWatched) {
+                    WatchedCheckBadge(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(6.dp)
+                    )
+                }
+            }
 
             Column(
                 modifier = Modifier

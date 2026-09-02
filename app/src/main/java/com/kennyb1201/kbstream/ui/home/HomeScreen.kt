@@ -88,6 +88,8 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.ui.components.PosterCard
+import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -2006,39 +2008,59 @@ fun HomeScreen(
 
         // Long-press menu for Continue Watching cards.
         continueWatchingMenu?.let { menuItem ->
-            ContinueWatchingActionMenu(
-                item = menuItem,
-                onGoToDetails = {
-                    val selectedItem = menuItem
-                    continueWatchingMenu = null
-                    openUpNext(selectedItem)
-                },
-                onPlayManually = {
-                    val selectedItem = menuItem
-                    continueWatchingMenu = null
-                    openUpNext(
-                        selectedItem,
-                        openInStreamsScreen = true,
-                        startAtBeginning = false
-                    )
-                },
-                onPlayFromBeginning = {
-                    val selectedItem = menuItem
-                    continueWatchingMenu = null
-                    openUpNext(
-                        selectedItem,
-                        openInStreamsScreen = true,
-                        startAtBeginning = true
-                    )
-                },
-                onRemove = {
-                    val selectedItem = menuItem
-                    continueWatchingMenu = null
-                    viewModel.removeFromContinueWatching(
-                        selectedItem
-                    )
-                    lastPosterFocusRequester?.requestFocus()
-                },
+            PosterContextMenu(
+                title = menuItem.title,
+                subtitle = menuItem.episodeTitle,
+                actions = listOf(
+                    PosterContextAction(
+                        label = "Go to Details",
+                        description = "Open this title's detail page"
+                    ) {
+                        val selectedItem = menuItem
+                        continueWatchingMenu = null
+                        openUpNext(selectedItem)
+                    },
+                    PosterContextAction(
+                        label = "Play Manually",
+                        description = if (menuItem.startPositionMs > 0L) {
+                            "Open the streams picker - still resumes at your progress"
+                        } else {
+                            "Open the streams picker"
+                        }
+                    ) {
+                        val selectedItem = menuItem
+                        continueWatchingMenu = null
+                        openUpNext(
+                            selectedItem,
+                            openInStreamsScreen = true,
+                            startAtBeginning = false
+                        )
+                    },
+                    PosterContextAction(
+                        label = "Play from Beginning",
+                        description = "Start over from the beginning"
+                    ) {
+                        val selectedItem = menuItem
+                        continueWatchingMenu = null
+                        openUpNext(
+                            selectedItem,
+                            openInStreamsScreen = true,
+                            startAtBeginning = true
+                        )
+                    },
+                    PosterContextAction(
+                        label = "Remove",
+                        description = "Hide this from Continue Watching",
+                        isDestructive = true
+                    ) {
+                        val selectedItem = menuItem
+                        continueWatchingMenu = null
+                        viewModel.removeFromContinueWatching(
+                            selectedItem
+                        )
+                        lastPosterFocusRequester?.requestFocus()
+                    }
+                ),
                 onDismiss = {
                     dismissContinueWatchingMenu()
                 }
@@ -2047,18 +2069,47 @@ fun HomeScreen(
 
         // Long-press menu for regular poster rails (movies/series catalogs).
         posterMenu?.let { target ->
-            PosterActionMenu(
-                meta = target.meta,
-                onGoToDetails = {
-                    posterMenu = null
-                    selectHero(target.meta)
-                    onItemClick(target.meta)
-                },
-                onMarkWatched = {
-                    posterMenu = null
-                    viewModel.markAsWatched(target.meta)
-                    lastPosterFocusRequester?.requestFocus()
-                },
+            // Same key the rail badge uses, so the toggle always matches what
+            // the poster currently shows: "Mark as Unwatched" when the badge
+            // is visible, "Mark as Watched" otherwise.
+            val isWatched =
+                viewModel.watchedKey(
+                    target.meta.id,
+                    target.meta.type
+                ) in watchedKeys
+
+            PosterContextMenu(
+                title = target.meta.name,
+                actions = listOf(
+                    PosterContextAction(
+                        label = "Go to Details",
+                        description = "Open this title's detail page"
+                    ) {
+                        posterMenu = null
+                        selectHero(target.meta)
+                        onItemClick(target.meta)
+                    },
+                    PosterContextAction(
+                        label = if (isWatched) {
+                            "Mark as Unwatched"
+                        } else {
+                            "Mark as Watched"
+                        },
+                        description = if (isWatched) {
+                            "Clear watched status on this device and Simkl"
+                        } else {
+                            "Show this title as watched"
+                        }
+                    ) {
+                        posterMenu = null
+                        if (isWatched) {
+                            viewModel.markUnwatched(target.meta)
+                        } else {
+                            viewModel.markAsWatched(target.meta)
+                        }
+                        lastPosterFocusRequester?.requestFocus()
+                    }
+                ),
                 onDismiss = {
                     dismissPosterMenu()
                 }
@@ -2074,350 +2125,4 @@ private data class PosterMenuTarget(
     val meta: MetaPreview
 )
 
-/**
- * Long-press menu for a catalog poster: Go to Details and Mark as Watched.
- */
-@Composable
-private fun PosterActionMenu(
-    meta: MetaPreview,
-    onGoToDetails: () -> Unit,
-    onMarkWatched: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    val firstRowFocusRequester = remember {
-        FocusRequester()
-    }
 
-    val dialogShape = RoundedCornerShape(20.dp)
-
-    // Dismiss on system Back.
-    BackHandler {
-        onDismiss()
-    }
-
-    LaunchedEffect(Unit) {
-        runCatching {
-            firstRowFocusRequester.requestFocus()
-        }
-    }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.60f)),
-        contentAlignment = Alignment.Center
-    ) {
-        Surface(
-            onClick = onDismiss,
-            shape = ClickableSurfaceDefaults.shape(
-                shape = dialogShape
-            ),
-            colors = ClickableSurfaceDefaults.colors(
-                containerColor = Color(0xFF101820).copy(alpha = 0.97f),
-                contentColor = KBTextHi,
-                focusedContainerColor = Color(0xFF101820).copy(alpha = 0.97f),
-                focusedContentColor = KBTextHi
-            ),
-            scale = ClickableSurfaceDefaults.scale(
-                scale = 1f,
-                focusedScale = 1f
-            ),
-            border = ClickableSurfaceDefaults.border(
-                border = Border(
-                    border = BorderStroke(
-                        1.dp,
-                        Color.White.copy(alpha = 0.10f)
-                    ),
-                    shape = dialogShape
-                ),
-                focusedBorder = Border(
-                    border = BorderStroke(
-                        1.dp,
-                        Color.White.copy(alpha = 0.10f)
-                    ),
-                    shape = dialogShape
-                )
-            ),
-            modifier = Modifier
-                .width(380.dp)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(22.dp)
-            ) {
-                Text(
-                    text = meta.name,
-                    color = Color.White,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-
-                Spacer(
-                    modifier = Modifier.height(16.dp)
-                )
-
-                ContinueWatchingMenuRow(
-                    label = "Go to Details",
-                    description = "Open this title's detail page",
-                    focusRequester = firstRowFocusRequester,
-                    onClick = onGoToDetails,
-                    onDismiss = onDismiss
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                ContinueWatchingMenuRow(
-                    label = "Mark as Watched",
-                    description = "Show this title as watched",
-                    onClick = onMarkWatched,
-                    onDismiss = onDismiss
-                )
-            }
-        }
-    }
-}
-
-/**
- * Long-press menu for a Continue Watching card: Go to Details, Play
- * Manually (streams picker, still resuming saved progress), Play from
- * Beginning (streams picker, forced start at 0), and Remove.
- */
-@Composable
-private fun ContinueWatchingActionMenu(
-    item: UpNextItem,
-    onGoToDetails: () -> Unit,
-    onPlayManually: () -> Unit,
-    onPlayFromBeginning: () -> Unit,
-    onRemove: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    val firstRowFocusRequester = remember {
-        FocusRequester()
-    }
-
-    val dialogShape = RoundedCornerShape(20.dp)
-
-    // Dismiss on system Back. BackHandler is used instead of key-event
-    // intercepts because the Activity back dispatcher consumes the Back key
-    // before it ever reaches compose key handlers; with the app-level
-    // BackHandler disabled on Home, Back would otherwise exit the app.
-    BackHandler {
-        onDismiss()
-    }
-
-    LaunchedEffect(Unit) {
-        runCatching {
-            firstRowFocusRequester.requestFocus()
-        }
-    }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.60f)),
-        contentAlignment = Alignment.Center
-    ) {
-        Surface(
-            onClick = onDismiss,
-            shape = ClickableSurfaceDefaults.shape(
-                shape = dialogShape
-            ),
-            colors = ClickableSurfaceDefaults.colors(
-                containerColor = Color(0xFF101820).copy(alpha = 0.97f),
-                contentColor = KBTextHi,
-                focusedContainerColor = Color(0xFF101820).copy(alpha = 0.97f),
-                focusedContentColor = KBTextHi
-            ),
-            scale = ClickableSurfaceDefaults.scale(
-                scale = 1f,
-                focusedScale = 1f
-            ),
-            border = ClickableSurfaceDefaults.border(
-                border = Border(
-                    border = BorderStroke(
-                        1.dp,
-                        Color.White.copy(alpha = 0.10f)
-                    ),
-                    shape = dialogShape
-                ),
-                focusedBorder = Border(
-                    border = BorderStroke(
-                        1.dp,
-                        Color.White.copy(alpha = 0.10f)
-                    ),
-                    shape = dialogShape
-                )
-            ),
-            modifier = Modifier
-                .width(380.dp)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(22.dp)
-            ) {
-                Text(
-                    text = item.title,
-                    color = Color.White,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-
-                item.episodeTitle
-                    ?.trim()
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let { episodeTitle ->
-                        Text(
-                            text = episodeTitle,
-                            color = KBTextLo,
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(top = 2.dp)
-                        )
-                    }
-
-                Spacer(
-                    modifier = Modifier.height(16.dp)
-                )
-
-                ContinueWatchingMenuRow(
-                    label = "Go to Details",
-                    description = "Open this title's detail page",
-                    focusRequester = firstRowFocusRequester,
-                    onClick = onGoToDetails,
-                    onDismiss = onDismiss
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                ContinueWatchingMenuRow(
-                    label = "Play Manually",
-                    description = if (item.startPositionMs > 0L) {
-                        "Open the streams picker - still resumes at your progress"
-                    } else {
-                        "Open the streams picker"
-                    },
-                    onClick = onPlayManually,
-                    onDismiss = onDismiss
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                ContinueWatchingMenuRow(
-                    label = "Play from Beginning",
-                    description = "Start over from the beginning",
-                    onClick = onPlayFromBeginning,
-                    onDismiss = onDismiss
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                ContinueWatchingMenuRow(
-                    label = "Remove",
-                    description = "Hide this from Continue Watching",
-                    isDestructive = true,
-                    onClick = onRemove,
-                    onDismiss = onDismiss
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun ContinueWatchingMenuRow(
-    label: String,
-    description: String,
-    isDestructive: Boolean = false,
-    focusRequester: FocusRequester? = null,
-    onClick: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    var focused by remember {
-        mutableStateOf(false)
-    }
-
-    Surface(
-        onClick = onClick,
-        shape = ClickableSurfaceDefaults.shape(
-            shape = RoundedCornerShape(12.dp)
-        ),
-        colors = ClickableSurfaceDefaults.colors(
-            containerColor = Color.Transparent,
-            contentColor = if (isDestructive) {
-                Color(0xFFE57373)
-            } else {
-                KBTextHi
-            },
-            focusedContainerColor = KBAccent.copy(alpha = 0.16f),
-            focusedContentColor = Color.White
-        ),
-        scale = ClickableSurfaceDefaults.scale(
-            scale = 1f,
-            focusedScale = 1.02f
-        ),
-        border = ClickableSurfaceDefaults.border(
-            border = Border(
-                border = BorderStroke(0.dp, Color.Transparent),
-                shape = RoundedCornerShape(12.dp)
-            ),
-            focusedBorder = Border(
-                border = BorderStroke(2.dp, KBAccent),
-                shape = RoundedCornerShape(12.dp)
-            )
-        ),
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(
-                if (focusRequester != null) {
-                    Modifier.focusRequester(focusRequester)
-                } else {
-                    Modifier
-                }
-            )
-            .onFocusChanged { focusState ->
-                focused = focusState.isFocused
-            }
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(
-                    horizontal = 16.dp,
-                    vertical = 12.dp
-                )
-        ) {
-            Text(
-                text = label,
-                color = when {
-                    focused -> Color.White
-                    isDestructive -> Color(0xFFE57373)
-                    else -> KBTextHi
-                },
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-
-            Text(
-                text = description,
-                color = if (focused) {
-                    Color.White.copy(alpha = 0.72f)
-                } else {
-                    KBTextLo
-                },
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 2.dp)
-            )
-        }
-    }
-}

@@ -742,6 +742,40 @@ Log.d(
         }
     }
 
+    /**
+     * Long-press "Mark as Unwatched" on a catalog poster: removes the local
+     * watched override so the badge clears immediately (and deletes the title
+     * from Simkl history when connected).
+     */
+    fun markUnwatched(meta: MetaPreview) {
+
+        val id = meta.id.trim()
+
+        if (id.isBlank()) {
+            return
+        }
+
+        viewModelScope.launch {
+
+            runCatching {
+
+                watchedStatusRepository.markUnwatchedLocal(
+                    id,
+                    meta.type
+                )
+
+            }.onFailure { e ->
+
+                Log.e(
+                    "HOME_WATCHED",
+                    "Failed to mark unwatched: " +
+                        "${meta.name} ($id)",
+                    e
+                )
+            }
+        }
+    }
+
     fun refreshAllHomeData() {
 
         viewModelScope.launch {

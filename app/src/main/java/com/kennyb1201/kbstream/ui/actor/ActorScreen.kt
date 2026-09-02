@@ -27,11 +27,15 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -48,6 +52,8 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbPersonCredit
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.metaLine
 import com.kennyb1201.kbstream.ui.components.PosterCard
+import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -91,6 +97,24 @@ fun ActorScreen(
 
     LaunchedEffect(actorId) {
         viewModel.load(actorId)
+    }
+
+    // Long-press context menu for credit posters.
+    var menuCredit by remember {
+        mutableStateOf<TmdbPersonCredit?>(
+            null
+        )
+    }
+
+    var lastCreditFocusRequester by remember {
+        mutableStateOf<FocusRequester?>(
+            null
+        )
+    }
+
+    fun dismissCreditMenu() {
+        menuCredit = null
+        lastCreditFocusRequester?.requestFocus()
     }
 
     when {
@@ -263,13 +287,25 @@ fun ActorScreen(
                                         modifier = Modifier.padding(bottom = 16.dp).focusGroup().focusRestorer()
                                     ) {
                                         items(movies, key = { it.id }) { credit ->
+                                            val requester = remember(
+                                                credit.id
+                                            ) {
+                                                FocusRequester()
+                                            }
+
                                             ActorCreditCard(
                                                 credit = credit,
                                                 isWatched = resolvedCreditIds[viewModel.creditLookupKey(credit.id, "movie")]
                                                     ?.let { imdbId -> viewModel.watchedKey(imdbId, "movie") in watchedKeys } == true,
                                                 onClick = {
                                                     viewModel.resolveAndNavigate(credit.id, "movie", onNavigateDetail)
-                                                }
+                                                },
+                                                onLongClick = {
+                                                    lastCreditFocusRequester =
+                                                        requester
+                                                    menuCredit = credit
+                                                },
+                                                focusRequester = requester
                                             )
                                         }
                                     }
@@ -291,19 +327,110 @@ fun ActorScreen(
                                         modifier = Modifier.padding(bottom = 32.dp).focusGroup().focusRestorer()
                                     ) {
                                         items(tvShows, key = { it.id }) { credit ->
+                                            val requester = remember(
+                                                credit.id
+                                            ) {
+                                                FocusRequester()
+                                            }
+
                                             ActorCreditCard(
                                                 credit = credit,
                                                 isWatched = resolvedCreditIds[viewModel.creditLookupKey(credit.id, "series")]
                                                     ?.let { imdbId -> viewModel.watchedKey(imdbId, "series") in watchedKeys } == true,
                                                 onClick = {
                                                     viewModel.resolveAndNavigate(credit.id, "tv", onNavigateDetail)
-                                                }
+                                                },
+                                                onLongClick = {
+                                                    lastCreditFocusRequester =
+                                                        requester
+                                                    menuCredit = credit
+                                                },
+                                                focusRequester = requester
                                             )
                                         }
                                     }
                                 }
                             }
                         }
+                    }
+
+                    menuCredit?.let { credit ->
+                        // Same normalized type/key the credit rails use for the
+                        // badge, so the toggle matches the poster's current state.
+                        val menuMediaType =
+                            when (credit.mediaType?.lowercase()) {
+                                "movie" -> "movie"
+                                "tv", "series" -> "series"
+                                else -> null
+                            }
+
+                        val isWatched =
+                            if (menuMediaType != null) {
+                                resolvedCreditIds[
+                                    viewModel.creditLookupKey(
+                                        credit.id,
+                                        menuMediaType
+                                    )
+                                ]?.let { imdbId ->
+                                    viewModel.watchedKey(
+                                        imdbId,
+                                        menuMediaType
+                                    ) in watchedKeys
+                                } == true
+                            } else {
+                                false
+                            }
+
+                        PosterContextMenu(
+                            title = credit.title
+                                ?: credit.name
+                                ?: "",
+                            actions = listOf(
+                                PosterContextAction(
+                                    label = "Go to Details",
+                                    description = "Open this title's detail page"
+                                ) {
+                                    menuCredit = null
+                                    viewModel.resolveAndNavigate(
+                                        credit.id,
+                                        credit.mediaType
+                                            ?: "movie",
+                                        onNavigateDetail
+                                    )
+                                },
+                                PosterContextAction(
+                                    label = if (isWatched) {
+                                        "Mark as Unwatched"
+                                    } else {
+                                        "Mark as Watched"
+                                    },
+                                    description = if (isWatched) {
+                                        "Clear watched status on this device and Simkl"
+                                    } else {
+                                        "Show this title as watched"
+                                    }
+                                ) {
+                                    menuCredit = null
+                                    if (isWatched) {
+                                        viewModel.markUnwatched(
+                                            credit.id,
+                                            credit.mediaType
+                                                ?: "movie"
+                                        )
+                                    } else {
+                                        viewModel.markAsWatched(
+                                            credit.id,
+                                            credit.mediaType
+                                                ?: "movie"
+                                        )
+                                    }
+                                    lastCreditFocusRequester?.requestFocus()
+                                }
+                            ),
+                            onDismiss = {
+                                dismissCreditMenu()
+                            }
+                        )
                     }
                 }
             }
@@ -343,13 +470,26 @@ private fun ActorStatusMessage(icon: String, message: String) {
 private fun ActorCreditCard(
     credit: TmdbPersonCredit,
     isWatched: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+    focusRequester: FocusRequester? = null
 ) {
     PosterCard(
         posterUrl = remember(credit.posterPath) { credit.posterPath?.let { TmdbRepository.POSTER_BASE + it } },
         contentDescription = credit.title ?: credit.name ?: "",
         isWatched = isWatched,
         onClick = onClick,
-        modifier = Modifier.width(124.dp).height(180.dp).padding(end = 12.dp)
+        onLongClick = onLongClick,
+        modifier = Modifier
+            .width(124.dp)
+            .height(180.dp)
+            .padding(end = 12.dp)
+            .then(
+                if (focusRequester != null) {
+                    Modifier.focusRequester(focusRequester)
+                } else {
+                    Modifier
+                }
+            )
     )
 }

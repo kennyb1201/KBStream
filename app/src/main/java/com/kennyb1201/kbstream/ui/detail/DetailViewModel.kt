@@ -515,6 +515,78 @@ if (resolvedMeta != null) {
         _selectedPersonDetail.value = null
     }
 
+    /**
+     * Long-press "Mark as Watched" on a More Like This / collection rail
+     * poster: resolves the TMDB id to an IMDB id, records the persistent
+     * local watched override (mirrored to SIMKL when connected) and updates
+     * the reactive poster keys so the checkmark appears immediately.
+     */
+    fun markPosterWatched(
+        tmdbId: Int,
+        mediaType: String
+    ) {
+        viewModelScope.launch {
+            val normalizedType = mediaType.lowercase().takeIf {
+                it == "movie" || it == "series" || it == "tv"
+            } ?: return@launch
+
+            val lookup = posterLookupKey(tmdbId, normalizedType)
+            val imdbId = _resolvedPosterIds.value[lookup]
+                ?: runCatching {
+                    resolveImdbId(tmdbId, normalizedType)
+                }.getOrNull()
+                    ?: return@launch
+
+            if (_resolvedPosterIds.value[lookup] == null) {
+                _resolvedPosterIds.value = _resolvedPosterIds.value + (lookup to imdbId)
+            }
+
+            runCatching {
+                watchedStatusRepository.markWatchedLocal(imdbId, normalizedType)
+            }.onFailure { e ->
+                Log.e("KBStream", "markPosterWatched failed tmdb=$tmdbId type=$normalizedType", e)
+            }
+
+            _watchedKeys.value = _watchedKeys.value + watchedKey(imdbId, normalizedType)
+        }
+    }
+
+    /**
+     * Long-press "Mark as Unwatched" on a More Like This / collection rail
+     * poster: resolves the TMDB id to an IMDB id, removes the persistent
+     * local watched override (mirrored as a Simkl history delete when
+     * connected) and drops the poster key so the checkmark clears.
+     */
+    fun markPosterUnwatched(
+        tmdbId: Int,
+        mediaType: String
+    ) {
+        viewModelScope.launch {
+            val normalizedType = mediaType.lowercase().takeIf {
+                it == "movie" || it == "series" || it == "tv"
+            } ?: return@launch
+
+            val lookup = posterLookupKey(tmdbId, normalizedType)
+            val imdbId = _resolvedPosterIds.value[lookup]
+                ?: runCatching {
+                    resolveImdbId(tmdbId, normalizedType)
+                }.getOrNull()
+                    ?: return@launch
+
+            if (_resolvedPosterIds.value[lookup] == null) {
+                _resolvedPosterIds.value = _resolvedPosterIds.value + (lookup to imdbId)
+            }
+
+            runCatching {
+                watchedStatusRepository.markUnwatchedLocal(imdbId, normalizedType)
+            }.onFailure { e ->
+                Log.e("KBStream", "markPosterUnwatched failed tmdb=$tmdbId type=$normalizedType", e)
+            }
+
+            _watchedKeys.value = _watchedKeys.value - watchedKey(imdbId, normalizedType)
+        }
+    }
+
     suspend fun resolveImdbId(tmdbId: Int, type: String): String? =
         tmdbRepository.resolveImdbId(tmdbId, type.lowercase())
 }

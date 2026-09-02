@@ -1032,6 +1032,145 @@ class WatchedStatusRepository(
         }
     }
 
+    /**
+     * Long-press "Mark as Unwatched": the mirror of [markWatchedLocal].
+     * Removes the local watched override so the badge clears immediately and
+     * stays cleared, wipes every local cache that could re-seed the watched
+     * state, and - when SIMKL is connected - DELETEs the title from the
+     * user's Simkl history (movies directly, series as a whole show). Delete
+     * failures are logged and never block the local unmark.
+     */
+    suspend fun markUnwatchedLocal(
+        id: String,
+        type: String
+    ) {
+        val normalizedId =
+            id.trim()
+
+        if (
+            normalizedId.isBlank()
+        ) {
+            return
+        }
+
+        val normalizedType =
+            normalizeType(
+                type
+            )
+
+        val key =
+            cacheKey(
+                normalizedId,
+                normalizedType
+            )
+
+        val now =
+            System.currentTimeMillis()
+
+        // 1. Drop the manual watched override (the thing "Mark as Watched"
+        // wrote). Leaving it in place would make every later resolution
+        // flip the badge straight back on.
+        val updatedKeys =
+            (localWatchedOverrideKeys()
+                .toMutableSet()
+                .apply {
+                    remove(key)
+                })
+
+        overridesPrefs
+            .edit()
+            .putStringSet(
+                KEY_WATCHED_OVERRIDES,
+                updatedKeys
+            )
+            .apply()
+
+        // 2. Force the in-memory cache to false AND scrub the id out of the
+        // in-memory SIMKL completed sets. If the id stayed in those sets, a
+        // later remote-activity refresh could recompute this title as watched
+        // again from the stale snapshot before Simkl's server state is
+        // re-fetched.
+        cacheMutex.withLock {
+            cache[key] =
+                now to false
+
+            when (
+                normalizedType
+            ) {
+                "movie" ->
+                    completedMovieKeys =
+                        completedMovieKeys
+                            .filterNot {
+                                it == "imdb:$normalizedId" ||
+                                    it == normalizedId
+                            }
+                            .toSet()
+
+                "series" ->
+                    completedShowImdbIds =
+                        completedShowImdbIds - normalizedId
+            }
+        }
+
+        // 3. Delete the persisted Room cache row so a cold start / disk read
+        // cannot re-seed the watched state from before the unmark.
+        try {
+            watchedStatusDao.deleteByKey(
+                key
+            )
+        } catch (e: Exception) {
+            Log.e(
+                "WATCHED_REPO",
+                "Failed to delete watched cache row for $key",
+                e
+            )
+        }
+
+        _watchedStateVersion.value =
+            now
+
+        WatchStateBus.notifyChanged(
+            key,
+            false
+        )
+
+        Log.d(
+            "WATCHED_REPO",
+            "Local watched override removed: $key"
+        )
+
+        // 4. Mirror the removal to SIMKL when connected (DELETE history).
+        // removeWatchedMovie / removeWatchedShow already swallow their own
+        // failures; the extra guard keeps a surprise throw from ever undoing
+        // the local unmark above.
+        if (
+            simklRepository.isConfigured() &&
+            simklRepository.hasToken()
+        ) {
+            try {
+                when (
+                    normalizedType
+                ) {
+                    "movie" ->
+                        simklRepository.removeWatchedMovie(
+                            normalizedId
+                        )
+
+                    "series" ->
+                        simklRepository.removeWatchedShow(
+                            normalizedId
+                        )
+                }
+            } catch (e: Exception) {
+                Log.e(
+                    "WATCHED_REPO",
+                    "SIMKL remove-watched push failed for $key",
+                    e
+                )
+            }
+        }
+    }
+
     private fun normalizeType(
         type: String
     ): String {

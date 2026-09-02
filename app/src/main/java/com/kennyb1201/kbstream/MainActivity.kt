@@ -549,7 +549,6 @@ fun AppRoot() {
             CollectionScreen(
                 current.id,
                 current.name,
-                tmdbRepository,
 
                 onNavigateDetail = {
                         type,

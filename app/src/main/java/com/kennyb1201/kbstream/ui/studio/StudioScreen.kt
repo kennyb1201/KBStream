@@ -21,7 +21,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -38,6 +40,8 @@ import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TmdbCompanyDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.components.PosterCard
+import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import kotlinx.coroutines.delay
@@ -60,6 +64,24 @@ fun StudioScreen(
     val companyInfo by viewModel.companyInfo.collectAsStateWithLifecycle()
 
     val firstItemFocusRequester = remember { FocusRequester() }
+
+    // Long-press context menu for rail posters.
+    var menuItem by remember {
+        mutableStateOf<StudioItem?>(
+            null
+        )
+    }
+
+    var lastRailFocusRequester by remember {
+        mutableStateOf<FocusRequester?>(
+            null
+        )
+    }
+
+    fun dismissRailMenu() {
+        menuItem = null
+        lastRailFocusRequester?.requestFocus()
+    }
 
     LaunchedEffect(id, isNetwork) {
         viewModel.load(id, isNetwork)
@@ -111,7 +133,12 @@ fun StudioScreen(
                                 isLoadingMore = pagingState.isLoadingMore,
                                 isFirstSection = section == sections.firstOrNull(),
                                 firstItemFocusRequester = firstItemFocusRequester,
-                                viewModel = viewModel
+                                viewModel = viewModel,
+                                onOpenPosterMenu = { item, requester ->
+                                    lastRailFocusRequester =
+                                        requester
+                                    menuItem = item
+                                }
                             )
                         }
 
@@ -121,6 +148,80 @@ fun StudioScreen(
                     }
                 }
             }
+        }
+
+        // Long-press context menu for rail posters (movies/series).
+        menuItem?.let { studioItem ->
+            // Same lookup the rail badge uses, so the toggle always matches
+            // what the poster currently shows: "Mark as Unwatched" when the
+            // badge is visible, "Mark as Watched" otherwise.
+            val menuTmdbId = studioItem.item.id
+            val menuMediaType =
+                when (studioItem.mediaType.lowercase()) {
+                    "tv", "series" -> "series"
+                    else -> "movie"
+                }
+
+            val isWatched =
+                resolvedIds[
+                    viewModel.lookupKey(
+                        menuTmdbId,
+                        menuMediaType
+                    )
+                ]?.let { imdbId ->
+                    viewModel.watchedKey(
+                        imdbId,
+                        menuMediaType
+                    ) in watchedKeys
+                } == true
+
+            PosterContextMenu(
+                title = studioItem.item.title
+                    ?: studioItem.item.name
+                    ?: "",
+                actions = listOf(
+                    PosterContextAction(
+                        label = "Go to Details",
+                        description = "Open this title's detail page"
+                    ) {
+                        menuItem = null
+                        viewModel.resolveAndNavigate(
+                            tmdbId = studioItem.item.id,
+                            mediaType = studioItem.mediaType,
+                            onNavigateDetail = onNavigateDetail
+                        )
+                    },
+                    PosterContextAction(
+                        label = if (isWatched) {
+                            "Mark as Unwatched"
+                        } else {
+                            "Mark as Watched"
+                        },
+                        description = if (isWatched) {
+                            "Clear watched status on this device and Simkl"
+                        } else {
+                            "Show this title as watched"
+                        }
+                    ) {
+                        menuItem = null
+                        if (isWatched) {
+                            viewModel.markUnwatched(
+                                tmdbId = studioItem.item.id,
+                                mediaType = studioItem.mediaType
+                            )
+                        } else {
+                            viewModel.markAsWatched(
+                                tmdbId = studioItem.item.id,
+                                mediaType = studioItem.mediaType
+                            )
+                        }
+                        lastRailFocusRequester?.requestFocus()
+                    }
+                ),
+                onDismiss = {
+                    dismissRailMenu()
+                }
+            )
         }
     }
 }
@@ -216,7 +317,8 @@ private fun StudioRailRow(
     isLoadingMore: Boolean,
     isFirstSection: Boolean,
     firstItemFocusRequester: FocusRequester,
-    viewModel: StudioViewModel
+    viewModel: StudioViewModel,
+    onOpenPosterMenu: (StudioItem, FocusRequester) -> Unit
 ) {
     val rowState = rememberLazyListState()
 
@@ -247,6 +349,15 @@ private fun StudioRailRow(
                     "${item.mediaType}:${item.item.id}"
                 }
             ) { studioItem ->
+                // Focus requester for restoring focus after the long-press
+                // menu dismisses, so the D-pad lands back on this exact card.
+                val requester = remember(
+                    studioItem.item.id,
+                    studioItem.mediaType
+                ) {
+                    FocusRequester()
+                }
+
                 val tmdbId = studioItem.item.id
                 val rawMediaType = studioItem.mediaType
                 val normalizedType = when (rawMediaType.lowercase()) {
@@ -278,10 +389,14 @@ private fun StudioRailRow(
                             onNavigateDetail = onNavigateDetail
                         )
                     },
+                    onLongClick = {
+                        onOpenPosterMenu(studioItem, requester)
+                    },
                     modifier = Modifier
                         .width(140.dp)
                         .height(210.dp)
                         .padding(end = 12.dp)
+                        .focusRequester(requester)
                         .then(
                             if (isFirstItem) {
                                 Modifier.focusRequester(firstItemFocusRequester)

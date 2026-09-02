@@ -14,6 +14,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchTitleResult
 import com.kennyb1201.kbstream.data.watched.WatchStateBus
+import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -24,6 +25,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 
 /**
  * A searchable title result. `meta` is the navigation payload the detail
@@ -58,6 +60,9 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
 
     private val tmdbRepository =
         TmdbRepository(application)
+
+    private val watchedStatusRepository =
+        WatchedStatusRepository(application)
 
     private val prefs =
         application.getSharedPreferences(
@@ -127,6 +132,18 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
     val watchedKeys: StateFlow<Set<String>> =
         _watchedKeys.asStateFlow()
 
+    // TMDB id -> IMDB id resolutions for the visible title results, filled
+    // asynchronously after each search/trending load so poster badges and the
+    // long-press "Mark as Watched" action can key off the IMDB id.
+    private val _resolvedIds =
+        MutableStateFlow<Map<String, String>>(
+            emptyMap()
+        )
+
+    val resolvedIds: StateFlow<Map<String, String>> =
+        _resolvedIds.asStateFlow()
+
+
     private val _isLoading =
         MutableStateFlow(false)
 
@@ -165,6 +182,132 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         id: String,
         type: String
     ): String = "$type::$id"
+
+    fun lookupKey(tmdbId: Int, mediaType: String): String =
+        "${mediaType.lowercase()}::$tmdbId"
+
+    private fun normalizedType(mediaType: String?): String? =
+        when (mediaType?.lowercase()) {
+            "movie" -> "movie"
+            "tv", "series" -> "series"
+            else -> null
+        }
+
+    /**
+     * Resolves the TMDB ids of the visible title tiles to IMDB in the
+     * background (cached by the repository), so watched badges and the
+     * long-press "Mark as Watched" action can key off the IMDB id.
+     */
+    private fun resolveTmdbTitles(items: List<SearchTitleResult>) {
+        if (items.isEmpty()) return
+
+        val uniqueItems = items
+            .mapNotNull { result ->
+                val normalizedType = normalizedType(result.type) ?: return@mapNotNull null
+                val tmdbId = result.id.removePrefix("tmdb:").toIntOrNull() ?: return@mapNotNull null
+                if (tmdbId <= 0) null else tmdbId to normalizedType
+            }
+            .filterNot { (tmdbId, mediaType) ->
+                _resolvedIds.value.containsKey(lookupKey(tmdbId, mediaType))
+            }
+            .distinct()
+            .take(MAX_RESOLUTION_BATCH)
+
+        if (uniqueItems.isEmpty()) return
+
+        viewModelScope.launch {
+            val resolvedTriples = supervisorScope {
+                uniqueItems.map { (tmdbId, mediaType) ->
+                    async {
+                        val imdbId = runCatching {
+                            tmdbRepository.resolveImdbId(tmdbId, mediaType)
+                        }.getOrNull()
+                        Triple(tmdbId, mediaType, imdbId)
+                    }
+                }.map { it.await() }
+            }
+
+            val resolved = resolvedTriples.filter { (_, _, imdbId) ->
+                !imdbId.isNullOrBlank()
+            }
+
+            if (resolved.isEmpty()) return@launch
+
+            _resolvedIds.value = _resolvedIds.value + resolved.associate {
+                (tmdbId, mediaType, imdbId) ->
+                lookupKey(tmdbId, mediaType) to imdbId!!
+            }
+        }
+    }
+
+    /**
+     * Long-press "Mark as Watched" on a search/trending tile: records the
+     * persistent local watched override (mirrored to SIMKL when connected).
+     * TMDB-keyed results resolve to an IMDB id first; add-on results are
+     * already keyed by their IMDB id and are marked directly.
+     */
+    fun markAsWatched(result: SearchTitleResult) {
+        viewModelScope.launch {
+            val normalizedType = normalizedType(result.type) ?: return@launch
+            val tmdbId = result.id.removePrefix("tmdb:").toIntOrNull()
+
+            val imdbId = if (tmdbId != null) {
+                val lookup = lookupKey(tmdbId, normalizedType)
+                val resolved = _resolvedIds.value[lookup]
+                    ?: runCatching {
+                        tmdbRepository.resolveImdbId(tmdbId, normalizedType)
+                    }.getOrNull()
+
+                if (resolved != null && _resolvedIds.value[lookup] == null) {
+                    _resolvedIds.value = _resolvedIds.value + (lookup to resolved)
+                }
+                resolved
+            } else {
+                result.id.trim().takeIf { it.isNotBlank() }
+            } ?: return@launch
+
+            runCatching {
+                watchedStatusRepository.markWatchedLocal(imdbId, normalizedType)
+            }.onFailure { e ->
+                Log.e("SEARCH_WATCHED", "markAsWatched failed id=${result.id}", e)
+            }
+        }
+    }
+
+    /**
+     * Long-press "Mark as Unwatched" on a search/trending tile: removes the
+     * persistent local watched override (mirrored as a Simkl history delete
+     * when connected). TMDB-keyed results resolve to an IMDB id first;
+     * add-on results are already keyed by their IMDB id and are unmarked
+     * directly.
+     */
+    fun markUnwatched(result: SearchTitleResult) {
+        viewModelScope.launch {
+            val normalizedType = normalizedType(result.type) ?: return@launch
+            val tmdbId = result.id.removePrefix("tmdb:").toIntOrNull()
+
+            val imdbId = if (tmdbId != null) {
+                val lookup = lookupKey(tmdbId, normalizedType)
+                val resolved = _resolvedIds.value[lookup]
+                    ?: runCatching {
+                        tmdbRepository.resolveImdbId(tmdbId, normalizedType)
+                    }.getOrNull()
+
+                if (resolved != null && _resolvedIds.value[lookup] == null) {
+                    _resolvedIds.value = _resolvedIds.value + (lookup to resolved)
+                }
+                resolved
+            } else {
+                result.id.trim().takeIf { it.isNotBlank() }
+            } ?: return@launch
+
+            runCatching {
+                watchedStatusRepository.markUnwatchedLocal(imdbId, normalizedType)
+            }.onFailure { e ->
+                Log.e("SEARCH_WATCHED", "markUnwatched failed id=${result.id}", e)
+            }
+        }
+    }
 
     fun onQueryChanged(query: String) {
         _searchQuery.value = query
@@ -274,6 +417,10 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
                 _actorResults.value = personResults.distinctBy { it.id }.take(MAX_PERSON_RESULTS)
                 _studioResults.value = studioResults.distinctBy { it.id }.take(MAX_STUDIO_RESULTS)
                 _collectionResults.value = collectionResults.distinctBy { it.id }.take(MAX_COLLECTION_RESULTS)
+
+                // Resolve the visible TMDB ids -> IMDB in the background so
+                // badges/marks can key off the IMDB id.
+                resolveTmdbTitles(_results.value)
             } catch (e: Exception) {
                 Log.e("KBStream", "Search failed", e)
                 _results.value = emptyList()
@@ -529,6 +676,8 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 }
                     .take(MAX_TRENDING_RESULTS)
+
+            resolveTmdbTitles(_trendingResults.value)
         }
     }
 
@@ -553,6 +702,7 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         search(query)
         commitSearch(query)
     }
+
 
     fun clearRecentSearches() {
         _recentSearches.value = emptyList()
@@ -605,6 +755,7 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         const val PREFS_NAME = "search_prefs"
         const val KEY_RECENT_SEARCHES = "recent_searches"
         const val RECENT_SEARCHES_SEPARATOR = "\u0001"
+        const val MAX_RESOLUTION_BATCH = 300
         const val MAX_RECENT_SEARCHES = 10
         const val MAX_TITLE_RESULTS = 24
         const val MAX_PERSON_RESULTS = 12

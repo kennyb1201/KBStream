@@ -95,6 +95,8 @@ import com.kennyb1201.kbstream.data.tmdb.tmdbImageOriginal
 import com.kennyb1201.kbstream.data.tmdb.writers
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.PosterCard
+import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -130,6 +132,12 @@ private enum class EpisodeFocusEdge { START, END }
 
 private data class EpisodeTransitionState(
     val edge: EpisodeFocusEdge? = null
+)
+
+private data class PosterMenuTarget(
+    val tmdbId: Int,
+    val mediaType: String,
+    val name: String
 )
 
 private data class DetailFactItem(
@@ -183,6 +191,25 @@ fun DetailScreen(
     val scope = rememberCoroutineScope()
     var selectedSeason by remember { mutableStateOf<Int?>(null) }
     var selectedReview by remember { mutableStateOf<TmdbReview?>(null) }
+
+    // Long-press context menu for More Like This / collection rail posters.
+    var posterMenu by remember {
+        mutableStateOf<PosterMenuTarget?>(
+            null
+        )
+    }
+
+    var lastPosterFocusRequester by remember {
+        mutableStateOf<FocusRequester?>(
+            null
+        )
+    }
+
+    fun                            dismissPosterMenu() {
+        posterMenu = null
+        lastPosterFocusRequester?.requestFocus()
+    }
+
     var userManuallyChangedSeason by remember { mutableStateOf(false) }
     val episodesRowState = rememberLazyListState()
     val seasonFocusRequesters = remember { mutableMapOf<Int, FocusRequester>() }
@@ -1923,6 +1950,14 @@ fun DetailScreen(
                                         collectionParts,
                                         key = { it.id }
                                     ) { part ->
+                                        // Focus requester for restoring focus
+                                        // after the long-press menu dismisses.
+                                        val requester = remember(
+                                            part.id
+                                        ) {
+                                            FocusRequester()
+                                        }
+
                                         PosterGridCard(
                                             posterPath =
                                                 part.posterPath,
@@ -1960,7 +1995,19 @@ fun DetailScreen(
                                                         )
                                                     }
                                                 }
-                                            }
+                                            },
+                                            onLongClick = {
+                                                lastPosterFocusRequester =
+                                                    requester
+                                                posterMenu =
+                                                    PosterMenuTarget(
+                                                        tmdbId = part.id,
+                                                        mediaType = "movie",
+                                                        name = part.title ?: ""
+                                                    )
+                                            },
+                                            modifier = Modifier
+                                                .focusRequester(requester)
                                         )
                                     }
                                 }
@@ -2007,6 +2054,14 @@ fun DetailScreen(
                                         recs.take(30),
                                         key = { it.id }
                                     ) { rec ->
+                                        // Focus requester for restoring focus
+                                        // after the long-press menu dismisses.
+                                        val requester = remember(
+                                            rec.id
+                                        ) {
+                                            FocusRequester()
+                                        }
+
                                         PosterGridCard(
                                             posterPath =
                                                 rec.posterPath,
@@ -2046,7 +2101,21 @@ fun DetailScreen(
                                                         )
                                                     }
                                                 }
-                                            }
+                                            },
+                                            onLongClick = {
+                                                lastPosterFocusRequester =
+                                                    requester
+                                                posterMenu =
+                                                    PosterMenuTarget(
+                                                        tmdbId = rec.id,
+                                                        mediaType = type,
+                                                        name = rec.title
+                                                            ?: rec.name
+                                                            ?: ""
+                                                    )
+                                            },
+                                            modifier = Modifier
+                                                .focusRequester(requester)
                                         )
                                     }
                                 }
@@ -2066,6 +2135,83 @@ fun DetailScreen(
                         review = review,
                         onDismiss = {
                             selectedReview = null
+                        }
+                    )
+                }
+
+                posterMenu?.let { target ->
+                    // Same key/type the rail badges use, so the toggle always
+                    // matches what the poster currently shows.
+                    val menuMediaType =
+                        target.mediaType.lowercase()
+
+                    val isWatched =
+                        resolvedPosterIds[
+                            viewModel.posterLookupKey(
+                                target.tmdbId,
+                                menuMediaType
+                            )
+                        ]?.let { imdbId ->
+                            viewModel.watchedKey(
+                                imdbId,
+                                menuMediaType
+                            ) in watchedKeys
+                        } == true
+
+                    PosterContextMenu(
+                        title = target.name.ifBlank { "Untitled" },
+                        actions = listOf(
+                            PosterContextAction(
+                                label = "Go to Details",
+                                description = "Open this title's detail page"
+                            ) {
+                                val selected = target
+                                posterMenu = null
+                                scope.launch {
+                                    val imdbId = viewModel
+                                        .resolveImdbId(
+                                            selected.tmdbId,
+                                            selected.mediaType
+                                        )
+
+                                    if (imdbId != null) {
+                                        onNavigateDetail(
+                                            selected.mediaType,
+                                            imdbId
+                                        )
+                                    }
+                                }
+                            },
+                            PosterContextAction(
+                                label = if (isWatched) {
+                                    "Mark as Unwatched"
+                                } else {
+                                    "Mark as Watched"
+                                },
+                                description = if (isWatched) {
+                                    "Clear watched status on this device and Simkl"
+                                } else {
+                                    "Show this title as watched"
+                                }
+                            ) {
+                                val selected = target
+                                posterMenu = null
+                                if (isWatched) {
+                                    viewModel.markPosterUnwatched(
+                                        selected.tmdbId,
+                                        selected.mediaType
+                                    )
+                                } else {
+                                    viewModel.markPosterWatched(
+                                        selected.tmdbId,
+                                        selected.mediaType
+                                    )
+                                }
+                                lastPosterFocusRequester?.requestFocus()
+                            }
+                        ),
+                        onDismiss = {
+                            dismissPosterMenu()
                         }
                     )
                 }
@@ -2939,7 +3085,9 @@ private fun PosterGridCard(
     posterPath: String?,
     contentDescription: String,
     isWatched: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
 ) {
     PosterCard(
         posterUrl = remember(posterPath) {
@@ -2950,7 +3098,8 @@ private fun PosterGridCard(
         contentDescription = contentDescription,
         isWatched = isWatched,
         onClick = onClick,
-        modifier = Modifier
+        onLongClick = onLongClick,
+        modifier = modifier
             .width(110.dp)
             .height(160.dp)
             .padding(end = 10.dp)

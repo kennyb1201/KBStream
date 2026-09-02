@@ -472,6 +472,128 @@ class SimklRepository(
         }
     }
 
+    /*
+     * Outbound "mark unwatched": DELETE /sync/history for a whole movie.
+     * Called from the poster long-press "Mark as Unwatched" menu action so
+     * the title leaves the user's Simkl history when it is unmarked locally.
+     * Failures are logged, never thrown.
+     */
+    suspend fun removeWatchedMovie(
+        imdbId: String,
+        title: String? = null,
+        tmdbId: Int? = null
+    ): Boolean {
+
+        if (!isConfigured() || !hasToken()) {
+            Log.d("SIMKL_REPO", "removeWatchedMovie skipped: not configured/authenticated")
+            return false
+        }
+
+        val ids = parsePlaybackIds(imdbId, tmdbId)
+        if (ids == null) {
+            Log.d("SIMKL_REPO", "removeWatchedMovie skipped: unparseable id=$imdbId")
+            return false
+        }
+
+        return try {
+            val response = api.deleteFromWatchedHistory(
+                authorization = bearer(requireAccessToken()),
+                body = SimklHistoryRequest(
+                    movies = listOf(
+                        SimklHistoryMovie(
+                            title = title,
+                            ids = ids
+                        )
+                    )
+                )
+            )
+
+            if (!response.isSuccessful) {
+                val errorText = try {
+                    response.errorBody()?.string()
+                } catch (e: Exception) {
+                    "unreadable: ${e.message}"
+                }
+                Log.e("SIMKL_REPO", "removeWatchedMovie failed code=${response.code()} body=$errorText")
+            } else {
+                // Drop the in-memory watched sets so a later preload re-fetches
+                // fresh remote state instead of resurrecting this title from a
+                // stale completed-list snapshot.
+                cachedCompletedMovieKeys = null
+                cachedCompletedMovieKeysFetchedAt = 0L
+                cachedAllShowItems = null
+                cachedAllShowItemsFetchedAt = 0L
+
+                Log.d("SIMKL_REPO", "removeWatchedMovie ok imdb=$imdbId")
+            }
+
+            response.isSuccessful
+        } catch (e: Exception) {
+            Log.e("SIMKL_REPO", "removeWatchedMovie error: ${e.message}", e)
+            false
+        }
+    }
+
+    /*
+     * Outbound "mark unwatched": DELETE /sync/history for a WHOLE show.
+     * Sending the show with no seasons array removes every episode of it
+     * from the user's Simkl history at once, the mirror of
+     * [pushWatchedShow]. Failures are logged, never thrown.
+     */
+    suspend fun removeWatchedShow(
+        showImdbId: String,
+        title: String? = null,
+        tmdbId: Int? = null
+    ): Boolean {
+
+        if (!isConfigured() || !hasToken()) {
+            Log.d("SIMKL_REPO", "removeWatchedShow skipped: not configured/authenticated")
+            return false
+        }
+
+        val ids = parsePlaybackIds(showImdbId, tmdbId)
+        if (ids == null) {
+            Log.d("SIMKL_REPO", "removeWatchedShow skipped: unparseable id=$showImdbId")
+            return false
+        }
+
+        return try {
+            val response = api.deleteFromWatchedHistory(
+                authorization = bearer(requireAccessToken()),
+                body = SimklHistoryRequest(
+                    shows = listOf(
+                        SimklHistoryShow(
+                            title = title,
+                            ids = ids,
+                            seasons = null
+                        )
+                    )
+                )
+            )
+
+            if (!response.isSuccessful) {
+                val errorText = try {
+                    response.errorBody()?.string()
+                } catch (e: Exception) {
+                    "unreadable: ${e.message}"
+                }
+                Log.e("SIMKL_REPO", "removeWatchedShow failed code=${response.code()} body=$errorText")
+            } else {
+                cachedCompletedMovieKeys = null
+                cachedCompletedMovieKeysFetchedAt = 0L
+                cachedAllShowItems = null
+                cachedAllShowItemsFetchedAt = 0L
+
+                Log.d("SIMKL_REPO", "removeWatchedShow ok show=$showImdbId")
+            }
+
+            response.isSuccessful
+        } catch (e: Exception) {
+            Log.e("SIMKL_REPO", "removeWatchedShow error: ${e.message}", e)
+            false
+        }
+    }
+
     suspend fun pushWatchedEpisode(
         showImdbId: String,
         season: Int,

@@ -33,6 +33,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -53,6 +55,8 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
 import com.kennyb1201.kbstream.ui.components.PosterCard
+import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.SuppressImeWhileFocused
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -79,6 +83,25 @@ fun SearchScreen(
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val recentSearches by viewModel.recentSearches.collectAsStateWithLifecycle()
     val trendingResults by viewModel.trendingResults.collectAsStateWithLifecycle()
+    val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
+
+    // Long-press context menu for title tiles (trending/search/add-on rails).
+    var menuResult by remember {
+        mutableStateOf<SearchTitleResult?>(
+            null
+        )
+    }
+
+    var lastPosterFocusRequester by remember {
+        mutableStateOf<FocusRequester?>(
+            null
+        )
+    }
+
+    fun dismissTitleMenu() {
+        menuResult = null
+        lastPosterFocusRequester?.requestFocus()
+    }
 
     LaunchedEffect(Unit) {
         viewModel.loadTrending()
@@ -160,10 +183,30 @@ fun SearchScreen(
                                 items = trendingResults,
                                 key = { result: SearchTitleResult -> result.id }
                             ) { result: SearchTitleResult ->
+                                val requester = remember(
+                                    result.id
+                                ) {
+                                    FocusRequester()
+                                }
+
                                 TitlePosterTile(
                                     result = result,
-                                    watched = false,
-                                    onClick = { onItemClick(result.meta) }
+                                    watched = watchedTile(
+                                        result = result,
+                                        resolvedIds = resolvedIds,
+                                        watchedKeys = watchedKeys,
+                                        viewModel = viewModel
+                                    ),
+                                    onClick = {
+                                        onItemClick(result.meta)
+                                    },
+                                    onLongClick = {
+                                        lastPosterFocusRequester =
+                                            requester
+                                        menuResult = result
+                                    },
+                                    modifier = Modifier
+                                        .focusRequester(requester)
                                 )
                             }
                         }
@@ -214,13 +257,31 @@ fun SearchScreen(
                                 items = results,
                                 key = { result: SearchTitleResult -> result.id }
                             ) { result: SearchTitleResult ->
+                                val requester = remember(
+                                    result.id
+                                ) {
+                                    FocusRequester()
+                                }
+
                                 TitlePosterTile(
                                     result = result,
-                                    watched = viewModel.watchedKey(result.id, result.type) in watchedKeys,
+                                    watched = watchedTile(
+                                        result = result,
+                                        resolvedIds = resolvedIds,
+                                        watchedKeys = watchedKeys,
+                                        viewModel = viewModel
+                                    ),
                                     onClick = {
                                         viewModel.onResultOpened(result)
                                         onItemClick(result.meta)
-                                    }
+                                    },
+                                    onLongClick = {
+                                        lastPosterFocusRequester =
+                                            requester
+                                        menuResult = result
+                                    },
+                                    modifier = Modifier
+                                        .focusRequester(requester)
                                 )
                             }
                         }
@@ -240,13 +301,31 @@ fun SearchScreen(
                                     "addon:$index:${result.id}"
                                 }
                             ) { result: SearchTitleResult ->
+                                val requester = remember(
+                                    result.id
+                                ) {
+                                    FocusRequester()
+                                }
+
                                 TitlePosterTile(
                                     result = result,
-                                    watched = viewModel.watchedKey(result.id, result.type) in watchedKeys,
+                                    watched = watchedTile(
+                                        result = result,
+                                        resolvedIds = resolvedIds,
+                                        watchedKeys = watchedKeys,
+                                        viewModel = viewModel
+                                    ),
                                     onClick = {
                                         viewModel.onResultOpened(result)
                                         onItemClick(result.meta)
-                                    }
+                                    },
+                                    onLongClick = {
+                                        lastPosterFocusRequester =
+                                            requester
+                                        menuResult = result
+                                    },
+                                    modifier = Modifier
+                                        .focusRequester(requester)
                                 )
                             }
                         }
@@ -311,7 +390,80 @@ fun SearchScreen(
                 }
             }
         }
+
+        // Long-press context menu for title tiles.
+        menuResult?.let { result ->
+            // Same lookup the tile badge uses, so the toggle always matches
+            // what the poster currently shows: "Mark as Unwatched" when the
+            // badge is visible, "Mark as Watched" otherwise.
+            val isWatched = watchedTile(
+                result = result,
+                resolvedIds = resolvedIds,
+                watchedKeys = watchedKeys,
+                viewModel = viewModel
+            )
+
+            PosterContextMenu(
+                title = result.name,
+                actions = listOf(
+                    PosterContextAction(
+                        label = "Go to Details",
+                        description = "Open this title's detail page"
+                    ) {
+                        val selected = result
+                        menuResult = null
+                        viewModel.onResultOpened(selected)
+                        onItemClick(selected.meta)
+                    },
+                    PosterContextAction(
+                        label = if (isWatched) {
+                            "Mark as Unwatched"
+                        } else {
+                            "Mark as Watched"
+                        },
+                        description = if (isWatched) {
+                            "Clear watched status on this device and Simkl"
+                        } else {
+                            "Show this title as watched"
+                        }
+                    ) {
+                        val selected = result
+                        menuResult = null
+                        if (isWatched) {
+                            viewModel.markUnwatched(selected)
+                        } else {
+                            viewModel.markAsWatched(selected)
+                        }
+                        lastPosterFocusRequester?.requestFocus()
+                    }
+                ),
+                onDismiss = {
+                    dismissTitleMenu()
+                }
+            )
+        }
     }
+}
+
+/**
+ * Watched badge for a search tile: TMDB-keyed results compare against the
+ * resolved IMDB id (populated asynchronously into [SearchViewModel.resolvedIds]);
+ * add-on results are already keyed by their IMDB id and compare directly.
+ */
+private fun watchedTile(
+    result: SearchTitleResult,
+    resolvedIds: Map<String, String>,
+    watchedKeys: Set<String>,
+    viewModel: SearchViewModel
+): Boolean {
+    val tmdbId = result.id.removePrefix("tmdb:").toIntOrNull()
+    val keyId = if (tmdbId != null) {
+        resolvedIds[viewModel.lookupKey(tmdbId, result.type)]
+    } else {
+        result.id
+    } ?: return false
+
+    return viewModel.watchedKey(keyId, result.type) in watchedKeys
 }
 
 @Composable
@@ -505,7 +657,9 @@ private fun SearchChip(
 private fun TitlePosterTile(
     result: SearchTitleResult,
     watched: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
 ) {
     Column(
         modifier = Modifier.width(124.dp)
@@ -515,7 +669,8 @@ private fun TitlePosterTile(
             contentDescription = result.name,
             isWatched = watched,
             onClick = onClick,
-            modifier = Modifier
+            onLongClick = onLongClick,
+            modifier = modifier
                 .width(124.dp)
                 .height(186.dp)
         )
