@@ -44,7 +44,6 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -78,7 +77,7 @@ import androidx.tv.material3.Surface
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
-import coil3.request.filterQuality
+import coil3.size.Size
 import coil3.toBitmap
 import com.kennyb1201.kbstream.data.tmdb.displaySeasonEpisodeCount
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
@@ -790,8 +789,8 @@ private fun HomeHero(
             model = remember(backdrop) {
                 ImageRequest.Builder(context)
                     .data(backdrop)
+                    .size(Size(1920, 1080))
                     .crossfade(true)
-                    .filterQuality(FilterQuality.High)
                     .build()
             },
             contentDescription = null,

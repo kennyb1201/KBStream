@@ -80,9 +80,7 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.allowHardware
 import coil3.request.crossfade
-import coil3.request.filterQuality
 import coil3.size.Size
-import androidx.compose.ui.graphics.FilterQuality
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbCastMember
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
@@ -684,7 +682,6 @@ fun DetailScreen(
                     .data(backdropUrl)
                     .size(Size(1280, 720))
                     .allowHardware(true)
-                    .filterQuality(FilterQuality.High)
                     .build()
             },
                     contentDescription = displayName,
