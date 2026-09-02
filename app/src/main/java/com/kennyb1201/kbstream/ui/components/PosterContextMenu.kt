@@ -126,7 +126,7 @@ fun PosterContextMenu(
         // so this reliably steals focus from the poster behind the scrim
         // within a frame or two (unlike the rows, whose focus tree attach
         // can race the first request).
-        repeat(10) {
+        for (attempt in 1..10) {
             runCatching {
                 overlayFocusRequester.requestFocus()
             }
