@@ -11,6 +11,7 @@ import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
 import com.kennyb1201.kbstream.data.simkl.SimklContinueWatchingItem
+import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbHeroArtworkRepository
@@ -830,8 +831,16 @@ Log.d(
                     val requestVersion =
                         nextUpNextRequestVersion()
 
-                    try {val localItems =
+                    try {
+
+                    val lookupSemaphore =
+                        Semaphore(MAX_CONCURRENT_UP_NEXT_LOOKUPS)
+
+                    val localItems =
+    coroutineScope {
     history.map { entry ->
+        async {
+            lookupSemaphore.withPermit {
 
         val isEpisodePlayback =
             entry.season != null && entry.episode != null
@@ -1056,7 +1065,10 @@ Log.d(
             startPositionMs = entry.positionMs,
             recencyTimestamp = entry.updatedAt
         )
-    }
+            }
+        }
+    }.awaitAll()
+}
 
                         val simklResult =
                             loadSimklUpNextItems()
@@ -1791,21 +1803,54 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
      * "X of Y episodes watched" display.
      */
     var season = 1
+    val seasonEpisodesBySeason =
+        mutableMapOf<Int, List<ResolvedEpisode>>()
 
+    // Small concurrent batches instead of a 50-season serial walk: for long
+    // shows that loop used to do 30+ sequential TMDB lookups per row, which
+    // dominated Continue Watching load time. A whole empty batch means we're
+    // past the last aired season, so stop.
+    while (season <= 50) {
+        val batchEnd =
+            minOf(season + UP_NEXT_SEASON_BATCH - 1, 50)
+
+        val batchResults: List<Pair<Int, List<ResolvedEpisode>>> =
+            coroutineScope {
+                (season..batchEnd).map { s ->
+                    async {
+                        s to (
+                            try {
+                                tmdbLookupSemaphore.withPermit {
+                                    tmdbRepository.getSeasonEpisodes(
+                                        tmdbId,
+                                        s,
+                                        parentId
+                                    )
+                                }
+                            } catch (_: Exception) {
+                                emptyList()
+                            }
+                            )
+                    }
+                }.awaitAll()
+            }
+
+        var anySeasonInBatch = false
+        for ((s, episodes) in batchResults) {
+            seasonEpisodesBySeason[s] = episodes
+            if (episodes.isNotEmpty()) {
+                anySeasonInBatch = true
+            }
+        }
+        if (!anySeasonInBatch) break
+        season = batchEnd + 1
+    }
+
+    season = 1
     while (season <= 50) {
 
         val seasonEpisodes =
-            try {
-                tmdbLookupSemaphore.withPermit {
-                    tmdbRepository.getSeasonEpisodes(
-                        tmdbId,
-                        season,
-                        parentId
-                    )
-                }
-            } catch (_: Exception) {
-                emptyList()
-            }
+            seasonEpisodesBySeason[season].orEmpty()
 
         if (seasonEpisodes.isEmpty()) {
             break
@@ -3265,6 +3310,12 @@ private suspend fun calculateEpisodesRemaining(
 
         private const val MAX_CONCURRENT_SIMKL_UP_NEXT_LOOKUPS =
             3
+
+        private const val MAX_CONCURRENT_UP_NEXT_LOOKUPS =
+            6
+
+        private const val UP_NEXT_SEASON_BATCH =
+            4
 
         private const val PERIODIC_SIMKL_REFRESH_MS =
             15 * 60 * 1000L

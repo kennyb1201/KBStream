@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.tmdb
 
 import android.content.Context
+import java.util.concurrent.ConcurrentHashMap
 import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.cache.ImdbResolutionEntity
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheDao
@@ -61,11 +62,14 @@ class TmdbRepository(context: Context) {
     private val imdbResolutionDao = database.imdbResolutionDao()
     private val tmdbJsonCacheDao: TmdbJsonCacheDao = database.tmdbJsonCacheDao()
 
-    private val detailCache = mutableMapOf<String, Pair<Long, TmdbDetail?>>()
+    // ConcurrentHashMap: continue-watching lookups run several rows in
+    // parallel, so these caches are written from multiple coroutines.
+    private val detailCache = ConcurrentHashMap<String, Pair<Long, TmdbDetail?>>()
     private val detailCacheTtlMs = 12L * 60L * 60L * 1000L
     private val detailCacheDiskTtlMs = 30L * 24L * 60L * 60L * 1000L
 
-    private val seasonEpisodesCache = mutableMapOf<String, Pair<Long, List<ResolvedEpisode>>>()
+    private val seasonEpisodesCache =
+        ConcurrentHashMap<String, Pair<Long, List<ResolvedEpisode>>>()
     private val seasonEpisodesCacheTtlMs = 12L * 60L * 60L * 1000L
     private val seasonEpisodesDiskTtlMs = 7L * 24L * 60L * 60L * 1000L
 
@@ -88,7 +92,8 @@ class TmdbRepository(context: Context) {
             )
         )
 
-    private val imdbResolutionMemoryCache = mutableMapOf<String, Pair<Long, String?>>()
+    private val imdbResolutionMemoryCache =
+        ConcurrentHashMap<String, Pair<Long, String?>>()
     private val imdbResolutionTtlMs = 30L * 24L * 60L * 60L * 1000L
 
     private var movieGenresCache: List<TmdbGenre>? = null
