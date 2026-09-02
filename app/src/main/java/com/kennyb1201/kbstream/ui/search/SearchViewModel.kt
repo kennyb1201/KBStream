@@ -14,6 +14,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchTitleResult
 import com.kennyb1201.kbstream.data.watched.WatchStateBus
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -37,6 +38,15 @@ data class SearchTitleResult(
     val year: Int? = null,
     val rating: Double? = null,
     val meta: MetaPreview
+)
+
+/**
+ * Search hits from one installed add-on (AIOMetadata, BingeCat, ...),
+ * grouped so the search screen can show them as a labelled source rail.
+ */
+data class AddonResultGroup(
+    val addonName: String,
+    val results: List<SearchTitleResult>
 )
 
 class SearchViewModel(application: Application) : AndroidViewModel(application) {
@@ -123,7 +133,17 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
     val isLoading: StateFlow<Boolean> =
         _isLoading.asStateFlow()
 
+    private val _addonResultGroups =
+        MutableStateFlow<List<AddonResultGroup>>(
+            emptyList()
+        )
+
+    val addonResultGroups: StateFlow<List<AddonResultGroup>> =
+        _addonResultGroups.asStateFlow()
+
     private var searchJob: Job? = null
+
+    private var addonSearchJob: Job? = null
 
     init {
         loadRecentSearches()
@@ -177,6 +197,8 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         _searchQuery.value = query
 
         searchJob?.cancel()
+        addonSearchJob?.cancel()
+        _addonResultGroups.value = emptyList()
 
         if (normalized.isBlank()) {
             _results.value = emptyList()
@@ -208,9 +230,6 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
                         }
                         .getOrDefault(emptyList())
                 }
-                val addonTitlesDeferred = async {
-                    searchAddonCatalogs(normalized)
-                }
                 val personDeferred = async {
                     runCatching { tmdbRepository.searchPerson(normalized) }
                         .onFailure { e -> Log.e("KBStream", "Person search failed", e) }
@@ -227,9 +246,18 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
                         .getOrDefault(emptyList())
                 }
 
+                // Add-on / AI search (AIOMetadata, BingeCat, ...) runs as a
+                // second wave: it awaits the same TMDB lookups for de-dupe
+                // keys and publishes its own grouped section when done, so it
+                // never delays the TMDB results above.
+                launchAddonSearch(
+                    normalized,
+                    tmdbMoviesDeferred,
+                    tmdbTvDeferred
+                )
+
                 val tmdbMovies = tmdbMoviesDeferred.await()
                 val tmdbTv = tmdbTvDeferred.await()
-                val addonTitles = addonTitlesDeferred.await()
                 val personResults = personDeferred.await()
                 val studioResults = studioDeferred.await()
                 val collectionResults = collectionDeferred.await()
@@ -240,8 +268,7 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
                     mergeTitles(
                         query = normalized,
                         movies = tmdbMovies,
-                        tv = tmdbTv,
-                        addonResults = addonTitles
+                        tv = tmdbTv
                     )
                         .take(MAX_TITLE_RESULTS)
                 _actorResults.value = personResults.distinctBy { it.id }.take(MAX_PERSON_RESULTS)
@@ -259,10 +286,48 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /**
+     * Second wave of a search: query every catalog add-on (AIOMetadata's AI /
+     * meta catalogs, BingeCat lists, Cinemeta, ...) via the standard Stremio
+     * search endpoint and publish the hits grouped by add-on so the search
+     * screen can show them as their own labelled rails. Runs after — and
+     * never delays — the TMDB wave.
+     */
+    private fun launchAddonSearch(
+        query: String,
+        tmdbMoviesDeferred: Deferred<List<TmdbSearchTitleResult>>,
+        tmdbTvDeferred: Deferred<List<TmdbSearchTitleResult>>
+    ) {
+        addonSearchJob?.cancel()
+        addonSearchJob = viewModelScope.launch {
+            val tmdbKeys = buildSet {
+                tmdbMoviesDeferred.await().forEach {
+                    add(tmdbNameKey("movie", it))
+                }
+                tmdbTvDeferred.await().forEach {
+                    add(tmdbNameKey("series", it))
+                }
+            }
+
+            val groups =
+                try {
+                    searchAddonCatalogs(query, tmdbKeys)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e("KBStream", "Add-on search failed", e)
+                    emptyList()
+                }
+
+            _addonResultGroups.value = groups
+        }
+    }
+
     private suspend fun searchAddonCatalogs(
-        query: String
-    ): List<MetaPreview> {
-        val found = mutableListOf<MetaPreview>()
+        query: String,
+        tmdbKeys: Set<String>
+    ): List<AddonResultGroup> {
+        val groups = mutableListOf<AddonResultGroup>()
         val addons = addonManager.getInstalledAddons()
 
         for (addon in addons) {
@@ -271,9 +336,11 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
             val baseUrl =
                 addon.manifestUrl.removeSuffix("/manifest.json")
 
+            val collected = mutableListOf<MetaPreview>()
+
             for (catalog in addon.catalogs) {
                 try {
-                    found += repository.searchCatalog(
+                    collected += repository.searchCatalog(
                         baseUrl,
                         catalog.type,
                         catalog.id,
@@ -282,23 +349,65 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
                 } catch (_: Exception) {
                 }
             }
+
+            if (collected.isEmpty()) continue
+
+            val addonItems =
+                collected
+                    .distinctBy { "${it.type}:${it.id}" }
+                    .filter {
+                        "${it.type}:${it.name.lowercase()}" !in tmdbKeys
+                    }
+                    .map { meta ->
+                        SearchTitleResult(
+                            id = meta.id,
+                            type = meta.type,
+                            name = meta.name,
+                            poster = meta.poster,
+                            meta = meta
+                        )
+                    }
+                    .take(MAX_ADDON_RESULTS_PER_ADDON)
+
+            if (addonItems.isEmpty()) continue
+
+            groups += AddonResultGroup(
+                addonName = addon.customName ?: addon.name,
+                results = addonItems
+            )
+
+            if (groups.size >= MAX_ADDON_GROUPS) break
         }
 
-        return found
+        return groups
+    }
+
+    private fun tmdbNameKey(
+        type: String,
+        result: TmdbSearchTitleResult
+    ): String {
+        val name =
+            if (type == "movie") {
+                result.title?.takeIf { it.isNotBlank() }
+                    ?: result.name?.takeIf { it.isNotBlank() }
+                    ?: "Untitled"
+            } else {
+                result.name?.takeIf { it.isNotBlank() }
+                    ?: result.title?.takeIf { it.isNotBlank() }
+                    ?: "Untitled"
+            }
+        return "$type:${name.lowercase()}"
     }
 
     /*
-     * Merge TMDB + add-on title results. TMDB is the primary source (works
-     * with no add-ons installed); add-on hits are layered on top but
-     * de-duplicated against exact TMDB title/type matches so the same movie
-     * from Cinemeta doesn't appear twice. Sorted by match quality, then
-     * newest first.
+     * Merge TMDB movie + series results into one ranked title list, sorted
+     * by match quality, then newest first. Add-on/AI results are published
+     * separately (see launchAddonSearch) so they keep their source label.
      */
     private fun mergeTitles(
         query: String,
         movies: List<TmdbSearchTitleResult>,
-        tv: List<TmdbSearchTitleResult>,
-        addonResults: List<MetaPreview>
+        tv: List<TmdbSearchTitleResult>
     ): List<SearchTitleResult> {
 
         val lowerQuery = query.trim().lowercase()
@@ -360,28 +469,7 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        val tmdbKeys =
-            tmdbItems
-                .map { "${it.type}:${it.name.lowercase()}" }
-                .toSet()
-
-        val addonItems =
-            addonResults
-                .distinctBy { "${it.type}:${it.id}" }
-                .filter {
-                    "${it.type}:${it.name.lowercase()}" !in tmdbKeys
-                }
-                .map { meta ->
-                    SearchTitleResult(
-                        id = meta.id,
-                        type = meta.type,
-                        name = meta.name,
-                        poster = meta.poster,
-                        meta = meta
-                    )
-                }
-
-        return (tmdbItems + addonItems)
+        return tmdbItems
             .sortedWith(
                 compareByDescending<SearchTitleResult> {
                     matchScore(it.name)
@@ -474,8 +562,11 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
     fun resetSearchState() {
         searchJob?.cancel()
         searchJob = null
+        addonSearchJob?.cancel()
+        addonSearchJob = null
         _searchQuery.value = ""
         _results.value = emptyList()
+        _addonResultGroups.value = emptyList()
         _actorResults.value = emptyList()
         _studioResults.value = emptyList()
         _collectionResults.value = emptyList()
@@ -519,6 +610,9 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         const val MAX_PERSON_RESULTS = 12
         const val MAX_STUDIO_RESULTS = 8
         const val MAX_COLLECTION_RESULTS = 8
+
+        const val MAX_ADDON_RESULTS_PER_ADDON = 40
+        const val MAX_ADDON_GROUPS = 6
         const val MAX_TRENDING_RESULTS = 20
         const val SEARCH_DEBOUNCE_MS = 300L
     }

@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.addon
 
 import retrofit2.http.GET
+import retrofit2.http.Headers
 import retrofit2.http.Url
 
 interface StremioApiService {
@@ -21,6 +22,7 @@ interface StremioApiService {
     ): StreamResponse
 
     @GET
+    @Headers("Cache-Control: no-cache")
     suspend fun getManifest(
         @Url url: String
     ): AddonManifest

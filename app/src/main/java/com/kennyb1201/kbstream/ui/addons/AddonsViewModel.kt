@@ -438,6 +438,8 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                 var successCount = 0
                 var failureCount = 0
 
+                var newCatalogTotal = 0
+
                 val refreshed = current.map { old ->
                     try {
                         val manifest = repository.fetchManifest(old.manifestUrl)
@@ -452,6 +454,13 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                         }
 
                         successCount++
+
+                        newCatalogTotal += manifest.catalogs.count { catalog ->
+                            old.catalogs.none {
+                                catalogKey(it.type, it.id) ==
+                                    catalogKey(catalog.type, catalog.id)
+                            }
+                        }
 
                         old.copy(
                             name = manifest.name,
@@ -475,8 +484,15 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                 refresh()
 
                 _status.value = when {
-                    failureCount == 0 ->
-                        "Refreshed $successCount add-on${if (successCount == 1) "" else "s"}"
+                    failureCount == 0 -> {
+                        val base =
+                            "Refreshed $successCount add-on${if (successCount == 1) "" else "s"}"
+                        if (newCatalogTotal > 0) {
+                            "$base · +$newCatalogTotal new catalog${if (newCatalogTotal == 1) "" else "s"}"
+                        } else {
+                            base
+                        }
+                    }
 
                     successCount == 0 ->
                         "Could not refresh any add-ons"
@@ -516,6 +532,14 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                     return@launch
                 }
 
+                val newCatalogCount =
+                    manifest.catalogs.count { catalog ->
+                        addon.catalogs.none {
+                            catalogKey(it.type, it.id) ==
+                                catalogKey(catalog.type, catalog.id)
+                        }
+                    }
+
                 addonManager.saveInstalledAddons(
                     addonManager.getInstalledAddons().map { old ->
                         if (old.id == id) {
@@ -539,8 +563,14 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
 
                 refresh()
 
-                _status.value =
-                    "Refreshed ${addon.displayName}"
+                _status.value = when {
+                    newCatalogCount > 0 ->
+                        "Refreshed ${addon.displayName} · " +
+                            "$newCatalogCount new catalog${if (newCatalogCount == 1) "" else "s"}"
+
+                    else ->
+                        "Refreshed ${addon.displayName} · no catalog changes"
+                }
             } catch (e: Exception) {
                 _error.value =
                     "Refresh failed: ${e.message ?: "Unknown error"}"

@@ -74,6 +74,7 @@ fun SearchScreen(
     val actorResults by viewModel.actorResults.collectAsStateWithLifecycle()
     val studioResults by viewModel.studioResults.collectAsStateWithLifecycle()
     val collectionResults by viewModel.collectionResults.collectAsStateWithLifecycle()
+    val addonResultGroups by viewModel.addonResultGroups.collectAsStateWithLifecycle()
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val recentSearches by viewModel.recentSearches.collectAsStateWithLifecycle()
@@ -89,7 +90,8 @@ fun SearchScreen(
         }
     }
 
-    val totalCount = results.size + actorResults.size + studioResults.size + collectionResults.size
+    val totalCount = results.size + actorResults.size + studioResults.size + collectionResults.size +
+        addonResultGroups.sumOf { it.results.size }
 
     Box(
         modifier = Modifier
@@ -111,6 +113,7 @@ fun SearchScreen(
                     actorCount = actorResults.size,
                     studioCount = studioResults.size,
                     collectionCount = collectionResults.size,
+                    addonCount = addonResultGroups.sumOf { it.results.size },
                     isLoading = isLoading
                 )
             }
@@ -225,6 +228,32 @@ fun SearchScreen(
                 }
             }
 
+            if (!isLoading && query.isNotBlank() && addonResultGroups.isNotEmpty()) {
+                addonResultGroups.forEachIndexed { index, group ->
+                    item(key = "addons_rail_$index") {
+                        SearchRail(
+                            title = "From ${group.addonName} · ${group.results.size}"
+                        ) {
+                            items(
+                                items = group.results,
+                                key = { result: SearchTitleResult ->
+                                    "addon:$index:${result.id}"
+                                }
+                            ) { result: SearchTitleResult ->
+                                TitlePosterTile(
+                                    result = result,
+                                    watched = viewModel.watchedKey(result.id, result.type) in watchedKeys,
+                                    onClick = {
+                                        viewModel.onResultOpened(result)
+                                        onItemClick(result.meta)
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             if (!isLoading && actorResults.isNotEmpty()) {
                 item(key = "actors_rail") {
                     SearchRail(title = "Actors") {
@@ -294,6 +323,7 @@ private fun SearchHero(
     actorCount: Int,
     studioCount: Int,
     collectionCount: Int,
+    addonCount: Int,
     isLoading: Boolean
 ) {
     var searchFocused by remember { mutableStateOf(false) }
@@ -389,6 +419,7 @@ private fun SearchHero(
                 text = buildString {
                     val chips = buildList {
                         if (catalogCount > 0) add("$catalogCount titles")
+                        if (addonCount > 0) add("$addonCount from add-ons")
                         if (actorCount > 0) add("$actorCount actors")
                         if (collectionCount > 0) add("$collectionCount collections")
                         if (studioCount > 0) add("$studioCount studios")

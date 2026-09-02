@@ -549,22 +549,42 @@ private fun AddonDetails(
                 text = it,
                 color = KBTextLo,
                 style = MaterialTheme.typography.bodyMedium,
-                maxLines = 3,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = 10.dp)
             )
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
-        DetailLine("ID", addon.id)
-        DetailLine("VERSION", addon.version ?: "—")
-        DetailLine("RESOURCES", addon.resources.joinToString(", ").ifBlank { "—" })
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            DetailLine(
+                label = "ID",
+                value = addon.id,
+                modifier = Modifier.weight(1f)
+            )
+            DetailLine(
+                label = "VERSION",
+                value = addon.version ?: "—",
+                modifier = Modifier.weight(1f)
+            )
+        }
+        Row(modifier = Modifier.fillMaxWidth()) {
+            DetailLine(
+                label = "RESOURCES",
+                value = addon.resources.joinToString(", ").ifBlank { "—" },
+                modifier = Modifier.weight(1f)
+            )
+            DetailLine(
+                label = "CATALOGS",
+                value = addon.catalogs.size.toString(),
+                modifier = Modifier.weight(1f)
+            )
+        }
         DetailLine("TYPES", addon.types.joinToString(", ").ifBlank { "—" })
-        DetailLine("CATALOGS", addon.catalogs.size.toString())
 
         // Action buttons stay pinned above the catalog list so they're always
         // reachable even with dozens of catalogs.
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(8.dp))
         Text(
             text = "ADD-ON ACTIONS",
             color = KBTextLo,
@@ -590,7 +610,7 @@ private fun AddonDetails(
             )
         }
 
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(4.dp))
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth()
@@ -609,7 +629,7 @@ private fun AddonDetails(
             )
         }
 
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(4.dp))
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth()
@@ -631,7 +651,7 @@ private fun AddonDetails(
         }
 
         if (addon.catalogs.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(10.dp))
             Text(
                 text = "CATALOGS ON HOME",
                 color = KBTextLo,
@@ -698,23 +718,26 @@ private fun AddonDetails(
 @Composable
 private fun DetailLine(
     label: String,
-    value: String
+    value: String,
+    modifier: Modifier = Modifier
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 1.dp)
     ) {
         Text(
             text = label,
             color = KBTextLo,
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.width(82.dp)
+            modifier = Modifier.width(84.dp)
         )
         Text(
             text = value,
             color = KBTextHi,
             style = MaterialTheme.typography.bodySmall,
-            maxLines = 2,
+            maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
         )
@@ -729,7 +752,7 @@ private fun ActionButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     horizontalPadding: androidx.compose.ui.unit.Dp = 13.dp,
-    verticalPadding: androidx.compose.ui.unit.Dp = 9.dp,
+    verticalPadding: androidx.compose.ui.unit.Dp = 6.dp,
     textStyle: androidx.compose.ui.text.TextStyle = MaterialTheme.typography.labelLarge
 ) {
     if (enabled) {
@@ -748,7 +771,7 @@ private fun ActionButton(
                     Icon(
                         imageVector = it,
                         contentDescription = null,
-                        modifier = Modifier.size(17.dp)
+                        modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(5.dp))
                 }
@@ -779,7 +802,7 @@ private fun ActionButton(
                     Icon(
                         imageVector = it,
                         contentDescription = null,
-                        modifier = Modifier.size(17.dp)
+                        modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(5.dp))
                 }
@@ -808,12 +831,12 @@ private fun SmallAction(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 9.dp)
+                    .padding(horizontal = 6.dp, vertical = 6.dp)
             ) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
-                    modifier = Modifier.size(16.dp)
+                    modifier = Modifier.size(14.dp)
                 )
                 Text(
                     text = label,
@@ -837,12 +860,12 @@ private fun SmallAction(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 9.dp)
+                    .padding(horizontal = 6.dp, vertical = 6.dp)
             ) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
-                    modifier = Modifier.size(16.dp)
+                    modifier = Modifier.size(14.dp)
                 )
                 Text(
                     text = label,
