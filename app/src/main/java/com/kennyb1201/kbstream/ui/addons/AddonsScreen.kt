@@ -55,6 +55,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -83,6 +85,7 @@ import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.data.addon.ManifestCatalog
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.SuppressImeWhileFocused
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -1297,6 +1300,16 @@ private fun AddAddonDialog(
         onDismiss()
     }
 
+    val urlFocusRequester = remember { FocusRequester() }
+
+    // Auto-focus the URL box when the dialog opens: it's the paste target
+    // (PASTE button, phone pairing page, or atvTools' "Send text" on the
+    // phone while this box is focused), and the IME suppression keeps the
+    // leanback keyboard from covering the screen.
+    LaunchedEffect(Unit) {
+        urlFocusRequester.requestFocus()
+    }
+
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
@@ -1325,7 +1338,8 @@ private fun AddAddonDialog(
                     value = url,
                     onValueChange = onUrlChange,
                     placeholder = "https://example.com/manifest.json",
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    focusRequester = urlFocusRequester
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 ActionButton(
@@ -1335,10 +1349,21 @@ private fun AddAddonDialog(
                     onClick = {
                         pasteFromClipboard(context) { pasted ->
                             onUrlChange(pasted)
+                            // Drop focus right after pasting so the leanback
+                            // IME can't re-cover the screen.
+                            focusManager.clearFocus()
+                            keyboardController?.hide()
                         }
                     }
                 )
             }
+
+            Text(
+                text = "TIP: With the URL box in focus you can also paste from atvTools on your phone.",
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 8.dp)
+            )
 
             if (pairUrl != null) {
                 Spacer(modifier = Modifier.height(12.dp))
@@ -1531,19 +1556,14 @@ private fun UrlField(
     value: String,
     onValueChange: (String) -> Unit,
     placeholder: String,
-    modifier: Modifier = Modifier.fillMaxWidth()
+    modifier: Modifier = Modifier.fillMaxWidth(),
+    focusRequester: FocusRequester? = null
 ) {
     var focused by remember { mutableStateOf(false) }
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
 
-    // TV remote: the leanback IME takes over the whole screen the moment this
-    // field gains focus, with no reliable way out. Hide it as soon as focus
-    // lands — physical-keyboard typing still works, and the PASTE button
-    // covers the common case. The DONE ime action is a second escape hatch.
-    LaunchedEffect(focused) {
-        if (focused) keyboardController?.hide()
-    }
+    SuppressImeWhileFocused(focused)
 
     BasicTextField(
         value = value,
@@ -1561,7 +1581,11 @@ private fun UrlField(
                 focusManager.clearFocus()
             }
         ),
-        modifier = modifier
+        modifier = (if (focusRequester != null) {
+            modifier.focusRequester(focusRequester)
+        } else {
+            modifier
+        })
             .clip(RoundedCornerShape(12.dp))
             .background(KBSurfaceRaised)
             .border(
