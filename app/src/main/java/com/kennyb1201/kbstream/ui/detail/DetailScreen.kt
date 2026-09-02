@@ -221,6 +221,11 @@ fun DetailScreen(
         )
     }
 
+    fun dismissPosterMenu() {
+        posterMenu = null
+        lastPosterFocusRequester?.requestFocus()
+    }
+
     // Long-press context menu for the season chips (mark a whole season
     // watched / unwatched).
     var seasonMenu by remember {

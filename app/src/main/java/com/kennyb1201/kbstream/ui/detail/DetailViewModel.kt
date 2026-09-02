@@ -650,6 +650,7 @@ if (resolvedMeta != null) {
                             type = "series",
                             name = showName,
                             poster = posterUrl,
+                            streamUrl = null,
                             positionMs = 0L,
                             durationMs = 1L,
                             season = season,
