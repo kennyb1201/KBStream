@@ -2109,7 +2109,9 @@ private fun PosterActionMenu(
     ) {
         Surface(
             onClick = onDismiss,
-            shape = dialogShape,
+            shape = ClickableSurfaceDefaults.shape(
+                shape = dialogShape
+            ),
             colors = ClickableSurfaceDefaults.colors(
                 containerColor = Color(0xFF101820).copy(alpha = 0.97f),
                 contentColor = KBTextHi,
@@ -2220,7 +2222,9 @@ private fun ContinueWatchingActionMenu(
     ) {
         Surface(
             onClick = onDismiss,
-            shape = dialogShape,
+            shape = ClickableSurfaceDefaults.shape(
+                shape = dialogShape
+            ),
             colors = ClickableSurfaceDefaults.colors(
                 containerColor = Color(0xFF101820).copy(alpha = 0.97f),
                 contentColor = KBTextHi,
@@ -2341,7 +2345,9 @@ private fun ContinueWatchingMenuRow(
 
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(12.dp),
+        shape = ClickableSurfaceDefaults.shape(
+            shape = RoundedCornerShape(12.dp)
+        ),
         colors = ClickableSurfaceDefaults.colors(
             containerColor = Color.Transparent,
             contentColor = if (isDestructive) {
