@@ -254,6 +254,26 @@ fun AppRoot() {
                     )
                 },
 
+                // Long-press "Play Manually" / "Play from Beginning" from
+                // Continue Watching: skip the detail screen and go straight
+                // to the streams picker for the same target. The target keeps
+                // its resumePositionMs (or 0 for "from Beginning"), so
+                // playback still resumes saved progress unless a fresh start
+                // was requested.
+                onOpenStreams = {
+                        meta,
+                        target,
+                        poster ->
+
+                    screen = Screen.Streams(
+                        target = target,
+                        parentId = meta.id,
+                        returnTo = Screen.Home,
+                        parentType = meta.type,
+                        itemPoster = poster ?: meta.poster
+                    )
+                },
+
                 onSearch = {
                     screen = Screen.Search
                 },

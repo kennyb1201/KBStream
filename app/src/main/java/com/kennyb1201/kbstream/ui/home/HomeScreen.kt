@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.home
 
 import android.util.Log
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.fadeIn
@@ -1090,6 +1091,7 @@ private fun CompactUpNextCard(
     onClick: () -> Unit,
     onFocus: () -> Unit = {},
     onUpPressed: () -> Unit = {},
+    onLongClick: (() -> Unit)? = null,
     focusRequester: FocusRequester? = null,
     badgeColor: Color,
     badgeText: String
@@ -1153,6 +1155,7 @@ private fun CompactUpNextCard(
         contentDescription = item.title,
         isWatched = false,
         onClick = onClick,
+        onLongClick = onLongClick,
         modifier = Modifier
             .width(224.dp)
             .height(146.dp)
@@ -1384,6 +1387,11 @@ fun HomeScreen(
         StreamsTarget,
         String?
     ) -> Unit,
+    onOpenStreams: (
+        MetaPreview,
+        StreamsTarget,
+        String?
+    ) -> Unit = { _, _, _ -> },
     onSearch: () -> Unit = {},
     onOpenGuide: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
@@ -1449,6 +1457,20 @@ fun HomeScreen(
         lastPosterFocusRequester?.requestFocus()
     }
 
+    // Long-press menu on Continue Watching cards.
+    var continueWatchingMenu by remember {
+        mutableStateOf<UpNextItem?>(null)
+    }
+
+    fun dismissContinueWatchingMenu() {
+        continueWatchingMenu = null
+        lastPosterFocusRequester?.requestFocus()
+    }
+
+    fun openContinueWatchingMenu(item: UpNextItem) {
+        continueWatchingMenu = item
+    }
+
     fun selectHero(
         item: MetaPreview
     ) {
@@ -1504,7 +1526,9 @@ fun HomeScreen(
     }
 
     fun openUpNext(
-        item: UpNextItem
+        item: UpNextItem,
+        openInStreamsScreen: Boolean = false,
+        startAtBeginning: Boolean = false
     ) {
         val parentId = item.parentId
         val parentType = item.parentType
@@ -1532,16 +1556,35 @@ fun HomeScreen(
             displayName = item.title,
             season = item.season,
             episode = item.episode,
-            resumePositionMs = item.startPositionMs
+            resumePositionMs =
+                if (startAtBeginning) {
+                    0L
+                } else {
+                    item.startPositionMs
+                }
         )
 
-        selectHero(detail)
+        if (openInStreamsScreen) {
 
-        onOpenDetailTarget(
-            detail,
-            target,
-            item.poster
-        )
+            // "Play Manually" / "Play from Beginning": go straight to the
+            // streams picker for this item. Resume position is preserved for
+            // Play Manually; Play from Beginning forces position 0. Both
+            // follow the global auto-select setting.
+            onOpenStreams(
+                detail,
+                target,
+                item.poster
+            )
+        } else {
+
+            selectHero(detail)
+
+            onOpenDetailTarget(
+                detail,
+                target,
+                item.poster
+            )
+        }
     }
 
     val firstRailNeedsUpHook =
@@ -1650,6 +1693,16 @@ fun HomeScreen(
                                         item = item,
                                         onClick = {
                                             openUpNext(
+                                                item
+                                            )
+                                        },
+                                        onLongClick = {
+                                            // Remember this card's requester so
+                                            // dismissing the menu restores focus
+                                            // to the exact card that opened it.
+                                            lastPosterFocusRequester =
+                                                requester
+                                            openContinueWatchingMenu(
                                                 item
                                             )
                                         },
@@ -1931,6 +1984,285 @@ fun HomeScreen(
                     }
                 )
             }
+        }
+
+        // Long-press menu for Continue Watching cards.
+        continueWatchingMenu?.let { menuItem ->
+            ContinueWatchingActionMenu(
+                item = menuItem,
+                onGoToDetails = {
+                    val selectedItem = menuItem
+                    continueWatchingMenu = null
+                    openUpNext(selectedItem)
+                },
+                onPlayManually = {
+                    val selectedItem = menuItem
+                    continueWatchingMenu = null
+                    openUpNext(
+                        selectedItem,
+                        openInStreamsScreen = true,
+                        startAtBeginning = false
+                    )
+                },
+                onPlayFromBeginning = {
+                    val selectedItem = menuItem
+                    continueWatchingMenu = null
+                    openUpNext(
+                        selectedItem,
+                        openInStreamsScreen = true,
+                        startAtBeginning = true
+                    )
+                },
+                onRemove = {
+                    val selectedItem = menuItem
+                    continueWatchingMenu = null
+                    viewModel.removeFromContinueWatching(
+                        selectedItem
+                    )
+                    lastPosterFocusRequester?.requestFocus()
+                },
+                onDismiss = {
+                    dismissContinueWatchingMenu()
+                }
+            )
+        }
+    }
+}
+
+/**
+ * Long-press menu for a Continue Watching card: Go to Details, Play
+ * Manually (streams picker, still resuming saved progress), Play from
+ * Beginning (streams picker, forced start at 0), and Remove.
+ */
+@Composable
+private fun ContinueWatchingActionMenu(
+    item: UpNextItem,
+    onGoToDetails: () -> Unit,
+    onPlayManually: () -> Unit,
+    onPlayFromBeginning: () -> Unit,
+    onRemove: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val firstRowFocusRequester = remember {
+        FocusRequester()
+    }
+
+    val dialogShape = RoundedCornerShape(20.dp)
+
+    // Dismiss on system Back. BackHandler is used instead of key-event
+    // intercepts because the Activity back dispatcher consumes the Back key
+    // before it ever reaches compose key handlers; with the app-level
+    // BackHandler disabled on Home, Back would otherwise exit the app.
+    BackHandler {
+        onDismiss()
+    }
+
+    LaunchedEffect(Unit) {
+        runCatching {
+            firstRowFocusRequester.requestFocus()
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.60f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            onClick = onDismiss,
+            shape = dialogShape,
+            colors = ClickableSurfaceDefaults.colors(
+                containerColor = Color(0xFF101820).copy(alpha = 0.97f),
+                contentColor = KBTextHi,
+                focusedContainerColor = Color(0xFF101820).copy(alpha = 0.97f),
+                focusedContentColor = KBTextHi
+            ),
+            scale = ClickableSurfaceDefaults.scale(
+                scale = 1f,
+                focusedScale = 1f
+            ),
+            border = ClickableSurfaceDefaults.border(
+                border = Border(
+                    border = BorderStroke(
+                        1.dp,
+                        Color.White.copy(alpha = 0.10f)
+                    ),
+                    shape = dialogShape
+                ),
+                focusedBorder = Border(
+                    border = BorderStroke(
+                        1.dp,
+                        Color.White.copy(alpha = 0.10f)
+                    ),
+                    shape = dialogShape
+                )
+            ),
+            modifier = Modifier
+                .width(380.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(22.dp)
+            ) {
+                Text(
+                    text = item.title,
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                item.episodeTitle
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { episodeTitle ->
+                        Text(
+                            text = episodeTitle,
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
+
+                Spacer(
+                    modifier = Modifier.height(16.dp)
+                )
+
+                ContinueWatchingMenuRow(
+                    label = "Go to Details",
+                    description = "Open this title's detail page",
+                    focusRequester = firstRowFocusRequester,
+                    onClick = onGoToDetails,
+                    onDismiss = onDismiss
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                ContinueWatchingMenuRow(
+                    label = "Play Manually",
+                    description = if (item.startPositionMs > 0L) {
+                        "Open the streams picker - still resumes at your progress"
+                    } else {
+                        "Open the streams picker"
+                    },
+                    onClick = onPlayManually,
+                    onDismiss = onDismiss
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                ContinueWatchingMenuRow(
+                    label = "Play from Beginning",
+                    description = "Start over from the beginning",
+                    onClick = onPlayFromBeginning,
+                    onDismiss = onDismiss
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                ContinueWatchingMenuRow(
+                    label = "Remove",
+                    description = "Hide this from Continue Watching",
+                    isDestructive = true,
+                    onClick = onRemove,
+                    onDismiss = onDismiss
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ContinueWatchingMenuRow(
+    label: String,
+    description: String,
+    isDestructive: Boolean = false,
+    focusRequester: FocusRequester? = null,
+    onClick: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var focused by remember {
+        mutableStateOf(false)
+    }
+
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = Color.Transparent,
+            contentColor = if (isDestructive) {
+                Color(0xFFE57373)
+            } else {
+                KBTextHi
+            },
+            focusedContainerColor = KBAccent.copy(alpha = 0.16f),
+            focusedContentColor = Color.White
+        ),
+        scale = ClickableSurfaceDefaults.scale(
+            scale = 1f,
+            focusedScale = 1.02f
+        ),
+        border = ClickableSurfaceDefaults.border(
+            border = Border(
+                border = BorderStroke(0.dp, Color.Transparent),
+                shape = RoundedCornerShape(12.dp)
+            ),
+            focusedBorder = Border(
+                border = BorderStroke(2.dp, KBAccent),
+                shape = RoundedCornerShape(12.dp)
+            )
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (focusRequester != null) {
+                    Modifier.focusRequester(focusRequester)
+                } else {
+                    Modifier
+                }
+            )
+            .onFocusChanged { focusState ->
+                focused = focusState.isFocused
+            }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    horizontal = 16.dp,
+                    vertical = 12.dp
+                )
+        ) {
+            Text(
+                text = label,
+                color = when {
+                    focused -> Color.White
+                    isDestructive -> Color(0xFFE57373)
+                    else -> KBTextHi
+                },
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            Text(
+                text = description,
+                color = if (focused) {
+                    Color.White.copy(alpha = 0.72f)
+                } else {
+                    KBTextLo
+                },
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 2.dp)
+            )
         }
     }
 }

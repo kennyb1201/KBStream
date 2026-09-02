@@ -38,6 +38,15 @@ class WatchHistoryRepository(context: Context) {
         dao.deleteById(id)
     }
 
+    /**
+     * Removes every in-progress (resume) row for a parent show/movie so it
+     * disappears from Continue Watching, while preserving completed-episode
+     * history used for watched badges and episode counts.
+     */
+    suspend fun deleteResumeRowsForParent(parentId: String) {
+        dao.deleteResumeRowsForParent(parentId)
+    }
+
     suspend fun clearAll() {
         dao.clearAll()
     }

@@ -93,7 +93,14 @@ data class UpNextItem(
     val episode: Int? = null,
     val episodeStreamId: String? = null,
     val startPositionMs: Long = 0L,
-    val recencyTimestamp: Long = 0L
+    val recencyTimestamp: Long = 0L,
+
+    /**
+     * Raw watch_history row id backing this item ("history:..." without the
+     * prefix). Non-history items (SIMKL) leave it null. Long-press Remove
+     * uses it to fall back when parentId is unavailable.
+     */
+    val historyRowId: String? = null
 )
 
 private data class ResolvedHomeSeriesTarget(
@@ -657,6 +664,50 @@ Log.d(
         }
     }
 
+    /**
+     * Long-press "Remove" on a Continue Watching card: deletes every
+     * in-progress resume row for the parent so the show/movie leaves the
+     * rail. Completed-episode history is kept so watched badges survive.
+     */
+    fun removeFromContinueWatching(item: UpNextItem) {
+
+        val parentId = item.parentId
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: item.historyRowId
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+            ?: return
+
+        viewModelScope.launch {
+
+            try {
+
+                watchHistoryRepository.deleteResumeRowsForParent(parentId)
+
+                // Fallback path removed a single row by its raw id; also
+                // drop that exact row so the item always leaves the rail.
+                item.historyRowId?.let { rowId ->
+                    watchHistoryRepository.deleteById(rowId)
+                }
+
+                _refreshTrigger.value += 1
+
+                Log.i(
+                    "HOME_UPNEXT",
+                    "Removed continue watching parent=$parentId"
+                )
+            } catch (e: Exception) {
+
+                Log.e(
+                    "HOME_UPNEXT",
+                    "Failed to remove continue watching parent=$parentId",
+                    e
+                )
+            }
+        }
+    }
+
     fun refreshAllHomeData() {
 
         viewModelScope.launch {
@@ -1063,7 +1114,8 @@ Log.d(
             episodeStreamId = entry.episodeStreamId,
 
             startPositionMs = entry.positionMs,
-            recencyTimestamp = entry.updatedAt
+            recencyTimestamp = entry.updatedAt,
+            historyRowId = entry.id
         )
             }
         }

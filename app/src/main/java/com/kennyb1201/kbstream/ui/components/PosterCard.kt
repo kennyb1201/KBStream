@@ -52,6 +52,7 @@ fun PosterCard(
     contentDescription: String?,
     isWatched: Boolean,
     onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     onPosterError: ((Throwable?) -> Unit)? = null,
     overlayContent: (@Composable BoxScope.() -> Unit)? = null 
@@ -61,6 +62,7 @@ fun PosterCard(
 
     KBCard(
         onClick = onClick,
+        onLongClick = onLongClick,
         modifier = modifier
     ) {
         Box(

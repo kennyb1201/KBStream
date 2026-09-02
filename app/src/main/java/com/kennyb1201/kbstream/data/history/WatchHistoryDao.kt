@@ -71,6 +71,16 @@ interface WatchHistoryDao {
 )
 fun observeContinueWatchingParents(): Flow<List<WatchHistoryEntity>>
 
+    @Query(
+        """
+        DELETE FROM watch_history
+        WHERE parentId = :parentId
+          AND positionMs > 0
+          AND isCompleted = 0
+        """
+    )
+    suspend fun deleteResumeRowsForParent(parentId: String)
+
     @Query("DELETE FROM watch_history WHERE id = :id")
     suspend fun deleteById(id: String)
 
