@@ -681,6 +681,160 @@ class SimklRepository(
     }
 
     /*
+     * Outbound "mark a whole season watched": POST /sync/history with one
+     * season listing every episode number, so Simkl marks exactly that
+     * season instead of auto-filling every season of the show (which is
+     * what sending a show with no seasons array does). Used by the
+     * season-chip long-press "Mark as Watched" action. Failures are
+     * logged, never thrown.
+     */
+    suspend fun pushWatchedSeason(
+        showImdbId: String,
+        season: Int,
+        episodes: List<Int>,
+        title: String? = null,
+        tmdbId: Int? = null
+    ): Boolean {
+
+        if (!isConfigured() || !hasToken()) {
+            Log.d("SIMKL_REPO", "pushWatchedSeason skipped: not configured/authenticated")
+            return false
+        }
+
+        val validEpisodes = episodes.filter { it > 0 }.distinct().sorted()
+        if (showImdbId.isBlank() || season <= 0 || validEpisodes.isEmpty()) {
+            Log.d("SIMKL_REPO", "pushWatchedSeason skipped: ids incomplete show=$showImdbId s=$season eps=${validEpisodes.size}")
+            return false
+        }
+
+        val ids = parsePlaybackIds(showImdbId, tmdbId)
+        if (ids == null) {
+            Log.d("SIMKL_REPO", "pushWatchedSeason skipped: unparseable id=$showImdbId")
+            return false
+        }
+
+        return try {
+            val response = api.addToWatchedHistory(
+                authorization = bearer(requireAccessToken()),
+                body = SimklHistoryRequest(
+                    shows = listOf(
+                        SimklHistoryShow(
+                            title = title,
+                            ids = ids,
+                            seasons = listOf(
+                                SimklHistorySeason(
+                                    number = season,
+                                    episodes = validEpisodes.map { number ->
+                                        SimklHistoryEpisode(number = number)
+                                    }
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+
+            if (!response.isSuccessful) {
+                val errorText = try {
+                    response.errorBody()?.string()
+                } catch (e: Exception) {
+                    "unreadable: ${e.message}"
+                }
+                Log.e("SIMKL_REPO", "pushWatchedSeason failed code=${response.code()} body=$errorText")
+            } else {
+                // Drop the in-memory show snapshot so the next detail load
+                // re-fetches fresh per-episode state from Simkl instead of
+                // serving the pre-mark snapshot.
+                cachedAllShowItems = null
+                cachedAllShowItemsFetchedAt = 0L
+
+                Log.d("SIMKL_REPO", "pushWatchedSeason ok show=$showImdbId s=$season eps=${validEpisodes.size}")
+            }
+
+            response.isSuccessful
+        } catch (e: Exception) {
+            Log.e("SIMKL_REPO", "pushWatchedSeason error: ${e.message}", e)
+            false
+        }
+    }
+
+    /*
+     * Outbound "mark a whole season unwatched": DELETE /sync/history with
+     * one season listing every episode number, so Simkl removes exactly
+     * that season's episodes from history while other seasons stay.
+     * The mirror of [pushWatchedSeason]. Failures are logged, never thrown.
+     */
+    suspend fun removeWatchedSeason(
+        showImdbId: String,
+        season: Int,
+        episodes: List<Int>,
+        title: String? = null,
+        tmdbId: Int? = null
+    ): Boolean {
+
+        if (!isConfigured() || !hasToken()) {
+            Log.d("SIMKL_REPO", "removeWatchedSeason skipped: not configured/authenticated")
+            return false
+        }
+
+        val validEpisodes = episodes.filter { it > 0 }.distinct().sorted()
+        if (showImdbId.isBlank() || season <= 0 || validEpisodes.isEmpty()) {
+            Log.d("SIMKL_REPO", "removeWatchedSeason skipped: ids incomplete show=$showImdbId s=$season eps=${validEpisodes.size}")
+            return false
+        }
+
+        val ids = parsePlaybackIds(showImdbId, tmdbId)
+        if (ids == null) {
+            Log.d("SIMKL_REPO", "removeWatchedSeason skipped: unparseable id=$showImdbId")
+            return false
+        }
+
+        return try {
+            val response = api.deleteFromWatchedHistory(
+                authorization = bearer(requireAccessToken()),
+                body = SimklHistoryRequest(
+                    shows = listOf(
+                        SimklHistoryShow(
+                            title = title,
+                            ids = ids,
+                            seasons = listOf(
+                                SimklHistorySeason(
+                                    number = season,
+                                    episodes = validEpisodes.map { number ->
+                                        SimklHistoryEpisode(number = number)
+                                    }
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+
+            if (!response.isSuccessful) {
+                val errorText = try {
+                    response.errorBody()?.string()
+                } catch (e: Exception) {
+                    "unreadable: ${e.message}"
+                }
+                Log.e("SIMKL_REPO", "removeWatchedSeason failed code=${response.code()} body=$errorText")
+            } else {
+                // Drop the in-memory show snapshot so the next detail load
+                // re-fetches fresh per-episode state from Simkl instead of
+                // resurrecting this season from the stale snapshot.
+                cachedAllShowItems = null
+                cachedAllShowItemsFetchedAt = 0L
+
+                Log.d("SIMKL_REPO", "removeWatchedSeason ok show=$showImdbId s=$season eps=${validEpisodes.size}")
+            }
+
+            response.isSuccessful
+        } catch (e: Exception) {
+            Log.e("SIMKL_REPO", "removeWatchedSeason error: ${e.message}", e)
+            false
+        }
+    }
+
+    /*
      * Live scrobble (POST /scrobble/start|pause|stop). Called from the
      * player on play/pause/end so Simkl records in-progress playback and
      * extrapolates the watch between events. Failures are logged, never

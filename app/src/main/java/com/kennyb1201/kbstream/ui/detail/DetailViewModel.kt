@@ -587,6 +587,224 @@ if (resolvedMeta != null) {
         }
     }
 
+    /**
+     * Long-press "Mark as Watched" on a season chip: writes one local
+     * completed history row per episode (keyed by the derived
+     * "parent:season:episode" key so the watched keys / episode badges
+     * update immediately and survive restarts; positionMs=0 keeps them out
+     * of Continue Watching / Recent) and mirrors the season to SIMKL
+     * episode-by-episode when connected.
+     */
+    fun markSeasonWatched(
+        season: Int,
+        episodeNumbers: List<Int>
+    ) {
+        val parentId = imdbId
+        if (parentId.isBlank() || season < 0) return
+
+        val validEpisodes =
+            episodeNumbers.filter { it > 0 }.distinct()
+        if (validEpisodes.isEmpty()) return
+
+        viewModelScope.launch {
+            val showName =
+                _meta.value?.name?.ifBlank {
+                    _tmdbDetail.value?.name
+                        ?: _tmdbDetail.value?.title
+                        ?: ""
+                } ?: _tmdbDetail.value?.name
+                ?: _tmdbDetail.value?.title
+                ?: ""
+            val posterUrl =
+                _meta.value?.poster?.takeIf {
+                    it.isNotBlank()
+                } ?: _tmdbDetail.value?.posterPath
+                ?.let {
+                    TmdbRepository.POSTER_BASE + it
+                }
+            val showTmdbId =
+                _tmdbDetail.value?.id
+
+            val now =
+                System.currentTimeMillis()
+
+            // 1. Local: one completed row per episode so the next load()
+            // re-derives the watched keys from Room.
+            validEpisodes.forEach { episode ->
+                val key =
+                    WatchedEpisodeState.buildEpisodeKey(
+                        parentId = parentId,
+                        season = season,
+                        episode = episode
+                    )
+
+                if (key == null) {
+                    return@forEach
+                }
+
+                runCatching {
+                    historyDao.upsert(
+                        WatchHistoryEntity(
+                            id = key,
+                            parentId = parentId,
+                            type = "series",
+                            name = showName,
+                            poster = posterUrl,
+                            positionMs = 0L,
+                            durationMs = 1L,
+                            season = season,
+                            episode = episode,
+                            updatedAt = now,
+                            isCompleted = true,
+                            completedAt = now
+                        )
+                    )
+                }.onFailure { e ->
+                    Log.e(
+                        "KBStream",
+                        "markSeasonWatched row failed s=$season e=$episode",
+                        e
+                    )
+                }
+            }
+
+            // 2. Optimistic in-memory state so badges light up instantly.
+            val newKeys =
+                _watchedEpisodeKeys.value +
+                    validEpisodes.mapNotNull { episode ->
+                        WatchedEpisodeState.buildEpisodeKey(
+                            parentId = parentId,
+                            season = season,
+                            episode = episode
+                        )
+                    }
+            _watchedEpisodeKeys.value = newKeys
+
+            val newSimklPairs =
+                _simklWatchedEpisodes.value +
+                    validEpisodes.map { episode ->
+                        season to episode
+                    }
+            _simklWatchedEpisodes.value = newSimklPairs
+            _simklSeriesWatched.value =
+                newSimklPairs.isNotEmpty()
+
+            // 3. Mirror to SIMKL when connected.
+            if (
+                simklRepository.isConfigured() &&
+                simklRepository.hasToken()
+            ) {
+                runCatching {
+                    simklRepository.pushWatchedSeason(
+                        showImdbId = parentId,
+                        season = season,
+                        episodes = validEpisodes,
+                        title = showName.takeIf {
+                            it.isNotBlank()
+                        },
+                        tmdbId = showTmdbId
+                    )
+                }.onFailure { e ->
+                    Log.e(
+                        "KBStream",
+                        "markSeasonWatched simkl failed s=$season",
+                        e
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Long-press "Mark as Unwatched" on a season chip: deletes every local
+     * completed row for that season, drops the derived watched keys from
+     * memory so the badges clear instantly, and mirrors the removal to
+     * SIMKL episode-by-episode when connected.
+     */
+    fun markSeasonUnwatched(
+        season: Int,
+        episodeNumbers: List<Int>
+    ) {
+        val parentId = imdbId
+        if (parentId.isBlank() || season < 0) return
+
+        val validEpisodes =
+            episodeNumbers.filter { it > 0 }.distinct()
+        if (validEpisodes.isEmpty()) return
+
+        viewModelScope.launch {
+            val showName =
+                _meta.value?.name?.ifBlank {
+                    _tmdbDetail.value?.name
+                        ?: _tmdbDetail.value?.title
+                        ?: ""
+                } ?: _tmdbDetail.value?.name
+                ?: _tmdbDetail.value?.title
+                ?: ""
+            val showTmdbId =
+                _tmdbDetail.value?.id
+
+            // 1. Local: drop every completed row for this season.
+            runCatching {
+                historyDao.deleteCompletedForParentSeason(
+                    parentId = parentId,
+                    season = season
+                )
+            }.onFailure { e ->
+                Log.e(
+                    "KBStream",
+                    "markSeasonUnwatched delete failed s=$season",
+                    e
+                )
+            }
+
+            // 2. Optimistic in-memory state so badges clear instantly.
+            val removeKeys =
+                validEpisodes.mapNotNull { episode ->
+                    WatchedEpisodeState.buildEpisodeKey(
+                        parentId = parentId,
+                        season = season,
+                        episode = episode
+                    )
+                }.toSet()
+            _watchedEpisodeKeys.value =
+                _watchedEpisodeKeys.value - removeKeys
+
+            val removePairs =
+                validEpisodes.map { episode ->
+                    season to episode
+                }.toSet()
+            _simklWatchedEpisodes.value =
+                _simklWatchedEpisodes.value - removePairs
+            _simklSeriesWatched.value =
+                _simklWatchedEpisodes.value.isNotEmpty()
+
+            // 3. Mirror to SIMKL when connected.
+            if (
+                simklRepository.isConfigured() &&
+                simklRepository.hasToken()
+            ) {
+                runCatching {
+                    simklRepository.removeWatchedSeason(
+                        showImdbId = parentId,
+                        season = season,
+                        episodes = validEpisodes,
+                        title = showName.takeIf {
+                            it.isNotBlank()
+                        },
+                        tmdbId = showTmdbId
+                    )
+                }.onFailure { e ->
+                    Log.e(
+                        "KBStream",
+                        "markSeasonUnwatched simkl failed s=$season",
+                        e
+                    )
+                }
+            }
+        }
+    }
+
     suspend fun resolveImdbId(tmdbId: Int, type: String): String? =
         tmdbRepository.resolveImdbId(tmdbId, type.lowercase())
 }

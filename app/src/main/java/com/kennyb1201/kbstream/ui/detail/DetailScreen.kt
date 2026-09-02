@@ -87,6 +87,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbReview
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
 import com.kennyb1201.kbstream.data.tmdb.bestReleaseDate
+import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.tmdb.director
 import com.kennyb1201.kbstream.data.tmdb.list
@@ -138,6 +139,12 @@ private data class PosterMenuTarget(
     val tmdbId: Int,
     val mediaType: String,
     val name: String
+)
+
+private data class SeasonMenuTarget(
+    val seasonNumber: Int,
+    val seasonName: String,
+    val episodeNumbers: List<Int>
 )
 
 private data class DetailFactItem(
@@ -205,9 +212,23 @@ fun DetailScreen(
         )
     }
 
-    fun                            dismissPosterMenu() {
-        posterMenu = null
-        lastPosterFocusRequester?.requestFocus()
+    // Long-press context menu for the season chips (mark a whole season
+    // watched / unwatched).
+    var seasonMenu by remember {
+        mutableStateOf<SeasonMenuTarget?>(
+            null
+        )
+    }
+
+    var lastSeasonFocusRequester by remember {
+        mutableStateOf<FocusRequester?>(
+            null
+        )
+    }
+
+    fun dismissSeasonMenu() {
+        seasonMenu = null
+        lastSeasonFocusRequester?.requestFocus()
     }
 
     var userManuallyChangedSeason by remember { mutableStateOf(false) }
@@ -367,6 +388,38 @@ fun DetailScreen(
         } else {
             locallyWatchedSeasonEpisodes
         }
+    }
+
+    // Episode numbers per season, used by the season-chip long-press menu to
+    // decide watched state and to mark/unmark the whole season. The loaded
+    // season uses the resolved episode list; other seasons fall back to the
+    // TMDB episode_count (null when unknown).
+    val seasonEpisodeNumbersFor = remember(
+        tmdbDetail,
+        episodes,
+        effectiveSeason
+    ) {
+        fun numbersFor(seasonNum: Int): List<Int>? {
+            if (
+                seasonNum == effectiveSeason &&
+                episodes.isNotEmpty()
+            ) {
+                return episodes.map {
+                    it.episodeNumber
+                }.distinct().sorted()
+            }
+            val count = tmdbDetail?.seasons
+                ?.firstOrNull {
+                    it.seasonNumber == seasonNum
+                }
+                ?.episodeCount
+            if (count != null && count > 0) {
+                return (1..count).toList()
+            }
+            return null
+        }
+
+        ::numbersFor
     }
 
     val resolvedTargetEpisode = remember(
@@ -1259,7 +1312,31 @@ fun DetailScreen(
                                         }
                                     },
                                     seasonFocusRequesters =
-                                        seasonFocusRequesters
+                                        seasonFocusRequesters,
+                                    parentId = id,
+                                    watchedEpisodeKeys =
+                                        watchedEpisodeKeys,
+                                    simklWatchedEpisodes =
+                                        simklWatchedEpisodes,
+                                    seasonEpisodeNumbersFor =
+                                        seasonEpisodeNumbersFor,
+                                    onSeasonLongPress = {
+                                        seasonNum,
+                                        seasonName,
+                                        episodeNumbers,
+                                        focusRequester ->
+                                        lastSeasonFocusRequester =
+                                            focusRequester
+                                        seasonMenu =
+                                            SeasonMenuTarget(
+                                                seasonNumber =
+                                                    seasonNum,
+                                                seasonName =
+                                                    seasonName,
+                                                episodeNumbers =
+                                                    episodeNumbers
+                                            )
+                                    }
                                 )
                             }
 
@@ -2215,6 +2292,58 @@ fun DetailScreen(
                         }
                     )
                 }
+
+                seasonMenu?.let { target ->
+                    val seasonWatchedSet =
+                        WatchedEpisodeState
+                            .effectiveWatchedEpisodesForSeason(
+                                parentId = id,
+                                season = target.seasonNumber,
+                                simklWatchedEpisodes =
+                                    simklWatchedEpisodes,
+                                watchedEpisodeKeys =
+                                    watchedEpisodeKeys
+                            )
+                    val isSeasonWatched =
+                        target.episodeNumbers.isNotEmpty() &&
+                            target.episodeNumbers.all {
+                                it in seasonWatchedSet
+                            }
+
+                    PosterContextMenu(
+                        title = displayName.ifBlank {
+                            "Untitled"
+                        },
+                        subtitle = target.seasonName,
+                        actions = listOf(
+                            PosterContextAction(
+                                label = if (isSeasonWatched) {
+                                    "Mark as Unwatched"
+                                } else {
+                                    "Mark as Watched"
+                                }
+                            ) {
+                                val selected = target
+                                seasonMenu = null
+                                if (isSeasonWatched) {
+                                    viewModel.markSeasonUnwatched(
+                                        selected.seasonNumber,
+                                        selected.episodeNumbers
+                                    )
+                                } else {
+                                    viewModel.markSeasonWatched(
+                                        selected.seasonNumber,
+                                        selected.episodeNumbers
+                                    )
+                                }
+                                lastSeasonFocusRequester?.requestFocus()
+                            }
+                        ),
+                        onDismiss = {
+                            dismissSeasonMenu()
+                        }
+                    )
+                }
             }
         }
     }
@@ -2269,10 +2398,12 @@ private fun SeasonChip(
     isSelected: Boolean,
     onClick: () -> Unit,
     onFocus: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     KBCard(
         onClick = onClick,
+        onLongClick = onLongClick,
         modifier = modifier.onFocusChanged {
             if (it.isFocused) {
                 onFocus()
@@ -2327,7 +2458,17 @@ private fun SeasonRow(
     currentSelectedSeason: Int?,
     onSeasonSelected: (Int) -> Unit,
     onSeasonFocused: (Int) -> Unit,
-    seasonFocusRequesters: MutableMap<Int, FocusRequester>
+    seasonFocusRequesters: MutableMap<Int, FocusRequester>,
+    parentId: String,
+    watchedEpisodeKeys: Set<String>,
+    simklWatchedEpisodes: Set<Pair<Int, Int>>,
+    seasonEpisodeNumbersFor: (Int) -> List<Int>?,
+    onSeasonLongPress: (
+        Int,
+        String,
+        List<Int>,
+        FocusRequester
+    ) -> Unit
 ) {
     LazyRow(
         contentPadding = PaddingValues(
@@ -2356,20 +2497,62 @@ private fun SeasonRow(
                 season
             ] = chipFocusRequester
 
+            val seasonName =
+                if (season == 0) {
+                    "SPECIALS"
+                } else {
+                    "SEASON $season"
+                }
+
+            val episodeNumbers =
+                seasonEpisodeNumbersFor(season)
+
+            val watchedSet =
+                if (episodeNumbers == null) {
+                    emptySet<Int>()
+                } else {
+                    WatchedEpisodeState
+                        .effectiveWatchedEpisodesForSeason(
+                            parentId = parentId,
+                            season = season,
+                            simklWatchedEpisodes =
+                                simklWatchedEpisodes,
+                            watchedEpisodeKeys =
+                                watchedEpisodeKeys
+                        )
+                }
+
+            val isSeasonWatched =
+                episodeNumbers != null &&
+                    episodeNumbers.isNotEmpty() &&
+                    episodeNumbers.all {
+                        it in watchedSet
+                    }
+
             SeasonChip(
                 seasonNumber = season,
-                seasonName =
-                    if (season == 0) {
-                        "SPECIALS"
-                    } else {
-                        "SEASON $season"
-                    },
+                seasonName = seasonName,
                 isSelected = selected,
                 onClick = {
                     onSeasonSelected(season)
                 },
                 onFocus = {
                     onSeasonFocused(season)
+                },
+                onLongClick = {
+                    val numbers =
+                        episodeNumbers
+                            ?: (1..(watchedSet
+                                .maxOrNull()
+                                ?: 0)
+                                .coerceAtLeast(1))
+                                .toList()
+                    onSeasonLongPress(
+                        season,
+                        seasonName,
+                        numbers,
+                        chipFocusRequester
+                    )
                 },
                 modifier = Modifier
                     .padding(end = 8.dp)

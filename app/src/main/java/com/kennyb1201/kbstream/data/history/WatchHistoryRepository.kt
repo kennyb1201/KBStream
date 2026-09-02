@@ -39,6 +39,22 @@ class WatchHistoryRepository(context: Context) {
     }
 
     /**
+     * Removes every completed-episode row for one season of a show. Used by
+     * the season-chip long-press "Mark as Unwatched" action so the local
+     * watched state (and the derived episode badges) clears for that season
+     * while other seasons stay untouched.
+     */
+    suspend fun deleteCompletedForParentSeason(
+        parentId: String,
+        season: Int
+    ) {
+        dao.deleteCompletedForParentSeason(
+            parentId = parentId,
+            season = season
+        )
+    }
+
+    /**
      * Removes every in-progress (resume) row for a parent show/movie so it
      * disappears from Continue Watching, while preserving completed-episode
      * history used for watched badges and episode counts.
