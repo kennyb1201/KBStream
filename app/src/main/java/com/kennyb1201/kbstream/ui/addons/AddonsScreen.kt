@@ -4,6 +4,7 @@ import android.content.ActivityNotFoundException
 import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -27,6 +28,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -43,6 +46,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -58,8 +62,11 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -1278,6 +1285,17 @@ private fun AddAddonDialog(
     }
 
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    // TV escape hatch: the leanback IME swallows BACK while it's open, which
+    // can trap the user in the keyboard with the dialog unreachable behind it.
+    // Always clear focus + hide the IME, then dismiss — one press gets out.
+    BackHandler {
+        focusManager.clearFocus()
+        keyboardController?.hide()
+        onDismiss()
+    }
 
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
         Column(
@@ -1425,6 +1443,16 @@ private fun RenameAddonDialog(
     onDismiss: () -> Unit,
     onSave: () -> Unit
 ) {
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    // Same escape hatch as the ADD dialog (see AddAddonDialog).
+    BackHandler {
+        focusManager.clearFocus()
+        keyboardController?.hide()
+        onDismiss()
+    }
+
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
@@ -1506,6 +1534,16 @@ private fun UrlField(
     modifier: Modifier = Modifier.fillMaxWidth()
 ) {
     var focused by remember { mutableStateOf(false) }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+
+    // TV remote: the leanback IME takes over the whole screen the moment this
+    // field gains focus, with no reliable way out. Hide it as soon as focus
+    // lands — physical-keyboard typing still works, and the PASTE button
+    // covers the common case. The DONE ime action is a second escape hatch.
+    LaunchedEffect(focused) {
+        if (focused) keyboardController?.hide()
+    }
 
     BasicTextField(
         value = value,
@@ -1516,6 +1554,13 @@ private fun UrlField(
             fontSize = MaterialTheme.typography.bodyLarge.fontSize
         ),
         cursorBrush = SolidColor(KBAccent),
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+        keyboardActions = KeyboardActions(
+            onDone = {
+                keyboardController?.hide()
+                focusManager.clearFocus()
+            }
+        ),
         modifier = modifier
             .clip(RoundedCornerShape(12.dp))
             .background(KBSurfaceRaised)

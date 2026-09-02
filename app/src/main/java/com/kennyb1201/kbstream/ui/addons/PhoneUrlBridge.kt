@@ -160,7 +160,10 @@ class PhoneUrlServer(
                     if (count < 0) break
                     read += count
                 }
-                url = queryParam(String(body, 0, read), "url")
+                // The form body is key=value&key=value with NO '?' prefix —
+                // queryParam() (which is for URL query strings) silently
+                // rejects it, so parse form fields directly.
+                url = formField(String(body, 0, read), "url")
             }
         }
 
@@ -199,6 +202,29 @@ class PhoneUrlServer(
         if (query.isEmpty()) return null
 
         return query.split('&')
+            .mapNotNull { pair ->
+                val index = pair.indexOf('=')
+                if (index > 0 && pair.substring(0, index) == key) {
+                    pair.substring(index + 1)
+                } else {
+                    null
+                }
+            }
+            .firstOrNull()
+    }
+
+    /**
+     * Reads one field out of an application/x-www-form-urlencoded request
+     * body ("key=value&key=value"). Unlike [queryParam], the body has no
+     * '?' delimiter to strip.
+     */
+    private fun formField(
+        body: String,
+        key: String
+    ): String? {
+        if (body.isBlank()) return null
+
+        return body.split('&')
             .mapNotNull { pair ->
                 val index = pair.indexOf('=')
                 if (index > 0 && pair.substring(0, index) == key) {
