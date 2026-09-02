@@ -192,11 +192,10 @@ fun DetailScreen(
 
     val meta by viewModel.meta.collectAsState()
     val tmdbDetail by viewModel.tmdbDetail.collectAsState()
-    // Add-on (meta provider) art wins — e.g. a fanart.tv clearlogo configured
-    // in AIOMetadata — with the TMDB logo as fallback. Kept as a plain val:
-    // both flows re-resolve it on recomposition, same as before.
-    val clearLogoUrl = meta?.logo?.takeIf { it.isNotBlank() }
-        ?: tmdbImageOriginal(tmdbDetail?.bestLogoPath())
+    // TMDB clearlogo first (more reliable); add-on logo (fanart.tv etc.) as
+    // fallback when TMDB has nothing for this title.
+    val clearLogoUrl = tmdbImageOriginal(tmdbDetail?.bestLogoPath())
+        ?: meta?.logo?.takeIf { it.isNotBlank() }
     val isLoading by viewModel.isLoading.collectAsState()
     val episodes by viewModel.episodes.collectAsState()
     val episodesLoading by viewModel.episodesLoading.collectAsState()
@@ -544,10 +543,10 @@ fun DetailScreen(
             // backdrop as fallback. When no meta add-on answered, the fallback
             // meta was built from TMDB itself, so this still lands on TMDB art.
             val backdropUrl = remember(tmdbDetail, m) {
-                m.background
-                    ?: tmdbDetail?.backdropPath?.let {
-                        TmdbRepository.BACKDROP_BASE + it
-                    }
+                tmdbDetail?.backdropPath?.let {
+                    TmdbRepository.BACKDROP_BASE + it
+                }
+                    ?: m.background
                     ?: m.poster
                     ?: initialPoster
             }
@@ -844,10 +843,10 @@ fun DetailScreen(
                                 } else {
                                     null
                                 },
-                                m.runtime
-                                    ?: tmdbDetail?.runtime
-                                        ?.takeIf { it > 0 }
-                                        ?.let { "${it} min" },
+                                tmdbDetail?.runtime
+                                    ?.takeIf { it > 0 }
+                                    ?.let { "${it} min" }
+                                    ?: m.runtime,
                                 m.imdbRating?.let {
                                     "IMDb $it"
                                 }
@@ -952,11 +951,11 @@ fun DetailScreen(
                                 )
                             ) {
                                 val descriptionText =
-                                    m.description
+                                    tmdbDetail?.overview
                                         ?.takeIf {
                                             it.isNotBlank()
                                         }
-                                        ?: tmdbDetail?.overview
+                                        ?: m.description
 
                                 descriptionText?.let {
                                     Text(
