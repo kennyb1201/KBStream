@@ -192,7 +192,11 @@ fun DetailScreen(
 
     val meta by viewModel.meta.collectAsState()
     val tmdbDetail by viewModel.tmdbDetail.collectAsState()
-    val clearLogoUrl = tmdbImageOriginal(tmdbDetail?.bestLogoPath())
+    // Add-on (meta provider) art wins — e.g. a fanart.tv clearlogo configured
+    // in AIOMetadata — with the TMDB logo as fallback. Kept as a plain val:
+    // both flows re-resolve it on recomposition, same as before.
+    val clearLogoUrl = meta?.logo?.takeIf { it.isNotBlank() }
+        ?: tmdbImageOriginal(tmdbDetail?.bestLogoPath())
     val isLoading by viewModel.isLoading.collectAsState()
     val episodes by viewModel.episodes.collectAsState()
     val episodesLoading by viewModel.episodesLoading.collectAsState()
@@ -536,10 +540,14 @@ fun DetailScreen(
                 tmdbDetail?.keywords?.list().orEmpty()
             }
 
+            // Add-on art first (fanart etc. from the meta provider), TMDB
+            // backdrop as fallback. When no meta add-on answered, the fallback
+            // meta was built from TMDB itself, so this still lands on TMDB art.
             val backdropUrl = remember(tmdbDetail, m) {
-                tmdbDetail?.backdropPath?.let {
-                    TmdbRepository.BACKDROP_BASE + it
-                } ?: m.background
+                m.background
+                    ?: tmdbDetail?.backdropPath?.let {
+                        TmdbRepository.BACKDROP_BASE + it
+                    }
                     ?: m.poster
                     ?: initialPoster
             }
