@@ -5,6 +5,6 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@android:color/black"
-    app:surface_type="texture_view"
+    app:surface_type="surface_view"
     app:use_controller="false"
     app:keep_content_on_player_reset="true" />

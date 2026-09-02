@@ -80,7 +80,9 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.allowHardware
 import coil3.request.crossfade
+import coil3.request.filterQuality
 import coil3.size.Size
+import androidx.compose.ui.graphics.FilterQuality
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbCastMember
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
@@ -436,8 +438,18 @@ fun DetailScreen(
             }
 
         if (episodeRequester != null) {
-            runCatching {
-                episodeRequester.requestFocus()
+            // The episode row is lazy, so an off-screen target card isn't
+            // composed yet and requestFocus() would silently no-op. Scroll
+            // it into view first, then focus after a brief pause.
+            val targetIndex = targetEpisodeIndex
+            scope.launch {
+                if (targetIndex >= 0) {
+                    episodesRowState.scrollToItem(targetIndex)
+                    delay(90)
+                }
+                runCatching {
+                    episodeRequester.requestFocus()
+                }
             }
             return true
         }
@@ -667,13 +679,14 @@ fun DetailScreen(
                 modifier = Modifier.fillMaxSize()
             ) {
                 AsyncImage(
-                    model = remember(backdropUrl) {
-                        ImageRequest.Builder(context)
-                            .data(backdropUrl)
-                            .size(Size(1280, 720))
-                            .allowHardware(true)
-                            .build()
-                    },
+            model = remember(backdropUrl) {
+                ImageRequest.Builder(context)
+                    .data(backdropUrl)
+                    .size(Size(1280, 720))
+                    .allowHardware(true)
+                    .filterQuality(FilterQuality.High)
+                    .build()
+            },
                     contentDescription = displayName,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()

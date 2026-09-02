@@ -1830,6 +1830,49 @@ private fun CatalogManagerDialog(
 }
 
 @Composable
+private fun CatalogIconButton(
+    icon: ImageVector,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    if (enabled) {
+        KBCard(onClick = onClick, modifier = modifier) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.fillMaxSize()
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    } else {
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            colors = SurfaceDefaults.colors(
+                containerColor = KBSurface.copy(alpha = 0.50f),
+                contentColor = KBTextLo.copy(alpha = 0.50f)
+            ),
+            modifier = modifier
+        ) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.fillMaxSize()
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun CatalogManagerRow(
     config: CatalogConfiguration,
     position: Int,
@@ -1894,49 +1937,38 @@ private fun CatalogManagerRow(
                     .padding(end = 8.dp)
             )
 
-            ActionButton(
-                label = "RENAME",
+            CatalogIconButton(
                 icon = Icons.Filled.Edit,
                 onClick = onRename,
-                modifier = Modifier.width(82.dp),
-                horizontalPadding = 6.dp,
-                verticalPadding = 5.dp
+                modifier = Modifier.size(38.dp)
             )
             Spacer(modifier = Modifier.width(4.dp))
-            ActionButton(
-                label = "TOP",
+            CatalogIconButton(
+                icon = Icons.Filled.KeyboardDoubleArrowUp,
                 enabled = position > 0,
                 onClick = { onMove(CatalogMoveAction.TOP) },
-                modifier = Modifier.width(46.dp),
-                horizontalPadding = 4.dp,
-                verticalPadding = 5.dp
+                modifier = Modifier.size(38.dp)
             )
             Spacer(modifier = Modifier.width(4.dp))
-            ActionButton(
-                label = "UP",
+            CatalogIconButton(
+                icon = Icons.Filled.ArrowUpward,
                 enabled = position > 0,
                 onClick = { onMove(CatalogMoveAction.UP) },
-                modifier = Modifier.width(46.dp),
-                horizontalPadding = 4.dp,
-                verticalPadding = 5.dp
+                modifier = Modifier.size(38.dp)
             )
             Spacer(modifier = Modifier.width(4.dp))
-            ActionButton(
-                label = "DOWN",
+            CatalogIconButton(
+                icon = Icons.Filled.ArrowDownward,
                 enabled = position < total - 1,
                 onClick = { onMove(CatalogMoveAction.DOWN) },
-                modifier = Modifier.width(52.dp),
-                horizontalPadding = 4.dp,
-                verticalPadding = 5.dp
+                modifier = Modifier.size(38.dp)
             )
             Spacer(modifier = Modifier.width(4.dp))
-            ActionButton(
-                label = "BTM",
+            CatalogIconButton(
+                icon = Icons.Filled.KeyboardDoubleArrowDown,
                 enabled = position < total - 1,
                 onClick = { onMove(CatalogMoveAction.BOTTOM) },
-                modifier = Modifier.width(46.dp),
-                horizontalPadding = 4.dp,
-                verticalPadding = 5.dp
+                modifier = Modifier.size(38.dp)
             )
         }
     }
