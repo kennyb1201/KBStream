@@ -2010,7 +2010,6 @@ fun HomeScreen(
         continueWatchingMenu?.let { menuItem ->
             PosterContextMenu(
                 title = menuItem.title,
-                subtitle = menuItem.episodeTitle,
                 actions = listOf(
                     PosterContextAction(
                         label = "Go to Details",

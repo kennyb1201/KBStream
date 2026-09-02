@@ -524,6 +524,11 @@ class SimklRepository(
                 cachedAllShowItems = null
                 cachedAllShowItemsFetchedAt = 0L
 
+                // The Continue Watching feed is snapshotted in-memory and on
+                // disk; drop it so the removed title doesn't resurface from
+                // the stale snapshot on the next rail refresh.
+                clearContinueWatchingCache()
+
                 Log.d("SIMKL_REPO", "removeWatchedMovie ok imdb=$imdbId")
             }
 
@@ -584,6 +589,11 @@ class SimklRepository(
                 cachedAllShowItems = null
                 cachedAllShowItemsFetchedAt = 0L
 
+                // The Continue Watching feed is snapshotted in-memory and on
+                // disk; drop it so the removed title doesn't resurface from
+                // the stale snapshot on the next rail refresh.
+                clearContinueWatchingCache()
+
                 Log.d("SIMKL_REPO", "removeWatchedShow ok show=$showImdbId")
             }
 
@@ -591,6 +601,21 @@ class SimklRepository(
         } catch (e: Exception) {
             Log.e("SIMKL_REPO", "removeWatchedShow error: ${e.message}", e)
             false
+        }
+    }
+
+    /**
+     * Drops the in-memory and on-disk Continue Watching snapshot so the next
+     * rail refresh re-fetches from Simkl instead of serving the stale list
+     * (e.g. right after a title was removed from history via
+     * [removeWatchedMovie]/[removeWatchedShow]).
+     */
+    private suspend fun clearContinueWatchingCache() {
+        cachedContinueWatching = null
+        runCatching {
+            tmdbJsonCacheDao?.deleteByKeys(
+                listOf(CONTINUE_WATCHING_DISK_KEY)
+            )
         }
     }
 

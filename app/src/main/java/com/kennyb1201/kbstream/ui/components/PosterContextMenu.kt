@@ -74,7 +74,6 @@ data class PosterContextAction(
 @Composable
 fun PosterContextMenu(
     title: String,
-    subtitle: String? = null,
     actions: List<PosterContextAction>,
     onDismiss: () -> Unit
 ) {
@@ -208,20 +207,6 @@ fun PosterContextMenu(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-
-                subtitle
-                    ?.trim()
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let { sub ->
-                        Text(
-                            text = sub,
-                            color = KBTextLo,
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(top = 2.dp)
-                        )
-                    }
 
                 Spacer(
                     modifier = Modifier.height(16.dp)

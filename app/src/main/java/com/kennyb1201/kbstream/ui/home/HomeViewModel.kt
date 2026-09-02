@@ -691,6 +691,41 @@ Log.d(
                     watchHistoryRepository.deleteById(rowId)
                 }
 
+                // Simkl-backed cards come back from the remote Continue
+                // Watching feed on every load (and after a restart) unless
+                // the title is also removed from Simkl history. Mirror the
+                // local delete with the matching DELETE /sync/history call;
+                // the repository clears its Continue Watching snapshot so the
+                // refresh below sees the updated remote state.
+                if (
+                    simklRepository.isConfigured() &&
+                    simklRepository.hasToken()
+                ) {
+                    val removedFromSimkl =
+                        when (item.parentType?.lowercase()) {
+                            "movie" -> parentId.let {
+                                simklRepository.removeWatchedMovie(
+                                    imdbId = it,
+                                    title = item.title
+                                )
+                            }
+                            "series", "tv" -> parentId.let {
+                                simklRepository.removeWatchedShow(
+                                    showImdbId = it,
+                                    title = item.title
+                                )
+                            }
+                            else -> false
+                        }
+
+                    Log.i(
+                        "HOME_UPNEXT",
+                        "Simkl continue watching removal " +
+                            "title=${item.title} " +
+                            "result=$removedFromSimkl"
+                    )
+                }
+
                 _refreshTrigger.value += 1
 
                 Log.i(
