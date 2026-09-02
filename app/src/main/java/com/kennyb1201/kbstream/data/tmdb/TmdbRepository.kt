@@ -192,14 +192,26 @@ class TmdbRepository(context: Context) {
     private suspend fun fetchDetailByTmdbId(
         tmdbId: Int,
         normalizedType: String
-    ): TmdbDetail? =
-        runCatching {
-            if (normalizedType == "series") {
+    ): TmdbDetail? {
+        if (normalizedType == "series") {
+            return runCatching {
                 api.getTv(tmdbId, apiKey)
-            } else {
+            }.getOrNull()
+        }
+        if (normalizedType == "movie") {
+            return runCatching {
                 api.getMovie(tmdbId, apiKey)
-            }
+            }.getOrNull()
+        }
+        // Unknown type (anime, trakt collection, ...): try series first,
+        // fall back to movie. Both failures are silently swallowed.
+        return runCatching {
+            api.getTv(tmdbId, apiKey)
         }.getOrNull()
+            ?: runCatching {
+                api.getMovie(tmdbId, apiKey)
+            }.getOrNull()
+    }
 
     suspend fun fetchEnrichedMetaCached(imdbId: String, type: String): TmdbDetail? {
         val key = "${normalizeType(type)}:$imdbId"
@@ -987,10 +999,10 @@ class TmdbRepository(context: Context) {
     }
 
     private fun normalizeType(type: String): String {
-        return when (type.lowercase()) {
-            "movie" -> "movie"
-            "series", "show", "tv" -> "series"
-            else -> type.lowercase()
+        return when (type.lowercase().trim()) {
+            "movie", "anime.movie" -> "movie"
+            "series", "show", "tv", "anime", "anime.series" -> "series"
+            else -> type.lowercase().trim()
         }
     }
 

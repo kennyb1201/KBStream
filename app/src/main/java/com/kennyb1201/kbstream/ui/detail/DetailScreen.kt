@@ -844,7 +844,10 @@ fun DetailScreen(
                                 } else {
                                     null
                                 },
-                                m.runtime,
+                                m.runtime
+                                    ?: tmdbDetail?.runtime
+                                        ?.takeIf { it > 0 }
+                                        ?.let { "${it} min" },
                                 m.imdbRating?.let {
                                     "IMDb $it"
                                 }
@@ -948,7 +951,14 @@ fun DetailScreen(
                                     bottom = 12.dp
                                 )
                             ) {
-                                m.description?.let {
+                                val descriptionText =
+                                    m.description
+                                        ?.takeIf {
+                                            it.isNotBlank()
+                                        }
+                                        ?: tmdbDetail?.overview
+
+                                descriptionText?.let {
                                     Text(
                                         it,
                                         modifier = Modifier.padding(
