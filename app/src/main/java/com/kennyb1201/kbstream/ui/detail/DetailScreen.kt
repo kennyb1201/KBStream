@@ -673,6 +673,48 @@ fun DetailScreen(
                 }
             }
 
+            // Continue Watching / Up Next deep-links auto-resume playback
+            // once the metadata (and episodes, for series) are ready, so the
+            // streams screen gets the rich backdrop/clearlogo/overview/cast
+            // without the user having to press Play again.
+            var autoPlayed by remember { mutableStateOf(false) }
+            LaunchedEffect(
+                initialTarget,
+                isLoading,
+                meta,
+                tmdbDetail,
+                episodes,
+                episodesLoading,
+                resumeInfo
+            ) {
+                if (
+                    autoPlayed ||
+                    initialTarget == null ||
+                    isLoading ||
+                    meta == null
+                ) return@LaunchedEffect
+                if (
+                    type == "series" &&
+                    (episodesLoading || episodes.isEmpty())
+                ) return@LaunchedEffect
+                if (
+                    type != "series" &&
+                    resumeInfo == null
+                ) return@LaunchedEffect
+
+                autoPlayed = true
+                onNavigateStreams(
+                    playTarget,
+                    id,
+                    type,
+                    m.poster,
+                    backdropUrl,
+                    clearLogoUrl,
+                    m.description,
+                    tmdbDetail?.credits?.cast.orEmpty()
+                )
+            }
+
             Box(
                 modifier = Modifier.fillMaxSize()
             ) {

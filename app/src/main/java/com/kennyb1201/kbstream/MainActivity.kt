@@ -241,6 +241,10 @@ fun AppRoot() {
                         target,
                         poster ->
 
+                    // Continue Watching / Up Next items open the detail
+                    // screen with a deep-linked target; DetailScreen
+                    // auto-plays it once metadata is ready so the stream
+                    // screen still gets the rich backdrop/overview/cast.
                     screen = Screen.Detail(
                         meta.type,
                         meta.id,
