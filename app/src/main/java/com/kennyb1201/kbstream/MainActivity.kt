@@ -44,6 +44,8 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.tmdb.TmdbCastMember
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.actor.ActorScreen
@@ -54,6 +56,8 @@ import com.kennyb1201.kbstream.ui.detail.StreamsTarget
 import com.kennyb1201.kbstream.ui.home.HomeScreen
 import com.kennyb1201.kbstream.ui.iptv.GuideScreen
 import com.kennyb1201.kbstream.ui.iptv.IptvViewModel
+import com.kennyb1201.kbstream.ui.onboarding.OnboardingPrefs
+import com.kennyb1201.kbstream.ui.onboarding.OnboardingScreen
 import com.kennyb1201.kbstream.ui.player.NativePlayerActivity
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.player.PlayerCastMember
@@ -560,6 +564,13 @@ fun AppRoot() {
 
     val context = LocalContext.current
 
+    // First-run onboarding: shown over the app until the user taps
+    // "Start Browsing". The flag lives in SharedPreferences so it survives
+    // restarts and process death (and restoring a saved screen can't skip it).
+    var onboardingComplete by rememberSaveable {
+        mutableStateOf(OnboardingPrefs.isComplete(context))
+    }
+
     val tmdbRepository = remember {
         TmdbRepository(context)
     }
@@ -594,6 +605,26 @@ fun AppRoot() {
         } else {
             pending.toStreamsScreen()
         }
+    }
+
+    // Launcher deep links (TV Watch Next cards) open the title's detail
+    // screen, and on startup the TV launcher Continue Watching rail is
+    // reconciled with the in-app watch history (self-healing, cheap).
+    LaunchedEffect(Unit) {
+        val intent = (context as? android.app.Activity)?.intent
+        val launcherType = intent?.getStringExtra(TvLauncherPublisher.EXTRA_TYPE)
+        val launcherId = intent?.getStringExtra(TvLauncherPublisher.EXTRA_ID)
+        if (!launcherType.isNullOrBlank() && !launcherId.isNullOrBlank()) {
+            screen = Screen.Detail(
+                if (launcherType == "tv") "series" else launcherType,
+                launcherId,
+                returnTo = Screen.Home
+            )
+        }
+
+        val dao = WatchHistoryDatabase.getInstance(context).watchHistoryDao()
+        val entries = runCatching { dao.getAll() }.getOrDefault(emptyList())
+        TvLauncherPublisher.sync(context, entries)
     }
 
     BackHandler(
@@ -639,6 +670,24 @@ fun AppRoot() {
             else ->
                 Screen.Home
         }
+    }
+
+    // Onboarding stands in for Home until the user finishes it — other
+    // screens (Add-ons, Live TV, Simkl) render normally so the setup cards
+    // genuinely hand off, and backing out to Home brings the guide back
+    // until "Start Browsing" is tapped.
+    if (!onboardingComplete && screen is Screen.Home) {
+        OnboardingScreen(
+            onOpenAddons = { screen = Screen.Addons },
+            onOpenSimkl = { screen = Screen.Simkl },
+            onOpenGuide = { screen = Screen.Guide },
+            onFinish = {
+                OnboardingPrefs.setComplete(context, true)
+                onboardingComplete = true
+                screen = Screen.Home
+            }
+        )
+        return
     }
 
     when (val current = screen) {

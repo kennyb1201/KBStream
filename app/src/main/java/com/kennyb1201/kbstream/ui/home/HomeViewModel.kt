@@ -16,6 +16,7 @@ import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbHeroArtworkRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.watched.WatchStateBus
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.data.tmdb.director
@@ -743,6 +744,13 @@ Log.d(
                         )
                     }
                 }
+
+                // Keep the TV launcher Continue Watching rail in sync with
+                // the in-app removal (full reconcile is cheap and self-healing).
+                TvLauncherPublisher.sync(
+                    getApplication(),
+                    watchHistoryRepository.getAll()
+                )
 
                 _refreshTrigger.value += 1
 

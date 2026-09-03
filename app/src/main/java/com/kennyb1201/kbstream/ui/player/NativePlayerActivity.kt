@@ -51,6 +51,7 @@ import androidx.media3.ui.PlayerView
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
@@ -2016,6 +2017,14 @@ class NativePlayerActivity : ComponentActivity() {
                     completedAt = if (isCompleted) existing?.completedAt ?: now else null
                 )
                 dao.upsert(entry)
+                // Mirror the in-app Continue Watching rail to the TV
+                // launcher (Watch Next) so in-progress titles show up on
+                // the home screen. Self-healing full reconcile: finished or
+                // removed titles drop off automatically.
+                TvLauncherPublisher.sync(
+                    this@NativePlayerActivity,
+                    dao.getAll()
+                )
             }
             if (isCompleted) syncCompletedToSimkl()
         }

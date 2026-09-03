@@ -1,6 +1,8 @@
 package com.kennyb1201.kbstream.ui.settings
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -21,6 +23,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
+import com.kennyb1201.kbstream.data.backup.BackupManager
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -39,6 +43,10 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlinx.coroutines.launch
 
 @Composable
 fun SettingsScreen(
@@ -62,6 +70,33 @@ fun SettingsScreen(
     var aspectRatio by remember { mutableIntStateOf(AppPreferences.getDefaultAspectRatio(context)) }
     var preferredAudioLang by remember { mutableStateOf(AppPreferences.getPreferredAudioLanguage(context)) }
     var preferredSubtitleLang by remember { mutableStateOf(AppPreferences.getPreferredSubtitleLanguage(context)) }
+    var backupStatus by remember { mutableStateOf<String?>(null) }
+
+    val backupScope = rememberCoroutineScope()
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) {
+            backupScope.launch {
+                backupStatus = runCatching {
+                    BackupManager.export(context, uri)
+                }.getOrElse { "Export failed: ${it.message}" }
+            }
+        }
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            backupScope.launch {
+                backupStatus = runCatching {
+                    BackupManager.import(context, uri)
+                }.getOrElse { "Import failed: ${it.message}" }
+            }
+        }
+    }
 
     BackHandler { onBack() }
 
@@ -100,6 +135,39 @@ fun SettingsScreen(
             description = "Connect your Simkl account for scrobbling",
             onClick = onOpenSimkl
         )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // ── DATA ──────────────────────────────────────────────────
+        SectionHeader("DATA")
+
+        NavigationRow(
+            label = "Export Backup",
+            description = "Save settings, add-ons & watched state to a file",
+            onClick = {
+                val stamp = SimpleDateFormat("yyyy-MM-dd_HHmmss", Locale.US).format(Date())
+                exportLauncher.launch("kbstream-backup-$stamp.json")
+            }
+        )
+
+        NavigationRow(
+            label = "Import Backup",
+            description = "Restore from a KBStream backup file",
+            onClick = {
+                importLauncher.launch(
+                    arrayOf("application/json", "text/plain", "application/octet-stream")
+                )
+            }
+        )
+
+        backupStatus?.let { message ->
+            Text(
+                text = message,
+                color = if (message.startsWith("Backup")) KBAccent else KBTextLo,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
+            )
+        }
 
         Spacer(modifier = Modifier.height(12.dp))
 

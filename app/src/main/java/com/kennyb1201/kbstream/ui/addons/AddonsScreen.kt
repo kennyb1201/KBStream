@@ -36,6 +36,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -115,6 +116,8 @@ fun AddonsScreen(
     val refreshing by viewModel.refreshing.collectAsState()
     val error by viewModel.error.collectAsState()
     val status by viewModel.status.collectAsState()
+    val health by viewModel.health.collectAsState()
+    val checkingHealth by viewModel.checkingHealth.collectAsState()
     val catalogConfigurations by viewModel.catalogConfigurations.collectAsState()
 
     var urlInput by remember { mutableStateOf("") }
@@ -180,6 +183,13 @@ fun AddonsScreen(
                     icon = Icons.Filled.Refresh,
                     enabled = !refreshing && !isLoading,
                     onClick = viewModel::refreshAllManifests
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                ActionButton(
+                    label = if (checkingHealth) "CHECKING" else "CHECK HEALTH",
+                    icon = Icons.Filled.CheckCircle,
+                    enabled = !checkingHealth && !refreshing && !isLoading,
+                    onClick = viewModel::checkHealth
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 ActionButton(
@@ -275,6 +285,7 @@ fun AddonsScreen(
                                 ) { addon ->
                                     AddonListCard(
                                         addon = addon,
+                                        health = health[addon.id],
                                         selected = addon.id == selectedId,
                                         onClick = {
                                             selectedId = addon.id
@@ -299,6 +310,7 @@ fun AddonsScreen(
                         } else {
                             AddonDetails(
                                 addon = selectedAddon,
+                                health = health[selectedAddon.id],
                                 refreshing = refreshing,
                                 onMoveUp = { viewModel.moveAddonUp(selectedAddon.id) },
                                 onMoveDown = { viewModel.moveAddonDown(selectedAddon.id) },
@@ -493,7 +505,8 @@ fun AddonsScreen(
 private fun AddonListCard(
     addon: InstalledAddon,
     selected: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    health: AddonsViewModel.AddonHealth? = null
 ) {
     Surface(
         onClick = onClick,
@@ -578,13 +591,44 @@ private fun AddonListCard(
                     )
                 }
             }
+
+            health?.let { h ->
+                HealthBadge(healthy = h.healthy)
+            }
         }
+    }
+}
+
+@Composable
+private fun HealthBadge(healthy: Boolean) {
+    val color = if (healthy) Color(0xFF3DBB6A) else Color(0xFFE0564E)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .padding(start = 8.dp)
+            .background(color.copy(alpha = 0.16f), RoundedCornerShape(999.dp))
+            .border(1.dp, color.copy(alpha = 0.5f), RoundedCornerShape(999.dp))
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(7.dp)
+                .background(color, RoundedCornerShape(50))
+        )
+        Text(
+            text = if (healthy) "OK" else "OFFLINE",
+            color = color,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(start = 5.dp)
+        )
     }
 }
 
 @Composable
 private fun AddonDetails(
     addon: InstalledAddon,
+    health: AddonsViewModel.AddonHealth?,
     refreshing: Boolean,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit,
@@ -676,6 +720,13 @@ private fun AddonDetails(
             )
         }
         DetailLine("TYPES", addon.types.joinToString(", ").ifBlank { "—" })
+        DetailLine(
+            "STATUS",
+            when (health) {
+                null -> "Unknown — CHECK HEALTH to verify"
+                else -> if (health.healthy) "Online" else "Offline"
+            }
+        )
 
         // Action buttons stay pinned above the catalog list so they're always
         // reachable even with dozens of catalogs.

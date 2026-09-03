@@ -25,6 +25,9 @@ interface WatchedStatusDao {
     )
     suspend fun getRefreshTargets(): List<WatchedRefreshTarget>
 
+    @Query("SELECT * FROM watched_status_cache")
+    suspend fun getAll(): List<WatchedStatusEntity>
+
     @Query("DELETE FROM watched_status_cache WHERE key = :key")
     suspend fun deleteByKey(key: String)
 

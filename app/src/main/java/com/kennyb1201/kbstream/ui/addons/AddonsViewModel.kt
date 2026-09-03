@@ -47,8 +47,51 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
     private val _status = MutableStateFlow<String?>(null)
     val status: StateFlow<String?> = _status.asStateFlow()
 
+    /** Health of every installed add-on (manifest reachable + usable). */
+    data class AddonHealth(
+        val healthy: Boolean,
+        val checkedAt: Long
+    )
+
+    private val _health = MutableStateFlow<Map<String, AddonHealth>>(emptyMap())
+    val health: StateFlow<Map<String, AddonHealth>> = _health.asStateFlow()
+
+    private val _checkingHealth = MutableStateFlow(false)
+    val checkingHealth: StateFlow<Boolean> = _checkingHealth.asStateFlow()
+
     init {
         refresh()
+        checkHealth()
+    }
+
+    /**
+     * Pings every installed add-on's manifest URL and records whether it
+     * responded with a usable Stremio manifest. Runs sequentially with the
+     * same timeouts as a normal manifest fetch, so broken/offline add-ons
+     * show a badge in the list instead of silently returning empty rails.
+     */
+    fun checkHealth() {
+        if (_checkingHealth.value || _refreshing.value) return
+
+        val addons = _addons.value
+        if (addons.isEmpty()) return
+
+        viewModelScope.launch {
+            _checkingHealth.value = true
+            val results = mutableMapOf<String, AddonHealth>()
+            val now = System.currentTimeMillis()
+
+            addons.forEach { addon ->
+                val healthy = runCatching {
+                    val manifest = repository.fetchManifest(addon.manifestUrl)
+                    manifest.resources.isNotEmpty() || manifest.catalogs.isNotEmpty()
+                }.getOrDefault(false)
+                results[addon.id] = AddonHealth(healthy = healthy, checkedAt = now)
+            }
+
+            _health.value = results
+            _checkingHealth.value = false
+        }
     }
 
     fun refresh() {
@@ -131,6 +174,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                 } else {
                     "Updated ${installed.displayName}"
                 }
+                checkHealth()
             } catch (e: Exception) {
                 _error.value =
                     "Failed to add add-on: ${e.message ?: "Unknown error"}"
@@ -144,6 +188,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         addonManager.removeAddon(id)
         refresh()
         _status.value = "Add-on removed"
+        checkHealth()
     }
 
     fun renameAddon(id: String, newName: String) {

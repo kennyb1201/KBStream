@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
+import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -205,6 +206,10 @@ class SimklViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 historyDao.clearAll()
                 watchedStatusRepository.clearAllWatchState()
+                TvLauncherPublisher.sync(
+                    application.applicationContext,
+                    emptyList()
+                )
 
                 _uiState.value = SimklUiState(
                     isConnected = false,

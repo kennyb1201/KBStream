@@ -83,6 +83,16 @@ class WatchedStatusRepository(
     private var simklSetsFetchedAt =
         0L
 
+    /*
+     * Backup restore replaces the Room watched tables while repository
+     * instances may still hold in-memory snapshots. This tracks the global
+     * invalidation epoch so stale memory state is dropped on the next
+     * preload instead of lingering until the memory TTL expires.
+     */
+    @Volatile
+    private var cacheEpochObserved: Long =
+        globalCacheEpoch
+
     private val _watchedStateVersion =
         MutableStateFlow(0L)
 
@@ -176,6 +186,24 @@ class WatchedStatusRepository(
 
         val now =
             System.currentTimeMillis()
+
+        if (cacheEpochObserved != globalCacheEpoch) {
+            cacheMutex.withLock {
+                cache.clear()
+
+                completedMovieKeys =
+                    emptySet()
+
+                completedShowImdbIds =
+                    emptySet()
+
+                simklSetsFetchedAt =
+                    0L
+            }
+
+            cacheEpochObserved =
+                globalCacheEpoch
+        }
 
         val distinctItems =
             items
@@ -1218,5 +1246,18 @@ class WatchedStatusRepository(
         // same 999 ceiling.
         private const val SQLITE_MAX_UPSERT_ROWS =
             150
+
+        /*
+         * Bumped by a backup restore so every live WatchedStatusRepository
+         * drops its in-memory snapshots on the next preload. Reads and
+         * writes of a single volatile Long are atomic, and there is only one
+         * writer (the restore path), so the increment is safe.
+         */
+        @Volatile
+        private var globalCacheEpoch: Long = 0L
+
+        fun invalidateAllCaches() {
+            globalCacheEpoch += 1L
+        }
     }
 }

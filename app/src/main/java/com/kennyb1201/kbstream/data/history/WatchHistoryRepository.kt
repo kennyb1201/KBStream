@@ -81,6 +81,12 @@ class WatchHistoryRepository(context: Context) {
         dao.deleteResumeRowsForParent(parentId)
     }
 
+    /**
+     * Every row with a saved resume position — used to rebuild the TV
+     * launcher Continue Watching rail and for backup/restore.
+     */
+    suspend fun getAll(): List<WatchHistoryEntity> = dao.getAll()
+
     suspend fun clearAll() {
         dao.clearAll()
     }
