@@ -87,8 +87,9 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbReview
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
 import com.kennyb1201.kbstream.data.tmdb.bestReleaseDate
-import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.data.tmdb.certification
+import com.kennyb1201.kbstream.data.tmdb.movieStatusTag
+import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.data.tmdb.director
 import com.kennyb1201.kbstream.data.tmdb.list
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
@@ -1004,12 +1005,24 @@ fun DetailScreen(
                                     type == "movie"
                                 ),
                                 yearInfo,
-                                if (type == "series") {
-                                    seriesStatusTag(
-                                        tmdbDetail?.status
-                                    )
-                                } else {
-                                    null
+                                when {
+                                    type.equals(
+                                        "series",
+                                        ignoreCase = true
+                                    ) ->
+                                        seriesStatusTag(
+                                            tmdbDetail?.status
+                                        )
+
+                                    type.equals(
+                                        "movie",
+                                        ignoreCase = true
+                                    ) ->
+                                        tmdbDetail
+                                            ?.movieStatusTag()
+                                            ?.uppercase()
+
+                                    else -> null
                                 },
                                 tmdbDetail?.runtime
                                     ?.takeIf { it > 0 }

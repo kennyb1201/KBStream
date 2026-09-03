@@ -87,6 +87,7 @@ import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.certification
+import com.kennyb1201.kbstream.data.tmdb.movieStatusTag
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
@@ -639,8 +640,14 @@ private fun HomeHero(
                         ?.value
                 }
 
+    // Status tag: series show their TMDB lifecycle (Ongoing / Ended /
+    // Canceled / ...). TMDB's movie status is only the production
+    // lifecycle, so movie tags are derived from release dates instead
+    // (In Theaters / Streaming / Coming Soon / ...).
     val statusTag =
-        if (preview.type != "movie") {
+        if (preview.type.equals("movie", ignoreCase = true)) {
+            tmdbDetail?.movieStatusTag()
+        } else {
             when (
                 tmdbDetail?.status
                     ?.trim()
@@ -654,8 +661,6 @@ private fun HomeHero(
                 "planned" -> "Planned"
                 else -> null
             }
-        } else {
-            null
         }
 
     val imdb =

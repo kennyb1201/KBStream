@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.tmdb
 
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
+import java.time.LocalDate
 import java.util.Locale
 
 @JsonClass(generateAdapter = true)
@@ -515,6 +516,127 @@ fun TmdbDetail.certification(isMovie: Boolean): String? {
                 ?.mapNotNull { it.rating?.takeIf(String::isNotBlank) }
                 ?.firstOrNull()
     }
+}
+
+// How long a theatrical run still counts as "In Theaters" after the
+// theatrical release date (runs span a couple of weeks up to ~90 days).
+private const val MOVIE_THEATRICAL_WINDOW_DAYS =
+    60L
+
+/**
+ * User-facing movie tag derived from TMDB data. TMDB's movie status is
+ * just the production lifecycle (Released / In Production / ...), which
+ * says nothing about where the movie is watchable - so once a movie is
+ * released, the tag is derived from the appended release_dates payload
+ * instead:
+ *
+ *  - theatrical release (type 2/3) within the last ~60 days -> In Theaters
+ *  - a digital or TV release (type 4/6) that has already happened -> Streaming
+ *  - an upcoming theatrical date -> Coming Soon
+ *  - otherwise plain Released (or the lifecycle status when it is not
+ *    released yet: In Production / Post Production / Planned / Canceled /
+ *    Rumored)
+ */
+fun TmdbDetail.movieStatusTag(): String? {
+
+    val normalizedStatus =
+        status?.trim().orEmpty()
+
+    when (normalizedStatus.lowercase()) {
+        "in production" -> return "In Production"
+        "post production" -> return "Post Production"
+        "planned" -> return "Planned"
+        "canceled", "cancelled" -> return "Canceled"
+        "rumored" -> return "Rumored"
+    }
+
+    val countries = releaseDates?.results.orEmpty()
+
+    val parsedDates =
+        countries.flatMap { country ->
+            country.releaseDates.mapNotNull { entry ->
+                parseReleaseDate(entry.releaseDate)
+                    ?.let { date ->
+                        MovieReleaseDateRef(
+                            type = entry.type,
+                            date = date
+                        )
+                    }
+            }
+        }
+
+    val theatricalDates =
+        parsedDates
+            .filter { it.type == 2 || it.type == 3 }
+            .map { it.date }
+
+    val homeReleaseDates =
+        parsedDates
+            .filter { it.type == 4 || it.type == 6 }
+            .map { it.date }
+
+    val today =
+        LocalDate.now()
+
+    if (
+        theatricalDates.any { date ->
+            !date.isAfter(today) &&
+                date >= today.minusDays(MOVIE_THEATRICAL_WINDOW_DAYS)
+        }
+    ) {
+        return "In Theaters"
+    }
+
+    if (homeReleaseDates.any { date -> !date.isAfter(today) }) {
+        return "Streaming"
+    }
+
+    if (theatricalDates.any { it.isAfter(today) }) {
+        return "Coming Soon"
+    }
+
+    val primaryDate =
+        bestReleaseDate()
+            ?.let(::parseReleaseDate)
+
+    return when {
+        primaryDate != null &&
+            primaryDate.isAfter(today) ->
+            "Coming Soon"
+
+        primaryDate != null ->
+            "Released"
+
+        normalizedStatus.equals(
+            "Released",
+            ignoreCase = true
+        ) ->
+            "Released"
+
+        else -> null
+    }
+}
+
+private data class MovieReleaseDateRef(
+    val type: Int?,
+    val date: LocalDate
+)
+
+private fun parseReleaseDate(raw: String?): LocalDate? {
+
+    val trimmed =
+        raw
+            ?.substringBefore("T")
+            ?.trim()
+            .orEmpty()
+
+    if (trimmed.isBlank()) {
+        return null
+    }
+
+    return runCatching {
+        LocalDate.parse(trimmed)
+    }.getOrNull()
 }
 
 fun TmdbDetail.bestLogoPath(): String? =
