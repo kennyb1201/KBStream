@@ -109,10 +109,10 @@ private class FfmpegOnlyRenderersFactory(context: Context) : DefaultRenderersFac
                 "androidx.media3.decoder.ffmpeg.ExperimentalFfmpegVideoRenderer"
             )
             val constructor = rendererClass.getConstructor(
-                Long.TYPE,
+                Long::class.javaPrimitiveType!!,
                 Handler::class.java,
                 VideoRendererEventListener::class.java,
-                Int.TYPE
+                Int::class.javaPrimitiveType!!
             )
             out.add(
                 constructor.newInstance(
