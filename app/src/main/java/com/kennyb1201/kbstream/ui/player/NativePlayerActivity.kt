@@ -1049,7 +1049,7 @@ class NativePlayerActivity : ComponentActivity() {
 
                 val audioUrl = currentAudioUrl
                 if (!audioUrl.isNullOrBlank()) {
-                    val videoSource = mediaSourceFactory
+                    val videoSource = ProgressiveMediaSource.Factory(httpFactory, extractorsFactory)
                         .createMediaSource(mediaItemBuilder.build())
                     val audioSource = ProgressiveMediaSource.Factory(httpFactory)
                         .createMediaSource(MediaItem.fromUri(audioUrl))
