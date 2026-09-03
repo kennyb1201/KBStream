@@ -61,6 +61,15 @@ data class PosterContextAction(
 )
 
 /**
+ * One-shot handoff from a context-menu action to the navigation layer. The
+ * detail screen's Play Manually action uses the shared menu, so this keeps
+ * that intent available to MainActivity without changing every menu callback.
+ */
+object ManualSourceSelection {
+    var requested: Boolean = false
+}
+
+/**
  * Shared long-press overlay menu for poster cards on every screen (Home
  * rails, actor credits, studio/network rails, genre/keyword rails, ...).
  *
@@ -330,7 +339,12 @@ fun PosterContextMenu(
                             }
                             focusedActionIndex = index
                         },
-                        onClick = action.onClick
+                        onClick = {
+                            if (action.label == "Play Manually") {
+                                ManualSourceSelection.requested = true
+                            }
+                            action.onClick()
+                        }
                     )
                 }
             }

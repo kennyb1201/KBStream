@@ -51,6 +51,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.actor.ActorScreen
 import com.kennyb1201.kbstream.ui.addons.AddonsScreen
 import com.kennyb1201.kbstream.ui.collection.CollectionScreen
+import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
 import com.kennyb1201.kbstream.ui.detail.DetailScreen
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
 import com.kennyb1201.kbstream.ui.home.HomeScreen
@@ -739,6 +740,11 @@ fun AppRoot() {
                     autoPlayedStreamKeys =
                         (autoPlayedStreamKeys + manualKey).distinct()
 
+                    // Home's manual action already opens the picker directly;
+                    // consume any shared marker so it cannot affect a later
+                    // detail-screen Play request.
+                    ManualSourceSelection.requested = false
+
                     screen = Screen.Streams(
                         target = target,
                         parentId = meta.id,
@@ -950,7 +956,15 @@ fun AppRoot() {
                         overview,
                         cast ->
 
-                    if (AppPreferences.getAutoSelectStream(context)) {
+                    val manualSourceSelection =
+                        ManualSourceSelection.requested.also {
+                            ManualSourceSelection.requested = false
+                        }
+
+                    if (
+                        !manualSourceSelection &&
+                        AppPreferences.getAutoSelectStream(context)
+                    ) {
                         // Autoselect is on: resolve sources in the background
                         // (this screen stays visible under a brief "Finding
                         // sources" overlay) and jump straight into the player —
