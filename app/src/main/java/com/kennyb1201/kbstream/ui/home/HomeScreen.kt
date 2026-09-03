@@ -1626,7 +1626,10 @@ fun HomeScreen(
             id = parentId,
             type = parentType,
             name = item.title,
-            poster = item.poster
+            poster = item.poster,
+            background = item.backdrop,
+            description = item.episodeDescription,
+            logo = item.clearLogo
         )
 
         val target = StreamsTarget(

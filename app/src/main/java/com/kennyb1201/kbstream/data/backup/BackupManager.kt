@@ -182,6 +182,7 @@ object BackupManager {
         put("episodeTitle", episodeTitle)
         put("overview", overview)
         put("clearLogo", clearLogo)
+        put("backdropUrl", backdropUrl)
         put("totalEpisodesInSeason", totalEpisodesInSeason)
         put("poster", poster)
         put("streamUrl", streamUrl)
@@ -204,6 +205,7 @@ object BackupManager {
             episodeTitle = optNullableString("episodeTitle"),
             overview = optNullableString("overview"),
             clearLogo = optNullableString("clearLogo"),
+            backdropUrl = optNullableString("backdropUrl"),
             totalEpisodesInSeason = optNullableInt("totalEpisodesInSeason"),
             poster = optNullableString("poster"),
             streamUrl = optNullableString("streamUrl"),

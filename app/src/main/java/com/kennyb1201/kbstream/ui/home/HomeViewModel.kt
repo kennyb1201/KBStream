@@ -90,6 +90,7 @@ data class UpNextItem(
     val episodesWatched: Int? = null,    val episodesTotal: Int? = null,
     val episodeThumbnail: String? = null,
     val backdrop: String? = null,
+    val clearLogo: String? = null,
 
     val subtitle: String? = null,
     val progressPercent: Float? = null,
@@ -1188,6 +1189,8 @@ Log.d(
 
                     val localItems =
     coroutineScope {
+    // Local continue-watching rows are already unfinished resume rows,
+    // including movies that were stopped before completion.
     history.map { entry ->
         async {
             lookupSemaphore.withPermit {
@@ -1197,7 +1200,25 @@ Log.d(
 
         var episodeRating: Double? = null
         var episodeThumbnail: String? = null
-        var backdropUrl: String? = null
+        var backdropUrl: String? = entry.backdropUrl
+
+        // Movie resume rows can predate backdrop persistence or come from a
+        // caller that only supplied a poster. Restore the artwork from the
+        // cached TMDB metadata so resume cards keep their movie identity.
+        if (!isEpisodePlayback && backdropUrl.isNullOrBlank()) {
+            val restoredBackdrop = runCatching {
+                tmdbRepository.fetchEnrichedMetaCached(
+                    entry.parentId.trim().ifBlank { entry.id.trim() },
+                    entry.type
+                )?.backdropPath
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { "https://image.tmdb.org/t/p/w780$it" }
+            }.getOrNull()
+            if (!restoredBackdrop.isNullOrBlank()) {
+                historyDao.updateBackdropIfMissing(entry.id, restoredBackdrop)
+            }
+            backdropUrl = restoredBackdrop
+        }
 
         // Cache completed episode keys per show so we only query the
         // DAO once per parentId instead of once per history row.
@@ -1390,6 +1411,7 @@ Log.d(
             imdbRating = episodeRating,
             episodeThumbnail = episodeThumbnail,
             backdrop = backdropUrl,
+            clearLogo = entry.clearLogo,
 
             runtimeMinutes =
                 if (entry.durationMs > 0L) {
@@ -1574,7 +1596,12 @@ Log.d(
             val items =
                 coroutineScope {
 
-                    raw.map { item ->
+                    raw
+                        .filter { item ->
+                            !item.mediaType.trim().equals("movie", ignoreCase = true) ||
+                                (item.source == "playback" && (item.progress ?: 0f) > 0f)
+                        }
+                        .map { item ->
 
                         async {
 
@@ -1973,10 +2000,11 @@ episodesTotal =
                 episodeRating,
 
             episodeThumbnail =
-                episodeThumbnail,
+                episodeThumbnail,            backdrop = backdropUrl,
 
-            backdrop =
-                backdropUrl,
+            clearLogo =
+                entry.clearLogo,
+
 
             runtimeMinutes =
                 runtimeMinutes,

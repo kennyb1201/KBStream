@@ -12,6 +12,7 @@ data class WatchHistoryEntity(
     val episodeTitle: String? = null,
     val overview: String? = null,
     val clearLogo: String? = null,
+    val backdropUrl: String? = null,
     val totalEpisodesInSeason: Int? = null,
     val poster: String?,
     val streamUrl: String?,

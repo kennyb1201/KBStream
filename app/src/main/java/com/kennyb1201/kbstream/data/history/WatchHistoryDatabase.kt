@@ -20,7 +20,7 @@ import com.kennyb1201.kbstream.data.cache.WatchedStatusEntity
         ImdbResolutionEntity::class,
         TmdbJsonCacheEntity::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 abstract class WatchHistoryDatabase : RoomDatabase() {
@@ -40,7 +40,7 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                     WatchHistoryDatabase::class.java,
                     "kbstream_watch_history"
                 )
-                    .addMigrations(MIGRATION_6_7)
+                    .addMigrations(MIGRATION_6_7, MIGRATION_7_8)
                     .fallbackToDestructiveMigration()
                     .build()
                     .also { instance = it }
@@ -57,6 +57,14 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                         PRIMARY KEY(`key`)
                     )
                     """.trimIndent()
+                )
+            }
+        }
+
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `watch_history` ADD COLUMN `backdropUrl` TEXT"
                 )
             }
         }

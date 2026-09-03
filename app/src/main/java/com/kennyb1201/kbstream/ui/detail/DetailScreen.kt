@@ -203,6 +203,9 @@ fun DetailScreen(
     ) -> Unit,
     initialTarget: StreamsTarget? = null,
     initialPoster: String? = null,
+    initialBackdrop: String? = null,
+    initialClearLogo: String? = null,
+    initialOverview: String? = null,
     viewModel: DetailViewModel = viewModel()
 ) {
     val scope = rememberCoroutineScope()
@@ -345,7 +348,24 @@ fun DetailScreen(
         userManuallyChangedSeason = false
         seasonFocusRequesters.clear()
         episodeFocusRequesters.clear()
-        viewModel.load(type, id)
+        viewModel.load(
+            type = type,
+            id = id,
+            initialMeta = Meta(
+                id = id,
+                type = type,
+                name = initialTarget?.displayName?.takeIf { it.isNotBlank() } ?: id,
+                poster = initialPoster,
+                background = initialBackdrop,
+                logo = initialClearLogo,
+                description = initialOverview
+            ).takeIf {
+                !initialPoster.isNullOrBlank() ||
+                    !initialBackdrop.isNullOrBlank() ||
+                    !initialClearLogo.isNullOrBlank() ||
+                    !initialOverview.isNullOrBlank()
+            }
+        )
     }
 
     LaunchedEffect(type, id, effectiveSeason, hasExplicitSeasonSource) {

@@ -208,9 +208,14 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun load(type: String, id: String, initialSeason: Int? = null) {
+    fun load(
+        type: String,
+        id: String,
+        initialSeason: Int? = null,
+        initialMeta: Meta? = null
+    ) {
         imdbId = id
-        _meta.value = null
+        _meta.value = initialMeta
         _tmdbDetail.value = null
         _episodes.value = emptyList()
         _episodeError.value = null
@@ -317,7 +322,13 @@ for (metaAddon in metaAddons) {
 }
 
 if (resolvedMeta != null) {
-    _meta.value = resolvedMeta
+    val savedMeta = initialMeta
+    _meta.value = resolvedMeta!!.copy(
+        poster = resolvedMeta!!.poster ?: savedMeta?.poster,
+        background = resolvedMeta!!.background ?: savedMeta?.background,
+        logo = resolvedMeta!!.logo ?: savedMeta?.logo,
+        description = resolvedMeta!!.description ?: savedMeta?.description
+    )
 } else {
     // Every meta add-on failed (down, removed, or network error). Fall back
     // to the TMDB data we already fetched so the detail screen still renders
@@ -344,7 +355,17 @@ if (resolvedMeta != null) {
             imdbRating = fallbackDetail.voteAverage?.let {
                 "%.1f".format(it)
             }
-        )
+        ).let { fallback ->
+            val savedMeta = initialMeta
+            fallback.copy(
+                poster = fallback.poster ?: savedMeta?.poster,
+                background = fallback.background ?: savedMeta?.background,
+                logo = fallback.logo ?: savedMeta?.logo,
+                description = fallback.description ?: savedMeta?.description
+            )
+        }
+    } else if (initialMeta != null) {
+        _meta.value = initialMeta
     }
 
     Log.e(

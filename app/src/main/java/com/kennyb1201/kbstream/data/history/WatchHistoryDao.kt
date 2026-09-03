@@ -8,7 +8,32 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface WatchHistoryDao {
     @Upsert
-    suspend fun upsert(entry: WatchHistoryEntity)
+    suspend fun upsertRaw(entry: WatchHistoryEntity)
+
+    /**
+     * Merge a playback row without allowing a partial caller to erase
+     * metadata already stored for the same title/episode.
+     */
+    @androidx.room.Transaction
+    suspend fun upsert(entry: WatchHistoryEntity) {
+        val existing = getById(entry.id)
+        upsertRaw(
+            entry.copy(
+                name = entry.name.ifBlank { existing?.name.orEmpty() },
+                episodeTitle = entry.episodeTitle ?: existing?.episodeTitle,
+                overview = entry.overview ?: existing?.overview,
+                clearLogo = entry.clearLogo ?: existing?.clearLogo,
+                backdropUrl = entry.backdropUrl ?: existing?.backdropUrl,
+                totalEpisodesInSeason =
+                    entry.totalEpisodesInSeason ?: existing?.totalEpisodesInSeason,
+                poster = entry.poster ?: existing?.poster,
+                streamUrl = entry.streamUrl ?: existing?.streamUrl,
+                season = entry.season ?: existing?.season,
+                episode = entry.episode ?: existing?.episode,
+                episodeStreamId = entry.episodeStreamId ?: existing?.episodeStreamId
+            )
+        )
+    }
 
     @Query("SELECT * FROM watch_history WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): WatchHistoryEntity?
@@ -80,6 +105,9 @@ fun observeContinueWatchingParents(): Flow<List<WatchHistoryEntity>>
         """
     )
     suspend fun deleteResumeRowsForParent(parentId: String)
+
+    @Query("UPDATE watch_history SET backdropUrl = :backdropUrl WHERE id = :id AND (backdropUrl IS NULL OR backdropUrl = '')")
+    suspend fun updateBackdropIfMissing(id: String, backdropUrl: String)
 
     @Query("DELETE FROM watch_history WHERE id = :id")
     suspend fun deleteById(id: String)

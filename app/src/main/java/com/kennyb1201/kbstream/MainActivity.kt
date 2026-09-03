@@ -96,7 +96,10 @@ sealed class Screen {
         val id: String,
         val pendingTarget: StreamsTarget? = null,
         val itemPoster: String? = null,
-        val returnTo: Screen = Home
+        val returnTo: Screen = Home,
+        val itemBackdrop: String? = null,
+        val itemClearLogo: String? = null,
+        val itemOverview: String? = null
     ) : Screen()
 
     data class Actor(
@@ -201,6 +204,9 @@ private fun encodeScreen(
             put("id", screen.id)
             screen.pendingTarget?.let { put("pendingTarget", encodeTarget(it)) }
             screen.itemPoster?.let { put("itemPoster", it) }
+            screen.itemBackdrop?.let { put("itemBackdrop", it) }
+            screen.itemClearLogo?.let { put("itemClearLogo", it) }
+            screen.itemOverview?.let { put("itemOverview", it) }
             if (depth < MAX_RETURN_DEPTH) {
                 put("returnTo", encodeScreen(screen.returnTo, depth + 1))
             }
@@ -283,7 +289,10 @@ private fun decodeScreen(
                 pendingTarget = json.optJSONObject("pendingTarget")
                     ?.let { decodeTarget(it) },
                 itemPoster = json.optNullableString("itemPoster"),
-                returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
+                returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1),
+                itemBackdrop = json.optNullableString("itemBackdrop"),
+                itemClearLogo = json.optNullableString("itemClearLogo"),
+                itemOverview = json.optNullableString("itemOverview")
             )
             "actor" -> Screen.Actor(
                 personId = json.optInt("personId"),
@@ -733,11 +742,14 @@ fun AppRoot() {
                     // auto-plays it once metadata is ready so the stream
                     // screen still gets the rich backdrop/overview/cast.
                     screen = Screen.Detail(
-                        meta.type,
-                        meta.id,
-                        target,
-                        poster ?: meta.poster,
-                        Screen.Home
+                        type = meta.type,
+                        id = meta.id,
+                        pendingTarget = target,
+                        itemPoster = poster ?: meta.poster,
+                        returnTo = Screen.Home,
+                        itemBackdrop = meta.background,
+                        itemClearLogo = meta.logo,
+                        itemOverview = meta.description
                     )
                 },
 
@@ -769,7 +781,10 @@ fun AppRoot() {
                         parentId = meta.id,
                         returnTo = Screen.Home,
                         parentType = meta.type,
-                        itemPoster = poster ?: meta.poster
+                        itemPoster = poster ?: meta.poster,
+                        backdropUrl = meta.background,
+                        clearLogoUrl = meta.logo,
+                        overview = meta.description
                     )
                 },
 
@@ -919,6 +934,9 @@ fun AppRoot() {
                 id = current.id,
                 initialTarget = current.pendingTarget,
                 initialPoster = current.itemPoster,
+                initialBackdrop = current.itemBackdrop,
+                initialClearLogo = current.itemClearLogo,
+                initialOverview = current.itemOverview,
 
                 onNavigateDetail = {
                         type,
