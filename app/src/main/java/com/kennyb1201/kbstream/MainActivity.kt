@@ -1293,6 +1293,7 @@ fun AppRoot() {
                             returnTo = current.returnTo,
                             parentType = current.parentType,
                             itemPoster = current.itemPoster,
+                            backdropUrl = current.backdropUrl,
                                 clearLogoUrl = current.clearLogoUrl,
                                 overview = current.overview,
                                 cast = current.cast.map { member ->
