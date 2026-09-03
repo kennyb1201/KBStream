@@ -977,6 +977,13 @@ class NativePlayerActivity : ComponentActivity() {
         val stripHdr10Plus = AppPreferences.getStripHdr10Plus(this)
         val dvRewriteEnabled = dvCompatMode != AppPreferences.DV_COMPAT_OFF
         val convertAllProfiles = dvCompatMode == AppPreferences.DV_COMPAT_ALL
+        Log.i(
+            "PLAYER_DV",
+            "DV settings mode=$dvCompatMode rewriteEnabled=$dvRewriteEnabled " +
+                "allProfiles=$convertAllProfiles stripHdr10Plus=$stripHdr10Plus " +
+                "decoderMode=${AppPreferences.getDecoderMode(this)} " +
+                "forceSoftware=$forceSoftwareDecoder audioSeparate=${!currentAudioUrl.isNullOrBlank()}"
+        )
         // The compat extractor is needed when DV conversion is on OR the
         // HDR10+ strip toggle is on — both run inside it.
         val extractorsFactory: androidx.media3.extractor.ExtractorsFactory =

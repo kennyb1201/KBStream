@@ -78,6 +78,12 @@ internal class DolbyVisionCompatExtractorsFactory(
                 NalFraming.ANNEX_B
             else -> return extractor
         }
+        Log.i(
+            "PLAYER_DV",
+            "Wrapping extractor=${name.substringAfterLast('.')} framing=$framing " +
+                "allProfiles=$convertAllProfiles rewriteEnabled=$dvRewriteEnabled " +
+                "stripHdr10Plus=$stripHdr10Plus"
+        )
         return VideoCompatExtractor(extractor, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled)
     }
 }
