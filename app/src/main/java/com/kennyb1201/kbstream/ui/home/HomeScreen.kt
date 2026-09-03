@@ -1609,7 +1609,8 @@ fun HomeScreen(
     fun openUpNext(
         item: UpNextItem,
         openInStreamsScreen: Boolean = false,
-        startAtBeginning: Boolean = false
+        startAtBeginning: Boolean = false,
+        openDetailsOnly: Boolean = false
     ) {
         val parentId = item.parentId
         val parentType = item.parentType
@@ -1645,12 +1646,13 @@ fun HomeScreen(
                 }
         )
 
-        if (openInStreamsScreen) {
+        if (openDetailsOnly) {
+            selectHero(detail)
+            onItemClick(detail)
+        } else if (openInStreamsScreen) {
 
-            // "Play Manually" / "Play from Beginning": go straight to the
-            // streams picker for this item. Resume position is preserved for
-            // Play Manually; Play from Beginning forces position 0. Both
-            // follow the global auto-select setting.
+            // "Play Manually" goes straight to the streams picker and
+            // intentionally bypasses Auto-select.
             onOpenStreams(
                 detail,
                 target,
@@ -2124,7 +2126,10 @@ fun HomeScreen(
                     ) {
                         val selectedItem = menuItem
                         continueWatchingMenu = null
-                        openUpNext(selectedItem)
+                        openUpNext(
+                            selectedItem,
+                            openDetailsOnly = true
+                        )
                     },
                     PosterContextAction(
                         label = "Play Manually",
@@ -2150,7 +2155,6 @@ fun HomeScreen(
                         continueWatchingMenu = null
                         openUpNext(
                             selectedItem,
-                            openInStreamsScreen = true,
                             startAtBeginning = true
                         )
                     },
