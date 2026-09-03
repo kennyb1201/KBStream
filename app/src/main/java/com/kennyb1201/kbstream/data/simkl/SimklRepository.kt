@@ -1003,13 +1003,13 @@ class SimklRepository(
         title: String?
     ): Boolean {
 
-        val media =
-            item.movie
-                ?: item.show
-                ?: return false
-
+        // A session is exactly one movie OR one show, and the two model
+        // types share no interface, so read ids/title off each side
+        // instead of combining them (item.movie ?: item.show would infer
+        // Any and make these members unresolvable).
         val ids =
-            media.ids
+            item.movie?.ids
+                ?: item.show?.ids
 
         if (
             imdb != null &&
@@ -1035,7 +1035,11 @@ class SimklRepository(
             ids == null &&
             title != null
         ) {
-            return media.title
+            val mediaTitle =
+                item.movie?.title
+                    ?: item.show?.title
+
+            return mediaTitle
                 ?.equals(
                     title,
                     ignoreCase = true
