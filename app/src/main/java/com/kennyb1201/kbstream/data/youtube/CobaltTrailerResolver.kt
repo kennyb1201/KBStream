@@ -89,7 +89,7 @@ object CobaltTrailerResolver {
                 TAG,
                 "TRAILER_PROXY_URL points at a PRIVATE/LAN address ($proxyHost): " +
                     "devices on other networks cannot reach it. Use the server's " +
-                    "PUBLIC IP, e.g. http://132.145.137.148:9000"
+                    "PUBLIC IP, e.g. https://proxy.example.com:9000"
             )
         }
 

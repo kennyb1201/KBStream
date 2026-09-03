@@ -10,13 +10,27 @@ import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.work.SimklSyncWorker
+import io.sentry.android.core.SentryAndroid
 import java.util.concurrent.TimeUnit
 
 class MainApplication : Application(), SingletonImageLoader.Factory {
 
     override fun onCreate() {
         super.onCreate()
+        initCrashReporting()
         scheduleSimklPeriodicSync()
+    }
+
+    /**
+     * Crash reporting via Sentry. Only initializes when a DSN was baked into
+     * the build (SENTRY_DSN in local.properties or the CI environment);
+     * without one the app behaves exactly as before.
+     */
+    private fun initCrashReporting() {
+        if (BuildConfig.SENTRY_DSN.isBlank()) return
+        SentryAndroid.init(this) { options ->
+            options.dsn = BuildConfig.SENTRY_DSN
+        }
     }
 
     override fun newImageLoader(context: android.content.Context): ImageLoader {

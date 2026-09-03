@@ -29,6 +29,10 @@ val trailerProxyUrl = localProps.getProperty("TRAILER_PROXY_URL")
     ?: System.getenv("TRAILER_PROXY_URL")
     ?: ""
 
+val sentryDsn = localProps.getProperty("SENTRY_DSN")
+    ?: System.getenv("SENTRY_DSN")
+    ?: ""
+
 val releaseStoreFile = System.getenv("KBSTREAM_STORE_FILE")
 val releaseStorePassword = System.getenv("KBSTREAM_STORE_PASSWORD")
 val releaseKeyAlias = System.getenv("KBSTREAM_KEY_ALIAS")
@@ -49,6 +53,7 @@ android {
         buildConfigField("String", "SIMKL_CLIENT_ID", "\"$simklClientId\"")
         buildConfigField("String", "SIMKL_CLIENT_SECRET", "\"$simklClientSecret\"")
         buildConfigField("String", "TRAILER_PROXY_URL", "\"$trailerProxyUrl\"")
+        buildConfigField("String", "SENTRY_DSN", "\"$sentryDsn\"")
     }
     buildFeatures {
         compose = true
@@ -73,7 +78,12 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
             signingConfig = signingConfigs.getByName("release")
         }
     }
@@ -112,6 +122,9 @@ dependencies {
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
     implementation("com.squareup.moshi:moshi-kotlin:1.15.1")
     implementation("com.google.zxing:core:3.5.3")
+
+    // Crash reporting (Sentry)
+    implementation("io.sentry:sentry-android:7.19.0")
 
     implementation("androidx.media3:media3-exoplayer:1.9.0")
     implementation("androidx.media3:media3-exoplayer-hls:1.9.0")

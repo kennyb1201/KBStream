@@ -17,6 +17,12 @@
         android:networkSecurityConfig="@xml/network_security_config"
         android:theme="@style/Theme.KBStream">
 
+        <!-- Sentry is initialized programmatically in MainApplication so the
+             DSN can come from build config; disable the SDK's auto-init. -->
+        <meta-data
+            android:name="io.sentry.auto-init"
+            android:value="false" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
