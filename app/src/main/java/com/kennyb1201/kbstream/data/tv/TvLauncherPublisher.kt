@@ -19,9 +19,9 @@ import org.json.JSONObject
 
 /**
  * Publishes KBStream's in-progress titles to the Android TV "Watch Next"
- * channel, which launchers surface as "Continue watching" (Google TV labels
- * the same row that way once the app is certified — the API itself works on
- * every Android TV).
+ * channel, which launchers surface as "Continue watching". The system-side
+ * table is writable by any app — no manifest provider, permission, or
+ * Google approval needed.
  *
  * One program per parent show/movie (the most recently active one) is kept,
  * mirroring the in-app Continue Watching rail. Each program is keyed by the
@@ -140,9 +140,9 @@ object TvLauncherPublisher {
             put(
                 TvContract.WatchNextPrograms.COLUMN_TYPE,
                 if (season != null && episode != null) {
-                    TvContract.WatchNextPrograms.TYPE_EPISODE
+                    TvContract.WatchNextPrograms.TYPE_TV_EPISODE
                 } else if (isSeries) {
-                    TvContract.WatchNextPrograms.TYPE_SERIES
+                    TvContract.WatchNextPrograms.TYPE_TV_SERIES
                 } else {
                     TvContract.WatchNextPrograms.TYPE_MOVIE
                 }
@@ -160,7 +160,7 @@ object TvLauncherPublisher {
                 episodeTitle?.takeIf { it.isNotBlank() } ?: name
             )
             put(
-                TvContract.WatchNextPrograms.COLUMN_DESCRIPTION,
+                TvContract.WatchNextPrograms.COLUMN_SHORT_DESCRIPTION,
                 buildString {
                     append(name)
                     if (season != null && episode != null) {
@@ -180,15 +180,15 @@ object TvLauncherPublisher {
             )
             put(TvContract.WatchNextPrograms.COLUMN_INTERNAL_PROVIDER_ID, id)
             season?.let {
-                put(TvContract.WatchNextPrograms.COLUMN_SEASON_NUMBER, it)
+                put(TvContract.WatchNextPrograms.COLUMN_SEASON_DISPLAY_NUMBER, it.toString())
             }
             episode?.let {
-                put(TvContract.WatchNextPrograms.COLUMN_EPISODE_NUMBER, it)
+                put(TvContract.WatchNextPrograms.COLUMN_EPISODE_DISPLAY_NUMBER, it.toString())
             }
         }
     }
 
-    private fun deepLinkIntent(
+    private fun WatchHistoryEntity.deepLinkIntent(
         context: Context
     ): Intent = Intent(context, MainActivity::class.java).apply {
         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP

@@ -201,13 +201,14 @@ class SimklViewModel(application: Application) : AndroidViewModel(application) {
 
     fun disconnect() {
         pollJob?.cancel()
+        val appContext = application.applicationContext
 
         viewModelScope.launch {
             try {
                 historyDao.clearAll()
                 watchedStatusRepository.clearAllWatchState()
                 TvLauncherPublisher.sync(
-                    application.applicationContext,
+                    appContext,
                     emptyList()
                 )
 
