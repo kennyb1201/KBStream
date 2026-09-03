@@ -270,7 +270,15 @@ LaunchedEffect(channelListState, groupedChannelIds) {
             }
         }
 }
-  LaunchedEffect(selectedGroup, groupedChannels) {
+  // Key on the channel membership itself rather than the list reference:
+  // EPG data arriving while browsing rebuilds the channel objects (new list
+  // instance every time), which used to re-fire this effect and yank the
+  // channel list back to the top mid-scroll. Membership only changes when
+  // the group content actually changes, so scrolling survives EPG updates.
+  val groupedChannelMembership = remember(groupedChannels) {
+    selectedGroup + "|" + groupedChannels.joinToString("|") { it.channel.id }
+  }
+  LaunchedEffect(groupedChannelMembership) {
     selectedChannelId = groupedChannels.firstOrNull()?.channel?.id
     channelListState.scrollToItem(0)
 }

@@ -1090,7 +1090,11 @@ class NativePlayerActivity : ComponentActivity() {
             // Auto: detect IPTV from parentType or .m3u8 URL
             if (isLiveChannel || currentUrl.lowercase().endsWith(".m3u8")) 1 else 0
         } else bufferMode
-        val bufferDurations = if (resolvedBufferMode == 1) intArrayOf(2_500, 10_000, 1_500, 3_000)
+        // Media3 validates minBufferMs >= bufferForPlaybackAfterRebufferMs
+        // (DefaultLoadControl.Builder throws IllegalArgumentException
+        // otherwise). The old IPTV config (2500/10000/1500/3000) violated
+        // that and force-closed the player on every IPTV start.
+        val bufferDurations = if (resolvedBufferMode == 1) intArrayOf(5_000, 10_000, 1_500, 3_000)
         else intArrayOf(10_000, 30_000, 3_000, 6_000)
 
         val loadControl = DefaultLoadControl.Builder()
