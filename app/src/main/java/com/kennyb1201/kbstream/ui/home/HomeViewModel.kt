@@ -2002,8 +2002,11 @@ episodesTotal =
             episodeThumbnail =
                 episodeThumbnail,            backdrop = backdropUrl,
 
+            // Simkl items carry no clear-logo artwork; TMDB lookups above
+            // only resolve posters/backdrops. Keep it null so the card
+            // falls back to the title text.
             clearLogo =
-                entry.clearLogo,
+                null,
 
 
             runtimeMinutes =
