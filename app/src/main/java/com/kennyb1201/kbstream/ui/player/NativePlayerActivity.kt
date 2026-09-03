@@ -210,6 +210,11 @@ class NativePlayerActivity : ComponentActivity() {
     private var streamHeight = 0
     private var streamBitrate = 0
     private var streamCodec: String? = null
+    // Original declared DV codec (e.g. "dvhe.07.06") of the current video
+    // track when the DV → HDR10 strip rewrote it; null for everything else.
+    // Surfaced in the codec badge so the exact DV profile stays visible
+    // after the rewrite (the codec string itself reads as plain HEVC then).
+    private var streamDeclaredDvCodec: String? = null
 
     // Retry
     private var retryAttempt = 0
@@ -224,12 +229,35 @@ class NativePlayerActivity : ComponentActivity() {
     // Track first-frame rendering and surface an actionable notice instead of
     // letting playback sit on black.
     private var videoTrackPresent = false
+    private var streamMimeType: String? = null
     private var firstFrameRendered = false
     private var blackVideoNoticeShown = false
     private var blackVideoSwRetried = false
+    // One surface bounce is allowed per player attempt: flipping the
+    // SurfaceView's visibility destroys/recreates its native surface and
+    // Media3 re-queues output, which recovers the silent "decoder outputs
+    // frames but the window lost them" case on some boxes (logcat: 'Could not
+    // find corresponding native window for surface') before paying for a full
+    // software-decoder rebuild.
+    private var blackVideoSurfaceRetried = false
     private var blackVideoWatchdogToken = 0
     private val blackVideoWatchdogMs = 8_000L
+    private val blackVideoSurfaceRecheckMs = 5_000L
     private val blackVideoSwTimeoutMs = 25_000L
+
+    // Stall watchdog: a server that stops sending mid-stream leaves the
+    // player stuck in BUFFERING forever — no error fires, the connection just
+    // goes quiet. Track forward progress (position OR buffered position) and
+    // after a quiet period recover by seeking just past the buffered edge,
+    // forcing a fresh ranged read. Two recoveries, then the retry/error path.
+    private var stallWatchdogToken = 0
+    private var stallRecoveries = 0
+    private var stallLastProgressAtMs = 0L
+    private var stallLastPositionMs = -1L
+    private var stallLastBufferedMs = -1L
+    private val stallNoProgressMs = 12_000L
+    private val stallMaxRecoveries = 2
+    private val stallTickMs = 2_000L
 
     // History
     private var isLiveChannel = false
@@ -904,6 +932,9 @@ class NativePlayerActivity : ComponentActivity() {
         videoTrackPresent = false
         firstFrameRendered = false
         blackVideoNoticeShown = false
+        // The surface reset is cheap and valid on every attempt (including the
+        // software one); only the software retry itself is once-per-session.
+        blackVideoSurfaceRetried = false
         blackVideoWatchdogToken++
         // Reset the black-video software-decoder retry only for fresh attempts
         // (new stream / source switch). The software retry itself must keep its
@@ -933,20 +964,30 @@ class NativePlayerActivity : ComponentActivity() {
             .filterValues { it.isNotBlank() }
         if (extraHeaders.isNotEmpty()) httpFactory.setDefaultRequestProperties(extraHeaders)
 
-        // Dolby Vision Profile 7 streams (common on Usenet/NZB 4K remuxes) show
-        // audio-but-black on TVs without a DV decoder. Strip the DV RPU /
-        // enhancement-layer NALs on the fly so the plain HDR10 base layer plays
-        // through the normal hardware HEVC decoder — no software decoding needed.
-        // Controllable from Settings → Playback: Off plays files untouched,
-        // Auto+HDR10+ also strips ST 2094-40 SEIs for HDR10+-intolerant TVs.
+        // Dolby Vision handling (Settings → Playback): in the Auto mode only
+        // dual-layer Profile 7 (remuxes) is rewritten to HDR10 on the fly — the
+        // other profiles pass through untouched so a Dolby-Vision display plays
+        // them as real DV. "All DV" rewrites every profile (4/5/7/8) for
+        // displays without Dolby Vision (P5 has no HDR10 base, so it is
+        // force-decoded as plain HEVC — best effort, colors may be off). Off
+        // plays DV exactly as provided. HDR10+ (ST 2094-40) stripping is an
+        // independent toggle that composes with any DV mode; with DV = Off it
+        // strips HDR10+ only and never touches DV.
         val dvCompatMode = AppPreferences.getDvCompatMode(this)
+        val stripHdr10Plus = AppPreferences.getStripHdr10Plus(this)
+        val dvRewriteEnabled = dvCompatMode != AppPreferences.DV_COMPAT_OFF
+        val convertAllProfiles = dvCompatMode == AppPreferences.DV_COMPAT_ALL
+        // The compat extractor is needed when DV conversion is on OR the
+        // HDR10+ strip toggle is on — both run inside it.
         val extractorsFactory: androidx.media3.extractor.ExtractorsFactory =
-            if (dvCompatMode == AppPreferences.DV_COMPAT_OFF) {
+            if (!dvRewriteEnabled && !stripHdr10Plus) {
                 DefaultExtractorsFactory()
             } else {
                 DolbyVisionCompatExtractorsFactory(
                     DefaultExtractorsFactory(),
-                    stripHdr10Plus = dvCompatMode == AppPreferences.DV_COMPAT_AUTO_HDR10_PLUS
+                    stripHdr10Plus = stripHdr10Plus,
+                    convertAllProfiles = convertAllProfiles,
+                    dvRewriteEnabled = dvRewriteEnabled
                 )
             }
         val mediaSourceFactory = DefaultMediaSourceFactory(httpFactory, extractorsFactory)
@@ -1079,6 +1120,9 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     private fun recreatePlayer() {
+        // Disarm any outstanding stall/black-video timers tied to the old
+        // player instance; fresh ones are armed when the new session is ready.
+        stallWatchdogToken++
         exoPlayer?.release()
         exoPlayer = null
         createPlayer()
@@ -1089,6 +1133,7 @@ class NativePlayerActivity : ComponentActivity() {
             if (isPlaying) {
                 hasPlayedOnce = true
                 hideSplash()
+                armStallWatchdog()
                 // Resume auto-hide when playback resumes while controls are visible
                 if (controlsVisible && !showSettingsPanel && !isPickerShowing) {
                     scheduleAutoHide()
@@ -1117,6 +1162,7 @@ class NativePlayerActivity : ComponentActivity() {
                     errorMessageStr = null
                     autoSelectPreferredLanguages()
                     armBlackVideoWatchdog()
+                    armStallWatchdog()
                 }
                 Player.STATE_ENDED -> {
                     onPlaybackEnded()
@@ -1127,6 +1173,9 @@ class NativePlayerActivity : ComponentActivity() {
         override fun onRenderedFirstFrame() {
             // A frame reached the display — nothing to watch for.
             firstFrameRendered = true
+            // Cancel any in-flight recovery messaging (surface reset / SW switch).
+            reconnectingContainer.visibility = View.GONE
+            bufferingSpinner.visibility = View.GONE
             blackVideoWatchdogToken++
         }
 
@@ -1142,7 +1191,18 @@ class NativePlayerActivity : ComponentActivity() {
                         streamHeight = fmt.height
                         streamBitrate = fmt.bitrate
                         streamCodec = codec.ifBlank { null }
-                        Log.i("PLAYER_CODEC", "video codec=$codec mime=${fmt.sampleMimeType} ${fmt.width}x${fmt.height}")
+                        streamMimeType = fmt.sampleMimeType
+                        // A declared-DV track that the DV → HDR10 strip rewrote
+                        // carries its original codec ("dvhe.07.06") in the
+                        // format label — remember it for the codec badge.
+                        streamDeclaredDvCodec =
+                            fmt.label?.takeIf { dvLabelFromCodec(it) != null }
+                        Log.i(
+                            "PLAYER_CODEC",
+                            "video codec=$codec mime=${fmt.sampleMimeType} " +
+                                "${fmt.width}x${fmt.height} color=${colorInfo?.colorTransfer ?: -1}" +
+                                (streamDeclaredDvCodec?.let { " rewrittenFrom=$it" } ?: "")
+                        )
                     }
                 }
             }
@@ -1262,61 +1322,124 @@ class NativePlayerActivity : ComponentActivity() {
         if (blackVideoNoticeShown || firstFrameRendered || !videoTrackPresent) return
         if (isLiveChannel) return
         val token = ++blackVideoWatchdogToken
-        handler.postDelayed(
-            {
-                if (token != blackVideoWatchdogToken) return@postDelayed
-                if (blackVideoNoticeShown || firstFrameRendered) return@postDelayed
-                // Only flag while actually playing (READY + advancing); a slow
-                // buffering start or rebuffer must not trip the notice.
-                if (exoPlayer?.isPlaying != true) return@postDelayed
-                if (exoPlayer?.playbackState != Player.STATE_READY) return@postDelayed
-                if (errorContainer.visibility == View.VISIBLE) return@postDelayed
-                if (!blackVideoSwRetried && !forceSoftwareDecoder) {
-                    // First occurrence: the decoder reached READY with audio
-                    // playing but never produced a frame (silent black screen).
-                    // Before giving up, rebuild the player with the software
-                    // decoder — this plays many files whose video the TV's
-                    // hardware decoder accepts but cannot actually present.
-                    blackVideoSwRetried = true
-                    val codecInfo = streamCodec?.let { codec ->
-                        if (streamWidth > 0) " ($codec ${streamWidth}x$streamHeight)" else " ($codec)"
-                    } ?: ""
-                    Log.w(
-                        "PLAYER_VIDEO",
-                        "Black video: no first frame after ${blackVideoWatchdogMs}ms$codecInfo — retrying with software decoder"
-                    )
-                    reconnectingContainer.visibility = View.VISIBLE
-                    bufferingSpinner.visibility = View.GONE
-                    reconnectingText.text = "Video isn't displaying — switching to software decoding…"
-                    handler.postDelayed(
+        handler.postDelayed({ handleBlackVideoTimeout(token) }, blackVideoWatchdogMs)
+    }
+
+    /**
+     * Recovery ladder for "READY with audio but no first video frame":
+     *  1. surface bounce — destroy/recreate the SurfaceView's native surface
+     *     (fixes the lost-native-window case where the decoder IS producing
+     *     frames but output goes nowhere),
+     *  2. software decoder rebuild — for content the TV's hardware decoder
+     *     accepts but cannot actually present (DV-family / HEVC-10 quirks),
+     *  3. explicit notice so the user is never left staring at a silent stall.
+     */
+    private fun handleBlackVideoTimeout(token: Int) {
+        if (token != blackVideoWatchdogToken) return
+        if (blackVideoNoticeShown || firstFrameRendered) return
+        // Only flag while actually playing (READY + advancing); a slow
+        // buffering start or rebuffer must not trip the notice.
+        if (exoPlayer?.isPlaying != true) return
+        if (exoPlayer?.playbackState != Player.STATE_READY) return
+        if (errorContainer.visibility == View.VISIBLE) return
+
+        val codecInfo = streamCodec?.let { codec ->
+            if (streamWidth > 0) " ($codec ${streamWidth}x$streamHeight)" else " ($codec)"
+        } ?: ""
+
+        // Stage 1: bounce the video surface. On some boxes a frame never
+        // reaches the display because the player's native window was lost
+        // (logcat: 'Could not find corresponding native window for surface') —
+        // decoding is fine, output is going nowhere. Flipping the SurfaceView's
+        // visibility destroys and recreates its native surface; PlayerView then
+        // hands the fresh surface back to the player and the video renderer
+        // restarts output. Cheaper than a rebuild, and it also covers the
+        // software attempt that follows it.
+        if (!blackVideoSurfaceRetried) {
+            blackVideoSurfaceRetried = true
+            Log.w(
+                "PLAYER_VIDEO",
+                "Black video: no first frame after ${blackVideoWatchdogMs}ms$codecInfo " +
+                    "mime=${streamMimeType ?: "?"} — resetting video surface"
+            )
+            reconnectingContainer.visibility = View.VISIBLE
+            bufferingSpinner.visibility = View.GONE
+            reconnectingText.text = "Video isn't displaying — resetting video surface…"
+            val surfaceView = findVideoSurfaceView(playerView)
+            handler.postDelayed(
+                {
+                    if (token != blackVideoWatchdogToken) return@postDelayed
+                    if (blackVideoNoticeShown || firstFrameRendered) return@postDelayed
+                    if (surfaceView == null) {
+                        // No SurfaceView to bounce (unexpected layout) — skip
+                        // straight to the software-decoder stage.
+                        handler.postDelayed({ handleBlackVideoTimeout(token) }, 0L)
+                        return@postDelayed
+                    }
+                    surfaceView.visibility = View.INVISIBLE
+                    surfaceView.postDelayed(
                         {
                             if (token != blackVideoWatchdogToken) return@postDelayed
-                            if (blackVideoNoticeShown || firstFrameRendered) return@postDelayed
-                            forceSoftwareDecoder = true
-                            errorMessageStr = null
-                            recreatePlayer()
+                            surfaceView.visibility = View.VISIBLE
+                            handler.postDelayed({ handleBlackVideoTimeout(token) }, blackVideoSurfaceRecheckMs)
                         },
-                        500L
+                        250L
                     )
-                    // Absolute deadline for the software attempt: if nothing
-                    // rendered (or the decoder can't even keep up to READY),
-                    // surface the notice instead of leaving a silent stall.
-                    handler.postDelayed(
-                        {
-                            if (token != blackVideoWatchdogToken) return@postDelayed
-                            if (blackVideoNoticeShown || firstFrameRendered) return@postDelayed
-                            if (errorContainer.visibility == View.VISIBLE) return@postDelayed
-                            showBlackVideoNotice()
-                        },
-                        blackVideoSwTimeoutMs
-                    )
-                } else {
-                    // The software decoder also produced no frame: surface the notice.
+                },
+                100L
+            )
+            return
+        }
+
+        // Stage 2: first occurrence with the hardware decoder — rebuild with
+        // the software decoder (plays many files whose video the TV's
+        // hardware decoder accepts but cannot actually present).
+        if (!blackVideoSwRetried && !forceSoftwareDecoder) {
+            blackVideoSwRetried = true
+            Log.w(
+                "PLAYER_VIDEO",
+                "Black video: no first frame (surface reset tried)$codecInfo — retrying with software decoder"
+            )
+            reconnectingContainer.visibility = View.VISIBLE
+            bufferingSpinner.visibility = View.GONE
+            reconnectingText.text = "Video isn't displaying — switching to software decoding…"
+            handler.postDelayed(
+                {
+                    if (token != blackVideoWatchdogToken) return@postDelayed
+                    if (blackVideoNoticeShown || firstFrameRendered) return@postDelayed
+                    forceSoftwareDecoder = true
+                    errorMessageStr = null
+                    recreatePlayer()
+                },
+                500L
+            )
+            // Absolute deadline for the software attempt: if nothing rendered
+            // (or the decoder can't even keep up to READY), surface the notice
+            // instead of leaving a silent stall.
+            handler.postDelayed(
+                {
+                    if (token != blackVideoWatchdogToken) return@postDelayed
+                    if (blackVideoNoticeShown || firstFrameRendered) return@postDelayed
+                    if (errorContainer.visibility == View.VISIBLE) return@postDelayed
                     showBlackVideoNotice()
-                }
-            },
-            blackVideoWatchdogMs
-        )
+                },
+                blackVideoSwTimeoutMs
+            )
+            return
+        }
+
+        // Stage 3: hardware + software both produced nothing — surface the notice.
+        showBlackVideoNotice()
+    }
+
+    private fun findVideoSurfaceView(root: View): android.view.SurfaceView? {
+        if (root is android.view.SurfaceView) return root
+        if (root is ViewGroup) {
+            for (i in 0 until root.childCount) {
+                findVideoSurfaceView(root.getChildAt(i))?.let { return it }
+            }
+        }
+        return null
     }
 
     private fun showBlackVideoNotice() {
@@ -1326,15 +1449,106 @@ class NativePlayerActivity : ComponentActivity() {
         } ?: ""
         Log.w(
             "PLAYER_VIDEO",
-            "Black-video notice: no first frame (hardware + software)${codecInfo}"
+            "Black-video notice: no first frame after surface reset + software retry$codecInfo " +
+                "mime=${streamMimeType ?: "?"} playing=${exoPlayer?.isPlaying} state=${exoPlayer?.playbackState}"
         )
+        reconnectingContainer.visibility = View.GONE
+        bufferingSpinner.visibility = View.GONE
         errorTitle.text = "Video isn't displaying"
         errorMessage.text =
             "Audio is playing but no video frames are rendering$codecInfo. " +
-                "Hardware and software decoding were both tried on this TV. " +
-                "Choose a different source — a 1080p H.264 release usually plays on any device."
+                "The video surface and hardware + software decoders were all tried on this TV. " +
+                "If Dolby Vision playback is on, try setting it to Off for this file, or choose " +
+                "a different source — a 1080p H.264 release usually plays on any device."
         errorContainer.visibility = View.VISIBLE
         btnChangeSource.visibility = View.VISIBLE
+    }
+
+    // --- Stall watchdog ---
+
+    private fun armStallWatchdog() {
+        // Only once real playback has begun (first frame rendered) — the slow
+        // NNTP first-byte wait (up to ~90s) is legitimate and must never trip
+        // this. Live channels have their own handling.
+        if (isLiveChannel) return
+        if (!firstFrameRendered) return
+        if (errorContainer.visibility == View.VISIBLE) return
+        val token = ++stallWatchdogToken
+        stallRecoveries = 0
+        stallLastProgressAtMs = System.currentTimeMillis()
+        stallLastPositionMs = exoPlayer?.currentPosition ?: 0L
+        stallLastBufferedMs = exoPlayer?.bufferedPosition ?: 0L
+        handler.postDelayed({ tickStallWatchdog(token) }, stallTickMs)
+    }
+
+    private fun tickStallWatchdog(token: Int) {
+        if (token != stallWatchdogToken) return
+        if (errorContainer.visibility == View.VISIBLE) return
+        val player = exoPlayer ?: return
+        // User paused: stop watching. Re-armed on resume (onIsPlayingChanged).
+        if (!player.playWhenReady) return
+        val state = player.playbackState
+        if (state != Player.STATE_READY && state != Player.STATE_BUFFERING) return
+        if (!firstFrameRendered) return
+
+        val positionMs = player.currentPosition
+        val bufferedMs = player.bufferedPosition
+        val now = System.currentTimeMillis()
+
+        // Any forward motion — playhead OR buffer — means data is flowing.
+        if (positionMs > stallLastPositionMs + 500 || bufferedMs > stallLastBufferedMs + 500) {
+            stallLastProgressAtMs = now
+            stallLastPositionMs = positionMs
+            stallLastBufferedMs = bufferedMs
+            handler.postDelayed({ tickStallWatchdog(token) }, stallTickMs)
+            return
+        }
+
+        if (now - stallLastProgressAtMs < stallNoProgressMs) {
+            handler.postDelayed({ tickStallWatchdog(token) }, stallTickMs)
+            return
+        }
+
+        // Quiet for the full threshold: recover by forcing a fresh read.
+        if (stallRecoveries >= stallMaxRecoveries) {
+            stallWatchdogToken++
+            Log.w(
+                "PLAYER_STALL",
+                "No data for ${now - stallLastProgressAtMs}ms (pos=${positionMs}ms buf=${bufferedMs}ms) — giving up after $stallRecoveries recoveries"
+            )
+            errorMessageStr =
+                "The stream stopped sending data. This can be a dead source — choose a different one or retry."
+            // Two seek-recoveries already failed, so a full player rebuild is
+            // unlikely to help a dead source; show the actionable error.
+            retryExhausted = true
+            updateUIError()
+            return
+        }
+
+        // Seek just past the buffered edge so the media source opens a new
+        // connection beyond the dead region. When nothing is buffered ahead
+        // (buffer fully drained), seek a little past the playhead instead — a
+        // seek to the exact current position would be a no-op.
+        val durationMs = player.duration
+        if (durationMs > 0 && bufferedMs + 500 >= durationMs - 500) {
+            // The whole file is already buffered, so this is not a network
+            // stall and no seek can force a fresh read. Completion of a
+            // frozen tail is the position poller's job — disarm here so a
+            // perfectly buffered ending never surfaces a network error.
+            stallWatchdogToken++
+            return
+        }
+        stallRecoveries++
+        stallLastProgressAtMs = now
+        stallLastPositionMs = positionMs
+        stallLastBufferedMs = bufferedMs
+        val targetMs = if (bufferedMs > positionMs) bufferedMs + 250 else positionMs + 250
+        Log.w(
+            "PLAYER_STALL",
+            "No data for ${now - stallLastProgressAtMs}ms (pos=${positionMs}ms buf=${bufferedMs}ms) — seeking to ${targetMs}ms to force a fresh read (recovery $stallRecoveries/$stallMaxRecoveries)"
+        )
+        player.seekTo(targetMs)
+        handler.postDelayed({ tickStallWatchdog(token) }, stallTickMs)
     }
 
     private fun updateHeaderInfo() {
@@ -1410,7 +1624,7 @@ class NativePlayerActivity : ComponentActivity() {
             streamHealth.text = buildString {
                 append(normalizeResolution(streamWidth, streamHeight))
                 if (streamBitrate > 0) append(" • ${streamBitrate / 1_000} kbps")
-                val codecLabel = normalizeCodec(streamCodec)
+                val codecLabel = normalizeCodec(streamCodec, streamDeclaredDvCodec)
                 if (codecLabel != "—") append(" • $codecLabel")
             }
     }
@@ -1616,7 +1830,7 @@ class NativePlayerActivity : ComponentActivity() {
                 settingsBitrate.text = "Bitrate: ${streamBitrate / 1_000} kbps"
                 settingsBitrate.visibility = View.VISIBLE
             }
-            val codecLabel = normalizeCodec(streamCodec)
+            val codecLabel = normalizeCodec(streamCodec, streamDeclaredDvCodec)
             if (codecLabel != "—") {
                 settingsCodec.text = "Codec: $codecLabel"
                 settingsCodec.visibility = View.VISIBLE
@@ -2520,16 +2734,42 @@ internal fun normalizeResolution(width: Int, height: Int): String {
     }
 }
 
+private val DV_PROFILE_CODEC = Regex("(?i)^(dvhe|dvh1|dvav|dva1)\\.(\\d+)")
+
+/**
+ * Extracts an exact Dolby Vision profile label from a codec string:
+ * "dvhe.07.06" → "DV P7", "dvh1.05.06" → "DV P5", "dvhe.08.06" → "DV P8".
+ * Non-DV strings return null so the generic family labels stay with normalizeCodec.
+ */
+internal fun dvLabelFromCodec(codec: String?): String? {
+    if (codec.isNullOrBlank()) return null
+    val profile = DV_PROFILE_CODEC.find(codec.trim())?.groupValues?.get(2)
+    if (profile != null) {
+        val number = profile.toIntOrNull() ?: profile.trimStart('0')
+        return "DV P$number"
+    }
+    val lower = codec.trim().lowercase()
+    return if (
+        lower.startsWith("dvhe") || lower.startsWith("dvh1") ||
+        lower.startsWith("dvav") || lower.startsWith("dva1") ||
+        lower.startsWith("dv") || lower.contains("dolby vision")
+    ) "Dolby Vision" else null
+}
+
 /**
  * Normalize raw codec string into a friendly label:
  * "hev1.1.6.L150" → "H.265", "avc1.640028" → "H.264",
  * "vp09.00" → "VP9", "av01" → "AV1".
  */
-internal fun normalizeCodec(codec: String?): String {
+internal fun normalizeCodec(codec: String?, dvOriginalCodec: String? = null): String {
+    // Declared Dolby Vision that the DV → HDR10 strip rewrote to plain HEVC:
+    // surface the original profile so the badge still shows what the file was.
+    dvLabelFromCodec(dvOriginalCodec)?.let { return "$it → HDR10" }
     if (codec.isNullOrBlank()) return "—"
+    dvLabelFromCodec(codec)?.let { return it }
     val lower = codec.lowercase()
     return when {
-        lower.startsWith("dv") || lower.contains("dolby vision") || lower.contains("dvhe") || lower.contains("dvh1") -> "Dolby Vision"
+        lower.contains("dolby vision") -> "Dolby Vision"
         lower.startsWith("avc") || lower.contains("h264") || lower.contains("h.264") -> "H.264"
         lower.startsWith("hev") || lower.startsWith("hvc") || lower.contains("h265") || lower.contains("h.265") -> "H.265"
         lower.startsWith("vp09") || lower.startsWith("vp9") -> "VP9"

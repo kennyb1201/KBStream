@@ -31,13 +31,22 @@ import java.io.EOFException
  *    single Annex-B strip covers both — including the common single-track MKV
  *    remuxes where the DV RPU rides in-band.
  *
- * Detection happens in two stages. Tracks whose codec string is declared
- * (dvhe.07/dvh1.07 via a dvcc box) strip immediately and have their codec
- * rewritten so Media3 never queries a Dolby Vision decoder. Tracks reported as
- * plain HEVC (hvc1/hev1 — muxers that omitted the dvcc marker) are sniffed for
- * in-band RPU NALs over the first samples and engage the same strip when found;
- * verified-clean samples are forwarded untouched, so a false negative only ever
- * costs a few buffered samples, never picture data.
+ * Detection happens in two stages. Tracks whose codec string declares Dolby
+ * Vision (dvhe/dvh1 via a dvcc box) strip immediately and have their codec
+ * rewritten so Media3 never queries a Dolby Vision decoder — but only when
+ * [dvRewriteEnabled] is set (DV mode Auto or "All DV"). In Auto mode only
+ * Profile 7 qualifies (every other DV profile is passed through so DV displays
+ * get the real thing); with [convertAllProfiles] set ("All DV") every profile
+ * — 4/5/7/8 — is rewritten for displays without Dolby Vision (P5 has no HDR10
+ * base, so that one is a best-effort plain-HEVC fallback). Tracks reported as
+ * plain HEVC (hvc1/hev1 — muxers that omitted the dvcc marker) are sniffed
+ * over the first samples: in-band RPU NALs engage the same strip (DV remuxes,
+ * when DV conversion is enabled), and with [stripHdr10Plus] set, ST 2094-40
+ * SEIs are removed from plain-HDR10+ releases so HDR10+-intolerant TVs don't
+ * black-screen. With DV conversion disabled but the HDR10+ strip on (DV mode
+ * Off + toggle), only the HDR10+ SEIs are removed and DV streams are never
+ * touched. Verified-clean samples are forwarded untouched, so a false
+ * negative only ever costs a few buffered samples, never picture data.
  *
  * MKV variants where the RPU only exists as BlockAdditional side data are not
  * reachable here (stock Media3 discards that data before TrackOutput); on those
@@ -46,7 +55,9 @@ import java.io.EOFException
  */
 internal class DolbyVisionCompatExtractorsFactory(
     private val delegate: ExtractorsFactory,
-    private val stripHdr10Plus: Boolean = false
+    private val stripHdr10Plus: Boolean = false,
+    private val convertAllProfiles: Boolean = false,
+    private val dvRewriteEnabled: Boolean = true
 ) : ExtractorsFactory {
 
     override fun createExtractors(): Array<Extractor> =
@@ -67,7 +78,7 @@ internal class DolbyVisionCompatExtractorsFactory(
                 NalFraming.ANNEX_B
             else -> return extractor
         }
-        return VideoCompatExtractor(extractor, framing, stripHdr10Plus)
+        return VideoCompatExtractor(extractor, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled)
     }
 }
 
@@ -78,11 +89,15 @@ internal enum class NalFraming { ANNEX_B, LENGTH_DELIMITED }
 private class VideoCompatExtractor(
     private val delegate: Extractor,
     private val framing: NalFraming,
-    private val stripHdr10Plus: Boolean
+    private val stripHdr10Plus: Boolean,
+    private val convertAllProfiles: Boolean,
+    private val dvRewriteEnabled: Boolean
 ) : Extractor {
 
     override fun init(output: ExtractorOutput) {
-        delegate.init(VideoCompatExtractorOutput(output, framing, stripHdr10Plus))
+        delegate.init(
+            VideoCompatExtractorOutput(output, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled)
+        )
     }
 
     override fun sniff(input: ExtractorInput): Boolean = delegate.sniff(input)
@@ -100,13 +115,15 @@ private class VideoCompatExtractor(
 private class VideoCompatExtractorOutput(
     private val delegate: ExtractorOutput,
     private val framing: NalFraming,
-    private val stripHdr10Plus: Boolean
+    private val stripHdr10Plus: Boolean,
+    private val convertAllProfiles: Boolean,
+    private val dvRewriteEnabled: Boolean
 ) : ExtractorOutput {
 
     override fun track(id: Int, type: Int): TrackOutput {
         val track = delegate.track(id, type)
         return if (type == C.TRACK_TYPE_VIDEO) {
-            VideoCompatTrackOutput(track, framing, stripHdr10Plus)
+            VideoCompatTrackOutput(track, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled)
         } else {
             track
         }
@@ -125,7 +142,9 @@ private class VideoCompatExtractorOutput(
 private class VideoCompatTrackOutput(
     private val delegate: TrackOutput,
     private val framing: NalFraming,
-    private val stripHdr10Plus: Boolean
+    private val stripHdr10Plus: Boolean,
+    private val convertAllProfiles: Boolean,
+    private val dvRewriteEnabled: Boolean
 ) : TrackOutput {
 
     private enum class Mode { NORMAL, SNIFFING, STRIPPING }
@@ -144,14 +163,25 @@ private class VideoCompatTrackOutput(
         currentCodecs = format.codecs
         // A (re)emitted format starts a fresh sample window (seek / re-init).
         pendingLen = 0
-        val dvRewrite = DolbyVisionCompat.hdr10Codec(format.codecs)
+        // When DV conversion is disabled (the DV setting is Off and only the
+        // HDR10+ strip toggle is on), declared DV tracks must pass through
+        // untouched — no codec rewrite, no RPU strip.
+        val dvRewrite =
+            if (dvRewriteEnabled) {
+                DolbyVisionCompat.hdr10Codec(format.codecs, convertAllProfiles)
+            } else {
+                null
+            }
         mode = when {
-            // Declared Profile 7 (dvcc present): strip from the first sample and
-            // rewrite the codec string so Media3 never queries a DV decoder.
+            // Declared Dolby Vision (dvcc present) with DV conversion enabled:
+            // Auto rewrites only Profile 7, "All DV" rewrites every profile
+            // (4/5/7/8). Strip from the first sample and rewrite the codec
+            // string so Media3 never queries a DV decoder.
             dvRewrite != null -> Mode.STRIPPING
             // No DV marker in the codec string — plain HEVC might still carry
-            // in-band RPU when the muxer omitted the dvcc box. Sniff the first
-            // samples for NAL type 62/63 before deciding.
+            // in-band RPU when the muxer omitted the dvcc box (remuxes). Sniff
+            // the first samples for NAL type 62/63 — and for HDR10+ SEIs when
+            // that toggle is on.
             isPlainHevc(format) -> {
                 sniffRemaining = SNIFF_BUDGET_SAMPLES
                 Mode.SNIFFING
@@ -162,7 +192,18 @@ private class VideoCompatTrackOutput(
             nalLengthFieldLength = nalLengthFieldLength(format)
         }
         if (dvRewrite != null) {
+            Log.i(
+                "PLAYER_DV",
+                "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — rewriting to HEVC HDR10"
+            )
             var builder = format.buildUpon().setCodecs(dvRewrite)
+            // Keep the original declared DV codec (e.g. "dvhe.07.06") on the
+            // rewritten format so the player UI can badge the exact profile
+            // that was converted ("DV P7 → HDR10"). The decoder selection
+            // only reads codecs / mime, so the label is safe metadata here.
+            if (!format.codecs.isNullOrBlank()) {
+                builder = builder.setLabel(format.codecs)
+            }
             if (format.sampleMimeType == MimeTypes.VIDEO_DOLBY_VISION) {
                 builder = builder.setSampleMimeType(MimeTypes.VIDEO_H265)
             }
@@ -239,7 +280,7 @@ private class VideoCompatTrackOutput(
                         pendingBuf, sampleEnd, nalLengthFieldLength
                     )
             }
-            if (dvFound) {
+            if (dvFound && dvRewriteEnabled) {
                 mode = Mode.STRIPPING
                 Log.i(
                     "PLAYER_DV",
@@ -247,6 +288,16 @@ private class VideoCompatTrackOutput(
                 )
                 // Fall through and strip this very sample: samples that contain
                 // DV NALs are never forwarded untouched to the decoder.
+            } else if (dvFound) {
+                // DV conversion is off for this session (DV = Off) — the sniff
+                // only exists to find HDR10+ SEIs. A DV remux has nothing to
+                // do here: forward it untouched and stop sniffing.
+                mode = Mode.NORMAL
+                sniffRemaining = 0
+                emit(sampleEnd)
+                if (carrySize > 0) System.arraycopy(pendingBuf, sampleEnd, pendingBuf, 0, carrySize)
+                pendingLen = carrySize
+                return
             } else {
                 // No DV NALs in this sample. When HDR10+ stripping is enabled,
                 // remove ST 2094-40 SEIs here too: plain-HDR10+ HEVC releases
@@ -289,11 +340,13 @@ private class VideoCompatTrackOutput(
 
         val stripped = when (framing) {
             NalFraming.ANNEX_B ->
-                DolbyVisionCompat.stripAnnexB(pendingBuf, sampleEnd, stripDv = true, stripHdr10Plus = stripHdr10Plus)
+                DolbyVisionCompat.stripAnnexB(
+                    pendingBuf, sampleEnd, stripDv = dvRewriteEnabled, stripHdr10Plus = stripHdr10Plus
+                )
             NalFraming.LENGTH_DELIMITED ->
                 DolbyVisionCompat.stripLengthDelimited(
                     pendingBuf, sampleEnd, nalLengthFieldLength,
-                    stripDv = true, stripHdr10Plus = stripHdr10Plus
+                    stripDv = dvRewriteEnabled, stripHdr10Plus = stripHdr10Plus
                 )
         }
         emit(if (stripped >= 0) stripped else sampleEnd)

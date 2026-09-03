@@ -27,7 +27,8 @@ object AppPreferences {
     private const val KEY_ENABLE_TUNNELING = "enable_tunneling"
     private const val KEY_ENABLE_PIP = "enable_pip"
     private const val KEY_DECODER_MODE = "decoder_mode"                      // 0=auto, 1=ffmpeg-only
-    private const val KEY_DV_COMPAT_MODE = "dv_compat_mode"                  // 0=auto, 1=off, 2=auto+hdr10+
+    private const val KEY_DV_COMPAT_MODE = "dv_compat_mode"                  // 0=auto, 1=off, 3=all (2=legacy auto+hdr10+)
+    private const val KEY_STRIP_HDR10_PLUS = "strip_hdr10_plus"             // independent of the DV mode
     private const val KEY_DEFAULT_ASPECT_RATIO = "default_aspect_ratio"     // 0=fit, 1=zoom, 2=fill
     private const val KEY_PREFERRED_AUDIO_LANG = "preferred_audio_language"   // BCP-47 tag or "" for auto
     private const val KEY_PREFERRED_SUBTITLE_LANG = "preferred_subtitle_language" // BCP-47 tag or "" for auto
@@ -110,20 +111,53 @@ object AppPreferences {
     }
 
     // ── Dolby Vision compatibility ─────────────────────────────────────
-    // 0 = Auto: rewrite DV Profile 7 remuxes (dvcc-declared or sniffed
-    //     in-band) to HDR10 so they play through the hardware HEVC decoder.
+    // 0 = Auto: rewrite only dual-layer Profile 7 (dvcc-declared, or sniffed
+    //     in-band on plain-HEVC remuxes) to HDR10 so it plays through the
+    //     hardware HEVC decoder. Every other DV profile (4/5/8) passes through
+    //     untouched so a Dolby-Vision display plays it as real Dolby Vision.
     // 1 = Off: pass streams through untouched (for devices that handle DV
     //     natively, or to compare against the default behavior).
-    // 2 = Auto + also strip HDR10+ SEI (for TVs that black-screen on HDR10+).
+    // 3 = All: rewrite every DV profile — 4/5/7/8 — for TVs without Dolby
+    //     Vision. P5 is a best-effort plain-HEVC fallback (no HDR10 base,
+    //     colors may be off).
+    // HDR10+ (ST 2094-40) stripping is a separate toggle: getStripHdr10Plus.
     const val DV_COMPAT_AUTO = 0
     const val DV_COMPAT_OFF = 1
-    const val DV_COMPAT_AUTO_HDR10_PLUS = 2
+    // Legacy value of the old "Auto + strip HDR10+" mode. Kept so prefs from
+    // earlier builds migrate cleanly — reading it now behaves as Auto with the
+    // HDR10+ strip toggle turned on.
+    const val DV_COMPAT_AUTO_HDR10_PLUS_LEGACY = 2
+    const val DV_COMPAT_ALL = 3
 
-    fun getDvCompatMode(context: Context): Int =
-        prefs(context).getInt(KEY_DV_COMPAT_MODE, DV_COMPAT_AUTO)
+    fun getDvCompatMode(context: Context): Int {
+        val p = prefs(context)
+        val mode = p.getInt(KEY_DV_COMPAT_MODE, DV_COMPAT_AUTO)
+        if (mode == DV_COMPAT_AUTO_HDR10_PLUS_LEGACY) {
+            // The old Auto+ mode was split into Auto + the HDR10+ strip toggle;
+            // preserve the user's intent by migrating the stored value.
+            p.edit()
+                .putInt(KEY_DV_COMPAT_MODE, DV_COMPAT_AUTO)
+                .putBoolean(KEY_STRIP_HDR10_PLUS, true)
+                .apply()
+            return DV_COMPAT_AUTO
+        }
+        return mode
+    }
 
     fun setDvCompatMode(context: Context, mode: Int) {
         prefs(context).edit().putInt(KEY_DV_COMPAT_MODE, mode).apply()
+    }
+
+    // ── HDR10+ (ST 2094-40) stripping ──────────────────────────────────
+    // Independent of the DV mode above: removes dynamic HDR10+ metadata from
+    // plain-HEVC (HDR10+ without DV) and DV-converted streams, for displays
+    // that black-screen on HDR10+ content. Works alongside Auto/All DV; in
+    // Off mode it strips HDR10+ only and never touches DV.
+    fun getStripHdr10Plus(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_STRIP_HDR10_PLUS, false)
+
+    fun setStripHdr10Plus(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_STRIP_HDR10_PLUS, enabled).apply()
     }
 
     // ── Default aspect ratio ─────────────────────────────────────────

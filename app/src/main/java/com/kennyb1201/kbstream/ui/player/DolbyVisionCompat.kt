@@ -1,18 +1,27 @@
 package com.kennyb1201.kbstream.ui.player
 
 /**
- * On-the-fly Dolby Vision Profile 7 -> HDR10 compatibility stripping.
+ * On-the-fly Dolby Vision -> HDR10 compatibility stripping.
  *
  * A non-Dolby-Vision decoder that claims HEVC support will happily "decode"
- * Profile 7 content and output nothing but black frames while audio plays —
+ * Dolby Vision content and output nothing but black frames while audio plays —
  * exactly the symptom on TVs that play the same file in players that perform
- * this transform. These streams carry a Dolby Vision RPU (NAL type 62) and an
- * enhancement layer (layerId > 0) in-band alongside the HDR10 base layer.
+ * this transform.
  *
- * Stripping those NAL units leaves a plain HDR10 HEVC stream that the normal
- * hardware decoder renders at full speed. The codec string (dvhe.07/dvh1.07)
- * is rewritten too, so Media3 never routes the track through a Dolby Vision
- * decoder query (which fails on non-DV hardware).
+ * Which profiles are rewritten depends on the mode the player selects:
+ *  - Auto (default): only dual-layer Profile 7 (dvhe.07/dvh1.07, Blu-ray
+ *    remuxes — base + RPU (NAL type 62) + enhancement layer (layerId > 0)).
+ *    Every other DV profile is passed through untouched so a Dolby-Vision
+ *    display plays it as real Dolby Vision.
+ *  - All DV: every profile — 4, 5, 7 and 8 (dvhe/dvh1.04/.05/.07/.08). For
+ *    displays without Dolby Vision. Profile 5 (single-layer ICtCp) has no
+ *    HDR10 base; stripping yields a plain-HEVC fallback picture with possibly
+ *    off colors rather than a true conversion.
+ *
+ * Stripping the RPU / EL NAL units leaves a plain HDR10 HEVC stream that the
+ * normal hardware decoder renders at full speed. The codec string is rewritten
+ * too, so Media3 never routes the track through a Dolby Vision decoder query
+ * (which fails on non-DV hardware).
  *
  * Media3 1.9 converts Matroska HEVC to Annex-B before handing samples to
  * TrackOutput, so this same strip covers MP4/fMP4 (length-delimited), TS and
@@ -22,9 +31,21 @@ package com.kennyb1201.kbstream.ui.player
  */
 internal object DolbyVisionCompat {
 
-    private val DV7_CODEC = Regex("(?i)^(dvhe|dvh1)\\.(07|7)\\.")
+    // Dual-layer Profile 7 (Blu-ray remuxes) is the DV flavor that routinely
+    // fails on players/TVs — its HDR10-compatible base layer plays everywhere
+    // once the DV RPU / enhancement-layer NALs are stripped. In the Auto modes
+    // this is the only profile that is rewritten: everything else (single-layer
+    // P4/P8 web encodes, P5) is passed through untouched so Dolby-Vision
+    // displays get the real thing.
+    private val DV_CODEC_PROFILE_7 = Regex("(?i)^(dvhe|dvh1)\\.(07|7)\\.")
 
-    /** Generic Main10@L5.1 HEVC identifier describing the stripped HDR10 base layer. */
+    // Every DV profile, used by the explicit "All DV" mode (the fallback for
+    // TVs without Dolby Vision). Profile 5 (ICtCp, no HDR10 base) can only be
+    // force-decoded as plain HEVC — a picture appears, but colors can be off;
+    // a true conversion would need a color-mapping pipeline.
+    private val DV_CODEC_ALL_PROFILES = Regex("(?i)^(dvhe|dvh1)\\.(04|4|05|5|07|7|08|8)\\.")
+
+    /** Generic Main10@L5.1 HEVC identifier describing the stripped base layer. */
     const val HDR10_CODEC: String = "hvc1.2.4.L153.B0"
 
     private const val NAL_PREFIX_SEI = 39
@@ -35,11 +56,25 @@ internal object DolbyVisionCompat {
     // code 0x003C, provider-orientation 0x0001, application id 0x04.
     private val HDR10_PLUS_MARKER = intArrayOf(0xB5, 0x00, 0x3C, 0x00, 0x01, 0x04)
 
-    fun isDolbyVisionProfile7(codecs: String?): Boolean =
-        !codecs.isNullOrBlank() && DV7_CODEC.containsMatchIn(codecs.trim())
-
-    fun hdr10Codec(codecs: String?): String? =
-        codecs?.takeIf { isDolbyVisionProfile7(it) }?.let { HDR10_CODEC }
+    /**
+     * The plain-HEVC rewrite target for a declared DV codec, or null when the
+     * track must be left untouched.
+     *
+     * Auto behavior ([convertAllProfiles] = false): only Profile 7 qualifies —
+     * the other profiles pass through so DV displays play them as Dolby Vision.
+     * "All DV" ([convertAllProfiles] = true): every profile (4/5/7/8) qualifies,
+     * for displays without Dolby Vision (P5 is a best-effort HEVC fallback).
+     */
+    fun hdr10Codec(codecs: String?, convertAllProfiles: Boolean = false): String? {
+        if (codecs.isNullOrBlank()) return null
+        val trimmed = codecs.trim()
+        val matches = if (convertAllProfiles) {
+            DV_CODEC_ALL_PROFILES.containsMatchIn(trimmed)
+        } else {
+            DV_CODEC_PROFILE_7.containsMatchIn(trimmed)
+        }
+        return if (matches) HDR10_CODEC else null
+    }
 
     /**
      * Strips RPU / enhancement-layer NAL units (and optionally HDR10+ SEI) from

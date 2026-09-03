@@ -68,6 +68,7 @@ fun SettingsScreen(
     val isFireTv = android.os.Build.MANUFACTURER.equals("Amazon", ignoreCase = true)
     var decoderMode by remember { mutableIntStateOf(AppPreferences.getDecoderMode(context)) }
     var dvCompatMode by remember { mutableIntStateOf(AppPreferences.getDvCompatMode(context)) }
+    var stripHdr10Plus by remember { mutableStateOf(AppPreferences.getStripHdr10Plus(context)) }
     var aspectRatio by remember { mutableIntStateOf(AppPreferences.getDefaultAspectRatio(context)) }
     var preferredAudioLang by remember { mutableStateOf(AppPreferences.getPreferredAudioLanguage(context)) }
     var preferredSubtitleLang by remember { mutableStateOf(AppPreferences.getPreferredSubtitleLanguage(context)) }
@@ -214,7 +215,7 @@ fun SettingsScreen(
             listOf(
                 AppPreferences.DV_COMPAT_AUTO to "Auto",
                 AppPreferences.DV_COMPAT_OFF to "Off",
-                AppPreferences.DV_COMPAT_AUTO_HDR10_PLUS to "Auto+"
+                AppPreferences.DV_COMPAT_ALL to "All DV"
             ).forEach { (value, label) ->
                 KBCard(onClick = {
                     dvCompatMode = value
@@ -227,13 +228,25 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(2.dp))
         Text(
             text = when (dvCompatMode) {
-                AppPreferences.DV_COMPAT_AUTO -> "Rewrite DV7 remuxes to HDR10 so they play on this TV"
+                AppPreferences.DV_COMPAT_AUTO -> "Profile 7 (remux) \u2192 HDR10; P4/P5/P8 play as Dolby Vision"
                 AppPreferences.DV_COMPAT_OFF -> "Play files exactly as provided (device must handle DV)"
-                AppPreferences.DV_COMPAT_AUTO_HDR10_PLUS -> "DV7 \u2192 HDR10, and strip HDR10+ metadata on plain HEVC too"
+                AppPreferences.DV_COMPAT_ALL -> "Convert every DV profile (P4/P5/P7/P8) \u2192 HDR10/HEVC — for non-DV TVs (P5 colors may be off)"
                 else -> ""
             },
             color = KBTextLo,
             style = MaterialTheme.typography.labelSmall
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        ToggleRow(
+            label = "Strip HDR10+",
+            description = "Remove ST 2094-40 metadata (HDR10+ & DV+HDR10+ files) for TVs that black-screen on it",
+            checked = stripHdr10Plus,
+            onToggle = {
+                stripHdr10Plus = it
+                AppPreferences.setStripHdr10Plus(context, it)
+            }
         )
 
         Spacer(modifier = Modifier.height(10.dp))
