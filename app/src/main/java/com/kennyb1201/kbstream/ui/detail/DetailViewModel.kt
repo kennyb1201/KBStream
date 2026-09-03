@@ -154,7 +154,7 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
                 if (rawItems.isEmpty()) {
                     _watchedKeys.value = emptySet()
                     _resolvedPosterIds.value = emptyMap()
-                    Log.e("KBStream", "poster watched refresh: no items")
+                    Log.i("KBStream", "poster watched refresh: no items")
                     return@launch
                 }
 
@@ -173,7 +173,7 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
                 if (resolvedItems.isEmpty()) {
                     _watchedKeys.value = emptySet()
                     _resolvedPosterIds.value = emptyMap()
-                    Log.e("KBStream", "poster watched refresh: no resolvable imdb ids")
+                    Log.i("KBStream", "poster watched refresh: no resolvable imdb ids")
                     return@launch
                 }
 
@@ -196,7 +196,7 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
                     }
                     .toSet()
 
-                Log.e(
+                Log.i(
                     "KBStream",
                     "poster watched refresh resolved=${resolvedItems.size} watched=${_watchedKeys.value.size}"
                 )

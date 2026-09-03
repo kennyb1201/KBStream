@@ -26,6 +26,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -61,7 +62,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import org.json.JSONArray
@@ -1985,39 +1985,41 @@ class NativePlayerActivity : ComponentActivity() {
 
     // --- History ---
     private fun saveProgress(reason: String, forceCompleted: Boolean = false) {
-        scope?.launch {
-            if (isLiveChannel) return@launch
-            val player = exoPlayer ?: return@launch
-            val pos = withContext(Dispatchers.Main) { player.currentPosition.coerceAtLeast(0L) }
-            val rawDur = withContext(Dispatchers.Main) { player.duration }
-            val dur = if (rawDur == C.TIME_UNSET || rawDur <= 0L) null else rawDur
-            if (parentId.isBlank() || historyId.isBlank() || dur == null) return@launch
-            if (pos < MIN_RESUME_POSITION_MS && !forceCompleted) return@launch
+        val player = exoPlayer ?: return
+        if (isLiveChannel || parentId.isBlank() || historyId.isBlank()) return
 
-            val isCompleted = forceCompleted || pos >= (dur * COMPLETION_THRESHOLD_RATIO).toLong()
-            val safePos = if (isCompleted) 0L else pos.coerceAtMost(dur)
-            val now = System.currentTimeMillis()
-            val dao = WatchHistoryDatabase.getInstance(this@NativePlayerActivity).watchHistoryDao()
-            val existing = withContext(Dispatchers.IO) { dao.getById(historyId) }
+        // Capture playback position synchronously: onStop() releases the
+        // player immediately after this returns, so the position has to be
+        // read while the player is still alive. The Room write then runs off
+        // the main thread via lifecycleScope instead of blocking it.
+        val pos = player.currentPosition.coerceAtLeast(0L)
+        val rawDur = player.duration
+        val dur = if (rawDur == C.TIME_UNSET || rawDur <= 0L) null else rawDur
+        if (dur == null) return
+        if (pos < MIN_RESUME_POSITION_MS && !forceCompleted) return
+        val isCompleted = forceCompleted || pos >= (dur * COMPLETION_THRESHOLD_RATIO).toLong()
+        val safePos = if (isCompleted) 0L else pos.coerceAtMost(dur)
+        val now = System.currentTimeMillis()
 
-            val entry = WatchHistoryEntity(
-                id = historyId, parentId = parentId, type = parentType,
-                name = itemName, episodeTitle = episodeTitle, overview = overview,
-                clearLogo = clearLogoUrl, totalEpisodesInSeason = totalEpisodesInSeason,
-                poster = itemPoster, streamUrl = currentUrl,
-                season = season, episode = episode, episodeStreamId = episodeStreamId,
-                positionMs = safePos, durationMs = dur, updatedAt = now,
-                isCompleted = isCompleted,
-                completedAt = if (isCompleted) existing?.completedAt ?: now else null
-            )
-            withContext(Dispatchers.IO) { dao.upsert(entry) }
-
-            if (isCompleted) {
-                syncCompletedToSimkl()
+        lifecycleScope.launch(Dispatchers.IO) {
+            runCatching {
+                val dao = WatchHistoryDatabase.getInstance(this@NativePlayerActivity).watchHistoryDao()
+                val existing = dao.getById(historyId)
+                val entry = WatchHistoryEntity(
+                    id = historyId, parentId = parentId, type = parentType,
+                    name = itemName, episodeTitle = episodeTitle, overview = overview,
+                    clearLogo = clearLogoUrl, totalEpisodesInSeason = totalEpisodesInSeason,
+                    poster = itemPoster, streamUrl = currentUrl,
+                    season = season, episode = episode, episodeStreamId = episodeStreamId,
+                    positionMs = safePos, durationMs = dur, updatedAt = now,
+                    isCompleted = isCompleted,
+                    completedAt = if (isCompleted) existing?.completedAt ?: now else null
+                )
+                dao.upsert(entry)
             }
+            if (isCompleted) syncCompletedToSimkl()
+        }
     }
-
-}
 
     /**
      * Resolves (once, lazily) the TMDB id for the current parent regardless
@@ -2171,7 +2173,7 @@ class NativePlayerActivity : ComponentActivity() {
         handler.removeCallbacksAndMessages(null)
         nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
         scope?.cancel()
-        saveProgressSync(reason = "stop")
+        saveProgress(reason = "stop")
         scrobbleSimkl("stop")
         exoPlayer?.release()
         exoPlayer = null
@@ -2190,38 +2192,6 @@ class NativePlayerActivity : ComponentActivity() {
         mediaSession = null
     }
 
-    private fun saveProgressSync(reason: String, forceCompleted: Boolean = false) {
-        val player = exoPlayer ?: return
-        if (isLiveChannel || parentId.isBlank() || historyId.isBlank()) return
-        var completed = false
-        runBlocking {
-            runCatching {
-                val pos = player.currentPosition.coerceAtLeast(0L)
-                val rawDur = player.duration
-                val dur = if (rawDur == C.TIME_UNSET || rawDur <= 0L) null else rawDur
-                if (dur == null) return@runBlocking
-                if (pos < MIN_RESUME_POSITION_MS && !forceCompleted) return@runBlocking
-                val isCompleted = forceCompleted || pos >= (dur * COMPLETION_THRESHOLD_RATIO).toLong()
-                completed = isCompleted
-                val safePos = if (isCompleted) 0L else pos.coerceAtMost(dur)
-                val now = System.currentTimeMillis()
-                val dao = WatchHistoryDatabase.getInstance(this@NativePlayerActivity).watchHistoryDao()
-                val existing = withContext(Dispatchers.IO) { dao.getById(historyId) }
-                val entry = WatchHistoryEntity(
-                    id = historyId, parentId = parentId, type = parentType,
-                    name = itemName, episodeTitle = episodeTitle, overview = overview,
-                    clearLogo = clearLogoUrl, totalEpisodesInSeason = totalEpisodesInSeason,
-                    poster = itemPoster, streamUrl = currentUrl,
-                    season = season, episode = episode, episodeStreamId = episodeStreamId,
-                    positionMs = safePos, durationMs = dur, updatedAt = now,
-                    isCompleted = isCompleted,
-                    completedAt = if (isCompleted) existing?.completedAt ?: now else null
-                )
-                withContext(Dispatchers.IO) { dao.upsert(entry) }
-            }
-        }
-        if (completed) syncCompletedToSimkl()
-    }
 
     // --- IntroDb ---
     private fun setupIntroDb() {

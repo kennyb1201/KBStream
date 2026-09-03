@@ -22,6 +22,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.SaverScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -155,6 +157,242 @@ sealed class Screen {
         val drmHeaders: Map<String, String> = emptyMap()
     ) : Screen()
 }
+
+// ---------------------------------------------------------------------------
+// Screen persistence (rememberSaveable).
+//
+// The Screen sealed class is not directly saveable, so it is encoded to/from
+// JSON. Only the navigation-essential fields are kept; returnTo chains are
+// capped at MAX_RETURN_DEPTH and anything unparseable restores Home, so a
+// restored screen always has a valid back destination and can never crash the
+// app on restore. The Player screen runs in its own activity and is mapped to
+// the screen underneath it (never relaunch a dead playback URL).
+// ---------------------------------------------------------------------------
+
+private const val SCREEN_TYPE_KEY = "type"
+private const val MAX_RETURN_DEPTH = 2
+
+private object ScreenSaver : Saver<Screen, String> {
+    override fun SaverScope.save(value: Screen): String =
+        encodeScreen(
+            if (value is Screen.Player) value.returnTo else value
+        ).toString()
+
+    override fun restore(value: String): Screen? =
+        decodeScreen(
+            runCatching { JSONObject(value) }.getOrNull()
+        )
+}
+
+private fun encodeScreen(
+    screen: Screen,
+    depth: Int = 0
+): JSONObject = JSONObject().apply {
+    put(SCREEN_TYPE_KEY, screen.typeName())
+
+    when (screen) {
+        is Screen.Detail -> {
+            put("type", screen.type)
+            put("id", screen.id)
+            screen.pendingTarget?.let { put("pendingTarget", encodeTarget(it)) }
+            screen.itemPoster?.let { put("itemPoster", it) }
+            if (depth < MAX_RETURN_DEPTH) {
+                put("returnTo", encodeScreen(screen.returnTo, depth + 1))
+            }
+        }
+        is Screen.Actor -> {
+            put("personId", screen.personId)
+            if (depth < MAX_RETURN_DEPTH) {
+                put("returnTo", encodeScreen(screen.returnTo, depth + 1))
+            }
+        }
+        is Screen.Studio -> {
+            put("id", screen.id)
+            put("name", screen.name)
+            put("isNetwork", screen.isNetwork)
+            if (depth < MAX_RETURN_DEPTH) {
+                put("returnTo", encodeScreen(screen.returnTo, depth + 1))
+            }
+        }
+        is Screen.Tag -> {
+            put("id", screen.id)
+            put("name", screen.name)
+            put("isKeyword", screen.isKeyword)
+            put("mediaType", screen.mediaType)
+            if (depth < MAX_RETURN_DEPTH) {
+                put("returnTo", encodeScreen(screen.returnTo, depth + 1))
+            }
+        }
+        is Screen.Collection -> {
+            put("id", screen.id)
+            put("name", screen.name)
+            if (depth < MAX_RETURN_DEPTH) {
+                put("returnTo", encodeScreen(screen.returnTo, depth + 1))
+            }
+        }
+        is Screen.Streams -> {
+            put("target", encodeTarget(screen.target))
+            put("parentId", screen.parentId)
+            put("parentType", screen.parentType)
+            screen.itemPoster?.let { put("itemPoster", it) }
+            screen.backdropUrl?.let { put("backdropUrl", it) }
+            screen.clearLogoUrl?.let { put("clearLogoUrl", it) }
+            screen.overview?.let { put("overview", it) }
+            put("cast", JSONArray().apply {
+                screen.cast.forEach { member ->
+                    put(
+                        JSONObject().apply {
+                            put("id", member.id)
+                            put("name", member.name)
+                            member.character?.let { put("character", it) }
+                            member.profilePath?.let { put("profilePath", it) }
+                        }
+                    )
+                }
+            })
+            if (depth < MAX_RETURN_DEPTH) {
+                put("returnTo", encodeScreen(screen.returnTo, depth + 1))
+            }
+        }
+        is Screen.Player -> Unit // mapped to returnTo by the saver; never encoded directly
+        else -> Unit // plain objects carry no payload
+    }
+}
+
+private fun decodeScreen(
+    json: JSONObject?,
+    depth: Int = 0
+): Screen {
+    if (json == null || depth > MAX_RETURN_DEPTH) return Screen.Home
+    return try {
+        when (json.optString(SCREEN_TYPE_KEY)) {
+            "home" -> Screen.Home
+            "addons" -> Screen.Addons
+            "search" -> Screen.Search
+            "simkl" -> Screen.Simkl
+            "guide" -> Screen.Guide
+            "settings" -> Screen.Settings
+            "detail" -> Screen.Detail(
+                type = json.optString("type", "movie"),
+                id = json.optString("id"),
+                pendingTarget = json.optJSONObject("pendingTarget")
+                    ?.let { decodeTarget(it) },
+                itemPoster = json.optNullableString("itemPoster"),
+                returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
+            )
+            "actor" -> Screen.Actor(
+                personId = json.optInt("personId"),
+                returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
+            )
+            "studio" -> Screen.Studio(
+                id = json.optInt("id"),
+                name = json.optString("name"),
+                isNetwork = json.optBoolean("isNetwork"),
+                returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
+            )
+            "tag" -> Screen.Tag(
+                id = json.optInt("id"),
+                name = json.optString("name"),
+                isKeyword = json.optBoolean("isKeyword"),
+                mediaType = json.optString("mediaType", "movie"),
+                returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
+            )
+            "collection" -> Screen.Collection(
+                id = json.optInt("id"),
+                name = json.optString("name"),
+                returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
+            )
+            "streams" -> {
+                val target = json.optJSONObject("target")
+                    ?.let { decodeTarget(it) }
+                    ?: return Screen.Home
+                Screen.Streams(
+                    target = target,
+                    parentId = json.optString("parentId"),
+                    returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1),
+                    parentType = json.optString("parentType", "movie"),
+                    itemPoster = json.optNullableString("itemPoster"),
+                    backdropUrl = json.optNullableString("backdropUrl"),
+                    clearLogoUrl = json.optNullableString("clearLogoUrl"),
+                    overview = json.optNullableString("overview"),
+                    cast = decodeCast(json.optJSONArray("cast"))
+                )
+            }
+            else -> Screen.Home
+        }
+    } catch (t: Throwable) {
+        Screen.Home
+    }
+}
+
+private fun encodeTarget(target: StreamsTarget): JSONObject = JSONObject().apply {
+    put("contentType", target.contentType)
+    put("streamId", target.streamId)
+    put("title", target.title)
+    put("displayName", target.displayName)
+    target.season?.let { put("season", it) }
+    target.episode?.let { put("episode", it) }
+    put("resumePositionMs", target.resumePositionMs)
+    target.totalEpisodesInSeason?.let { put("totalEpisodesInSeason", it) }
+}
+
+private fun decodeTarget(json: JSONObject): StreamsTarget? = try {
+    StreamsTarget(
+        contentType = json.optString("contentType", "movie"),
+        streamId = json.optString("streamId"),
+        title = json.optString("title"),
+        displayName = json.optString("displayName"),
+        season = json.optNullableInt("season"),
+        episode = json.optNullableInt("episode"),
+        resumePositionMs = json.optLong("resumePositionMs", 0L),
+        totalEpisodesInSeason = json.optNullableInt("totalEpisodesInSeason")
+    )
+} catch (t: Throwable) {
+    null
+}
+
+private fun decodeCast(array: JSONArray?): List<TmdbCastMember> {
+    if (array == null) return emptyList()
+    return try {
+        buildList {
+            for (i in 0 until array.length()) {
+                val obj = array.optJSONObject(i) ?: continue
+                add(
+                    TmdbCastMember(
+                        id = obj.optInt("id"),
+                        name = obj.optString("name"),
+                        character = obj.optNullableString("character"),
+                        profilePath = obj.optNullableString("profilePath")
+                    )
+                )
+            }
+        }
+    } catch (t: Throwable) {
+        emptyList()
+    }
+}
+
+private fun Screen.typeName(): String = when (this) {
+    is Screen.Home -> "home"
+    is Screen.Addons -> "addons"
+    is Screen.Search -> "search"
+    is Screen.Simkl -> "simkl"
+    is Screen.Guide -> "guide"
+    is Screen.Settings -> "settings"
+    is Screen.Detail -> "detail"
+    is Screen.Actor -> "actor"
+    is Screen.Studio -> "studio"
+    is Screen.Tag -> "tag"
+    is Screen.Collection -> "collection"
+    is Screen.Streams -> "streams"
+    is Screen.Player -> "player"
+}
+
+private fun JSONObject.optNullableString(key: String): String? =
+    if (has(key) && !isNull(key)) optString(key) else null
+
+private fun JSONObject.optNullableInt(key: String): Int? =
+    if (has(key) && !isNull(key)) optInt(key) else null
 
 // A playback request whose sources are resolved in the background when
 // autoselect is on: the current screen stays visible (with a brief "Finding
@@ -301,7 +539,11 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun AppRoot() {
 
-    var screen by remember {
+    // Persisted across process death: Android can kill a backgrounded TV app,
+    // and without a Saver the app would come back on Home instead of the
+    // detail/streams screen the user was on. The Saver encodes the current
+    // Screen as JSON; anything unparseable falls back to Home.
+    var screen by rememberSaveable(stateSaver = ScreenSaver) {
         mutableStateOf<Screen>(Screen.Home)
     }
 

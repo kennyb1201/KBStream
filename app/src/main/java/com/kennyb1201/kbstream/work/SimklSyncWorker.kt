@@ -23,7 +23,7 @@ class SimklSyncWorker(
             val items = refreshTargets.map { it.imdbId to it.mediaType }
 
             if (items.isEmpty()) {
-                Log.e(TAG, "No watched refresh targets found; skipping sync")
+                Log.i(TAG, "No watched refresh targets found; skipping sync")
                 return Result.success()
             }
 
