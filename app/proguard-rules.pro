@@ -25,6 +25,14 @@
 -keep class org.schabi.newpipeextractor.** { *; }
 -dontwarn org.schabi.newpipeextractor.**
 
+# --- Rhino JS engine (pulled in by NewPipeExtractor) ---
+# Rhino references desktop-only JDK classes (java.beans / javax.script) that
+# do not exist on Android. The code paths NewPipe uses (evaluating player
+# response JS) never touch them, so R8 can safely ignore the missing classes.
+-dontwarn org.mozilla.javascript.**
+-dontwarn java.beans.**
+-dontwarn javax.script.**
+
 # --- ZXing QR generation ---
 -keep class com.google.zxing.** { *; }
 
