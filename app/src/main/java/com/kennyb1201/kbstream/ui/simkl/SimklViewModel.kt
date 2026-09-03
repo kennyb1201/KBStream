@@ -14,12 +14,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-class SimklViewModel(application: Application) : AndroidViewModel(application) {
+class SimklViewModel(app: Application) : AndroidViewModel(app) {
 
-    private val repository = SimklRepository.getInstance(application.applicationContext)
-    private val watchedStatusRepository = WatchedStatusRepository(application.applicationContext)
+    private val appContext = app.applicationContext
+    private val repository = SimklRepository.getInstance(appContext)
+    private val watchedStatusRepository = WatchedStatusRepository(appContext)
     private val historyDao = WatchHistoryDatabase
-        .getInstance(application.applicationContext)
+        .getInstance(appContext)
         .watchHistoryDao()
 
     private val _uiState = MutableStateFlow(
@@ -201,7 +202,6 @@ class SimklViewModel(application: Application) : AndroidViewModel(application) {
 
     fun disconnect() {
         pollJob?.cancel()
-        val appContext = application.applicationContext
 
         viewModelScope.launch {
             try {
