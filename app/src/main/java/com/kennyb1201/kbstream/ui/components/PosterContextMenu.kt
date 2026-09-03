@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -64,7 +65,7 @@ data class PosterContextAction(
  * rails, actor credits, studio/network rails, genre/keyword rails, ...).
  *
  * Rendered in-window on top of the caller's screen with a dim scrim, just
- * like the per-screen menus it replaced. Two things keep D-pad focus from
+ * like the per-screen menus it replaced. Three things keep D-pad focus from
  * escaping into the rails behind the scrim:
  *
  *  1. The overlay is its own [focusGroup] - focus search performed from a
@@ -74,6 +75,11 @@ data class PosterContextAction(
  *     horizontal neighbors), so a stray press can never strand focus on an
  *     invisible item behind the menu - which previously forced users to
  *     press Back to recover.
+ *  3. Up/Down are swallowed at the menu's vertical edges (first/last
+ *     action). The focusGroup only bounds focus *search* - when the search
+ *     finds no next row the key event still falls through to the screen
+ *     behind the scrim, whose scrollables/focusables pick it up and steal
+ *     focus. Consuming the edge press keeps focus clamped to the menu.
  */
 @Composable
 fun PosterContextMenu(
@@ -108,6 +114,14 @@ fun PosterContextMenu(
     // True while the invisible overlay anchor holds focus (Phase 1 below).
     var overlayAnchorFocused by remember {
         mutableStateOf(false)
+    }
+
+    // Index of the action row that currently holds focus; -1 while the
+    // invisible anchor still holds it. Drives the Up/Down edge clamping in
+    // the overlay's key handler so a press at the first/last action can
+    // never escape into the screen behind the scrim.
+    var focusedActionIndex by remember {
+        mutableIntStateOf(-1)
     }
 
     val dialogShape = RoundedCornerShape(20.dp)
@@ -162,32 +176,46 @@ fun PosterContextMenu(
             .focusGroup()
             .background(KBVoid.copy(alpha = 0.60f))
             .onPreviewKeyEvent { event ->
-                // No horizontal focus target exists inside a vertical menu;
-                // consuming Left/Right keeps focus trapped on the action
-                // list instead of letting it wander behind the scrim.
-                if (
-                    event.type == KeyEventType.KeyDown &&
-                    (
-                        event.key == Key.DirectionLeft ||
-                            event.key == Key.DirectionRight
-                        )
-                ) {
-                    true
-                } else if (
-                    event.type == KeyEventType.KeyDown &&
-                    event.key == Key.Back
-                ) {
-                    // Some TV platforms deliver BACK straight to the focused
-                    // compose hierarchy instead of routing it through the
-                    // Activity back dispatcher, which can make the menu look
-                    // like it needs two presses to dismiss. Consume it here
-                    // too so a single press always closes the menu; the
-                    // BackHandler above remains the primary path and simply
-                    // no-ops when this already dismissed it.
-                    onDismiss()
-                    true
-                } else {
+                if (event.type != KeyEventType.KeyDown) {
                     false
+                } else {
+                    when (event.key) {
+                        // No horizontal focus target exists inside a vertical
+                        // menu; consuming Left/Right keeps focus trapped on
+                        // the action list instead of letting it wander
+                        // behind the scrim.
+                        Key.DirectionLeft,
+                        Key.DirectionRight -> true
+
+                        // Same for the vertical edges: once focus is on the
+                        // first/last action there is no next row, so swallow
+                        // Up/Down there too. The focusGroup above only bounds
+                        // focus *search* - when the search finds nothing the
+                        // key event still falls through to the screen behind
+                        // the scrim, and its scrollables/focusables steal
+                        // focus. Consuming the edge press keeps focus clamped
+                        // to the menu. (While the invisible anchor holds
+                        // focus, focusedActionIndex is -1, so Up is already
+                        // an edge press; Down is still free to reach row 0.)
+                        Key.DirectionUp -> focusedActionIndex <= 0
+                        Key.DirectionDown ->
+                            focusedActionIndex >= actions.lastIndex
+
+                        Key.Back -> {
+                            // Some TV platforms deliver BACK straight to the
+                            // focused compose hierarchy instead of routing it
+                            // through the Activity back dispatcher, which
+                            // can make the menu look like it needs two
+                            // presses to dismiss. Consume it here too so a
+                            // single press always closes the menu; the
+                            // BackHandler above remains the primary path and
+                            // simply no-ops when this already dismissed it.
+                            onDismiss()
+                            true
+                        }
+
+                        else -> false
+                    }
                 }
             },
         contentAlignment = Alignment.Center
@@ -296,12 +324,11 @@ fun PosterContextMenu(
                         } else {
                             null
                         },
-                        onFocused = if (index == 0) {
-                            {
+                        onFocused = {
+                            if (index == 0) {
                                 firstActionFocused = true
                             }
-                        } else {
-                            null
+                            focusedActionIndex = index
                         },
                         onClick = action.onClick
                     )
