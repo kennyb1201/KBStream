@@ -36,7 +36,10 @@
 # --- ZXing QR generation ---
 -keep class com.google.zxing.** { *; }
 
-# --- Common optional/annotation noise ---
+# --- Reflection-loaded Jellyfin FFmpeg video renderer ---
+# FFmpeg-only playback instantiates this renderer by its published class name.
+-keep class androidx.media3.decoder.ffmpeg.ExperimentalFfmpegVideoRenderer { *; }
+
 -dontwarn javax.annotation.**
 -dontwarn org.conscrypt.**
 -dontwarn org.bouncycastle.**

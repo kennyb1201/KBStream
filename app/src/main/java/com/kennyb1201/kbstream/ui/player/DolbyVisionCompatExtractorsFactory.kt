@@ -25,11 +25,12 @@ import java.io.EOFException
  * pass-through that never touches the buffering path.
  *
  * Framing per container:
- *  - MP4 / fragmented MP4 store HEVC NAL units length-delimited.
- *  - TS and Matroska reach TrackOutput as Annex-B (Media3 1.9's Matroska
- *    extractor converts MKV HEVC length delimiters into start codes), so a
- *    single Annex-B strip covers both — including the common single-track MKV
- *    remuxes where the DV RPU rides in-band.
+ *  - Media3's MP4 / fragmented MP4 extractors convert length-prefixed HEVC NAL
+ *    units to Annex-B start codes before calling TrackOutput, so their samples
+ *    are handled as Annex-B here too.
+ *  - TS and Matroska reach TrackOutput as Annex-B as well. This single framing
+ *    path covers MP4, fMP4, TS and the common single-track MKV remuxes where
+ *    the DV RPU rides in-band.
  *
  * Detection happens in two stages. Tracks whose codec string declares Dolby
  * Vision (dvhe/dvh1 via a dvcc box) strip immediately and have their codec
@@ -60,21 +61,31 @@ internal class DolbyVisionCompatExtractorsFactory(
     private val dvRewriteEnabled: Boolean = true
 ) : ExtractorsFactory {
 
-    override fun createExtractors(): Array<Extractor> =
-        delegate.createExtractors().map { wrap(it) }.toTypedArray()
+    override fun createExtractors(): Array<Extractor> {
+        Log.i("PLAYER_DV", "Compat extractor factory invoked (default)")
+        return delegate.createExtractors().map { wrap(it) }.toTypedArray()
+    }
 
     override fun createExtractors(
         uri: Uri,
         responseHeaders: Map<String, List<String>>
-    ): Array<Extractor> =
-        delegate.createExtractors(uri, responseHeaders).map { wrap(it) }.toTypedArray()
+    ): Array<Extractor> {
+        Log.i(
+            "PLAYER_DV",
+            "Compat extractor factory invoked uri=${uri.lastPathSegment ?: uri} " +
+                "headers=${responseHeaders.keys.joinToString(",")}"
+        )
+        return delegate.createExtractors(uri, responseHeaders).map { wrap(it) }.toTypedArray()
+    }
 
     private fun wrap(extractor: Extractor): Extractor {
         val name = extractor.javaClass.name
         val framing = when {
-            name.contains("FragmentedMp4Extractor") || name.contains("Mp4Extractor") ->
-                NalFraming.LENGTH_DELIMITED
-            name.contains("TsExtractor") || name.contains("MatroskaExtractor") ->
+            // Media3's MP4/fMP4 extractors prepend NAL start codes while
+            // emitting samples through TrackOutput. They do not expose the
+            // original length-delimited MP4 payload to this wrapper.
+            name.contains("FragmentedMp4Extractor") || name.contains("Mp4Extractor") ||
+                name.contains("TsExtractor") || name.contains("MatroskaExtractor") ->
                 NalFraming.ANNEX_B
             else -> return extractor
         }

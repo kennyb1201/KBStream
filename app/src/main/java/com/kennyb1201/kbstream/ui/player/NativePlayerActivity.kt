@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.player
 
 import android.app.PictureInPictureParams
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -40,7 +41,9 @@ import androidx.recyclerview.widget.RecyclerView
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
@@ -48,6 +51,7 @@ import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.session.MediaSession
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import androidx.media3.exoplayer.video.VideoRendererEventListener
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
@@ -67,6 +71,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.ArrayList
 import java.util.concurrent.TimeUnit
 
 private const val TAG = "NativePlayer"
@@ -81,6 +86,50 @@ private val RETRY_BACKOFF_MS = listOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 3
 private val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 private const val CONTROLS_HIDE_DELAY_MS = 6_000L
 private const val NEXT_UP_COUNTDOWN_SECONDS = 5
+
+/**
+ * Renderer policy used by the explicit FFmpeg-only setting. Media3's
+ * EXTENSION_RENDERER_MODE_PREFER only changes ordering; it still creates the
+ * hardware MediaCodec renderer. This factory deliberately creates only the
+ * bundled FFmpeg video renderer, so hardware cannot win track selection.
+ */
+private class FfmpegOnlyRenderersFactory(context: Context) : DefaultRenderersFactory(context) {
+    override fun buildVideoRenderers(
+        context: Context,
+        extensionRendererMode: Int,
+        mediaCodecSelector: MediaCodecSelector,
+        enableDecoderFallback: Boolean,
+        eventHandler: Handler,
+        eventListener: VideoRendererEventListener,
+        allowedVideoJoiningTimeMs: Long,
+        out: ArrayList<Renderer>
+    ) {
+        try {
+            val rendererClass = Class.forName(
+                "androidx.media3.decoder.ffmpeg.ExperimentalFfmpegVideoRenderer"
+            )
+            val constructor = rendererClass.getConstructor(
+                Long.TYPE,
+                Handler::class.java,
+                VideoRendererEventListener::class.java,
+                Int.TYPE
+            )
+            out.add(
+                constructor.newInstance(
+                    allowedVideoJoiningTimeMs,
+                    eventHandler,
+                    eventListener,
+                    DefaultRenderersFactory.MAX_DROPPED_VIDEO_FRAME_COUNT_TO_NOTIFY
+                ) as Renderer
+            )
+            Log.i("PLAYER_DV", "FFmpeg-only renderer installed; hardware video renderer excluded")
+        } catch (e: ClassNotFoundException) {
+            throw IllegalStateException("FFmpeg-only was selected but the FFmpeg video renderer is unavailable", e)
+        } catch (e: Exception) {
+            throw IllegalStateException("Could not create the FFmpeg-only video renderer", e)
+        }
+    }
+}
 
 class NativePlayerActivity : ComponentActivity() {
 
@@ -975,14 +1024,20 @@ class NativePlayerActivity : ComponentActivity() {
         // strips HDR10+ only and never touches DV.
         val dvCompatMode = AppPreferences.getDvCompatMode(this)
         val stripHdr10Plus = AppPreferences.getStripHdr10Plus(this)
+        val decoderMode = AppPreferences.getDecoderMode(this)
+        // Keep the automatic fallback latch separate from the persisted mode.
+        // A retry sets forceSoftwareDecoder before recreatePlayer(); overwriting
+        // it here would silently switch that retry back to MediaCodec.
+        val softwareDecoderActive = decoderMode == 1 || forceSoftwareDecoder
         val dvRewriteEnabled = dvCompatMode != AppPreferences.DV_COMPAT_OFF
         val convertAllProfiles = dvCompatMode == AppPreferences.DV_COMPAT_ALL
         Log.i(
             "PLAYER_DV",
             "DV settings mode=$dvCompatMode rewriteEnabled=$dvRewriteEnabled " +
                 "allProfiles=$convertAllProfiles stripHdr10Plus=$stripHdr10Plus " +
-                "decoderMode=${AppPreferences.getDecoderMode(this)} " +
-                "forceSoftware=$forceSoftwareDecoder audioSeparate=${!currentAudioUrl.isNullOrBlank()}"
+                "decoderMode=$decoderMode " +
+                "forceSoftware=$softwareDecoderActive " +
+                "audioSeparate=${!currentAudioUrl.isNullOrBlank()}"
         )
         // The compat extractor is needed when DV conversion is on OR the
         // HDR10+ strip toggle is on — both run inside it.
@@ -998,6 +1053,17 @@ class NativePlayerActivity : ComponentActivity() {
                 )
             }
         val mediaSourceFactory = DefaultMediaSourceFactory(httpFactory, extractorsFactory)
+        // DefaultMediaSourceFactory selects HLS/DASH by URI or MIME type and
+        // otherwise falls back to progressive extraction. Build that fallback
+        // explicitly so direct stream endpoints (which commonly have no file
+        // extension) cannot skip the custom DV extractor.
+        val progressiveMediaSourceFactory =
+            ProgressiveMediaSource.Factory(httpFactory, extractorsFactory)
+        Log.i(
+            "PLAYER_DV",
+            "Compat extractor configured=${extractorsFactory.javaClass.simpleName} " +
+                "progressiveSource=${progressiveMediaSourceFactory.javaClass.simpleName}"
+        )
 
         val mimeType = if (retryAttempt < 3) resolveMimeType(currentUrl) else null
         val mediaItemBuilder = MediaItem.Builder().setUri(currentUrl)
@@ -1031,14 +1097,18 @@ class NativePlayerActivity : ComponentActivity() {
             .setBufferDurationsMs(bufferDurations[0], bufferDurations[1], bufferDurations[2], bufferDurations[3])
             .setPrioritizeTimeOverSizeThresholds(true).build()
 
-        val extensionMode = when {
-            forceSoftwareDecoder -> DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
-            AppPreferences.getDecoderMode(this) == 1 -> DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
-            else -> DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
+        val renderersFactory = if (softwareDecoderActive) {
+            FfmpegOnlyRenderersFactory(this)
+        } else {
+            DefaultRenderersFactory(this)
+                .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+                .setEnableDecoderFallback(true)
         }
-        val renderersFactory = DefaultRenderersFactory(this)
-            .setExtensionRendererMode(extensionMode)
-            .setEnableDecoderFallback(true)
+        Log.i(
+            "PLAYER_DV",
+            "Renderer policy decoderMode=$decoderMode forceSoftware=$softwareDecoderActive " +
+                "ffmpegOnly=$softwareDecoderActive"
+        )
 
         val player = ExoPlayer.Builder(this, renderersFactory)
             .setLoadControl(loadControl)
@@ -1055,14 +1125,30 @@ class NativePlayerActivity : ComponentActivity() {
                 setAudioAttributes(audioAttrs, true)
 
                 val audioUrl = currentAudioUrl
+                val initialMediaItem = mediaItemBuilder.build()
+                val urlMimeType = resolveMimeType(currentUrl)
+                val isManifest = mimeType == MimeTypes.APPLICATION_M3U8 ||
+                    mimeType == MimeTypes.APPLICATION_MPD ||
+                    urlMimeType == MimeTypes.APPLICATION_M3U8 ||
+                    urlMimeType == MimeTypes.APPLICATION_MPD
+                Log.i(
+                    "PLAYER_DV",
+                    "Media source path=${if (isManifest) "manifest" else "progressive"} " +
+                        "mime=${mimeType ?: urlMimeType ?: "unknown"}"
+                )
                 if (!audioUrl.isNullOrBlank()) {
-                    val videoSource = ProgressiveMediaSource.Factory(httpFactory, extractorsFactory)
-                        .createMediaSource(mediaItemBuilder.build())
+                    val videoSource = if (isManifest) {
+                        mediaSourceFactory.createMediaSource(initialMediaItem)
+                    } else {
+                        progressiveMediaSourceFactory.createMediaSource(initialMediaItem)
+                    }
                     val audioSource = ProgressiveMediaSource.Factory(httpFactory)
                         .createMediaSource(MediaItem.fromUri(audioUrl))
                     setMediaSource(MergingMediaSource(videoSource, audioSource))
+                } else if (isManifest) {
+                    setMediaItem(initialMediaItem)
                 } else {
-                    setMediaItem(mediaItemBuilder.build())
+                    setMediaSource(progressiveMediaSourceFactory.createMediaSource(initialMediaItem))
                 }
 
                 externalSubtitleUri?.let { subtitleUri ->
@@ -1075,7 +1161,11 @@ class NativePlayerActivity : ComponentActivity() {
                         .setSubtitleConfigurations(listOf(subtitle))
                         .build()
                     if (audioUrl.isNullOrBlank()) {
-                        setMediaItem(currentItem)
+                        if (isManifest) {
+                            setMediaItem(currentItem)
+                        } else {
+                            setMediaSource(progressiveMediaSourceFactory.createMediaSource(currentItem))
+                        }
                     } else {
                         Log.w(TAG, "External subtitles are not merged with a separate audio source")
                     }
