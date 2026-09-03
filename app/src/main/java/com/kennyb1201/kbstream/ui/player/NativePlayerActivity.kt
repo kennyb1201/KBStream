@@ -219,6 +219,16 @@ class NativePlayerActivity : ComponentActivity() {
     private var manualRetryToken = 0
     private var rebufferStartedAtMs = 0L
 
+    // Black-video watchdog: some files reach READY with audio playing but the
+    // video decoder never produces a frame (silent black screen, no error).
+    // Track first-frame rendering and surface an actionable notice instead of
+    // letting playback sit on black.
+    private var videoTrackPresent = false
+    private var firstFrameRendered = false
+    private var blackVideoNoticeShown = false
+    private var blackVideoWatchdogToken = 0
+    private val blackVideoWatchdogMs = 8_000L
+
     // History
     private var isLiveChannel = false
     private var parentId = ""
@@ -887,11 +897,27 @@ class NativePlayerActivity : ComponentActivity() {
 
     // --- Player Creation ---
     private fun createPlayer() {
+        // Fresh attempt at the current URL: reset per-attempt state so the
+        // black-video watchdog can re-arm and report at most once per attempt.
+        videoTrackPresent = false
+        firstFrameRendered = false
+        blackVideoNoticeShown = false
+        blackVideoWatchdogToken++
+
         val agent = streamHeaders["User-Agent"] ?: streamHeaders["user-agent"]
             ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+        // AIOStreams' usenet/NNTP playback endpoints can take a while before
+        // the first bytes arrive (the addon host must fetch the NZB and start
+        // pulling articles from the provider first), so give those streams a
+        // much longer read timeout. With the default 20s, a slow-but-valid
+        // usenet stream gets killed as an error and enters a retry loop of
+        // loading screens.
+        val slowStartUrl =
+            currentUrl.contains("/usenet/stream/") ||
+                currentUrl.contains("/api/v1/debrid/playback/")
         val okHttpClient = OkHttpClient.Builder()
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(20, TimeUnit.SECONDS)
+            .connectTimeout(if (slowStartUrl) 45L else 20L, TimeUnit.SECONDS)
+            .readTimeout(if (slowStartUrl) 90L else 20L, TimeUnit.SECONDS)
             .build()
         val httpFactory = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(okHttpClient)
             .setUserAgent(agent)
@@ -1068,6 +1094,7 @@ class NativePlayerActivity : ComponentActivity() {
                     retryExhausted = false
                     errorMessageStr = null
                     autoSelectPreferredLanguages()
+                    armBlackVideoWatchdog()
                 }
                 Player.STATE_ENDED -> {
                     onPlaybackEnded()
@@ -1075,11 +1102,18 @@ class NativePlayerActivity : ComponentActivity() {
             }
         }
 
+        override fun onRenderedFirstFrame() {
+            // A frame reached the display — nothing to watch for.
+            firstFrameRendered = true
+            blackVideoWatchdogToken++
+        }
+
         override fun onTracksChanged(tracks: Tracks) {
             for (group in tracks.groups) {
                 for (i in 0 until group.length) {
                     val fmt = group.getTrackFormat(i)
                     if (group.type == C.TRACK_TYPE_VIDEO) {
+                        videoTrackPresent = true
                         val codec = fmt.codecs.orEmpty()
                         val colorInfo = fmt.colorInfo
                         streamWidth = fmt.width
@@ -1094,7 +1128,14 @@ class NativePlayerActivity : ComponentActivity() {
         }
 
         override fun onPlayerError(error: PlaybackException) {
-            val msg = friendlyErrorMessage(error)
+            var msg = friendlyErrorMessage(error)
+            if (isDecoderError(error.errorCode)) {
+                val codec = streamCodec
+                if (!codec.isNullOrBlank()) {
+                    val dims = if (streamWidth > 0) " ${streamWidth}x$streamHeight" else ""
+                    msg += "\nThis file's video ($codec$dims) can't be decoded on this TV."
+                }
+            }
             errorMessageStr = msg + if (forceSoftwareDecoder) " (software decoder)" else ""
             if (isLikelyRetryable(error)) {
                 scheduleRetry()
@@ -1184,6 +1225,51 @@ class NativePlayerActivity : ComponentActivity() {
         errorContainer.visibility = View.VISIBLE
         errorTitle.text = if (isLiveChannel) "Channel unavailable" else "Playback failed"
         errorMessage.text = errorMessageStr.orEmpty()
+        btnChangeSource.visibility = View.VISIBLE
+    }
+
+    // --- Black-video watchdog ---
+
+    private fun isDecoderError(errorCode: Int): Boolean =
+        errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
+            errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
+            errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES
+
+    private fun armBlackVideoWatchdog() {
+        // Only meaningful when a video track exists and hasn't rendered yet.
+        if (blackVideoNoticeShown || firstFrameRendered || !videoTrackPresent) return
+        if (forceSoftwareDecoder || isLiveChannel) return
+        val token = ++blackVideoWatchdogToken
+        handler.postDelayed(
+            {
+                if (token != blackVideoWatchdogToken) return@postDelayed
+                if (blackVideoNoticeShown || firstFrameRendered) return@postDelayed
+                // Only flag while actually playing (READY + advancing); a slow
+                // buffering start or rebuffer must not trip the notice.
+                if (exoPlayer?.isPlaying != true) return@postDelayed
+                if (exoPlayer?.playbackState != Player.STATE_READY) return@postDelayed
+                if (errorContainer.visibility == View.VISIBLE) return@postDelayed
+                showBlackVideoNotice()
+            },
+            blackVideoWatchdogMs
+        )
+    }
+
+    private fun showBlackVideoNotice() {
+        blackVideoNoticeShown = true
+        val codecInfo = streamCodec?.let { codec ->
+            if (streamWidth > 0) " ($codec ${streamWidth}x$streamHeight)" else " ($codec)"
+        } ?: ""
+        Log.w(
+            "PLAYER_VIDEO",
+            "Black-video notice: no first frame after ${blackVideoWatchdogMs}ms$codecInfo"
+        )
+        errorTitle.text = "Video isn't displaying"
+        errorMessage.text =
+            "Audio is playing but no video frames are rendering$codecInfo. " +
+                "This TV can't decode this file's video track. Choose a different " +
+                "source — a 1080p H.264 release usually plays on any device."
+        errorContainer.visibility = View.VISIBLE
         btnChangeSource.visibility = View.VISIBLE
     }
 

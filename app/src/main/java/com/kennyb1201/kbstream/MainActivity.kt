@@ -1381,7 +1381,7 @@ fun AppRoot() {
                         .crossfade(true)
                         .build(),
                     contentDescription = pending.target.displayName,
-                    contentScale = ContentScale.Fit,
+                    contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
                 )
             }
