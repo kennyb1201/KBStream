@@ -233,6 +233,10 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
         }
+        // The catalog manager dialog renders from _catalogConfigurations,
+        // not _addons — without this refresh a toggle saves silently but the
+        // row (and any re-open of the dialog) still shows the old state.
+        refresh()
     }
 
     /**

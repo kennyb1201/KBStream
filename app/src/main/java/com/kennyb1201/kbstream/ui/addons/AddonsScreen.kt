@@ -1926,6 +1926,56 @@ private fun CatalogIconButton(
 }
 
 @Composable
+private fun CatalogToggle(
+    checked: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    // One D-pad target (the whole capsule) — the state is read from the
+    // track color/knob position instead of ON/OFF text.
+    KBCard(onClick = onClick, modifier = modifier) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp)
+        ) {
+            // Track
+            Box(
+                modifier = Modifier
+                    .width(46.dp)
+                    .height(26.dp)
+                    .clip(RoundedCornerShape(13.dp))
+                    .background(
+                        if (checked) {
+                            KBAccent.copy(alpha = 0.30f)
+                        } else {
+                            KBSurfaceRaised.copy(alpha = 0.60f)
+                        }
+                    )
+                    .border(
+                        1.dp,
+                        if (checked) {
+                            KBAccent
+                        } else {
+                            KBTextLo.copy(alpha = 0.45f)
+                        },
+                        RoundedCornerShape(13.dp)
+                    )
+            ) {
+                // Knob
+                Box(
+                    modifier = Modifier
+                        .align(if (checked) Alignment.CenterEnd else Alignment.CenterStart)
+                        .padding(3.dp)
+                        .size(20.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (checked) KBAccent else KBTextLo)
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun CatalogManagerRow(
     config: CatalogConfiguration,
     position: Int,
@@ -1941,7 +1991,7 @@ private fun CatalogManagerRow(
             .background(KBSurface)
             .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
-        // Line 1: position + name + ON/OFF toggle
+        // Line 1: position + name + show/hide switch
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth()
@@ -1963,12 +2013,9 @@ private fun CatalogManagerRow(
                 modifier = Modifier.weight(1f).padding(end = 6.dp)
             )
 
-            ActionButton(
-                label = if (config.catalog.showOnHome) "ON" else "OFF",
-                onClick = onToggle,
-                modifier = Modifier.width(50.dp),
-                horizontalPadding = 6.dp,
-                verticalPadding = 5.dp
+            CatalogToggle(
+                checked = config.catalog.showOnHome,
+                onClick = onToggle
             )
         }
 
