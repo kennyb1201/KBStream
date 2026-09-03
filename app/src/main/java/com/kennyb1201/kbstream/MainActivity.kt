@@ -4,8 +4,19 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -13,11 +24,21 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
+import androidx.tv.material3.Text
+import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.tmdb.TmdbCastMember
@@ -44,6 +65,9 @@ import com.kennyb1201.kbstream.ui.streams.StreamsViewModel
 import com.kennyb1201.kbstream.ui.studio.StudioScreen
 import com.kennyb1201.kbstream.ui.tag.TagScreen
 import com.kennyb1201.kbstream.ui.theme.KBStreamTheme
+import com.kennyb1201.kbstream.ui.theme.KBTextHi
+import com.kennyb1201.kbstream.ui.theme.KBTextLo
+import com.kennyb1201.kbstream.ui.theme.KBVoid
 
 sealed class Screen {
 
@@ -131,6 +155,121 @@ sealed class Screen {
     ) : Screen()
 }
 
+// A playback request whose sources are resolved in the background when
+// autoselect is on: the current screen stays visible (with a brief "Finding
+// sources" overlay) and playback starts straight from the player. The streams
+// picker is only reached as a fallback when nothing playable resolves.
+private data class PendingPlay(
+    val target: StreamsTarget,
+    val parentId: String,
+    val parentType: String,
+    val itemPoster: String?,
+    val backdropUrl: String?,
+    val clearLogoUrl: String?,
+    val overview: String?,
+    val cast: List<TmdbCastMember>,
+    val returnTo: Screen,
+    val totalEpisodesInSeason: Int? = null
+) {
+    val streamKey: String
+        get() = "${target.contentType}:${target.streamId}"
+
+    fun toPlayerScreen(stream: Stream, allSources: List<Stream>): Screen.Player {
+        return Screen.Player(
+            url = stream.url.orEmpty(),
+            audioUrl = stream.audioUrl,
+            parentId = parentId,
+            parentType = parentType,
+            season = target.season,
+            episode = target.episode,
+            episodeStreamId = target.streamId,
+            episodeTitle = target.title
+                .substringAfterLast("•", "")
+                .trim()
+                .takeIf { it.isNotBlank() && it != target.title },
+            itemName = target.displayName,
+            itemPoster = itemPoster,
+            clearLogoUrl = clearLogoUrl,
+            backdropUrl = backdropUrl,
+            overview = overview,
+            cast = cast.map { member ->
+                PlayerCastMember(
+                    id = member.id,
+                    name = member.name,
+                    character = member.character,
+                    profilePath = member.profilePath?.let {
+                        TmdbRepository.PROFILE_BASE + it
+                    }
+                )
+            },
+            startPositionMs = target.resumePositionMs,
+            returnTo = returnTo,
+            sources = allSources,
+            totalEpisodesInSeason = totalEpisodesInSeason,
+            drmLicenseUrl = stream.drm?.licenseUrl,
+            drmHeaders = stream.drm?.headers.orEmpty()
+        )
+    }
+
+    fun toStreamsScreen(): Screen.Streams {
+        return Screen.Streams(
+            target = target,
+            parentId = parentId,
+            returnTo = returnTo,
+            parentType = parentType,
+            itemPoster = itemPoster,
+            backdropUrl = backdropUrl,
+            clearLogoUrl = clearLogoUrl,
+            overview = overview,
+            cast = cast
+        )
+    }
+}
+
+// Mirrors the player's clearlogo_pulse animation (1.0 -> 1.08 scale, 0.7 -> 1.0
+// alpha, 1200 ms, reverse, infinite) applied to the clear logo.
+@Composable
+private fun PulsingClearLogo(
+    url: String,
+    contentDescription: String
+) {
+    val pulse = rememberInfiniteTransition(label = "clearLogoPulse")
+    val scale by pulse.animateFloat(
+        initialValue = 1f,
+        targetValue = 1.08f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "clearLogoScale"
+    )
+    val alpha by pulse.animateFloat(
+        initialValue = 0.7f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "clearLogoAlpha"
+    )
+    AsyncImage(
+        model = ImageRequest.Builder(LocalContext.current)
+            .data(url)
+            .crossfade(true)
+            .build(),
+        contentDescription = contentDescription,
+        contentScale = ContentScale.Fit,
+        modifier = Modifier
+            .width(240.dp)
+            .height(80.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                this.alpha = alpha
+            }
+    )
+}
+
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(
@@ -184,9 +323,45 @@ fun AppRoot() {
 
     val iptvViewModel: IptvViewModel = viewModel()
 
+    val streamsViewModel: StreamsViewModel = viewModel()
+
+    // When autoselect is on, sources resolve here in the background while the
+    // current screen stays visible (a brief "Finding sources" overlay), then
+    // playback starts straight from the player — the streams picker never
+    // flashes before playback. The picker is only shown as a fallback when
+    // nothing playable resolves.
+    var pendingAutoPlay by remember {
+        mutableStateOf<PendingPlay?>(null)
+    }
+
+    LaunchedEffect(pendingAutoPlay) {
+        val pending = pendingAutoPlay ?: return@LaunchedEffect
+        // Mark the target as auto-played up front so the picker can never
+        // auto-select it again if we fall through to it (no playable source).
+        autoPlayedStreamKeys =
+            (autoPlayedStreamKeys + pending.streamKey).distinct()
+        val streams = streamsViewModel.resolve(
+            pending.target.contentType,
+            pending.target.streamId
+        )
+        val top = streams.firstOrNull { !it.url.isNullOrBlank() }
+        pendingAutoPlay = null
+        screen = if (top != null) {
+            pending.toPlayerScreen(top, streams)
+        } else {
+            pending.toStreamsScreen()
+        }
+    }
+
     BackHandler(
-        enabled = screen != Screen.Home
+        enabled = screen != Screen.Home || pendingAutoPlay != null
     ) {
+        // Backing out while "Finding sources" is up cancels the in-flight
+        // resolution (the LaunchedEffect above is keyed on pendingAutoPlay) and
+        // navigates back from the screen underneath.
+        if (pendingAutoPlay != null) {
+            pendingAutoPlay = null
+        }
         screen = when (val current = screen) {
 
             is Screen.Addons ->
@@ -476,17 +651,36 @@ fun AppRoot() {
                         overview,
                         cast ->
 
-                    screen = Screen.Streams(
-                        target = target,
-                        parentId = parentId,
-                        returnTo = current,
-                        parentType = parentType,
-                        itemPoster = poster,
-                        backdropUrl = backdropUrl,
-                        clearLogoUrl = clearLogoUrl,
-                        overview = overview,
-                        cast = cast
-                    )
+                    if (AppPreferences.getAutoSelectStream(context)) {
+                        // Autoselect is on: resolve sources in the background
+                        // (this screen stays visible under a brief "Finding
+                        // sources" overlay) and jump straight into the player —
+                        // the streams picker only appears if nothing playable
+                        // resolves.
+                        pendingAutoPlay = PendingPlay(
+                            target = target,
+                            parentId = parentId,
+                            parentType = parentType,
+                            itemPoster = poster,
+                            backdropUrl = backdropUrl,
+                            clearLogoUrl = clearLogoUrl,
+                            overview = overview,
+                            cast = cast,
+                            returnTo = current
+                        )
+                    } else {
+                        screen = Screen.Streams(
+                            target = target,
+                            parentId = parentId,
+                            returnTo = current,
+                            parentType = parentType,
+                            itemPoster = poster,
+                            backdropUrl = backdropUrl,
+                            clearLogoUrl = clearLogoUrl,
+                            overview = overview,
+                            cast = cast
+                        )
+                    }
                 }
             )
         }
@@ -570,10 +764,17 @@ fun AppRoot() {
                 current.target.contentType,
                 current.target.streamId
             ) {
-                streamsViewModel.load(
-                    current.target.contentType,
-                    current.target.streamId
-                )
+                val targetKey = "${current.target.contentType}:${current.target.streamId}"
+                // Skip a redundant re-fetch when this target was just resolved
+                // in the background (autoselect path) — its result is already
+                // in the ViewModel, so the picker appears instantly without a
+                // loading flash.
+                if (streamsViewModel.loadedKey.value != targetKey) {
+                    streamsViewModel.load(
+                        current.target.contentType,
+                        current.target.streamId
+                    )
+                }
             }
 
             val streamKey =
@@ -652,33 +853,51 @@ fun AppRoot() {
             ) { result ->
                 // Check shared state first (more reliable than activity results)
                 val next = com.kennyb1201.kbstream.ui.player.NextEpisodeResult.consume()
-                if (next != null) {                        screen = Screen.Streams(
-                            target = StreamsTarget(
-                                contentType = current.parentType,
-                                streamId = next.streamId,
-                            title = next.title,
-                            displayName = current.itemName,
-                            season = next.season,
-                            episode = next.episode,
-                            resumePositionMs = 0L,
-                            totalEpisodesInSeason = current.totalEpisodesInSeason
-                        ),
-                        parentId = current.parentId,
-                        returnTo = current.returnTo,
-                        parentType = current.parentType,
-                        itemPoster = current.itemPoster,
-                        backdropUrl = current.backdropUrl,
-                        clearLogoUrl = current.clearLogoUrl,
-                        overview = current.overview,
-                        cast = current.cast.map { member ->
-                            TmdbCastMember(
-                                id = member.id,
-                                name = member.name,
-                                character = member.character,
-                                profilePath = member.profilePath?.removePrefix(TmdbRepository.PROFILE_BASE)
-                            )
-                        }
+                if (next != null) {
+                    val nextTarget = StreamsTarget(
+                        contentType = current.parentType,
+                        streamId = next.streamId,
+                        title = next.title,
+                        displayName = current.itemName,
+                        season = next.season,
+                        episode = next.episode,
+                        resumePositionMs = 0L,
+                        totalEpisodesInSeason = current.totalEpisodesInSeason
                     )
+                    val nextCast = current.cast.map { member ->
+                        TmdbCastMember(
+                            id = member.id,
+                            name = member.name,
+                            character = member.character,
+                            profilePath = member.profilePath?.removePrefix(TmdbRepository.PROFILE_BASE)
+                        )
+                    }
+                    if (AppPreferences.getAutoSelectStream(context)) {
+                        pendingAutoPlay = PendingPlay(
+                            target = nextTarget,
+                            parentId = current.parentId,
+                            parentType = current.parentType,
+                            itemPoster = current.itemPoster,
+                            backdropUrl = current.backdropUrl,
+                            clearLogoUrl = current.clearLogoUrl,
+                            overview = current.overview,
+                            cast = nextCast,
+                            returnTo = current.returnTo,
+                            totalEpisodesInSeason = current.totalEpisodesInSeason
+                        )
+                    } else {
+                        screen = Screen.Streams(
+                            target = nextTarget,
+                            parentId = current.parentId,
+                            returnTo = current.returnTo,
+                            parentType = current.parentType,
+                            itemPoster = current.itemPoster,
+                            backdropUrl = current.backdropUrl,
+                            clearLogoUrl = current.clearLogoUrl,
+                            overview = current.overview,
+                            cast = nextCast
+                        )
+                    }
                 } else {
                     val data = result.data
                     val action = data?.getStringExtra("player_result_action")
@@ -688,33 +907,50 @@ fun AppRoot() {
                             val nextSeason = data.getIntExtra("next_season", -1).takeIf { it >= 0 }
                             val nextTitle = data.getStringExtra("next_title")
                             val nextStreamId = data.getStringExtra("next_stream_id")
-                            screen = Screen.Streams(
-                                target = StreamsTarget(
-                                    contentType = current.parentType,
-                                    streamId = nextStreamId.orEmpty(),
-                                    title = nextTitle.orEmpty(),
-                                    displayName = current.itemName,
-                                    season = nextSeason,
-                                    episode = nextEpisode,
-                                    resumePositionMs = 0L,
-                                    totalEpisodesInSeason = current.totalEpisodesInSeason
-                                ),
-                            parentId = current.parentId,
-                            returnTo = current.returnTo,
-                            parentType = current.parentType,
-                            itemPoster = current.itemPoster,
-                                backdropUrl = current.backdropUrl,
-                                clearLogoUrl = current.clearLogoUrl,
-                                overview = current.overview,
-                                cast = current.cast.map { member ->
-                                    TmdbCastMember(
-                                        id = member.id,
-                                        name = member.name,
-                                        character = member.character,
-                                        profilePath = member.profilePath?.removePrefix(TmdbRepository.PROFILE_BASE)
-                                    )
-                                }
+                            val nextTarget = StreamsTarget(
+                                contentType = current.parentType,
+                                streamId = nextStreamId.orEmpty(),
+                                title = nextTitle.orEmpty(),
+                                displayName = current.itemName,
+                                season = nextSeason,
+                                episode = nextEpisode,
+                                resumePositionMs = 0L,
+                                totalEpisodesInSeason = current.totalEpisodesInSeason
                             )
+                            val nextCast = current.cast.map { member ->
+                                TmdbCastMember(
+                                    id = member.id,
+                                    name = member.name,
+                                    character = member.character,
+                                    profilePath = member.profilePath?.removePrefix(TmdbRepository.PROFILE_BASE)
+                                )
+                            }
+                            if (AppPreferences.getAutoSelectStream(context)) {
+                                pendingAutoPlay = PendingPlay(
+                                    target = nextTarget,
+                                    parentId = current.parentId,
+                                    parentType = current.parentType,
+                                    itemPoster = current.itemPoster,
+                                    backdropUrl = current.backdropUrl,
+                                    clearLogoUrl = current.clearLogoUrl,
+                                    overview = current.overview,
+                                    cast = nextCast,
+                                    returnTo = current.returnTo,
+                                    totalEpisodesInSeason = current.totalEpisodesInSeason
+                                )
+                            } else {
+                                screen = Screen.Streams(
+                                    target = nextTarget,
+                                    parentId = current.parentId,
+                                    returnTo = current.returnTo,
+                                    parentType = current.parentType,
+                                    itemPoster = current.itemPoster,
+                                    backdropUrl = current.backdropUrl,
+                                    clearLogoUrl = current.clearLogoUrl,
+                                    overview = current.overview,
+                                    cast = nextCast
+                                )
+                            }
                         }
                     "navigate_actor" -> {
                         val personId = data.getIntExtra("actor_person_id", -1)
@@ -833,6 +1069,61 @@ fun AppRoot() {
                     current.totalEpisodesInSeason?.let { putExtra("total_episodes_in_season", it) }
                 }
                 playerResultLauncher.launch(intent)
+            }
+        }
+    }
+
+    // Loading splash while autoselect resolves sources in the background —
+    // mirrors the player's first-load splash (backdrop + pulsing clearlogo) —
+    // so the streams picker is never shown before playback.
+    pendingAutoPlay?.let { pending ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(KBVoid)
+        ) {
+            if (!pending.backdropUrl.isNullOrBlank()) {
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(pending.backdropUrl)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = pending.target.displayName,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                if (!pending.clearLogoUrl.isNullOrBlank()) {
+                    PulsingClearLogo(
+                        url = pending.clearLogoUrl,
+                        contentDescription = pending.target.displayName
+                    )
+                } else {
+                    Text(
+                        text = pending.target.displayName,
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                Spacer(
+                    modifier = Modifier.height(14.dp)
+                )
+
+                Text(
+                    text = "Finding sources…",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodyMedium
+                )
             }
         }
     }
