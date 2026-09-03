@@ -399,6 +399,25 @@ private fun JSONObject.optNullableString(key: String): String? =
 private fun JSONObject.optNullableInt(key: String): Int? =
     if (has(key) && !isNull(key)) optInt(key) else null
 
+private fun restoredStreamTitle(
+    displayName: String,
+    season: Int?,
+    episode: Int?,
+    episodeTitle: String?
+): String {
+    val episodeMarker = if (season != null && episode != null) {
+        "$displayName S$season E$episode"
+    } else {
+        displayName
+    }
+
+    return episodeTitle
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+        ?.let { "$episodeMarker • $it" }
+        ?: episodeMarker
+}
+
 // A playback request whose sources are resolved in the background when
 // autoselect is on: the current screen stays visible (with a brief "Finding
 // sources" overlay) and playback starts straight from the player. The streams
@@ -1296,7 +1315,12 @@ fun AppRoot() {
                                 target = StreamsTarget(
                                     contentType = current.parentType,
                                     streamId = current.episodeStreamId.orEmpty(),
-                                    title = current.episodeTitle.orEmpty().ifBlank { current.itemName },
+                                    title = restoredStreamTitle(
+                                        displayName = current.itemName,
+                                        season = current.season,
+                                        episode = current.episode,
+                                        episodeTitle = current.episodeTitle
+                                    ),
                                     displayName = current.itemName,
                                     season = current.season,
                                     episode = current.episode,

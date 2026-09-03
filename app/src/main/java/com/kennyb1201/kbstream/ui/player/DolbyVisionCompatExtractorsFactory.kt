@@ -80,18 +80,19 @@ internal class DolbyVisionCompatExtractorsFactory(
 
     private fun wrap(extractor: Extractor): Extractor {
         val name = extractor.javaClass.name
-        val framing = when {
-            // Media3's MP4/fMP4 extractors prepend NAL start codes while
-            // emitting samples through TrackOutput. They do not expose the
-            // original length-delimited MP4 payload to this wrapper.
-            name.contains("FragmentedMp4Extractor") || name.contains("Mp4Extractor") ||
-                name.contains("TsExtractor") || name.contains("MatroskaExtractor") ->
-                NalFraming.ANNEX_B
-            else -> return extractor
-        }
+        val simpleName = name.substringAfterLast('.')
+        // Keep the wrapper in front of every candidate returned by
+        // DefaultExtractorsFactory. Media3 may return a container-specific
+        // extractor whose implementation is decorated/proxied, so relying
+        // only on the concrete class name can silently bypass DV rewriting.
+        // VideoCompatExtractor only intercepts video tracks; audio and other
+        // track types remain direct pass-throughs. Media3 emits the HEVC
+        // access units seen here as Annex-B for the progressive containers
+        // handled by this factory.
+        val framing = NalFraming.ANNEX_B
         Log.i(
             "PLAYER_DV",
-            "Wrapping extractor=${name.substringAfterLast('.')} framing=$framing " +
+            "Wrapping extractor=$simpleName framing=$framing " +
                 "allProfiles=$convertAllProfiles rewriteEnabled=$dvRewriteEnabled " +
                 "stripHdr10Plus=$stripHdr10Plus"
         )
@@ -112,6 +113,7 @@ private class VideoCompatExtractor(
 ) : Extractor {
 
     override fun init(output: ExtractorOutput) {
+        Log.i("PLAYER_DV", "Compat extractor initialized=${delegate.javaClass.simpleName}")
         delegate.init(
             VideoCompatExtractorOutput(output, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled)
         )
@@ -178,6 +180,10 @@ private class VideoCompatTrackOutput(
 
     override fun format(format: Format) {
         currentCodecs = format.codecs
+        Log.i(
+            "PLAYER_DV",
+            "Compat video format mime=${format.sampleMimeType} codecs=${format.codecs ?: "?"}"
+        )
         // A (re)emitted format starts a fresh sample window (seek / re-init).
         pendingLen = 0
         // When DV conversion is disabled (the DV setting is Off and only the

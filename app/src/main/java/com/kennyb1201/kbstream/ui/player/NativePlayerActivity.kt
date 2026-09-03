@@ -1174,14 +1174,14 @@ class NativePlayerActivity : ComponentActivity() {
                 if (!isLiveChannel && carryPositionMs > 0L) seekTo(carryPositionMs)
                 setPlaybackSpeed(playbackSpeed)
                 playWhenReady = true
-                prepare()
-
-                if (enableTunneling) {
+                if (enableTunneling && !softwareDecoderActive) {
                     trackSelectionParameters = androidx.media3.exoplayer.trackselection.DefaultTrackSelector
                         .Parameters.Builder(this@NativePlayerActivity)
                         .setTunnelingEnabled(true).build()
                     Log.i("PLAYER_TUNNEL", "Tunneled via TrackSelector")
                 }
+
+                prepare()
             }
 
         player.addListener(createPlayerListener())
