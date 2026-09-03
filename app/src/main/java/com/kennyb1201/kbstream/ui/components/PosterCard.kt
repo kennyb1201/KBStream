@@ -12,7 +12,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -20,6 +19,10 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import com.kennyb1201.kbstream.ui.theme.KBSurface
+import com.kennyb1201.kbstream.ui.theme.KBTextHi
+import com.kennyb1201.kbstream.ui.theme.KBTextLo
+import com.kennyb1201.kbstream.ui.theme.KBVoid
 
 @Composable
 fun WatchedCheckBadge(
@@ -29,13 +32,13 @@ fun WatchedCheckBadge(
         modifier = modifier
             .size(24.dp)
             .clip(CircleShape)
-            .background(Color(0xCC111111))
-            .border(1.dp, Color.White.copy(alpha = 0.95f), CircleShape),
+            .background(KBVoid.copy(alpha = 0.8f))
+            .border(1.dp, KBTextHi.copy(alpha = 0.95f), CircleShape),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = "✓",
-            color = Color.White,
+            color = KBTextHi,
             fontSize = 13.sp
         )
     }
@@ -68,7 +71,7 @@ fun PosterCard(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0xFF1B3A57)) // Visual fallback background container
+                .background(KBSurface) // Visual fallback background container
         ) {
             if (!posterUrl.isNullOrBlank() && !hasError) {
                 AsyncImage(
@@ -91,7 +94,7 @@ fun PosterCard(
                 ) {
                     Text(
                         text = contentDescription ?: "No Image",
-                        color = Color.LightGray,
+                        color = KBTextLo,
                         fontSize = 12.sp,
                         maxLines = 3
                     )

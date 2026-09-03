@@ -95,6 +95,7 @@ import com.kennyb1201.kbstream.ui.detail.StreamsTarget
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
+import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
 import com.kennyb1201.kbstream.data.youtube.YoutubeChunkedDataSourceFactory
 import kotlinx.coroutines.delay
@@ -168,11 +169,11 @@ private fun TopActionItem(
         ),
         colors = androidx.tv.material3.ClickableSurfaceDefaults.colors(
             containerColor = Color.Transparent,
-            contentColor = Color.White.copy(alpha = .76f),
-            focusedContainerColor = KBAccent.copy(alpha = .28f),
-            focusedContentColor = Color.White,
-            pressedContainerColor = KBAccent.copy(alpha = .28f),
-            pressedContentColor = Color.White
+            contentColor = KBTextHi.copy(alpha = 0.76f),
+            focusedContainerColor = KBAccent.copy(alpha = 0.28f),
+            focusedContentColor = KBTextHi,
+            pressedContainerColor = KBAccent.copy(alpha = 0.28f),
+            pressedContentColor = KBTextHi
         ),
         border = androidx.tv.material3.ClickableSurfaceDefaults.border(
             border = androidx.tv.material3.Border(
@@ -453,7 +454,7 @@ private fun HeroClearLogo(
                 isDarkMonochromeArtwork(state.result.image.toBitmap())
             }.getOrDefault(false)
         },
-        colorFilter = if (logoIsDark) ColorFilter.tint(Color.White) else null,
+        colorFilter = if (logoIsDark) ColorFilter.tint(KBTextHi) else null,
         modifier = modifier
     )
 }
@@ -916,9 +917,8 @@ private fun HomeHero(
             } else {
                 Text(
                     text = title,
-                    color = Color.White,
-                    fontSize = 28.sp,
-                    fontWeight = FontWeight.Bold,
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.headlineLarge,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -928,7 +928,7 @@ private fun HomeHero(
             if (heroInfo.isNotBlank()) {
                 Text(
                     text = heroInfo,
-                    color = Color.White.copy(alpha = .94f),
+                    color = KBTextHi.copy(alpha = 0.94f),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
@@ -957,7 +957,7 @@ private fun HomeHero(
                         Text(
                             text = status,
                             color = KBAccent,
-                            fontSize = 12.sp,
+                            style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
@@ -970,7 +970,7 @@ private fun HomeHero(
                     ) {
                         Text(
                             text = "  •  ",
-                            color = Color.White.copy(alpha = .94f),
+                            color = KBTextHi.copy(alpha = 0.94f),
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold
                         )
@@ -979,7 +979,7 @@ private fun HomeHero(
                     seasonEpisodeCount?.let { count ->
                         Text(
                             text = count,
-                            color = Color.White.copy(alpha = .94f),
+                            color = KBTextHi.copy(alpha = 0.94f),
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold,
                             maxLines = 1,
@@ -1008,7 +1008,7 @@ private fun HomeHero(
             .width(260.dp)
             .height(4.dp)
             .background(
-                Color.White.copy(alpha = .28f),
+                KBTextHi.copy(alpha = 0.28f),
                 RoundedCornerShape(2.dp)
             )
     ) {
@@ -1027,9 +1027,8 @@ private fun HomeHero(
 continueTimeLeft?.let { label ->
     Text(
         text = label,
-        color = Color.White.copy(alpha = .70f),
-        fontSize = 11.sp,
-        fontWeight = FontWeight.Medium,
+        color = KBTextHi.copy(alpha = 0.70f),
+        style = MaterialTheme.typography.labelSmall,
         maxLines = 1,
         modifier = Modifier.padding(top = 5.dp)
     )
@@ -1038,9 +1037,8 @@ continueTimeLeft?.let { label ->
             continueEpisodeCount?.let { label ->
     Text(
         text = label,
-        color = Color.White.copy(alpha = .70f),
-        fontSize = 11.sp,
-        fontWeight = FontWeight.Medium,
+        color = KBTextHi.copy(alpha = 0.70f),
+        style = MaterialTheme.typography.labelSmall,
         maxLines = 1,
         modifier = Modifier.padding(top = 5.dp)
     )
@@ -1056,9 +1054,8 @@ continueTimeLeft?.let { label ->
         ?.let { episodeTitle ->
             Text(
                 text = episodeTitle,
-                color = Color.White,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold,
+                color = KBTextHi,
+                style = MaterialTheme.typography.titleMedium,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = 10.dp)
@@ -1078,9 +1075,8 @@ continueTimeLeft?.let { label ->
             ?.let { description ->
                 Text(
                     text = description,
-                    color = Color.White.copy(alpha = .80f),
-                    fontSize = 12.sp,
-                    lineHeight = 17.sp,
+                    color = KBTextHi.copy(alpha = 0.80f),
+                    style = MaterialTheme.typography.bodySmall,
                     maxLines = 5,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 7.dp)
@@ -1101,9 +1097,8 @@ continueTimeLeft?.let { label ->
         ?.let { description ->
             Text(
                 text = description,
-                color = Color.White.copy(alpha = .80f),
-                fontSize = 12.sp,
-                lineHeight = 17.sp,
+                color = KBTextHi.copy(alpha = 0.80f),
+                style = MaterialTheme.typography.bodySmall,
                 maxLines = 5,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = 12.dp)
@@ -1120,9 +1115,8 @@ continueTimeLeft?.let { label ->
 private fun SectionTitle(text: String) {
     Text(
         text = text,
-        color = Color.White.copy(alpha = .94f),
-        fontSize = 16.sp,
-        fontWeight = FontWeight.SemiBold,
+        color = KBTextHi.copy(alpha = 0.94f),
+        style = MaterialTheme.typography.titleMedium,
         modifier = Modifier.padding(
             top = 4.dp,
             bottom = 6.dp
@@ -1243,7 +1237,7 @@ private fun CompactUpNextCard(
                                 Color.Black.copy(alpha = 0.08f),
                                 Color.Black.copy(alpha = 0.34f),
                                 Color.Black.copy(alpha = 0.80f),
-                                Color.Black.copy(alpha = 0.97f)
+                                KBVoid.copy(alpha = 0.97f)
                             )
                         )
                     )
@@ -1251,7 +1245,7 @@ private fun CompactUpNextCard(
 
             Text(
                 text = displayBadge,
-                color = Color.White,
+                color = KBTextHi,
                 fontSize = 9.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
@@ -1289,11 +1283,7 @@ private fun CompactUpNextCard(
             ) {
                 Text(
                     text = item.title,
-                    color = if (focused) {
-                        Color.White
-                    } else {
-                        KBTextHi
-                    },
+                    color = KBTextHi,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
@@ -1304,7 +1294,7 @@ private fun CompactUpNextCard(
                     Text(
                         text = label,
                         color = if (focused) {
-                            Color.White.copy(alpha = .78f)
+                            KBTextHi.copy(alpha = 0.78f)
                         } else {
                             KBTextLo
                         },
@@ -1325,7 +1315,7 @@ private fun CompactUpNextCard(
                         Text(
                             text = episodeTitle,
                             color = if (focused) {
-                                Color.White.copy(alpha = .88f)
+                                KBTextHi.copy(alpha = 0.88f)
                             } else {
                                 KBTextLo
                             },
@@ -1346,7 +1336,7 @@ private fun CompactUpNextCard(
 } else {
     "$remaining episodes left"
 },
-            color = Color.White,
+            color = KBTextHi,
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
@@ -1366,7 +1356,7 @@ private fun CompactUpNextCard(
                     }
                 )
                 .background(
-                    color = Color.Black.copy(alpha = 0.65f),
+                    color = KBVoid.copy(alpha = 0.65f),
                     shape = RoundedCornerShape(4.dp)
                 )
                 .padding(
@@ -1379,7 +1369,7 @@ private fun CompactUpNextCard(
             timeLeft?.let { label ->
                 Text(
                     text = label,
-                    color = Color.White.copy(alpha = .90f),
+                    color = KBTextHi.copy(alpha = 0.90f),
                     fontSize = 10.sp,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
@@ -1388,7 +1378,7 @@ private fun CompactUpNextCard(
                         .align(Alignment.TopEnd)
                         .padding(6.dp)
                         .background(
-                            color = Color.Black.copy(alpha = .55f),
+                            color = KBVoid.copy(alpha = 0.55f),
                             shape = RoundedCornerShape(4.dp)
                         )
                         .padding(
@@ -1409,7 +1399,7 @@ private fun CompactUpNextCard(
                         .fillMaxWidth()
                         .height(4.dp)
                         .background(
-                            Color.White.copy(alpha = 0.28f)
+                            KBTextHi.copy(alpha = 0.28f)
                         )
                 ) {
                     Box(

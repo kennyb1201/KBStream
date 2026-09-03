@@ -91,6 +91,8 @@ import com.kennyb1201.kbstream.data.addon.ManifestCatalog
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.SuppressImeWhileFocused
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBSuccess
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -601,7 +603,7 @@ private fun AddonListCard(
 
 @Composable
 private fun HealthBadge(healthy: Boolean) {
-    val color = if (healthy) Color(0xFF3DBB6A) else Color(0xFFE0564E)
+    val color = if (healthy) KBSuccess else KBDanger
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -1048,7 +1050,7 @@ private fun AddonTile(
         modifier = Modifier
             .size(size)
             .clip(RoundedCornerShape(12.dp))
-            .background(Color.Black),
+            .background(KBVoid),
         contentAlignment = Alignment.Center
     ) {
         if (logoUrl.isNullOrBlank()) {
@@ -1094,7 +1096,7 @@ private fun AddonTileLetter(
 ) {
     Text(
         text = initial,
-        color = Color.White,
+        color = KBTextHi,
         fontSize = fontSize,
         fontWeight = FontWeight.Bold
     )

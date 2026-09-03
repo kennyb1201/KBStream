@@ -20,6 +20,7 @@ val KBAccent = Color(0xFFE8A33D) // brass / projector-bulb warmth -- the one acc
 val KBTextHi = Color(0xFFF3EFE4)
 val KBTextLo = Color(0xFF8891A0)
 val KBDanger = Color(0xFFB0453C)
+val KBSuccess = Color(0xFF3DBB6A)
 
 val CardShape = RoundedCornerShape(12.dp())
 private fun Int.dp() = androidx.compose.ui.unit.Dp(this.toFloat())

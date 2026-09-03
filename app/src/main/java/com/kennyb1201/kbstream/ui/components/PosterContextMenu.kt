@@ -41,8 +41,11 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
+import com.kennyb1201.kbstream.ui.theme.KBVoid
 
 /**
  * One selectable row in a [PosterContextMenu]. The action itself is
@@ -157,7 +160,7 @@ fun PosterContextMenu(
         modifier = Modifier
             .fillMaxSize()
             .focusGroup()
-            .background(Color.Black.copy(alpha = 0.60f))
+            .background(KBVoid.copy(alpha = 0.60f))
             .onPreviewKeyEvent { event ->
                 // No horizontal focus target exists inside a vertical menu;
                 // consuming Left/Right keeps focus trapped on the action
@@ -213,9 +216,9 @@ fun PosterContextMenu(
                 shape = dialogShape
             ),
             colors = ClickableSurfaceDefaults.colors(
-                containerColor = Color(0xFF101820).copy(alpha = 0.97f),
+                containerColor = KBSurfaceRaised.copy(alpha = 0.97f),
                 contentColor = KBTextHi,
-                focusedContainerColor = Color(0xFF101820).copy(alpha = 0.97f),
+                focusedContainerColor = KBSurfaceRaised.copy(alpha = 0.97f),
                 focusedContentColor = KBTextHi
             ),
             scale = ClickableSurfaceDefaults.scale(
@@ -226,14 +229,14 @@ fun PosterContextMenu(
                 border = Border(
                     border = BorderStroke(
                         1.dp,
-                        Color.White.copy(alpha = 0.10f)
+                        KBTextLo.copy(alpha = 0.10f)
                     ),
                     shape = dialogShape
                 ),
                 focusedBorder = Border(
                     border = BorderStroke(
                         1.dp,
-                        Color.White.copy(alpha = 0.10f)
+                        KBTextLo.copy(alpha = 0.10f)
                     ),
                     shape = dialogShape
                 )
@@ -255,7 +258,7 @@ fun PosterContextMenu(
             ) {
                 Text(
                     text = title,
-                    color = Color.White,
+                    color = KBTextHi,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
@@ -330,12 +333,12 @@ private fun ContextMenuActionRow(
         colors = ClickableSurfaceDefaults.colors(
             containerColor = Color.Transparent,
             contentColor = if (isDestructive) {
-                Color(0xFFE57373)
+                KBDanger
             } else {
                 KBTextHi
             },
             focusedContainerColor = KBAccent.copy(alpha = 0.16f),
-            focusedContentColor = Color.White
+            focusedContentColor = KBTextHi
         ),
         scale = ClickableSurfaceDefaults.scale(
             scale = 1f,
@@ -379,8 +382,8 @@ private fun ContextMenuActionRow(
             Text(
                 text = label,
                 color = when {
-                    focused -> Color.White
-                    isDestructive -> Color(0xFFE57373)
+                    focused -> KBTextHi
+                    isDestructive -> KBDanger
                     else -> KBTextHi
                 },
                 style = MaterialTheme.typography.bodyLarge,
