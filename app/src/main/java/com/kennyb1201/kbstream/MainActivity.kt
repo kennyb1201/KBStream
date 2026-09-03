@@ -732,6 +732,13 @@ fun AppRoot() {
                         target,
                         poster ->
 
+                    // Home's "Play Manually" / "Play from Beginning" always mean
+                    // a manual source pick — remember the target so the streams
+                    // picker never auto-selects it, even with auto-select on.
+                    val manualKey = "${meta.type}:${target.streamId}"
+                    autoPlayedStreamKeys =
+                        (autoPlayedStreamKeys + manualKey).distinct()
+
                     screen = Screen.Streams(
                         target = target,
                         parentId = meta.id,

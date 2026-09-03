@@ -27,6 +27,7 @@ object AppPreferences {
     private const val KEY_ENABLE_TUNNELING = "enable_tunneling"
     private const val KEY_ENABLE_PIP = "enable_pip"
     private const val KEY_DECODER_MODE = "decoder_mode"                      // 0=auto, 1=ffmpeg-only
+    private const val KEY_DV_COMPAT_MODE = "dv_compat_mode"                  // 0=auto, 1=off, 2=auto+hdr10+
     private const val KEY_DEFAULT_ASPECT_RATIO = "default_aspect_ratio"     // 0=fit, 1=zoom, 2=fill
     private const val KEY_PREFERRED_AUDIO_LANG = "preferred_audio_language"   // BCP-47 tag or "" for auto
     private const val KEY_PREFERRED_SUBTITLE_LANG = "preferred_subtitle_language" // BCP-47 tag or "" for auto
@@ -106,6 +107,23 @@ object AppPreferences {
 
     fun setDecoderMode(context: Context, mode: Int) {
         prefs(context).edit().putInt(KEY_DECODER_MODE, mode).apply()
+    }
+
+    // ── Dolby Vision compatibility ─────────────────────────────────────
+    // 0 = Auto: rewrite DV Profile 7 remuxes (dvcc-declared or sniffed
+    //     in-band) to HDR10 so they play through the hardware HEVC decoder.
+    // 1 = Off: pass streams through untouched (for devices that handle DV
+    //     natively, or to compare against the default behavior).
+    // 2 = Auto + also strip HDR10+ SEI (for TVs that black-screen on HDR10+).
+    const val DV_COMPAT_AUTO = 0
+    const val DV_COMPAT_OFF = 1
+    const val DV_COMPAT_AUTO_HDR10_PLUS = 2
+
+    fun getDvCompatMode(context: Context): Int =
+        prefs(context).getInt(KEY_DV_COMPAT_MODE, DV_COMPAT_AUTO)
+
+    fun setDvCompatMode(context: Context, mode: Int) {
+        prefs(context).edit().putInt(KEY_DV_COMPAT_MODE, mode).apply()
     }
 
     // ── Default aspect ratio ─────────────────────────────────────────

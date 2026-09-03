@@ -67,6 +67,7 @@ fun SettingsScreen(
     // Fire TV OS doesn't support PiP for third-party apps; hide the toggle there.
     val isFireTv = android.os.Build.MANUFACTURER.equals("Amazon", ignoreCase = true)
     var decoderMode by remember { mutableIntStateOf(AppPreferences.getDecoderMode(context)) }
+    var dvCompatMode by remember { mutableIntStateOf(AppPreferences.getDvCompatMode(context)) }
     var aspectRatio by remember { mutableIntStateOf(AppPreferences.getDefaultAspectRatio(context)) }
     var preferredAudioLang by remember { mutableStateOf(AppPreferences.getPreferredAudioLanguage(context)) }
     var preferredSubtitleLang by remember { mutableStateOf(AppPreferences.getPreferredSubtitleLanguage(context)) }
@@ -195,6 +196,40 @@ fun SettingsScreen(
             text = when (decoderMode) {
                 0 -> "Hardware first, falls back to FFmpeg if unsupported"
                 1 -> "Use FFmpeg for all decoding (fixes green-tint DV)"
+                else -> ""
+            },
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelSmall
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Text(
+            text = "Dolby Vision",
+            color = KBTextHi,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(
+                AppPreferences.DV_COMPAT_AUTO to "Auto",
+                AppPreferences.DV_COMPAT_OFF to "Off",
+                AppPreferences.DV_COMPAT_AUTO_HDR10_PLUS to "Auto+"
+            ).forEach { (value, label) ->
+                KBCard(onClick = {
+                    dvCompatMode = value
+                    AppPreferences.setDvCompatMode(context, value)
+                }) {
+                    PillChip(label, dvCompatMode == value)
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = when (dvCompatMode) {
+                AppPreferences.DV_COMPAT_AUTO -> "Rewrite DV7 remuxes to HDR10 so they play on this TV"
+                AppPreferences.DV_COMPAT_OFF -> "Play files exactly as provided (device must handle DV)"
+                AppPreferences.DV_COMPAT_AUTO_HDR10_PLUS -> "DV7 \u2192 HDR10, and strip HDR10+ metadata on plain HEVC too"
                 else -> ""
             },
             color = KBTextLo,

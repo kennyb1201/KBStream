@@ -226,8 +226,10 @@ class NativePlayerActivity : ComponentActivity() {
     private var videoTrackPresent = false
     private var firstFrameRendered = false
     private var blackVideoNoticeShown = false
+    private var blackVideoSwRetried = false
     private var blackVideoWatchdogToken = 0
     private val blackVideoWatchdogMs = 8_000L
+    private val blackVideoSwTimeoutMs = 25_000L
 
     // History
     private var isLiveChannel = false
@@ -903,6 +905,10 @@ class NativePlayerActivity : ComponentActivity() {
         firstFrameRendered = false
         blackVideoNoticeShown = false
         blackVideoWatchdogToken++
+        // Reset the black-video software-decoder retry only for fresh attempts
+        // (new stream / source switch). The software retry itself must keep its
+        // marker so a second silent failure shows the notice instead of looping.
+        if (!forceSoftwareDecoder) blackVideoSwRetried = false
 
         val agent = streamHeaders["User-Agent"] ?: streamHeaders["user-agent"]
             ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
@@ -927,7 +933,23 @@ class NativePlayerActivity : ComponentActivity() {
             .filterValues { it.isNotBlank() }
         if (extraHeaders.isNotEmpty()) httpFactory.setDefaultRequestProperties(extraHeaders)
 
-        val mediaSourceFactory = DefaultMediaSourceFactory(httpFactory, DefaultExtractorsFactory())
+        // Dolby Vision Profile 7 streams (common on Usenet/NZB 4K remuxes) show
+        // audio-but-black on TVs without a DV decoder. Strip the DV RPU /
+        // enhancement-layer NALs on the fly so the plain HDR10 base layer plays
+        // through the normal hardware HEVC decoder — no software decoding needed.
+        // Controllable from Settings → Playback: Off plays files untouched,
+        // Auto+HDR10+ also strips ST 2094-40 SEIs for HDR10+-intolerant TVs.
+        val dvCompatMode = AppPreferences.getDvCompatMode(this)
+        val extractorsFactory: androidx.media3.extractor.ExtractorsFactory =
+            if (dvCompatMode == AppPreferences.DV_COMPAT_OFF) {
+                DefaultExtractorsFactory()
+            } else {
+                DolbyVisionCompatExtractorsFactory(
+                    DefaultExtractorsFactory(),
+                    stripHdr10Plus = dvCompatMode == AppPreferences.DV_COMPAT_AUTO_HDR10_PLUS
+                )
+            }
+        val mediaSourceFactory = DefaultMediaSourceFactory(httpFactory, extractorsFactory)
 
         val mimeType = if (retryAttempt < 3) resolveMimeType(currentUrl) else null
         val mediaItemBuilder = MediaItem.Builder().setUri(currentUrl)
@@ -1238,7 +1260,7 @@ class NativePlayerActivity : ComponentActivity() {
     private fun armBlackVideoWatchdog() {
         // Only meaningful when a video track exists and hasn't rendered yet.
         if (blackVideoNoticeShown || firstFrameRendered || !videoTrackPresent) return
-        if (forceSoftwareDecoder || isLiveChannel) return
+        if (isLiveChannel) return
         val token = ++blackVideoWatchdogToken
         handler.postDelayed(
             {
@@ -1249,7 +1271,49 @@ class NativePlayerActivity : ComponentActivity() {
                 if (exoPlayer?.isPlaying != true) return@postDelayed
                 if (exoPlayer?.playbackState != Player.STATE_READY) return@postDelayed
                 if (errorContainer.visibility == View.VISIBLE) return@postDelayed
-                showBlackVideoNotice()
+                if (!blackVideoSwRetried && !forceSoftwareDecoder) {
+                    // First occurrence: the decoder reached READY with audio
+                    // playing but never produced a frame (silent black screen).
+                    // Before giving up, rebuild the player with the software
+                    // decoder — this plays many files whose video the TV's
+                    // hardware decoder accepts but cannot actually present.
+                    blackVideoSwRetried = true
+                    val codecInfo = streamCodec?.let { codec ->
+                        if (streamWidth > 0) " ($codec ${streamWidth}x$streamHeight)" else " ($codec)"
+                    } ?: ""
+                    Log.w(
+                        "PLAYER_VIDEO",
+                        "Black video: no first frame after ${blackVideoWatchdogMs}ms$codecInfo — retrying with software decoder"
+                    )
+                    reconnectingContainer.visibility = View.VISIBLE
+                    bufferingSpinner.visibility = View.GONE
+                    reconnectingText.text = "Video isn't displaying — switching to software decoding…"
+                    handler.postDelayed(
+                        {
+                            if (token != blackVideoWatchdogToken) return@postDelayed
+                            if (blackVideoNoticeShown || firstFrameRendered) return@postDelayed
+                            forceSoftwareDecoder = true
+                            errorMessageStr = null
+                            recreatePlayer()
+                        },
+                        500L
+                    )
+                    // Absolute deadline for the software attempt: if nothing
+                    // rendered (or the decoder can't even keep up to READY),
+                    // surface the notice instead of leaving a silent stall.
+                    handler.postDelayed(
+                        {
+                            if (token != blackVideoWatchdogToken) return@postDelayed
+                            if (blackVideoNoticeShown || firstFrameRendered) return@postDelayed
+                            if (errorContainer.visibility == View.VISIBLE) return@postDelayed
+                            showBlackVideoNotice()
+                        },
+                        blackVideoSwTimeoutMs
+                    )
+                } else {
+                    // The software decoder also produced no frame: surface the notice.
+                    showBlackVideoNotice()
+                }
             },
             blackVideoWatchdogMs
         )
@@ -1262,13 +1326,13 @@ class NativePlayerActivity : ComponentActivity() {
         } ?: ""
         Log.w(
             "PLAYER_VIDEO",
-            "Black-video notice: no first frame after ${blackVideoWatchdogMs}ms$codecInfo"
+            "Black-video notice: no first frame (hardware + software)${codecInfo}"
         )
         errorTitle.text = "Video isn't displaying"
         errorMessage.text =
             "Audio is playing but no video frames are rendering$codecInfo. " +
-                "This TV can't decode this file's video track. Choose a different " +
-                "source — a 1080p H.264 release usually plays on any device."
+                "Hardware and software decoding were both tried on this TV. " +
+                "Choose a different source — a 1080p H.264 release usually plays on any device."
         errorContainer.visibility = View.VISIBLE
         btnChangeSource.visibility = View.VISIBLE
     }
@@ -1296,21 +1360,30 @@ class NativePlayerActivity : ComponentActivity() {
             itemNameView.visibility = View.VISIBLE
         }
 
-        // Load backdrop into splash overlay
+        // Load backdrop into splash overlay. Only a real backdrop goes
+        // full-screen here — the portrait poster is never stretched into the
+        // loading splash (a blown-up poster reads as a zoomed, wrong backdrop).
+        // Items without widescreen art keep the dark splash + pulsing logo,
+        // matching the pre-player "Finding sources" overlay.
         val resolvedBackdropUrl = backdropUrl?.takeIf { it.isNotBlank() }?.let { rawUrl ->
             if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) rawUrl
             else "https://image.tmdb.org/t/p/w1280${if (rawUrl.startsWith("/")) rawUrl else "/$rawUrl"}"
-        } ?: itemPoster?.takeIf { it.isNotBlank() }?.let { rawPoster ->
-            if (rawPoster.startsWith("http://") || rawPoster.startsWith("https://")) rawPoster
-            else if (rawPoster.startsWith("/")) "https://image.tmdb.org/t/p/w1280$rawPoster"
-            else null
         }
         if (resolvedBackdropUrl != null) {
+            splashBackdrop.visibility = View.VISIBLE
             splashBackdrop.load(resolvedBackdropUrl)
             // Show splash initially before video plays on every first load —
             // including items resuming a saved position. Only skip it when
             // returning from the actor page (fromActorReturn), where the
             // small spinner is enough.
+            if (!fromActorReturn) {
+                showSplash()
+            }
+        } else {
+            // No widescreen art: clear any previous frame and show the dark
+            // splash (pulsing clearlogo) so no portrait/stale image flashes.
+            splashBackdrop.visibility = View.GONE
+            splashBackdrop.setImageDrawable(null)
             if (!fromActorReturn) {
                 showSplash()
             }
