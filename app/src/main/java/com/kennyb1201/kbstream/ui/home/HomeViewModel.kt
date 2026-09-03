@@ -1,6 +1,8 @@
 package com.kennyb1201.kbstream.ui.home
 
 import android.app.Application
+import android.content.Context
+import android.content.SharedPreferences
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -49,6 +51,10 @@ import kotlinx.coroutines.sync.withPermit
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.temporal.ChronoUnit
+import org.json.JSONObject
+
+private const val PREFS_DISMISSED_UPNEXT =
+    "continue_watching_dismissals"
 
 data class Rail(
     val addonName: String,
@@ -108,7 +114,20 @@ data class UpNextItem(
      * Simkl playback session. Long-press Remove deletes the session so the
      * card stops reappearing from the remote Continue Watching feed.
      */
-    val playbackId: Int? = null
+    val playbackId: Int? = null,
+
+    /**
+     * True when this card's episode is the last aired episode of its
+     * season. Renders as the "SEASON FINALE" tag on the rail and hero.
+     */
+    val isSeasonFinale: Boolean = false,
+
+    /**
+     * True when this card's episode is the show's final aired episode
+     * (the last episode of the last aired season). Takes precedence over
+     * [isSeasonFinale] and renders as the "SERIES FINALE" tag.
+     */
+    val isSeriesFinale: Boolean = false
 )
 
 private data class ResolvedHomeSeriesTarget(
@@ -126,6 +145,12 @@ private data class ResolvedHomeSeriesTarget(
     val episodesRemaining: Int? = null,
     val episodeThumbnail: String? = null,
     val episodeRating: Double? = null,
+
+    /** True when this target is the last aired episode of its season. */
+    val isSeasonFinale: Boolean = false,
+
+    /** True when this target is the show's final aired episode. */
+    val isSeriesFinale: Boolean = false,
 )
 
 private data class ShowEpisodeTotals(
@@ -215,6 +240,24 @@ class HomeViewModel(
     private var watchedRefreshVersion = 0L
 
     private var periodicRefreshJob: Job? = null
+
+    // Title-level removals from the Continue Watching rail: dedupe key ->
+    // wall-clock ms of the dismissal. The local delete plus the Simkl calls
+    // in removeFromContinueWatching normally remove the title everywhere,
+    // but a paused session or a "watching" status can survive on Simkl's
+    // side and resurrect the card from the remote feed. This persistent
+    // layer guarantees the card stays hidden until there is NEWER watch
+    // activity for the same title (a fresh local resume row or a new Simkl
+    // pause), which then un-hides it automatically.
+    private val dismissalPrefs: SharedPreferences =
+        getApplication<Application>()
+            .getSharedPreferences(
+                PREFS_DISMISSED_UPNEXT,
+                Context.MODE_PRIVATE
+            )
+
+    private val dismissedContinueWatching: MutableMap<String, Long> =
+        loadDismissedContinueWatching()
 
     private val _rails =
         MutableStateFlow<List<Rail>>(
@@ -691,6 +734,16 @@ Log.d(
 
             try {
 
+                // Local guarantee: remember the dismissal up front so the
+                // card cannot resurface from a stale Simkl feed snapshot
+                // while the remote delete calls settle (or if one of them
+                // fails). Watching the title again later clears this.
+                dismissedContinueWatching[
+                    showDedupeKey(item)
+                ] = System.currentTimeMillis()
+
+                persistDismissedContinueWatching()
+
                 watchHistoryRepository.deleteResumeRowsForParent(parentId)
 
                 // Fallback path removed a single row by its raw id; also
@@ -736,8 +789,16 @@ Log.d(
                     // Playback-sourced cards (paused mid-title) live in a
                     // separate Simkl playback table - removing history alone
                     // does not clear the paused session, so the card would
-                    // keep reappearing from the remote feed. Drop the
-                    // session explicitly so it stays gone after a restart.
+                    // keep reappearing from the remote feed. A paused title
+                    // is usually backed by BOTH a local resume row and a
+                    // Simkl session, and the rail dedupe can surface the
+                    // local twin (which carries no playbackId) - so sweep
+                    // every open session matching this parent instead of
+                    // only the one this card happened to carry.
+                    simklRepository.deletePlaybackSessionsForParent(
+                        parentId = parentId,
+                        title = item.title
+                    )
                     item.playbackId?.let { playbackId ->
                         simklRepository.deletePlaybackSession(
                             playbackId
@@ -767,6 +828,115 @@ Log.d(
                 )
             }
         }
+    }
+
+    private fun loadDismissedContinueWatching(): MutableMap<String, Long> {
+
+        val raw =
+            dismissalPrefs.getString(
+                PREFS_DISMISSED_UPNEXT,
+                null
+            )
+                ?: return mutableMapOf()
+
+        return runCatching {
+
+            val json =
+                JSONObject(raw)
+
+            val keys =
+                json.keys()
+
+            buildMap {
+                while (keys.hasNext()) {
+                    val key =
+                        keys.next()
+
+                    put(
+                        key,
+                        json.optLong(key)
+                    )
+                }
+            }
+                .toMutableMap()
+        }
+            .getOrDefault(
+                mutableMapOf()
+            )
+    }
+
+    private fun persistDismissedContinueWatching() {
+
+        runCatching {
+
+            val json =
+                JSONObject()
+
+            dismissedContinueWatching.forEach { (key, dismissedAt) ->
+                json.put(key, dismissedAt)
+            }
+
+            dismissalPrefs
+                .edit()
+                .putString(
+                    PREFS_DISMISSED_UPNEXT,
+                    json.toString()
+                )
+                .apply()
+        }
+    }
+
+    /**
+     * Filters the merged Up Next list against locally dismissed titles (see
+     * [removeFromContinueWatching]). A dismissal stays in effect until there
+     * is watch activity for the title NEWER than the dismissal time - a
+     * fresh local resume row or a new Simkl pause/session - at which point
+     * the marker is cleared and the card is allowed back onto the rail.
+     */
+    private fun applyContinueWatchingDismissals(
+        items: List<UpNextItem>
+    ): List<UpNextItem> {
+
+        if (
+            dismissedContinueWatching.isEmpty() ||
+            items.isEmpty()
+        ) {
+            return items
+        }
+
+        var changed =
+            false
+
+        val filtered =
+            items.filter { item ->
+
+                val key =
+                    showDedupeKey(item)
+
+                val dismissedAt =
+                    dismissedContinueWatching[key]
+                        ?: return@filter true
+
+                val reAdded =
+                    item.recencyTimestamp >
+                        dismissedAt
+
+                if (reAdded) {
+
+                    dismissedContinueWatching.remove(key)
+
+                    changed = true
+                }
+
+                reAdded
+            }
+
+        if (changed) {
+
+            persistDismissedContinueWatching()
+        }
+
+        return filtered
     }
 
     /**
@@ -1053,6 +1223,15 @@ Log.d(
         var tmdbEpisodeTotals: ShowEpisodeTotals? = null
         var tmdbEpisodesRemaining: Int? = null
 
+        // Finale flags derived from the shared-watched-state resolution
+        // below; default false so movies / unresolvable titles stay plain
+        // RESUME cards.
+        var localSeasonFinale =
+            false
+
+        var localSeriesFinale =
+            false
+
         if (
             isEpisodePlayback &&
             entry.season != null && entry.episode != null
@@ -1123,6 +1302,10 @@ Log.d(
                             target.episodesTotal?.let { t -> ShowEpisodeTotals(w, t) }
                         }
                     tmdbEpisodesRemaining = target?.episodesRemaining
+                    localSeasonFinale =
+                        target?.isSeasonFinale == true
+                    localSeriesFinale =
+                        target?.isSeriesFinale == true
                 }
 
                 if (tmdbId != null && tmdbId > 0) {
@@ -1244,7 +1427,13 @@ Log.d(
 
             startPositionMs = entry.positionMs,
             recencyTimestamp = entry.updatedAt,
-            historyRowId = entry.id
+            historyRowId = entry.id,
+
+            isSeasonFinale =
+                localSeasonFinale,
+
+            isSeriesFinale =
+                localSeriesFinale
         )
             }
         }
@@ -1263,12 +1452,28 @@ Log.d(
                             )
 
                             if (
-                                localItems.isNotEmpty() &&
                                 isLatestUpNextRequest(requestVersion)
                             ) {
 
                                 _upNext.value =
-                                    dedupeAndSortUpNext(localItems)
+                                    applyContinueWatchingDismissals(
+                                        if (localItems.isNotEmpty()) {
+
+                                            dedupeAndSortUpNext(
+                                                localItems
+                                            )
+
+                                        } else {
+
+                                            // Simkl is unreachable and there
+                                            // is no local history - keep the
+                                            // previous list but still honor
+                                            // removals so a dismissed card
+                                            // cannot linger behind a failing
+                                            // feed.
+                                            _upNext.value
+                                        }
+                                    )
                             }
 
                             return@collect
@@ -1288,19 +1493,26 @@ Log.d(
                             return@collect
                         }
 
-                        if (merged.isNotEmpty()) {
+                        val result =
+                            if (merged.isNotEmpty()) {
 
-                            _upNext.value = merged
+                                merged
 
-                        } else if (localItems.isNotEmpty()) {
+                            } else if (localItems.isNotEmpty()) {
 
-                            _upNext.value =
-                                dedupeAndSortUpNext(localItems)
+                                dedupeAndSortUpNext(
+                                    localItems
+                                )
 
-                        } else {
+                            } else {
 
-                            _upNext.value = emptyList()
-                        }
+                                emptyList()
+                            }
+
+                        _upNext.value =
+                            applyContinueWatchingDismissals(
+                                result
+                            )
 
                     } catch (e: kotlinx.coroutines.CancellationException) {
 
@@ -1477,7 +1689,14 @@ var episodesTotal: Int? = null
         var resolvedStartPositionMs =
             0L
 
-        
+        // Finale flags from the resolved target (last aired episode of its
+        // season / of the show). Used to tag the card SEASON/SERIES FINALE
+        // instead of the plain resume/next-up tags.
+        var targetIsSeasonFinale =
+            false
+
+        var targetIsSeriesFinale =
+            false
 
         val needsTmdbLookup =
             true
@@ -1616,6 +1835,12 @@ episodesWatched =
 
 episodesTotal =
     resolvedTarget.episodesTotal
+
+                    targetIsSeasonFinale =
+                        resolvedTarget.isSeasonFinale
+
+                    targetIsSeriesFinale =
+                        resolvedTarget.isSeriesFinale
 
                     val airedRecently =
                         resolvedTarget.airDate
@@ -1820,6 +2045,12 @@ episodesTotal =
 
             startPositionMs =
                 resolvedStartPositionMs,
+
+            isSeasonFinale =
+                targetIsSeasonFinale,
+
+            isSeriesFinale =
+                targetIsSeriesFinale,
 
             recencyTimestamp =
                 recencyTimestamp,
@@ -2070,6 +2301,62 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
         season++
     }
 
+    // Finale detection helpers: report whether a (season, episode) target is
+    // the last AIRED episode of its season (season finale) and, when that
+    // season is also the last one with aired episodes, the series finale.
+    // Only aired episodes count - an announced-but-unaired finale is just
+    // the next upcoming episode, not a finale you can watch yet.
+    fun seasonFinaleFor(
+        season: Int,
+        episode: Int
+    ): Boolean {
+
+        val lastAiredEpisode =
+            seasonEpisodesBySeason[season]
+                .orEmpty()
+                .filter {
+                    isAiredOrUnknown(
+                        it.airDate
+                    )
+                }
+                .maxOfOrNull {
+                    it.episodeNumber
+                }
+                ?: return false
+
+        return episode >= lastAiredEpisode
+    }
+
+    fun seriesFinaleFor(
+        season: Int,
+        episode: Int
+    ): Boolean {
+
+        if (
+            !seasonFinaleFor(
+                season,
+                episode
+            )
+        ) {
+            return false
+        }
+
+        val lastAiredSeason =
+            seasonEpisodesBySeason
+                .filterValues { episodes ->
+                    episodes.any {
+                        isAiredOrUnknown(
+                            it.airDate
+                        )
+                    }
+                }
+                .keys
+                .maxOrNull()
+                ?: return false
+
+        return season >= lastAiredSeason
+    }
+
     val episodesTotal =
         totalAiredEpisodes
             .takeIf { it > 0 }
@@ -2175,6 +2462,20 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
                             resume.season,
                         startingEpisode =
                             resume.episode
+                    ),
+
+                isSeasonFinale =
+                    seasonFinaleFor(
+                        resume.season,
+                        matchedResumeEpisode
+                            .episodeNumber
+                    ),
+
+                isSeriesFinale =
+                    seriesFinaleFor(
+                        resume.season,
+                        matchedResumeEpisode
+                            .episodeNumber
                     )
             )
         }
@@ -2283,7 +2584,21 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
                     startingEpisode =
                         nextUnwatchedInSeason
                             .episodeNumber
-                )
+                ),
+
+                isSeasonFinale =
+                    seasonFinaleFor(
+                        startingSeason,
+                        nextUnwatchedInSeason
+                            .episodeNumber
+                    ),
+
+                isSeriesFinale =
+                    seriesFinaleFor(
+                        startingSeason,
+                        nextUnwatchedInSeason
+                            .episodeNumber
+                    )
         )
     }
 
@@ -2414,6 +2729,20 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
                         startingEpisode =
                             firstUnwatchedAired
                                 .episodeNumber
+                    ),
+
+                isSeasonFinale =
+                    seasonFinaleFor(
+                        futureSeason,
+                        firstUnwatchedAired
+                            .episodeNumber
+                    ),
+
+                isSeriesFinale =
+                    seriesFinaleFor(
+                        futureSeason,
+                        firstUnwatchedAired
+                            .episodeNumber
                     )
             )
         }
@@ -2440,6 +2769,7 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
 
 private suspend fun calculateEpisodesRemaining(
     parentId: String,
+    // PROBE2
     tmdbId: Int,
     startingSeason: Int,
     startingEpisode: Int

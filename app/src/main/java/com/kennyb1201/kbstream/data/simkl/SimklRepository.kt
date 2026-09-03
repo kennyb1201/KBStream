@@ -866,7 +866,10 @@ class SimklRepository(
                 authorization = bearer(requireAccessToken())
             )
 
-            if (!response.isSuccessful) {
+            val alreadyGone =
+                response.code() == 404
+
+            if (!response.isSuccessful && !alreadyGone) {
                 val errorText = try {
                     response.errorBody()?.string()
                 } catch (e: Exception) {
@@ -881,15 +884,19 @@ class SimklRepository(
                 // Drop the Continue Watching snapshot so the next rail
                 // refresh sees the updated remote state instead of
                 // resurrecting the deleted session from the stale copy.
+                // 404 means the session is already gone (204 is the
+                // success code) - count it as removed so a stale snapshot
+                // can't keep a ghost card around until its disk TTL ends.
                 clearContinueWatchingCache()
 
                 Log.d(
                     "SIMKL_REPO",
-                    "deletePlaybackSession ok id=$playbackId"
+                    "deletePlaybackSession ok id=$playbackId" +
+                        if (alreadyGone) " (already gone)" else ""
                 )
             }
 
-            response.isSuccessful
+            response.isSuccessful || alreadyGone
         } catch (e: Exception) {
             Log.e(
                 "SIMKL_REPO",
@@ -898,6 +905,144 @@ class SimklRepository(
             )
             false
         }
+    }
+
+    /**
+     * Deletes every open Simkl playback session whose show/movie matches the
+     * given parent, regardless of which deduped card surfaced it. A paused
+     * title is usually backed by BOTH a local resume row and a Simkl paused
+     * session; when the local twin wins the rail dedupe the visible card
+     * carries no playbackId, so deleting only the card's own session (or none
+     * at all) leaves the remote session open and the title gets re-added from
+     * /sync/playback on the very next feed refresh. Returns how many sessions
+     * were removed (including ones already gone server-side).
+     */
+    suspend fun deletePlaybackSessionsForParent(
+        parentId: String,
+        title: String? = null
+    ): Int {
+
+        if (
+            !isConfigured() ||
+            !hasToken()
+        ) {
+            Log.d(
+                "SIMKL_REPO",
+                "deletePlaybackSessionsForParent skipped: " +
+                    "not configured/authenticated"
+            )
+            return 0
+        }
+
+        val ref =
+            parsePlaybackIds(
+                parentId
+            )
+                ?: return 0
+
+        return try {
+
+            val matchingSessions =
+                getPlaybackItems()
+                    .filter { item ->
+                        playbackItemMatchesParent(
+                            item = item,
+                            imdb = ref.imdb,
+                            tmdb = ref.tmdb,
+                            title = title
+                        )
+                    }
+
+            if (matchingSessions.isEmpty()) {
+                Log.d(
+                    "SIMKL_REPO",
+                    "deletePlaybackSessionsForParent: no open session " +
+                        "for parent=$parentId"
+                )
+                return 0
+            }
+
+            var removed =
+                0
+
+            matchingSessions.forEach { item ->
+                if (
+                    deletePlaybackSession(
+                        item.id
+                    )
+                ) {
+                    removed += 1
+                }
+            }
+
+            Log.d(
+                "SIMKL_REPO",
+                "deletePlaybackSessionsForParent parent=$parentId " +
+                    "matched=${matchingSessions.size} removed=$removed"
+            )
+
+            removed
+        } catch (
+            e: kotlinx.coroutines.CancellationException
+        ) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(
+                "SIMKL_REPO",
+                "deletePlaybackSessionsForParent error: ${e.message}",
+                e
+            )
+            0
+        }
+    }
+
+    private fun playbackItemMatchesParent(
+        item: SimklPlaybackItem,
+        imdb: String?,
+        tmdb: Int?,
+        title: String?
+    ): Boolean {
+
+        val media =
+            item.movie
+                ?: item.show
+                ?: return false
+
+        val ids =
+            media.ids
+
+        if (
+            imdb != null &&
+            ids?.imdb?.equals(
+                imdb,
+                ignoreCase = true
+            ) == true
+        ) {
+            return true
+        }
+
+        if (
+            tmdb != null &&
+            ids?.tmdb == tmdb
+        ) {
+            return true
+        }
+
+        // The Simkl id is not in the ref (it is resolved from the remote
+        // feed, never derived from a local parent id); only fall back to
+        // the title when the session carries no ids at all.
+        if (
+            ids == null &&
+            title != null
+        ) {
+            return media.title
+                ?.equals(
+                    title,
+                    ignoreCase = true
+                ) == true
+        }
+
+        return false
     }
 
     /*

@@ -733,18 +733,27 @@ private fun HomeHero(
     val continueEpisodeLabel =
         continueWatchingItem?.let { item ->
             val prefix =
-                when (item.badge) {
-                    UpNextBadge.CONTINUE_WATCHING ->
-                        "Resume"
+                when {
+                    item.isSeriesFinale ->
+                        "Series Finale"
 
-                    UpNextBadge.NEXT_UP ->
-                        "Next Up"
+                    item.isSeasonFinale ->
+                        "Season Finale"
 
-                    UpNextBadge.NEW_EPISODE ->
-                        "New Episode"
+                    else ->
+                        when (item.badge) {
+                            UpNextBadge.CONTINUE_WATCHING ->
+                                "Resume"
 
-                    UpNextBadge.NEW_SEASON ->
-                        "New Season"
+                            UpNextBadge.NEXT_UP ->
+                                "Next Up"
+
+                            UpNextBadge.NEW_EPISODE ->
+                                "New Episode"
+
+                            UpNextBadge.NEW_SEASON ->
+                                "New Season"
+                        }
                 }
 
             when {
@@ -1062,10 +1071,13 @@ continueTimeLeft?.let { label ->
             )
         }
 
-    // Only show the episode description for non-resume items.
+    // Only show the episode description for non-resume items (a finale
+    // that is being resumed still has a saved position, so it behaves
+    // like a plain resume card here).
     if (
         continueWatchingItem.badge !=
-            UpNextBadge.CONTINUE_WATCHING
+            UpNextBadge.CONTINUE_WATCHING &&
+        continueWatchingItem.startPositionMs <= 0L
     ) {
         continueWatchingItem.episodeDescription
             ?.trim()
@@ -1155,19 +1167,29 @@ private fun CompactUpNextCard(
         else -> null
     }
 
-    val displayBadge = when (item.badge) {
-        UpNextBadge.CONTINUE_WATCHING ->
-            "RESUME"
+    val displayBadge =
+        when {
+            item.isSeriesFinale ->
+                "SERIES FINALE"
 
-        UpNextBadge.NEXT_UP ->
-            "NEXT UP"
+            item.isSeasonFinale ->
+                "SEASON FINALE"
 
-        UpNextBadge.NEW_EPISODE ->
-            "NEW EPISODE"
+            else ->
+                when (item.badge) {
+                    UpNextBadge.CONTINUE_WATCHING ->
+                        "RESUME"
 
-        UpNextBadge.NEW_SEASON ->
-            "NEW SEASON"
-    }
+                    UpNextBadge.NEXT_UP ->
+                        "NEXT UP"
+
+                    UpNextBadge.NEW_EPISODE ->
+                        "NEW EPISODE"
+
+                    UpNextBadge.NEW_SEASON ->
+                        "NEW SEASON"
+                }
+        }
 
     val subtitle = item.subtitle
         ?.removePrefix("Resume - ")
@@ -1182,8 +1204,17 @@ private fun CompactUpNextCard(
     val progress = item.progressPercent
         ?.coerceIn(0f, 1f)
 
+    // Resume cards keep their progress bar and time-left. A finale being
+    // resumed still has a saved position, so treat it like a resume card;
+    // plain up-next finales have no position to show.
+    val isResumeCard =
+        item.badge == UpNextBadge.CONTINUE_WATCHING ||
+            (item.startPositionMs > 0L &&
+                (item.isSeasonFinale ||
+                    item.isSeriesFinale))
+
     val timeLeft =
-    if (item.badge == UpNextBadge.CONTINUE_WATCHING) {
+    if (isResumeCard) {
         formatTimeLeft(item.remainingMinutes)
     } else {
         null
@@ -1271,7 +1302,7 @@ private fun CompactUpNextCard(
                         start = 10.dp,
                         end = 10.dp,
                         bottom = if (
-                            item.badge == UpNextBadge.CONTINUE_WATCHING &&
+                            isResumeCard &&
                             progress != null &&
                             progress > 0f
                         ) {
@@ -1346,7 +1377,7 @@ private fun CompactUpNextCard(
                 .padding(
                     end = 10.dp,
                     bottom = if (
-                        item.badge == UpNextBadge.CONTINUE_WATCHING &&
+                        isResumeCard &&
                         progress != null &&
                         progress > 0f
                     ) {
@@ -1389,7 +1420,7 @@ private fun CompactUpNextCard(
             }
 
             if (
-                item.badge == UpNextBadge.CONTINUE_WATCHING &&
+                isResumeCard &&
                 progress != null &&
                 progress > 0f
             ) {
@@ -1765,42 +1796,64 @@ fun HomeScreen(
                                         focusRequester =
                                             requester,
                                         badgeColor =
-                                            when (
-                                                item.badge
-                                            ) {
-                                                UpNextBadge.CONTINUE_WATCHING ->
-                                                    KBAccent
-
-                                                UpNextBadge.NEXT_UP ->
+                                            when {
+                                                item.isSeriesFinale ->
                                                     Color(
-                                                        0xFF2E5BFF
+                                                        0xFFB71C1C
                                                     )
 
-                                                UpNextBadge.NEW_EPISODE ->
+                                                item.isSeasonFinale ->
                                                     Color(
-                                                        0xFF2E7D32
+                                                        0xFFD84315
                                                     )
 
-                                                UpNextBadge.NEW_SEASON ->
-                                                    Color(
-                                                        0xFF6A1B9A
-                                                    )
+                                                else ->
+                                                    when (
+                                                        item.badge
+                                                    ) {
+                                                        UpNextBadge.CONTINUE_WATCHING ->
+                                                            KBAccent
+
+                                                        UpNextBadge.NEXT_UP ->
+                                                            Color(
+                                                                0xFF2E5BFF
+                                                            )
+
+                                                        UpNextBadge.NEW_EPISODE ->
+                                                            Color(
+                                                                0xFF2E7D32
+                                                            )
+
+                                                        UpNextBadge.NEW_SEASON ->
+                                                            Color(
+                                                                0xFF6A1B9A
+                                                            )
+                                                    }
                                             },
                                         badgeText =
-                                            when (
-                                                item.badge
-                                            ) {
-                                                UpNextBadge.CONTINUE_WATCHING ->
-                                                    "RESUME"
+                                            when {
+                                                item.isSeriesFinale ->
+                                                    "SERIES FINALE"
 
-                                                UpNextBadge.NEXT_UP ->
-                                                    "NEXT UP"
+                                                item.isSeasonFinale ->
+                                                    "SEASON FINALE"
 
-                                                UpNextBadge.NEW_EPISODE ->
-                                                    "NEW"
+                                                else ->
+                                                    when (
+                                                        item.badge
+                                                    ) {
+                                                        UpNextBadge.CONTINUE_WATCHING ->
+                                                            "RESUME"
 
-                                                UpNextBadge.NEW_SEASON ->
-                                                    "NEW SEASON"
+                                                        UpNextBadge.NEXT_UP ->
+                                                            "NEXT UP"
+
+                                                        UpNextBadge.NEW_EPISODE ->
+                                                            "NEW"
+
+                                                        UpNextBadge.NEW_SEASON ->
+                                                            "NEW SEASON"
+                                                    }
                                             }
                                     )
                                 }
