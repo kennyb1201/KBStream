@@ -1673,7 +1673,7 @@ class NativePlayerActivity : ComponentActivity() {
         val state = player.playbackState
         if (state == Player.STATE_READY || state == Player.STATE_ENDED) return
         // Audio-only content has no video start to wait on.
-        if (player.tracks.groups.isNotEmpty() && !videoTrackPresent) return
+        if (player.currentTracks.groups.isNotEmpty() && !videoTrackPresent) return
 
         val now = System.currentTimeMillis()
         val positionMs = player.currentPosition
