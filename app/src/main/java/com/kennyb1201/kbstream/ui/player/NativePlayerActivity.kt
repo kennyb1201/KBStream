@@ -371,6 +371,30 @@ class NativePlayerActivity : ComponentActivity() {
     private val blackVideoSurfaceRecheckMs = 5_000L
     private val blackVideoSwTimeoutMs = 25_000L
 
+    // Startup watchdog: the black-video and stall watchdogs are only armed
+    // from READY / isPlaying, so a session that never leaves BUFFERING (no
+    // first frame ever — a surface whose native window was lost, or a source
+    // that goes quiet after the first bytes) previously sat on the splash
+    // screen forever with no recovery. This one ticks from prepare() and
+    // hands the session to the black-video recovery ladder once it is clear
+    // nothing is going to start.
+    private var startupWatchdogToken = 0
+    private var startupStartedAtMs = 0L
+    private var startupLastProgressAtMs = 0L
+    private var startupLastPositionMs = -1L
+    private var startupLastBufferedMs = -1L
+    private var startupSawData = false
+    private val startupWatchdogTickMs = 5_000L
+    // Before the first byte arrives, be patient: NNTP first-byte waits up to
+    // ~90s are legitimate. Once ANY data has arrived, 20s of total silence
+    // means the pipe died and the ladder should act.
+    private val startupQuietNoDataMs = 90_000L
+    private val startupQuietAfterDataMs = 20_000L
+    // Absolute cap: even a connection that keeps streaming but never reaches
+    // READY must surface an outcome eventually (a 4K file the connection
+    // can't sustain would otherwise buffer forever).
+    private val startupAbsoluteCapMs = 150_000L
+
     // Stall watchdog: a server that stops sending mid-stream leaves the
     // player stuck in BUFFERING forever — no error fires, the connection just
     // goes quiet. Track forward progress (position OR buffered position) and
@@ -1333,6 +1357,7 @@ class NativePlayerActivity : ComponentActivity() {
 
         player.addListener(createPlayerListener())
         player.addAnalyticsListener(createAnalyticsListener())
+        armStartupWatchdog()
 
         // New media: re-arm the ended fallback for this playback session.
         playbackEndedHandled = false
@@ -1624,6 +1649,88 @@ class NativePlayerActivity : ComponentActivity() {
             errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
             errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES
 
+    private fun armStartupWatchdog() {
+        // VOD only: live channels have their own recovery paths and an HLS
+        // playlist legitimately sits in BUFFERING while it loads — that must
+        // not trip this.
+        if (isLiveChannel) return
+        if (errorContainer.visibility == View.VISIBLE) return
+        val token = ++startupWatchdogToken
+        startupStartedAtMs = System.currentTimeMillis()
+        startupLastProgressAtMs = startupStartedAtMs
+        startupLastPositionMs = -1L
+        startupLastBufferedMs = -1L
+        startupSawData = false
+        handler.postDelayed({ tickStartupWatchdog(token) }, startupWatchdogTickMs)
+    }
+
+    private fun tickStartupWatchdog(token: Int) {
+        if (token != startupWatchdogToken) return
+        if (errorContainer.visibility == View.VISIBLE) return
+        // Session succeeded, or the normal watchdogs own it from here.
+        if (firstFrameRendered || blackVideoNoticeShown) return
+        val player = exoPlayer ?: return
+        val state = player.playbackState
+        if (state == Player.STATE_READY || state == Player.STATE_ENDED) return
+        // Audio-only content has no video start to wait on.
+        if (player.tracks.groups.isNotEmpty() && !videoTrackPresent) return
+
+        val now = System.currentTimeMillis()
+        val positionMs = player.currentPosition
+        val bufferedMs = player.bufferedPosition
+        if (bufferedMs > 0 || positionMs > 0) startupSawData = true
+
+        if (startupLastPositionMs >= 0L &&
+            (positionMs > startupLastPositionMs + 500 || bufferedMs > startupLastBufferedMs + 500)
+        ) {
+            startupLastProgressAtMs = now
+        }
+        startupLastPositionMs = positionMs
+        startupLastBufferedMs = bufferedMs
+
+        val quietMs = if (startupSawData) startupQuietAfterDataMs else startupQuietNoDataMs
+
+        // A video track exists and nothing has progressed — run the black-video
+        // recovery ladder (surface bounce -> decoder rebuild -> notice). The
+        // ladder normally requires READY + playing; the startup path skips that
+        // gate because this session never got that far.
+        if (now - startupLastProgressAtMs >= quietMs && videoTrackPresent) {
+            Log.w(
+                "PLAYER_VIDEO",
+                "Startup watchdog: no first frame after ${now - startupLastProgressAtMs}ms " +
+                    "quiet (data=$startupSawData state=$state) — running recovery ladder"
+            )
+            handleBlackVideoTimeout(blackVideoWatchdogToken, requirePlaying = false)
+            return
+        }
+
+        // Absolute deadline: never leave the user on an eternal buffering
+        // splash, even when data is flowing but READY is unreachable.
+        if (now - startupStartedAtMs >= startupAbsoluteCapMs) {
+            startupWatchdogToken++
+            blackVideoNoticeShown = true
+            Log.w(
+                "PLAYER_VIDEO",
+                "Startup watchdog: no READY after ${now - startupStartedAtMs}ms " +
+                    "(pos=${positionMs}ms buf=${bufferedMs}ms) — showing timeout notice"
+            )
+            reconnectingContainer.visibility = View.GONE
+            bufferingSpinner.visibility = View.GONE
+            errorTitle.text = "Playback is taking too long to start"
+            errorMessage.text =
+                "The stream never became ready (buffered ${bufferedMs / 1000}s). This usually means " +
+                    "the connection can't sustain the file's bitrate, the source went quiet, or the " +
+                    "release has broken timestamps. Try a different source, a lower resolution, " +
+                    "or a non-Dolby-Vision release."
+            errorContainer.visibility = View.VISIBLE
+            btnChangeSource.visibility = View.VISIBLE
+            focusErrorButtons()
+            return
+        }
+
+        handler.postDelayed({ tickStartupWatchdog(token) }, startupWatchdogTickMs)
+    }
+
     private fun armBlackVideoWatchdog() {
         // Only meaningful when a video track exists and hasn't rendered yet.
         if (blackVideoNoticeShown || firstFrameRendered || !videoTrackPresent) return
@@ -1645,13 +1752,17 @@ class NativePlayerActivity : ComponentActivity() {
      *     accepts but cannot actually present (DV-family / HEVC-10 quirks),
      *  3. explicit notice so the user is never left staring at a silent stall.
      */
-    private fun handleBlackVideoTimeout(token: Int) {
+    private fun handleBlackVideoTimeout(token: Int, requirePlaying: Boolean = true) {
         if (token != blackVideoWatchdogToken) return
         if (blackVideoNoticeShown || firstFrameRendered) return
         // Only flag while actually playing (READY + advancing); a slow
-        // buffering start or rebuffer must not trip the notice.
-        if (exoPlayer?.isPlaying != true) return
-        if (exoPlayer?.playbackState != Player.STATE_READY) return
+        // buffering start or rebuffer must not trip the notice. The startup
+        // watchdog bypasses this gate — a session that never reached READY
+        // needs the same recovery ladder, not an eternal splash.
+        if (requirePlaying) {
+            if (exoPlayer?.isPlaying != true) return
+            if (exoPlayer?.playbackState != Player.STATE_READY) return
+        }
         if (errorContainer.visibility == View.VISIBLE) return
 
         val codecInfo = streamCodec?.let { codec ->
@@ -1684,7 +1795,7 @@ class NativePlayerActivity : ComponentActivity() {
                     if (surfaceView == null) {
                         // No SurfaceView to bounce (unexpected layout) — skip
                         // straight to the software-decoder stage.
-                        handler.postDelayed({ handleBlackVideoTimeout(token) }, 0L)
+                        handler.postDelayed({ handleBlackVideoTimeout(token, requirePlaying) }, 0L)
                         return@postDelayed
                     }
                     surfaceView.visibility = View.INVISIBLE
@@ -1692,7 +1803,7 @@ class NativePlayerActivity : ComponentActivity() {
                         {
                             if (token != blackVideoWatchdogToken) return@postDelayed
                             surfaceView.visibility = View.VISIBLE
-                            handler.postDelayed({ handleBlackVideoTimeout(token) }, blackVideoSurfaceRecheckMs)
+                            handler.postDelayed({ handleBlackVideoTimeout(token, requirePlaying) }, blackVideoSurfaceRecheckMs)
                         },
                         250L
                     )
@@ -1819,7 +1930,7 @@ class NativePlayerActivity : ComponentActivity() {
         bufferingSpinner.visibility = View.GONE
         errorTitle.text = "Video isn't displaying"
         errorMessage.text =
-            "Audio is playing but no video frames are rendering$codecInfo. " +
+            "Playback started but no video frames are rendering$codecInfo. " +
                 "The video surface and hardware + software decoders were all tried on this TV. " +
                 "If Dolby Vision playback is on, try setting it to Off for this file, or choose " +
                 "a different source — a 1080p H.264 release usually plays on any device."

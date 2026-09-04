@@ -89,9 +89,17 @@ fun StreamsScreen(
     val episodeTitle = if (season != null && episode != null) {
         val episodeMarker = Regex("S\\s*${season}\\s*E\\s*${episode}\\b", RegexOption.IGNORE_CASE)
         episodeMarker.find(title)?.let { match ->
+            // Trim first, then strip a single leading separator: titles arrive
+            // as "Show S4 E4 • Episode Name", so the remainder after the
+            // marker starts with a space before the bullet. Stripping before
+            // trimming never matches (the string leads with whitespace) and
+            // the bullet then leaks into the name, rendering a doubled
+            // separator ("S04 · E04 · • Karambits").
             title.substring(match.range.last + 1)
+                .trim()
                 .removePrefix("•")
                 .removePrefix("-")
+                .removePrefix("·")
                 .trim()
                 .takeIf { it.isNotBlank() }
         }
@@ -252,9 +260,15 @@ private fun StreamsHeader(
             )
         }
 
-        episodeLabel?.let {
+        episodeLabel?.let { label ->
             Text(
-                text = if (episodeTitle != null) "$it · $episodeTitle" else it,
+                text = buildString {
+                    append(label)
+                    episodeTitle?.let { append(" · $it") }
+                    // Runtime rides on the episode line so the meta line below
+                    // stays a single clean "N sources found".
+                    runtimeMinutes?.let { append(" · ${formatStreamRuntime(it)}") }
+                },
                 color = KBAccent,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
@@ -265,10 +279,16 @@ private fun StreamsHeader(
         }
 
         Text(
-            text = listOfNotNull(
-                runtimeMinutes?.let(::formatStreamRuntime),
+            // Episodes already carry the runtime on the title line; movies
+            // (no episode label) keep it on this meta line instead.
+            text = if (episodeLabel != null) {
                 sourceLabel
-            ).joinToString(" · "),
+            } else {
+                listOfNotNull(
+                    runtimeMinutes?.let(::formatStreamRuntime),
+                    sourceLabel
+                ).joinToString(" · ")
+            },
             color = KBTextLo,
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.padding(top = 8.dp)
