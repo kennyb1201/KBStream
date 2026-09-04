@@ -33,9 +33,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
@@ -545,6 +549,35 @@ private fun SearchHero(
                     modifier = Modifier
                         .fillMaxWidth()
                         .onFocusChanged { searchFocused = it.isFocused }
+                        // TV D-pad escape: the field consumes DirectionDown/Up
+                        // for cursor movement, and the leanback IME grabs the
+                        // D-pad entirely while it is up. Intercepting here
+                        // moves focus out of the field (down into the results,
+                        // up back to the tab bar) so search results are always
+                        // reachable with the remote.
+                        .onPreviewKeyEvent { event ->
+                            if (event.type != KeyEventType.KeyDown) {
+                                false
+                            } else {
+                                when (event.key) {
+                                    Key.DirectionDown -> {
+                                        val moved = focusManager.moveFocus(FocusDirection.Down)
+                                        if (moved) {
+                                            keyboardController?.hide()
+                                        }
+                                        moved
+                                    }
+                                    Key.DirectionUp -> {
+                                        val moved = focusManager.moveFocus(FocusDirection.Up)
+                                        if (moved) {
+                                            keyboardController?.hide()
+                                        }
+                                        moved
+                                    }
+                                    else -> false
+                                }
+                            }
+                        }
                 )
             }
         }
