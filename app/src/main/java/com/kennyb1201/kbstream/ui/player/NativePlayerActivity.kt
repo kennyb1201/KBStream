@@ -270,6 +270,11 @@ class NativePlayerActivity : ComponentActivity() {
     private var retryExhausted = false
     private var errorMessageStr: String? = null
     private var forceSoftwareDecoder = false
+    // Black-video recovery in the reverse direction: an FFmpeg-only session
+    // (decoderMode == 1) whose renderer never presents a frame is rebuilt with
+    // the hardware decoder. Session latch mirroring forceSoftwareDecoder so
+    // createPlayer cannot silently undo the watchdog's decision.
+    private var forceHardwareDecoder = false
     private var manualRetryToken = 0
     private var rebufferStartedAtMs = 0L
 
@@ -282,6 +287,10 @@ class NativePlayerActivity : ComponentActivity() {
     private var firstFrameRendered = false
     private var blackVideoNoticeShown = false
     private var blackVideoSwRetried = false
+    // Whether an FFmpeg-only session has already been rebuilt with the
+    // hardware decoder (Stage 2 in reverse). Kept alongside the software
+    // marker so a second silent failure shows the notice instead of looping.
+    private var blackVideoHwRetried = false
     // One surface bounce is allowed per player attempt: flipping the
     // SurfaceView's visibility destroys/recreates its native surface and
     // Media3 re-queues output, which recovers the silent "decoder outputs
@@ -989,6 +998,8 @@ class NativePlayerActivity : ComponentActivity() {
         // (new stream / source switch). The software retry itself must keep its
         // marker so a second silent failure shows the notice instead of looping.
         if (!forceSoftwareDecoder) blackVideoSwRetried = false
+        // Same rule for the reverse retry (FFmpeg-only session -> hardware).
+        if (!forceHardwareDecoder) blackVideoHwRetried = false
 
         val agent = streamHeaders["User-Agent"] ?: streamHeaders["user-agent"]
             ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
@@ -1025,12 +1036,25 @@ class NativePlayerActivity : ComponentActivity() {
         val dvCompatMode = AppPreferences.getDvCompatMode(this)
         val stripHdr10Plus = AppPreferences.getStripHdr10Plus(this)
         val decoderMode = AppPreferences.getDecoderMode(this)
+        val dvRewriteEnabled = dvCompatMode != AppPreferences.DV_COMPAT_OFF
+        val convertAllProfiles = dvCompatMode == AppPreferences.DV_COMPAT_ALL
         // Keep the automatic fallback latch separate from the persisted mode.
         // A retry sets forceSoftwareDecoder before recreatePlayer(); overwriting
         // it here would silently switch that retry back to MediaCodec.
-        val softwareDecoderActive = decoderMode == 1 || forceSoftwareDecoder
-        val dvRewriteEnabled = dvCompatMode != AppPreferences.DV_COMPAT_OFF
-        val convertAllProfiles = dvCompatMode == AppPreferences.DV_COMPAT_ALL
+        //
+        // FFmpeg-only (decoderMode == 1) is a VOD compatibility fallback for
+        // DV material the hardware decoder cannot take as-is (green tint). It
+        // is bypassed where it cannot help: live IPTV is plain H.264/HEVC HLS
+        // that the TV's hardware decoder handles reliably, and when the DV →
+        // HEVC rewrite is active the output stream is plain HEVC built
+        // precisely so the hardware decoder can play it. The experimental
+        // FFmpeg renderer has also produced black-video-with-audio on this TV,
+        // so the black-video watchdog can flip an FFmpeg-only session to
+        // hardware (forceHardwareDecoder). An explicit software retry
+        // (forceSoftwareDecoder) still wins so the Auto recovery keeps working.
+        val softwareDecoderActive =
+            forceSoftwareDecoder ||
+                (decoderMode == 1 && !isLiveChannel && !dvRewriteEnabled && !forceHardwareDecoder)
         Log.i(
             "PLAYER_DV",
             "DV settings mode=$dvCompatMode rewriteEnabled=$dvRewriteEnabled " +
@@ -1178,7 +1202,10 @@ class NativePlayerActivity : ComponentActivity() {
                 if (!isLiveChannel && carryPositionMs > 0L) seekTo(carryPositionMs)
                 setPlaybackSpeed(playbackSpeed)
                 playWhenReady = true
-                if (enableTunneling && !softwareDecoderActive) {
+                // Tunneled playback is skipped on live channels: HLS live
+                // manifests (discontinuities, rolling window) are the classic
+                // tunnel black-video-with-audio case on Fire TV/Android TV.
+                if (enableTunneling && !softwareDecoderActive && !isLiveChannel) {
                     trackSelectionParameters = androidx.media3.exoplayer.trackselection.DefaultTrackSelector
                         .Parameters.Builder(this@NativePlayerActivity)
                         .setTunnelingEnabled(true).build()
@@ -1421,7 +1448,11 @@ class NativePlayerActivity : ComponentActivity() {
     private fun armBlackVideoWatchdog() {
         // Only meaningful when a video track exists and hasn't rendered yet.
         if (blackVideoNoticeShown || firstFrameRendered || !videoTrackPresent) return
-        if (isLiveChannel) return
+        // Live channels count too: IPTV no longer tunnels or forces FFmpeg by
+        // default, so a READY player with audio but no first frame is a real
+        // no-video failure (black screen with audio) and gets the same
+        // surface-bounce -> software -> notice recovery ladder as VOD.
+        // Audio-only channels are already filtered by !videoTrackPresent.
         val token = ++blackVideoWatchdogToken
         handler.postDelayed({ handleBlackVideoTimeout(token) }, blackVideoWatchdogMs)
     }
@@ -1492,9 +1523,59 @@ class NativePlayerActivity : ComponentActivity() {
             return
         }
 
-        // Stage 2: first occurrence with the hardware decoder — rebuild with
-        // the software decoder (plays many files whose video the TV's
-        // hardware decoder accepts but cannot actually present).
+        // Stage 2: swap renderer families. Auto sessions started on hardware,
+        // so the retry rebuilds with the software decoder (plays many files
+        // whose video the TV's hardware decoder accepts but cannot actually
+        // present). A session started FFmpeg-only by persisted choice retries
+        // with the hardware decoder instead — the experimental FFmpeg renderer
+        // can produce no frames at all, and a "software retry" would rebuild
+        // the identical renderer (a no-op that always ends in the notice).
+        // Snapshot the persisted mode here too (createPlayer keeps its own
+        // local copy); a mid-session settings change only matters from the
+        // next player rebuild anyway.
+        val ffmpegOnlyByChoice = AppPreferences.getDecoderMode(this) == 1 && !forceSoftwareDecoder
+        if (ffmpegOnlyByChoice) {
+            if (blackVideoHwRetried) {
+                // The hardware retry already ran and produced nothing — both
+                // renderer families failed, surface the notice.
+                showBlackVideoNotice()
+                return
+            }
+            blackVideoHwRetried = true
+            Log.w(
+                "PLAYER_VIDEO",
+                "Black video: no first frame (surface reset tried)$codecInfo " +
+                    "mime=${streamMimeType ?: "?"} — retrying with hardware decoder"
+            )
+            reconnectingContainer.visibility = View.VISIBLE
+            bufferingSpinner.visibility = View.GONE
+            reconnectingText.text = "Video isn't displaying — switching to hardware decoding…"
+            handler.postDelayed(
+                {
+                    if (token != blackVideoWatchdogToken) return@postDelayed
+                    if (blackVideoNoticeShown || firstFrameRendered) return@postDelayed
+                    forceHardwareDecoder = true
+                    errorMessageStr = null
+                    recreatePlayer()
+                },
+                500L
+            )
+            // Absolute deadline for the hardware attempt: if nothing rendered,
+            // surface the notice instead of leaving a silent stall.
+            handler.postDelayed(
+                {
+                    if (token != blackVideoWatchdogToken) return@postDelayed
+                    if (blackVideoNoticeShown || firstFrameRendered) return@postDelayed
+                    if (errorContainer.visibility == View.VISIBLE) return@postDelayed
+                    showBlackVideoNotice()
+                },
+                blackVideoSwTimeoutMs
+            )
+            return
+        }
+
+        // Stage 2 (Auto): first occurrence with the hardware decoder — rebuild
+        // with the software decoder.
         if (!blackVideoSwRetried && !forceSoftwareDecoder) {
             blackVideoSwRetried = true
             Log.w(
@@ -2695,7 +2776,7 @@ class NativePlayerActivity : ComponentActivity() {
         currentSourceLabel = stream.displayLabel()
         currentUrl = newUrl
         currentAudioUrl = stream.audioUrl
-        retryAttempt = 0; retryExhausted = false; errorMessageStr = null; forceSoftwareDecoder = false; languagesAutoSelected = false
+        retryAttempt = 0; retryExhausted = false; errorMessageStr = null; forceSoftwareDecoder = false; forceHardwareDecoder = false; languagesAutoSelected = false
         dismissPicker()
         recreatePlayer()
     }
