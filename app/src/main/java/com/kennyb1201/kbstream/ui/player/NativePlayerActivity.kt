@@ -1577,7 +1577,12 @@ class NativePlayerActivity : ComponentActivity() {
         val h = fmt.height
         if (w <= 0 || h <= 0) return
         val pixels = w.toLong() * h.toLong()
-        val bitDepth = fmt.colorInfo?.bitDepth ?: 8
+        // media3 ColorInfo exposes lumaBitdepth (Format.NO_VALUE when
+        // unknown); unknown or 8-bit color info falls back to 8, so only
+        // true 10-bit+ (HEVC Main10, DV base layers) triggers the
+        // bit-depth guard.
+        val colorLumaDepth = fmt.colorInfo?.lumaBitdepth ?: Format.NO_VALUE
+        val bitDepth = if (colorLumaDepth >= 10) colorLumaDepth else 8
         // 1080p-class 8-bit is roughly the ceiling for the software renderer
         // on a Fire TV Stick-class CPU; anything bigger — or 10-bit — goes to
         // the hardware decoder (MediaCodec handles 10-bit HEVC natively).
