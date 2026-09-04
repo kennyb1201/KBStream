@@ -66,7 +66,8 @@ fun SettingsScreen(
     var enablePip by remember { mutableStateOf(AppPreferences.getEnablePip(context)) }
     // Fire TV OS doesn't support PiP for third-party apps; hide the toggle there.
     val isFireTv = android.os.Build.MANUFACTURER.equals("Amazon", ignoreCase = true)
-    var decoderMode by remember { mutableIntStateOf(AppPreferences.getDecoderMode(context)) }
+    var videoDecoder by remember { mutableIntStateOf(AppPreferences.getVideoDecoder(context)) }
+    var audioDecoder by remember { mutableIntStateOf(AppPreferences.getAudioDecoder(context)) }
     var dvCompatMode by remember { mutableIntStateOf(AppPreferences.getDvCompatMode(context)) }
     var stripHdr10Plus by remember { mutableStateOf(AppPreferences.getStripHdr10Plus(context)) }
     var aspectRatio by remember { mutableIntStateOf(AppPreferences.getDefaultAspectRatio(context)) }
@@ -183,20 +184,59 @@ fun SettingsScreen(
             modifier = Modifier.padding(bottom = 4.dp)
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("Auto", "FFmpeg Only").forEachIndexed { index, label ->
+            listOf("Prefer device", "FFmpeg (software)").forEachIndexed { index, label ->
                 KBCard(onClick = {
-                    decoderMode = index
-                    AppPreferences.setDecoderMode(context, index)
+                    videoDecoder = index
+                    AppPreferences.setVideoDecoder(context, index)
                 }) {
-                    PillChip(label, decoderMode == index)
+                    PillChip(label, videoDecoder == index)
                 }
             }
         }
         Spacer(modifier = Modifier.height(2.dp))
         Text(
-            text = when (decoderMode) {
-                0 -> "Hardware first, falls back to FFmpeg if unsupported"
-                1 -> "Use FFmpeg for all decoding (fixes green-tint DV)"
+            text = when (videoDecoder) {
+                AppPreferences.VIDEO_DECODER_PREFER_DEVICE ->
+                    "Hardware video when available; FFmpeg software video only as fallback for unsupported codecs."
+                AppPreferences.VIDEO_DECODER_FFMPEG ->
+                    "FFmpeg software video. Best codec coverage, higher CPU; uses hardware where software can't keep up."
+                else -> ""
+            },
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelSmall
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Text(
+            text = "Audio Decoder",
+            color = KBTextHi,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(
+                "Device decoders only",
+                "Prefer device decoders",
+                "Prefer app decoders (FFmpeg)"
+            ).forEachIndexed { index, label ->
+                KBCard(onClick = {
+                    audioDecoder = index
+                    AppPreferences.setAudioDecoder(context, index)
+                }) {
+                    PillChip(label, audioDecoder == index)
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = when (audioDecoder) {
+                AppPreferences.AUDIO_DECODER_DEVICE_ONLY ->
+                    "Only built-in hardware decoders. Most compatible but may not support all formats."
+                AppPreferences.AUDIO_DECODER_PREFER_DEVICE ->
+                    "Hardware when available, falls back to FFmpeg. Recommended for most devices."
+                AppPreferences.AUDIO_DECODER_PREFER_APP ->
+                    "FFmpeg audio first — decodes DTS/TrueHD to PCM. Best format support but higher CPU usage."
                 else -> ""
             },
             color = KBTextLo,

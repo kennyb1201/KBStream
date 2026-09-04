@@ -94,7 +94,21 @@ private const val NEXT_UP_COUNTDOWN_SECONDS = 5
  * hardware MediaCodec renderer. This factory deliberately creates only the
  * bundled FFmpeg video renderer, so hardware cannot win track selection.
  */
-private class FfmpegOnlyRenderersFactory(context: Context) : DefaultRenderersFactory(context) {
+private class FfmpegOnlyRenderersFactory(
+    context: Context,
+    audioExtMode: Int
+) : DefaultRenderersFactory(context) {
+    init {
+        // This factory replaces the VIDEO renderer below with the experimental
+        // FFmpeg software renderer; audio keeps the platform renderer plus the
+        // FFmpeg extension at the priority-driven position (fallback behind
+        // MediaCodec, or preferred ahead of it). Without the FFmpeg audio
+        // renderer, DTS / DTS-HD / TrueHD tracks — which the Fire TV stick's
+        // MediaCodec can't decode — play video with no sound.
+        setExtensionRendererMode(audioExtMode)
+        setEnableDecoderFallback(true)
+    }
+
     override fun buildVideoRenderers(
         context: Context,
         extensionRendererMode: Int,
@@ -131,6 +145,50 @@ private class FfmpegOnlyRenderersFactory(context: Context) : DefaultRenderersFac
         }
     }
 }
+
+/**
+ * Decouples the video and audio extension policies, which stock
+ * DefaultRenderersFactory ties to a single extensionRendererMode. Audio gets
+ * the FFmpeg audio extension at the position set by the audio decoder
+ * priority (OFF / fallback / preferred). The video extension mode is passed
+ * per call site: ON keeps the FFmpeg software video renderer available as a
+ * fallback behind MediaCodec ("Prefer device" video); OFF keeps video
+ * strictly hardware (used when an FFmpeg-software session is bypassed by its
+ * own guards — live IPTV and DV->HDR10-rewritten streams).
+ */
+private class SplitModeRenderersFactory(
+    context: Context,
+    private val videoExtMode: Int,
+    audioExtMode: Int
+) : DefaultRenderersFactory(context) {
+    init {
+        setExtensionRendererMode(audioExtMode)
+        setEnableDecoderFallback(true)
+    }
+
+    override fun buildVideoRenderers(
+        context: Context,
+        extensionRendererMode: Int,
+        mediaCodecSelector: MediaCodecSelector,
+        enableDecoderFallback: Boolean,
+        eventHandler: Handler,
+        eventListener: VideoRendererEventListener,
+        allowedVideoJoiningTimeMs: Long,
+        out: ArrayList<Renderer>
+    ) {
+        super.buildVideoRenderers(
+            context,
+            videoExtMode,
+            mediaCodecSelector,
+            enableDecoderFallback,
+            eventHandler,
+            eventListener,
+            allowedVideoJoiningTimeMs,
+            out
+        )
+    }
+}
+
 
 class NativePlayerActivity : ComponentActivity() {
 
@@ -271,8 +329,9 @@ class NativePlayerActivity : ComponentActivity() {
     private var retryExhausted = false
     private var errorMessageStr: String? = null
     private var forceSoftwareDecoder = false
-    // Black-video recovery in the reverse direction: an FFmpeg-only session
-    // (decoderMode == 1) whose renderer never presents a frame is rebuilt with
+    // Black-video recovery in the reverse direction: a "Prefer app (FFmpeg)"
+    // session (video decoder = FFmpeg) whose renderer never presents a frame
+    // is rebuilt with
     // the hardware decoder. Session latch mirroring forceSoftwareDecoder so
     // createPlayer cannot silently undo the watchdog's decision.
     private var forceHardwareDecoder = false
@@ -292,8 +351,9 @@ class NativePlayerActivity : ComponentActivity() {
     // hardware decoder (Stage 2 in reverse). Kept alongside the software
     // marker so a second silent failure shows the notice instead of looping.
     private var blackVideoHwRetried = false
-    // The current session runs the FFmpeg-only renderer by persisted choice
-    // (decoderMode == 1). Such sessions pre-empt themselves for formats
+    // The current session runs the FFmpeg-only video renderer by persisted
+    // choice (video decoder = FFmpeg). Such sessions pre-empt themselves for
+    // formats
     // software decode cannot keep up with (4K / 10-bit): as soon as the track
     // format is known the session swaps to the hardware decoder instead of
     // sitting on black until the watchdog fires.
@@ -1055,35 +1115,51 @@ class NativePlayerActivity : ComponentActivity() {
         // strips HDR10+ only and never touches DV.
         val dvCompatMode = AppPreferences.getDvCompatMode(this)
         val stripHdr10Plus = AppPreferences.getStripHdr10Plus(this)
-        val decoderMode = AppPreferences.getDecoderMode(this)
+        val videoDecoder = AppPreferences.getVideoDecoder(this)
+        val audioDecoderPriority = AppPreferences.getAudioDecoder(this)
         val dvRewriteEnabled = dvCompatMode != AppPreferences.DV_COMPAT_OFF
         val convertAllProfiles = dvCompatMode == AppPreferences.DV_COMPAT_ALL
+        // Audio extension mode follows the independent audio decoder priority
+        // (Nuvio-style): 0 = device only (no FFmpeg at all), 1 = FFmpeg
+        // fallback behind MediaCodec, 2 = prefer FFmpeg — decoding DTS/TrueHD
+        // ahead of MediaCodec passthrough, which is silent on TVs without a
+        // DTS-capable sink.
+        val audioExtMode = when (audioDecoderPriority) {
+            AppPreferences.AUDIO_DECODER_DEVICE_ONLY ->
+                DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF
+            AppPreferences.AUDIO_DECODER_PREFER_APP ->
+                DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
+            else -> DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
+        }
         // Keep the automatic fallback latch separate from the persisted mode.
         // A retry sets forceSoftwareDecoder before recreatePlayer(); overwriting
         // it here would silently switch that retry back to MediaCodec.
         //
-        // FFmpeg-only (decoderMode == 1) is a VOD compatibility fallback for
-        // DV material the hardware decoder cannot take as-is (green tint). It
-        // is bypassed where it cannot help: live IPTV is plain H.264/HEVC HLS
-        // that the TV's hardware decoder handles reliably, and when the DV →
-        // HEVC rewrite is active the output stream is plain HEVC built
-        // precisely so the hardware decoder can play it. The experimental
-        // FFmpeg renderer has also produced black-video-with-audio on this TV,
-        // so the black-video watchdog can flip an FFmpeg-only session to
-        // hardware (forceHardwareDecoder). An explicit software retry
+        // The Video Decoder = "FFmpeg (software)" choice uses the software
+        // renderer as a VOD compatibility fallback for DV material the
+        // hardware decoder cannot take as-is (green tint). It is bypassed
+        // where it cannot help: live IPTV is plain H.264/HEVC HLS that the
+        // TV's hardware decoder handles reliably, and when the DV → HEVC
+        // rewrite is active the output stream is plain HEVC built precisely
+        // so the hardware decoder can play it. The experimental FFmpeg
+        // renderer has also produced black-video-with-audio on this TV, so the
+        // black-video watchdog can flip such a session to hardware
+        // (forceHardwareDecoder). An explicit software retry
         // (forceSoftwareDecoder) still wins so the Auto recovery keeps working.
         val softwareDecoderActive =
             forceSoftwareDecoder ||
-                (decoderMode == 1 && !isLiveChannel && !dvRewriteEnabled && !forceHardwareDecoder)
-        // Remember that this session is FFmpeg-only BY CHOICE (not a
+                (videoDecoder == AppPreferences.VIDEO_DECODER_FFMPEG &&
+                    !isLiveChannel && !dvRewriteEnabled && !forceHardwareDecoder)
+        // Remember that this session is FFmpeg-video BY CHOICE (not a
         // forceSoftwareDecoder retry) so onTracksChanged can pre-empt it for
         // formats the software renderer cannot decode in real time.
-        ffmpegOnlySession = decoderMode == 1 && !isLiveChannel && !dvRewriteEnabled && !forceHardwareDecoder
+        ffmpegOnlySession = videoDecoder == AppPreferences.VIDEO_DECODER_FFMPEG &&
+            !isLiveChannel && !dvRewriteEnabled && !forceHardwareDecoder
         Log.i(
             "PLAYER_DV",
             "DV settings mode=$dvCompatMode rewriteEnabled=$dvRewriteEnabled " +
                 "allProfiles=$convertAllProfiles stripHdr10Plus=$stripHdr10Plus " +
-                "decoderMode=$decoderMode " +
+                "videoDecoder=$videoDecoder audioDecoder=$audioDecoderPriority " +
                 "forceSoftware=$softwareDecoderActive " +
                 "audioSeparate=${!currentAudioUrl.isNullOrBlank()}"
         )
@@ -1149,17 +1225,25 @@ class NativePlayerActivity : ComponentActivity() {
             .setBufferDurationsMs(bufferDurations[0], bufferDurations[1], bufferDurations[2], bufferDurations[3])
             .setPrioritizeTimeOverSizeThresholds(true).build()
 
+        // Video and audio are independent. Software video only runs when the
+        // video decoder says FFmpeg AND its guards permit it; otherwise video
+        // extension mode is ON ("Prefer device": FFmpeg fallback behind
+        // hardware) or OFF (an FFmpeg session bypassed for live/DV-rewrite).
         val renderersFactory = if (softwareDecoderActive) {
-            FfmpegOnlyRenderersFactory(this)
+            FfmpegOnlyRenderersFactory(this, audioExtMode)
         } else {
-            DefaultRenderersFactory(this)
-                .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
-                .setEnableDecoderFallback(true)
+            val videoExtMode =
+                if (videoDecoder == AppPreferences.VIDEO_DECODER_PREFER_DEVICE) {
+                    DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
+                } else {
+                    DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF
+                }
+            SplitModeRenderersFactory(this, videoExtMode, audioExtMode)
         }
         Log.i(
             "PLAYER_DV",
-            "Renderer policy decoderMode=$decoderMode forceSoftware=$softwareDecoderActive " +
-                "ffmpegOnly=$softwareDecoderActive"
+            "Renderer policy videoDecoder=$videoDecoder audioDecoder=$audioDecoderPriority " +
+                "forceSoftware=$softwareDecoderActive ffmpegOnly=$softwareDecoderActive"
         )
 
         val player = ExoPlayer.Builder(this, renderersFactory)
@@ -1480,7 +1564,7 @@ class NativePlayerActivity : ComponentActivity() {
     // --- Black-video watchdog ---
 
     /**
-     * An FFmpeg-only session (persisted decoderMode == 1) that tries to
+     * An FFmpeg-only session (persisted video decoder = FFmpeg) that tries to
      * software-decode a stream it cannot keep up with produces audio with no
      * first frame — the exact black-screen-with-audio failure seen on 4K /
      * 10-bit HEVC. When the track format reveals such a stream, rebuild with
@@ -1615,7 +1699,9 @@ class NativePlayerActivity : ComponentActivity() {
         // Snapshot the persisted mode here too (createPlayer keeps its own
         // local copy); a mid-session settings change only matters from the
         // next player rebuild anyway.
-        val ffmpegOnlyByChoice = AppPreferences.getDecoderMode(this) == 1 && !forceSoftwareDecoder
+        val ffmpegOnlyByChoice =
+            AppPreferences.getVideoDecoder(this) == AppPreferences.VIDEO_DECODER_FFMPEG &&
+                !forceSoftwareDecoder
         if (ffmpegOnlyByChoice) {
             if (blackVideoHwRetried) {
                 // The hardware retry already ran and produced nothing — both

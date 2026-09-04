@@ -26,7 +26,10 @@ object AppPreferences {
     private const val KEY_FORCE_SOFTWARE_DECODER = "force_software_decoder"
     private const val KEY_ENABLE_TUNNELING = "enable_tunneling"
     private const val KEY_ENABLE_PIP = "enable_pip"
-    private const val KEY_DECODER_MODE = "decoder_mode"                      // 0=auto, 1=ffmpeg-only
+    private const val KEY_DECODER_MODE = "decoder_mode" // legacy toggle, migrated below
+    private const val KEY_DECODER_PRIORITY = "decoder_priority" // combined (one release), migrated below
+    private const val KEY_VIDEO_DECODER = "video_decoder"
+    private const val KEY_AUDIO_DECODER = "audio_decoder"                      // 0=auto, 1=ffmpeg-only
     private const val KEY_DV_COMPAT_MODE = "dv_compat_mode"                  // 0=auto, 1=off, 3=all (2=legacy auto+hdr10+)
     private const val KEY_STRIP_HDR10_PLUS = "strip_hdr10_plus"             // independent of the DV mode
     private const val KEY_DEFAULT_ASPECT_RATIO = "default_aspect_ratio"     // 0=fit, 1=zoom, 2=fill
@@ -100,14 +103,76 @@ object AppPreferences {
         prefs(context).edit().putBoolean(KEY_ENABLE_PIP, enabled).apply()
     }
 
-    // ── Decoder mode ────────────────────────────────────────────────
-    // 0 = Auto (HW first, FFmpeg fallback)
-    // 1 = FFmpeg only (software decoder for everything)
-    fun getDecoderMode(context: Context): Int =
-        prefs(context).getInt(KEY_DECODER_MODE, 0)
+    // ── Decoder priority (Nuvio-style) ───────────────────────────────
+    // Controls whether hardware or software (FFmpeg) decoders are used for
+    // audio, and whether the software video renderer is available:
+    // 0 = Device decoders only (pure MediaCodec, no FFmpeg anywhere)
+    // 1 = Prefer device decoders (hardware first, FFmpeg fallback)
+    // 2 = Prefer app decoders / FFmpeg (FFmpeg audio first, software video)
+    // Video decoder: which renderer family produces video frames.
+    // 0 = Prefer device (hardware first, FFmpeg video as fallback)
+    // 1 = FFmpeg software video (auto-uses hardware where software can't help)
+    const val VIDEO_DECODER_PREFER_DEVICE = 0
+    const val VIDEO_DECODER_FFMPEG = 1
+    // Audio decoder priority (Nuvio-style): position of the FFmpeg audio
+    // extension relative to MediaCodec.
+    // 0 = Device decoders only (no FFmpeg audio)
+    // 1 = Prefer device decoders (FFmpeg fallback behind MediaCodec)
+    // 2 = Prefer app decoders (FFmpeg audio first; decodes DTS/TrueHD)
+    const val AUDIO_DECODER_DEVICE_ONLY = 0
+    const val AUDIO_DECODER_PREFER_DEVICE = 1
+    const val AUDIO_DECODER_PREFER_APP = 2
 
-    fun setDecoderMode(context: Context, mode: Int) {
-        prefs(context).edit().putInt(KEY_DECODER_MODE, mode).apply()
+    private fun migrateDecoderPrefs(context: Context) {
+        val sp = prefs(context)
+        if (sp.contains(KEY_VIDEO_DECODER) && sp.contains(KEY_AUDIO_DECODER)) return
+        // Combined builds stored one "decoder_priority" (0=device only,
+        // 1=prefer device, 2=prefer app); earlier builds stored the legacy
+        // "decoder_mode" toggle (0=Auto, 1=FFmpeg only). Derive both split
+        // preferences from whichever exists, then drop the old keys.
+        var video = VIDEO_DECODER_PREFER_DEVICE
+        var audio = AUDIO_DECODER_PREFER_DEVICE
+        when {
+            sp.contains(KEY_DECODER_PRIORITY) -> when (sp.getInt(KEY_DECODER_PRIORITY, 1)) {
+                0 -> audio = AUDIO_DECODER_DEVICE_ONLY
+                2 -> {
+                    video = VIDEO_DECODER_FFMPEG
+                    audio = AUDIO_DECODER_PREFER_APP
+                }
+                else -> audio = AUDIO_DECODER_PREFER_DEVICE
+            }
+            sp.contains(KEY_DECODER_MODE) -> when (sp.getInt(KEY_DECODER_MODE, 0)) {
+                1 -> {
+                    video = VIDEO_DECODER_FFMPEG
+                    audio = AUDIO_DECODER_PREFER_APP
+                }
+                else -> audio = AUDIO_DECODER_PREFER_DEVICE
+            }
+        }
+        sp.edit()
+            .putInt(KEY_VIDEO_DECODER, video)
+            .putInt(KEY_AUDIO_DECODER, audio)
+            .remove(KEY_DECODER_PRIORITY)
+            .remove(KEY_DECODER_MODE)
+            .apply()
+    }
+
+    fun getVideoDecoder(context: Context): Int {
+        migrateDecoderPrefs(context)
+        return prefs(context).getInt(KEY_VIDEO_DECODER, VIDEO_DECODER_PREFER_DEVICE)
+    }
+
+    fun setVideoDecoder(context: Context, mode: Int) {
+        prefs(context).edit().putInt(KEY_VIDEO_DECODER, mode.coerceIn(0, 1)).apply()
+    }
+
+    fun getAudioDecoder(context: Context): Int {
+        migrateDecoderPrefs(context)
+        return prefs(context).getInt(KEY_AUDIO_DECODER, AUDIO_DECODER_PREFER_DEVICE)
+    }
+
+    fun setAudioDecoder(context: Context, priority: Int) {
+        prefs(context).edit().putInt(KEY_AUDIO_DECODER, priority.coerceIn(0, 2)).apply()
     }
 
     // ── Dolby Vision compatibility ─────────────────────────────────────
