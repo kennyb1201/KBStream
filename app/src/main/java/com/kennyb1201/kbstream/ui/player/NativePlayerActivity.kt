@@ -30,6 +30,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
@@ -291,6 +292,13 @@ class NativePlayerActivity : ComponentActivity() {
     // hardware decoder (Stage 2 in reverse). Kept alongside the software
     // marker so a second silent failure shows the notice instead of looping.
     private var blackVideoHwRetried = false
+    // The current session runs the FFmpeg-only renderer by persisted choice
+    // (decoderMode == 1). Such sessions pre-empt themselves for formats
+    // software decode cannot keep up with (4K / 10-bit): as soon as the track
+    // format is known the session swaps to the hardware decoder instead of
+    // sitting on black until the watchdog fires.
+    private var ffmpegOnlySession = false
+    private var ffmpegSessionSwappedToHw = false
     // One surface bounce is allowed per player attempt: flipping the
     // SurfaceView's visibility destroys/recreates its native surface and
     // Media3 re-queues output, which recovers the silent "decoder outputs
@@ -966,13 +974,23 @@ class NativePlayerActivity : ComponentActivity() {
                     togglePlayPause(); true
                 }
                 KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_BUTTON_SELECT -> {
-                    if (!controlsVisible) showControls() else hideControls()
-                    true
+                    if (errorContainer.visibility == View.VISIBLE) {
+                        focusErrorButtons()
+                        true
+                    } else {
+                        if (!controlsVisible) showControls() else hideControls()
+                        true
+                    }
                 }
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                    showControls()
-                    controlsOverlay.requestFocus()
-                    true
+                    if (errorContainer.visibility == View.VISIBLE) {
+                        focusErrorButtons()
+                        true
+                    } else {
+                        showControls()
+                        controlsOverlay.requestFocus()
+                        true
+                    }
                 }
                 KeyEvent.KEYCODE_BACK -> {
                     if (isPickerShowing || showSettingsPanel) { dismissAllPanels(); true } else false
@@ -994,6 +1012,8 @@ class NativePlayerActivity : ComponentActivity() {
         // software one); only the software retry itself is once-per-session.
         blackVideoSurfaceRetried = false
         blackVideoWatchdogToken++
+        ffmpegOnlySession = false
+        ffmpegSessionSwappedToHw = false
         // Reset the black-video software-decoder retry only for fresh attempts
         // (new stream / source switch). The software retry itself must keep its
         // marker so a second silent failure shows the notice instead of looping.
@@ -1055,6 +1075,10 @@ class NativePlayerActivity : ComponentActivity() {
         val softwareDecoderActive =
             forceSoftwareDecoder ||
                 (decoderMode == 1 && !isLiveChannel && !dvRewriteEnabled && !forceHardwareDecoder)
+        // Remember that this session is FFmpeg-only BY CHOICE (not a
+        // forceSoftwareDecoder retry) so onTracksChanged can pre-empt it for
+        // formats the software renderer cannot decode in real time.
+        ffmpegOnlySession = decoderMode == 1 && !isLiveChannel && !dvRewriteEnabled && !forceHardwareDecoder
         Log.i(
             "PLAYER_DV",
             "DV settings mode=$dvCompatMode rewriteEnabled=$dvRewriteEnabled " +
@@ -1331,6 +1355,7 @@ class NativePlayerActivity : ComponentActivity() {
                                 "${fmt.width}x${fmt.height} color=${colorInfo?.colorTransfer ?: -1}" +
                                 (streamDeclaredDvCodec?.let { " rewrittenFrom=$it" } ?: "")
                         )
+                        preemptHeavyFfmpegSession(fmt)
                     }
                 }
             }
@@ -1436,9 +1461,66 @@ class NativePlayerActivity : ComponentActivity() {
         errorTitle.text = if (isLiveChannel) "Channel unavailable" else "Playback failed"
         errorMessage.text = errorMessageStr.orEmpty()
         btnChangeSource.visibility = View.VISIBLE
+        focusErrorButtons()
+    }
+
+    /**
+     * Move D-pad focus onto the error card's buttons. Without this the focus
+     * stays parked on playerView, whose key listener reroutes every arrow/OK
+     * press into the (hidden) controls overlay, so the remote can never reach
+     * RETRY / CHANGE SOURCE.
+     */
+    private fun focusErrorButtons() {
+        errorContainer.post {
+            val target = if (btnRetry.visibility == View.VISIBLE) btnRetry else btnChangeSource
+            target.requestFocus()
+        }
     }
 
     // --- Black-video watchdog ---
+
+    /**
+     * An FFmpeg-only session (persisted decoderMode == 1) that tries to
+     * software-decode a stream it cannot keep up with produces audio with no
+     * first frame — the exact black-screen-with-audio failure seen on 4K /
+     * 10-bit HEVC. When the track format reveals such a stream, rebuild with
+     * the hardware decoder immediately instead of waiting out the black-video
+     * watchdog (which would reach the same swap ~8s later).
+     */
+    private fun preemptHeavyFfmpegSession(fmt: Format) {
+        if (!ffmpegOnlySession || ffmpegSessionSwappedToHw) return
+        val w = fmt.width
+        val h = fmt.height
+        if (w <= 0 || h <= 0) return
+        val pixels = w.toLong() * h.toLong()
+        val bitDepth = fmt.colorInfo?.bitDepth ?: 8
+        // 1080p-class 8-bit is roughly the ceiling for the software renderer
+        // on a Fire TV Stick-class CPU; anything bigger — or 10-bit — goes to
+        // the hardware decoder (MediaCodec handles 10-bit HEVC natively).
+        val tooHeavy = pixels > 1_920L * 1_080L ||
+            (pixels >= 1_920L * 1_080L && bitDepth > 8)
+        if (!tooHeavy) return
+        ffmpegSessionSwappedToHw = true
+        Log.w(
+            "PLAYER_VIDEO",
+            "FFmpeg-only can't keep up with ${w}x$h bitDepth=$bitDepth " +
+                "mime=${streamMimeType ?: "?"} — switching to hardware decoder"
+        )
+        reconnectingContainer.visibility = View.VISIBLE
+        bufferingSpinner.visibility = View.GONE
+        reconnectingText.text = "Too heavy for software decoding — switching to hardware…"
+        // Invalidate any pending watchdog work; this rebuild supersedes it.
+        blackVideoWatchdogToken++
+        handler.postDelayed(
+            {
+                if (blackVideoNoticeShown || firstFrameRendered) return@postDelayed
+                forceHardwareDecoder = true
+                errorMessageStr = null
+                recreatePlayer()
+            },
+            300L
+        )
+    }
 
     private fun isDecoderError(errorCode: Int): Boolean =
         errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
@@ -1644,6 +1726,7 @@ class NativePlayerActivity : ComponentActivity() {
                 "a different source — a 1080p H.264 release usually plays on any device."
         errorContainer.visibility = View.VISIBLE
         btnChangeSource.visibility = View.VISIBLE
+        focusErrorButtons()
     }
 
     // --- Stall watchdog ---

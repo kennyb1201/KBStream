@@ -158,7 +158,7 @@
                 android:paddingHorizontal="20dp"
                 android:paddingVertical="10dp"
                 android:text="CHANGE SOURCE"
-                android:textColor="@color/kb_accent"
+                android:textColor="@color/kb_void"
                 android:textSize="16sp"
                 android:visibility="gone" />
         </LinearLayout>
