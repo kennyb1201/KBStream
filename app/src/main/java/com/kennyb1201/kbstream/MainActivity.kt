@@ -161,6 +161,7 @@ sealed class Screen {
         val sources: List<Stream> = emptyList(),
         val streamHeaders: Map<String, String> = emptyMap(),
         val totalEpisodesInSeason: Int? = null,
+        val runtimeMinutes: Int? = null,
         val drmLicenseUrl: String? = null,
         val drmHeaders: Map<String, String> = emptyMap()
     ) : Screen()
@@ -348,6 +349,7 @@ private fun encodeTarget(target: StreamsTarget): JSONObject = JSONObject().apply
     target.episode?.let { put("episode", it) }
     put("resumePositionMs", target.resumePositionMs)
     target.totalEpisodesInSeason?.let { put("totalEpisodesInSeason", it) }
+    target.runtimeMinutes?.let { put("runtimeMinutes", it) }
 }
 
 private fun decodeTarget(json: JSONObject): StreamsTarget? = try {
@@ -359,7 +361,8 @@ private fun decodeTarget(json: JSONObject): StreamsTarget? = try {
         season = json.optNullableInt("season"),
         episode = json.optNullableInt("episode"),
         resumePositionMs = json.optLong("resumePositionMs", 0L),
-        totalEpisodesInSeason = json.optNullableInt("totalEpisodesInSeason")
+        totalEpisodesInSeason = json.optNullableInt("totalEpisodesInSeason"),
+        runtimeMinutes = json.optNullableInt("runtimeMinutes")
     )
 } catch (t: Throwable) {
     null
@@ -478,6 +481,7 @@ private data class PendingPlay(
             returnTo = returnTo,
             sources = allSources,
             totalEpisodesInSeason = totalEpisodesInSeason,
+            runtimeMinutes = target.runtimeMinutes,
             drmLicenseUrl = stream.drm?.licenseUrl,
             drmHeaders = stream.drm?.headers.orEmpty()
         )
@@ -1136,6 +1140,7 @@ fun AppRoot() {
                 displayName = current.target.displayName,
                 season = current.target.season,
                 episode = current.target.episode,
+                runtimeMinutes = current.target.runtimeMinutes,
                 backdropUrl = current.backdropUrl,
                 clearLogoUrl = current.clearLogoUrl,
                 suppressAutoSelect =
@@ -1186,6 +1191,8 @@ fun AppRoot() {
                             sources = allSources,
                             totalEpisodesInSeason =
                                 current.target.totalEpisodesInSeason,
+                            runtimeMinutes =
+                                current.target.runtimeMinutes,
                             drmLicenseUrl = stream.drm?.licenseUrl,
                             drmHeaders = stream.drm?.headers.orEmpty()
                         )
@@ -1343,7 +1350,8 @@ fun AppRoot() {
                                     season = current.season,
                                     episode = current.episode,
                                     resumePositionMs = current.startPositionMs,
-                                    totalEpisodesInSeason = current.totalEpisodesInSeason
+                                    totalEpisodesInSeason = current.totalEpisodesInSeason,
+                                    runtimeMinutes = current.runtimeMinutes
                                 ),
                             parentId = current.parentId,
                             returnTo = current.returnTo,

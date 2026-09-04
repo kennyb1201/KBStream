@@ -2393,12 +2393,13 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
      * A season finale of a still-running show (Returning Series, In
      * Production, Planned, or status unknown) must NOT be labelled "Series
      * Finale" — the show may air more seasons. Only Ended/Canceled qualifies.
-     * Cached per show for the lifetime of this ViewModel.
+     * Cached per show for the lifetime of this resolution pass (the three
+     * finale checks for one target share a single TMDB lookup).
      */
-    private val seriesEndedCache =
+    val seriesEndedCache =
         java.util.concurrent.ConcurrentHashMap<Int, Boolean>()
 
-    private suspend fun isSeriesEnded(
+    suspend fun isSeriesEnded(
         tmdbId: Int
     ): Boolean {
 

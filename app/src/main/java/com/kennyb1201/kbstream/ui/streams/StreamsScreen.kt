@@ -56,6 +56,7 @@ fun StreamsScreen(
     displayName: String,
     season: Int?,
     episode: Int?,
+    runtimeMinutes: Int? = null,
     backdropUrl: String?,
     clearLogoUrl: String?,
     suppressAutoSelect: Boolean = false,
@@ -151,6 +152,7 @@ fun StreamsScreen(
                 clearLogoUrl = clearLogoUrl,
                 episodeLabel = episodeLabel,
                 episodeTitle = episodeTitle,
+                runtimeMinutes = runtimeMinutes,
                 sourceLabel = sourceLabel
             )
 
@@ -219,6 +221,7 @@ private fun StreamsHeader(
     clearLogoUrl: String?,
     episodeLabel: String?,
     episodeTitle: String?,
+    runtimeMinutes: Int?,
     sourceLabel: String
 ) {
     val context = LocalContext.current
@@ -262,11 +265,24 @@ private fun StreamsHeader(
         }
 
         Text(
-            text = sourceLabel,
+            text = listOfNotNull(
+                runtimeMinutes?.let(::formatStreamRuntime),
+                sourceLabel
+            ).joinToString(" · "),
             color = KBTextLo,
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.padding(top = 8.dp)
         )
+    }
+}
+
+private fun formatStreamRuntime(minutes: Int): String {
+    val hours = minutes / 60
+    val mins = minutes % 60
+    return when {
+        hours > 0 && mins > 0 -> "${hours}h ${mins}m"
+        hours > 0 -> "${hours}h"
+        else -> "${mins}m"
     }
 }
 

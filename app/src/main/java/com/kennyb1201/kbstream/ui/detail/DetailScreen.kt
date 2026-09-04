@@ -123,7 +123,8 @@ data class StreamsTarget(
     val season: Int?,
     val episode: Int?,
     val resumePositionMs: Long,
-    val totalEpisodesInSeason: Int? = null
+    val totalEpisodesInSeason: Int? = null,
+    val runtimeMinutes: Int? = null
 )
 
 private sealed interface PeopleRowItem {
@@ -155,7 +156,8 @@ private data class EpisodeMenuTarget(
     val episodeTitle: String?,
     val seasonEpisodeNumbers: List<Int>,
     val streamId: String,
-    val overview: String?
+    val overview: String?,
+    val runtimeMinutes: Int? = null
 )
 
 private data class DetailFactItem(
@@ -714,8 +716,16 @@ fun DetailScreen(
                 playTarget = remember(
                     resumeInfo,
                     id,
-                    displayName
+                    displayName,
+                    tmdbDetail?.runtime
                 ) {
+                    // Prefer the actual recorded duration (accurate for the
+                    // file that was watched); fall back to TMDB's runtime.
+                    val recordedMinutes =
+                        resumeInfo?.durationMs
+                            ?.div(60_000L)
+                            ?.toInt()
+                            ?.takeIf { it > 0 }
                     StreamsTarget(
                         contentType = "movie",
                         streamId = id,
@@ -724,7 +734,11 @@ fun DetailScreen(
                         season = null,
                         episode = null,
                         resumePositionMs =
-                            resumeInfo?.positionMs ?: 0L
+                            resumeInfo?.positionMs ?: 0L,
+                        runtimeMinutes =
+                            recordedMinutes
+                                ?: tmdbDetail?.runtime
+                                    ?.takeIf { it > 0 }
                     )
                 }
             } else {
@@ -774,6 +788,41 @@ fun DetailScreen(
                         "PLAY"
                 }
 
+                // Only trust the resolved episode's name when it actually is
+                // the episode this target plays (the resolution can fall back
+                // to a different row, e.g. the first episode of the season).
+                // When the resolved row doesn't line up but we're resuming the
+                // target episode, fall back to the episode name stored in the
+                // watch-history entry.
+                val playTargetEpisodeName =
+                    resolvedTargetEpisode
+                        ?.takeIf {
+                            it.episodeNumber == targetEpisode
+                        }
+                        ?.name
+                        ?.takeIf { it.isNotBlank() }
+                        ?: resumeInfo?.episodeTitle
+                            ?.takeIf { isResumingHere }
+                            ?.takeIf { it.isNotBlank() }
+
+                // Same gate for the runtime: the resolved row's runtime only
+                // counts when it is the target episode; when resuming, prefer
+                // the actual recorded duration of the watched file.
+                val playTargetRuntimeMinutes: Int? =
+                    if (isResumingHere) {
+                        resumeInfo?.durationMs
+                            ?.div(60_000L)
+                            ?.toInt()
+                            ?.takeIf { it > 0 }
+                    } else {
+                        resolvedTargetEpisode
+                            ?.takeIf {
+                                it.episodeNumber == targetEpisode
+                            }
+                            ?.runtimeMinutes
+                            ?.takeIf { it > 0 }
+                    }
+
                 playTarget = remember(
                     id,
                     displayName,
@@ -781,13 +830,20 @@ fun DetailScreen(
                     targetEpisode,
                     targetStreamId,
                     isResumingHere,
-                    resumeInfo?.positionMs
+                    resumeInfo?.positionMs,
+                    resumeInfo?.episodeTitle,
+                    playTargetEpisodeName,
+                    playTargetRuntimeMinutes
                 ) {
+                    val episodeSuffix =
+                        playTargetEpisodeName?.let {
+                            " • $it"
+                        } ?: ""
                     StreamsTarget(
                         contentType = "series",
                         streamId = targetStreamId,
                         title =
-                            "$displayName S$targetSeason E$targetEpisode",
+                            "$displayName S$targetSeason E$targetEpisode$episodeSuffix",
                         displayName = displayName,
                         season = targetSeason,
                         episode = targetEpisode,
@@ -797,7 +853,8 @@ fun DetailScreen(
                             } else {
                                 0L
                             },
-                        totalEpisodesInSeason = episodes.size
+                        totalEpisodesInSeason = episodes.size,
+                        runtimeMinutes = playTargetRuntimeMinutes
                     )
                 }
             }
@@ -1641,7 +1698,24 @@ fun DetailScreen(
                                                                         } else {
                                                                             0L
                                                                         },
-                                                                    totalEpisodesInSeason = episodes.size
+                                                                    totalEpisodesInSeason = episodes.size,
+                                                                    runtimeMinutes =
+                                                                        if (
+                                                                            hasResumeHere
+                                                                        ) {
+                                                                            resumeInfo
+                                                                                ?.durationMs
+                                                                                ?.div(60_000L)
+                                                                                ?.toInt()
+                                                                                ?.takeIf {
+                                                                                    it > 0
+                                                                                }
+                                                                        } else {
+                                                                            ep.runtimeMinutes
+                                                                                ?.takeIf {
+                                                                                    it > 0
+                                                                                }
+                                                                        }
                                                                 )
 
                                                             onNavigateStreams(
@@ -1683,7 +1757,9 @@ fun DetailScreen(
                                                                         streamId =
                                                                             ep.streamId,
                                                                         overview =
-                                                                            ep.overview
+                                                                            ep.overview,
+                                                                        runtimeMinutes =
+                                                                            ep.runtimeMinutes
                                                                     )
                                                             }
                                                         },
@@ -2583,7 +2659,24 @@ fun DetailScreen(
                                             totalEpisodesInSeason =
                                                 selected
                                                     .seasonEpisodeNumbers
-                                                    .size
+                                                    .size,
+                                            runtimeMinutes =
+                                                if (
+                                                    hasResumeHere
+                                                ) {
+                                                    resumeInfo
+                                                        ?.durationMs
+                                                        ?.div(60_000L)
+                                                        ?.toInt()
+                                                        ?.takeIf {
+                                                            it > 0
+                                                        }
+                                                } else {
+                                                    selected.runtimeMinutes
+                                                        ?.takeIf {
+                                                            it > 0
+                                                        }
+                                                }
                                         )
 
                                     onNavigateStreams(

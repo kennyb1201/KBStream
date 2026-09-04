@@ -1632,12 +1632,43 @@ fun HomeScreen(
             logo = item.clearLogo
         )
 
+        // Series-episode cards carry the show name in [item.title] with the
+        // episode details in separate fields (season/episode/episodeTitle).
+        // The streams picker (and everything downstream that re-parses the
+        // title) needs the canonical "Sx Ey • Name" shape, so compose it when
+        // the card title doesn't already contain the marker.
+        val targetTitle = run {
+            val hasMarker =
+                item.season != null &&
+                    item.episode != null &&
+                    Regex(
+                        "S\\s*0*${item.season}\\s*E\\s*0*${item.episode}\\b",
+                        RegexOption.IGNORE_CASE
+                    ).containsMatchIn(item.title)
+            if (
+                parentType == "series" &&
+                item.season != null &&
+                item.episode != null &&
+                !hasMarker
+            ) {
+                buildString {
+                    append(item.title)
+                    append(" S${item.season} E${item.episode}")
+                    item.episodeTitle
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { append(" • $it") }
+                }
+            } else {
+                item.title
+            }
+        }
+
         val target = StreamsTarget(
             contentType = parentType,
             streamId = item.episodeStreamId
                 ?: item.parentId
                 ?: item.id,
-            title = item.title,
+            title = targetTitle,
             displayName = item.title,
             season = item.season,
             episode = item.episode,
@@ -1646,7 +1677,10 @@ fun HomeScreen(
                     0L
                 } else {
                     item.startPositionMs
-                }
+                },
+            runtimeMinutes =
+                item.runtimeMinutes
+                    ?.takeIf { it > 0 }
         )
 
         if (openDetailsOnly) {
