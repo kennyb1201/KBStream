@@ -230,6 +230,10 @@ private class VideoCompatTrackOutput(
             if (format.sampleMimeType == MimeTypes.VIDEO_DOLBY_VISION) {
                 builder = builder.setSampleMimeType(MimeTypes.VIDEO_H265)
             }
+            // Clear the codec initialization data since DV csd is incompatible
+            // with plain HDR10 playback. The decoder will initialize fresh with
+            // the stripped HDR10 stream instead of using DV-specific CSD.
+            builder = builder.setInitializationData(emptyList())
             delegate.format(builder.build())
         } else {
             delegate.format(format)
