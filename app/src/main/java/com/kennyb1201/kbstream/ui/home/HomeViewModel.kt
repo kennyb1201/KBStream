@@ -2388,6 +2388,47 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
         return season >= lastAiredSeason
     }
 
+    /**
+     * Whether the series itself has concluded, per TMDB's series-level status.
+     * A season finale of a still-running show (Returning Series, In
+     * Production, Planned, or status unknown) must NOT be labelled "Series
+     * Finale" — the show may air more seasons. Only Ended/Canceled qualifies.
+     * Cached per show for the lifetime of this ViewModel.
+     */
+    private val seriesEndedCache =
+        java.util.concurrent.ConcurrentHashMap<Int, Boolean>()
+
+    private suspend fun isSeriesEnded(
+        tmdbId: Int
+    ): Boolean {
+
+        seriesEndedCache[tmdbId]?.let {
+            return it
+        }
+
+        val ended =
+            try {
+
+                val status =
+                    tmdbLookupSemaphore.withPermit {
+                        tmdbRepository.getDetailByTmdbId(
+                            tmdbId,
+                            "tv"
+                        )
+                    }?.status
+
+                status == "Ended" ||
+                    status == "Canceled"
+
+            } catch (_: Exception) {
+                // Unknown status must never claim the series has ended.
+                false
+            }
+
+        seriesEndedCache[tmdbId] = ended
+        return ended
+    }
+
     val episodesTotal =
         totalAiredEpisodes
             .takeIf { it > 0 }
@@ -2503,11 +2544,12 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
                     ),
 
                 isSeriesFinale =
-                    seriesFinaleFor(
-                        resume.season,
-                        matchedResumeEpisode
-                            .episodeNumber
-                    )
+                    isSeriesEnded(tmdbId) &&
+                        seriesFinaleFor(
+                            resume.season,
+                            matchedResumeEpisode
+                                .episodeNumber
+                        )
             )
         }
     }
@@ -2625,11 +2667,12 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
                     ),
 
                 isSeriesFinale =
-                    seriesFinaleFor(
-                        startingSeason,
-                        nextUnwatchedInSeason
-                            .episodeNumber
-                    )
+                    isSeriesEnded(tmdbId) &&
+                        seriesFinaleFor(
+                            startingSeason,
+                            nextUnwatchedInSeason
+                                .episodeNumber
+                        )
         )
     }
 
@@ -2770,11 +2813,12 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
                     ),
 
                 isSeriesFinale =
-                    seriesFinaleFor(
-                        futureSeason,
-                        firstUnwatchedAired
-                            .episodeNumber
-                    )
+                    isSeriesEnded(tmdbId) &&
+                        seriesFinaleFor(
+                            futureSeason,
+                            firstUnwatchedAired
+                                .episodeNumber
+                        )
             )
         }
     }

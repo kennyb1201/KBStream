@@ -1313,7 +1313,15 @@ class NativePlayerActivity : ComponentActivity() {
                 // Tunneled playback is skipped on live channels: HLS live
                 // manifests (discontinuities, rolling window) are the classic
                 // tunnel black-video-with-audio case on Fire TV/Android TV.
-                if (enableTunneling && !softwareDecoderActive && !isLiveChannel) {
+                // It is also skipped when the FFmpeg audio decoder is
+                // preferred (audioDecoder = Prefer app): tunneled audio needs
+                // a MediaCodec decoder inside the hardware tunnel, so a
+                // software-decoded PCM track gets created with FLAG_HW_AV_SYNC
+                // and AudioFlinger refuses it (createTrack error -38,
+                // "Cannot create AudioTrack"). Same rule Nuvio uses.
+                if (enableTunneling && !softwareDecoderActive && !isLiveChannel &&
+                    audioExtMode != DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
+                ) {
                     trackSelectionParameters = androidx.media3.exoplayer.trackselection.DefaultTrackSelector
                         .Parameters.Builder(this@NativePlayerActivity)
                         .setTunnelingEnabled(true).build()
