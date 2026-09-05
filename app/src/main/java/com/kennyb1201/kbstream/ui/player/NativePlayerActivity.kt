@@ -528,6 +528,12 @@ class NativePlayerActivity : ComponentActivity() {
 
         setContentView(R.layout.activity_player)
         bindViews()
+        playerView.post {
+            if (playerView is android.view.SurfaceView) {
+                playerView.visibility = android.view.View.INVISIBLE
+                playerView.post { playerView.visibility = android.view.View.VISIBLE }
+            }
+        }
         findViewById<View>(R.id.player_root).setOnClickListener {
             if (controlsVisible) hideControls() else showControls()
         }
@@ -721,6 +727,12 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     private fun bindViews() {
+        playerView.post {
+            if (playerView is android.view.SurfaceView) {
+                playerView.visibility = android.view.View.INVISIBLE
+                playerView.post { playerView.visibility = android.view.View.VISIBLE }
+            }
+        }
         playerView = findViewById(R.id.player_view)
         liveBadge = findViewById(R.id.live_badge)
         bufferingSpinner = findViewById(R.id.buffering_spinner)
@@ -1374,7 +1386,7 @@ class NativePlayerActivity : ComponentActivity() {
                 2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
                 else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
             })
-            player.prepare()
+            playerView.post { player.prepare() }
 
             mediaSession?.release()
             // media3 keys sessions by their session ID in a process-wide static map. The real fix
