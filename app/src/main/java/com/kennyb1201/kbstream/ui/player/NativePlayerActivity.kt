@@ -206,6 +206,7 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var btnSkipIntro: TextView
     private lateinit var controlsOverlay: LinearLayout
     private lateinit var playerClock: TextView
+    private lateinit var endsAtClock: TextView
     private lateinit var splashContainer: View
     private lateinit var splashBackdrop: ImageView
     private lateinit var splashClearLogo: ImageView
@@ -754,6 +755,7 @@ class NativePlayerActivity : ComponentActivity() {
         btnSkipIntro = findViewById(R.id.btn_skip_intro)
         controlsOverlay = findViewById(R.id.controls_overlay)
         playerClock = findViewById(R.id.player_clock)
+        endsAtClock = findViewById(R.id.ends_at_clock)
         splashContainer = findViewById(R.id.splash_container)
         splashBackdrop = findViewById(R.id.splash_backdrop)
         splashClearLogo = findViewById(R.id.splash_clear_logo)
@@ -1133,18 +1135,15 @@ class NativePlayerActivity : ComponentActivity() {
 
         val agent = streamHeaders["User-Agent"] ?: streamHeaders["user-agent"]
             ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-        // AIOStreams' usenet/NNTP playback endpoints can take a while before
-        // the first bytes arrive (the addon host must fetch the NZB and start
-        // pulling articles from the provider first), so give those streams a
-        // much longer read timeout. With the default 20s, a slow-but-valid
-        // usenet stream gets killed as an error and enters a retry loop of
-        // loading screens.
-        val slowStartUrl =
-            currentUrl.contains("/usenet/stream/") ||
-                currentUrl.contains("/api/v1/debrid/playback/")
+        // Some addon hosts / CDNs need more than the default 20 s connect
+        // timeout, especially during peak hours or on first-byte waits.
+        // Give every playback attempt a slightly more generous ceiling so
+        // a slow-but-valid source does not get killed before the retry
+        // ladder can act. The startup / stall / black-video watchdogs still
+        // bound total wait time.
         val okHttpClient = OkHttpClient.Builder()
-            .connectTimeout(if (slowStartUrl) 45L else 20L, TimeUnit.SECONDS)
-            .readTimeout(if (slowStartUrl) 90L else 20L, TimeUnit.SECONDS)
+            .connectTimeout(30L, TimeUnit.SECONDS)
+            .readTimeout(60L, TimeUnit.SECONDS)
             .build()
         val httpFactory = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(okHttpClient)
             .setUserAgent(agent)
@@ -2245,6 +2244,12 @@ class NativePlayerActivity : ComponentActivity() {
         val now = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
             .format(java.util.Date())
         playerClock.text = now
+        val durationMs = exoPlayer?.duration ?: 0L
+        val positionMs = exoPlayer?.currentPosition ?: 0L
+        val remainingMs = (durationMs - positionMs).coerceAtLeast(0L)
+        val endsAt = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+            .format(java.util.Date(System.currentTimeMillis() + remainingMs))
+        endsAtClock.text = "Ends at $endsAt"
     }
 
     private fun updateControlsInfo() {
@@ -2366,6 +2371,7 @@ class NativePlayerActivity : ComponentActivity() {
         updateControlsInfo()
         updateClock()
         playerClock.visibility = View.VISIBLE
+        endsAtClock.visibility = View.VISIBLE
         clockHandler.removeCallbacks(clockRunnable)
         clockHandler.post(clockRunnable)
         controlsOverlay.post { btnPlayPause.requestFocus() }
