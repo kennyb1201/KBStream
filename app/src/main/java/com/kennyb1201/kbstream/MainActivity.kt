@@ -1219,7 +1219,8 @@ fun AppRoot() {
                         season = next.season,
                         episode = next.episode,
                         resumePositionMs = 0L,
-                        totalEpisodesInSeason = current.totalEpisodesInSeason
+                        totalEpisodesInSeason = current.totalEpisodesInSeason,
+                        runtimeMinutes = next.runtimeMinutes
                     )
                     val nextCast = current.cast.map { member ->
                         TmdbCastMember(
