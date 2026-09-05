@@ -355,6 +355,7 @@ class NativePlayerActivity : ComponentActivity() {
     private var videoTrackPresent = false
     private var streamMimeType: String? = null
     private var firstFrameRendered = false
+    private var dvRewriteEnabled = false
     private var firstFrameRenderedAtMs = 0L
     private var blackVideoNoticeShown = false
     private var blackVideoSwRetried = false
@@ -1372,6 +1373,7 @@ class NativePlayerActivity : ComponentActivity() {
                         .setTunnelingEnabled(true).build()
                     Log.i("PLAYER_TUNNEL", "Tunneled via TrackSelector")
                 }
+                dvRewriteEnabled = AppPreferences.getDvCompatMode(this@NativePlayerActivity) != AppPreferences.DV_COMPAT_OFF
 
                 playWhenReady = true
             }
@@ -1472,6 +1474,7 @@ class NativePlayerActivity : ComponentActivity() {
         }
 
         override fun onTracksChanged(tracks: Tracks) {
+            var disabledGroupIndex = -1
             for (group in tracks.groups) {
                 for (i in 0 until group.length) {
                     val fmt = group.getTrackFormat(i)
@@ -1496,24 +1499,23 @@ class NativePlayerActivity : ComponentActivity() {
                                 (streamDeclaredDvCodec?.let { " rewrittenFrom=$it" } ?: "")
                         )
                         preemptHeavyFfmpegSession(fmt)
-                        // If DV compat is enabled and this is still a DV track,
-                        // disable the track group so ExoPlayer falls back to the
-                        // HDR10/HEVC base layer on non-DV displays.
-                        if (dvRewriteEnabled) {
-                            val mime = fmt.sampleMimeType
+                        if (dvRewriteEnabled && disabledGroupIndex < 0) {
+                            val mime = fmt.sampleMimeType ?: ""
                             if (mime == "video/dolby-vision" || codec.startsWith("dv")) {
-                                val mediaTrackGroup = group.mediaTrackGroup
-                                exoPlayer?.trackSelector?.setParameters(
-                                    androidx.media3.exoplayer.trackselection.DefaultTrackSelector
-                                        .Parameters.Builder(this@NativePlayerActivity)
-                                        .setTrackGroupDisabled(mediaTrackGroup, true)
-                                        .build()
-                                )
-                                Log.i("PLAYER_DV", "Disabled DV track group, falling back to HDR10/HEVC")
+                                disabledGroupIndex = tracks.indexOf(group)
+                                Log.i("PLAYER_DV", "Disabling DV track group index $disabledGroupIndex, falling back to HDR10/HEVC")
                             }
                         }
                     }
                 }
+            }
+            if (disabledGroupIndex >= 0) {
+                exoPlayer?.trackSelector?.setParameters(
+                    androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+                        .Parameters.Builder(this@NativePlayerActivity)
+                        .setDisabledTrackGroups(disabledGroupIndex)
+                        .build()
+                )
             }
             updateStreamHealthDisplay()
         }
