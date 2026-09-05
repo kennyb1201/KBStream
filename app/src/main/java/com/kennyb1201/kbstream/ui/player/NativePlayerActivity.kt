@@ -205,6 +205,7 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var btnChangeSource: TextView
     private lateinit var btnSkipIntro: TextView
     private lateinit var controlsOverlay: LinearLayout
+    private lateinit var playerClock: TextView
     private lateinit var splashContainer: View
     private lateinit var splashBackdrop: ImageView
     private lateinit var splashClearLogo: ImageView
@@ -273,6 +274,15 @@ class NativePlayerActivity : ComponentActivity() {
     private var scrubDirection = 0  // -1 = back, 1 = forward, 0 = idle
     private var scrubStepMs = 0L
     private val scrubHandler = Handler(Looper.getMainLooper())
+    private val clockHandler = Handler(Looper.getMainLooper())
+    private val clockRunnable = object : Runnable {
+        override fun run() {
+            if (controlsVisible) {
+                updateClock()
+                clockHandler.postDelayed(this, 1000)
+            }
+        }
+    }
     private val scrubRunnable = object : Runnable {
         override fun run() {
             if (scrubDirection == 0) return
@@ -739,6 +749,7 @@ class NativePlayerActivity : ComponentActivity() {
         btnChangeSource = findViewById(R.id.btn_change_source)
         btnSkipIntro = findViewById(R.id.btn_skip_intro)
         controlsOverlay = findViewById(R.id.controls_overlay)
+        playerClock = findViewById(R.id.player_clock)
         splashContainer = findViewById(R.id.splash_container)
         splashBackdrop = findViewById(R.id.splash_backdrop)
         splashClearLogo = findViewById(R.id.splash_clear_logo)
@@ -2238,6 +2249,12 @@ class NativePlayerActivity : ComponentActivity() {
         }
     }
 
+    private fun updateClock() {
+        val now = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+            .format(java.util.Date())
+        playerClock.text = now
+    }
+
     private fun updateControlsInfo() {
         sourceLabel.text = "Source: $currentSourceLabel"
         btnPlayPause.setImageResource(
@@ -2355,6 +2372,10 @@ class NativePlayerActivity : ComponentActivity() {
         controlsOverlay.visibility = View.VISIBLE
         seekbarRow.visibility = View.VISIBLE
         updateControlsInfo()
+        updateClock()
+        playerClock.visibility = View.VISIBLE
+        clockHandler.removeCallbacks(clockRunnable)
+        clockHandler.post(clockRunnable)
         controlsOverlay.post { btnPlayPause.requestFocus() }
         scheduleAutoHide()
     }

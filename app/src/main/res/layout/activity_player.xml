@@ -197,6 +197,17 @@
         android:focusable="true"
         android:focusableInTouchMode="true">
 
+        <TextView
+            android:id="@+id/player_clock"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="end"
+            android:fontFamily="@font/oswald_medium"
+            android:textColor="@color/kb_text_hi"
+            android:textSize="14sp"
+            android:maxLines="1"
+            android:visibility="gone" />
+
         <!-- Top section: title + info (scrollable so the cast role, which
              sits at the bottom of this bounded column, is never clipped) -->
         <ScrollView
