@@ -132,6 +132,11 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
 
     fun posterLookupKey(tmdbId: Int, mediaType: String): String = "${mediaType.lowercase()}::$tmdbId"
 
+    private fun normalizeMediaType(type: String): String = when (type.lowercase()) {
+        "tv", "show" -> "series"
+        else -> type.lowercase()
+    }
+
     // Hot reactive check to observe if the current item is marked watched in real-time
     fun observeIsWatched(id: String, type: String): StateFlow<Boolean> {
         return watchedStatusRepository.observeIsWatched(id, type)
@@ -236,7 +241,7 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
             _error.value = null
 
             try {
-                val normalizedType = type.lowercase()
+                val normalizedType = normalizeMediaType(type)
                 Log.e("KBStream", "detail load start type=$normalizedType id=$id initialSeason=$initialSeason")
 
                 val addonsDeferred = async { addonManager.getInstalledAddons() }

@@ -309,6 +309,11 @@ fun DetailScreen(
 
     val hasStreamAddons by viewModel.hasStreamAddons.collectAsState()
 
+    val normalizedType = when (type.lowercase()) {
+        "tv", "show" -> "series"
+        else -> type.lowercase()
+    }
+
     val seasons = remember(tmdbDetail) {
         tmdbDetail?.seasons.orEmpty()
             .map { it.seasonNumber }
@@ -328,7 +333,7 @@ fun DetailScreen(
         vmLoadedSeason,
         isLoading
     ) {
-        if (type != "series") {
+        if (normalizedType != "series") {
             null
         } else {
             selectedSeason
@@ -339,7 +344,7 @@ fun DetailScreen(
         }
     }
 
-    val hasExplicitSeasonSource = type == "series" && (
+    val hasExplicitSeasonSource = normalizedType == "series" && (
         selectedSeason != null ||
             initialTarget?.season?.takeIf { it in seasons } != null ||
             resumeInfo?.season?.takeIf { it in seasons } != null ||
@@ -373,7 +378,7 @@ fun DetailScreen(
 
     LaunchedEffect(type, id, effectiveSeason, hasExplicitSeasonSource) {
         if (
-            type == "series" &&
+            normalizedType == "series" &&
             effectiveSeason != null &&
             hasExplicitSeasonSource
         ) {
@@ -386,7 +391,7 @@ fun DetailScreen(
     val resumeStreamId = resumeInfo?.episodeStreamId
 
     val hasSeriesResume =
-        type == "series" &&
+        normalizedType == "series" &&
             (resumeInfo?.positionMs ?: 0L) > 0L &&
             resumeSeason != null &&
             resumeEpisode != null
@@ -396,7 +401,7 @@ fun DetailScreen(
         effectiveSeason,
         simklWatchedEpisodes
     ) {
-        if (type != "series" || effectiveSeason == null) {
+        if (normalizedType != "series" || effectiveSeason == null) {
             emptySet<Int>()
         } else {
             simklWatchedEpisodes
@@ -412,7 +417,7 @@ fun DetailScreen(
         effectiveSeason,
         watchedEpisodeKeys
     ) {
-        if (type != "series" || effectiveSeason == null) {
+        if (normalizedType != "series" || effectiveSeason == null) {
             emptySet<Int>()
         } else {
             watchedEpisodeKeys.mapNotNull { key ->
@@ -488,7 +493,7 @@ fun DetailScreen(
         effectiveSeason,
         vmTargetEpisode
     ) {
-        if (type != "series") {
+        if (normalizedType != "series") {
             null
         } else if (
             initialTarget?.season == effectiveSeason &&
@@ -516,7 +521,7 @@ fun DetailScreen(
         type,
         resolvedTargetEpisode
     ) {
-        if (type != "series") {
+        if (normalizedType != "series") {
             null
         } else {
             resolvedTargetEpisode?.episodeNumber
@@ -551,7 +556,7 @@ fun DetailScreen(
         userManuallyChangedSeason
     ) {
         if (
-            type == "series" &&
+            normalizedType == "series" &&
             effectiveSeason != null &&
             !episodesLoading &&
             targetEpisodeIndex >= 0 &&
@@ -886,11 +891,11 @@ fun DetailScreen(
                     meta == null
                 ) return@LaunchedEffect
                 if (
-                    type == "series" &&
+                    normalizedType == "series" &&
                     (episodesLoading || episodes.isEmpty())
                 ) return@LaunchedEffect
                 if (
-                    type != "series" &&
+                    normalizedType != "series" &&
                     resumeInfo == null
                 ) return@LaunchedEffect
 
@@ -1066,7 +1071,7 @@ fun DetailScreen(
                             type
                         ) {
                             val yearInfo =
-                                if (type == "series") {
+                                if (normalizedType == "series") {
                                     formatSeriesYearRange(
                                         tmdbDetail?.firstAirDate,
                                         tmdbDetail?.lastEpisodeToAir?.airDate,
@@ -1141,7 +1146,7 @@ fun DetailScreen(
                                     .onPreviewKeyEvent {
                                         keyEvent: KeyEvent ->
                                         if (
-                                            type == "series" &&
+                                            normalizedType == "series" &&
                                             keywords.isEmpty() &&
                                             keyEvent.type ==
                                                 KeyEventType.KeyDown &&
@@ -1360,7 +1365,7 @@ fun DetailScreen(
                                                     .requestFocus()
                                                 true
                                             } else if (
-                                                type == "series"
+                                                normalizedType == "series"
                                             ) {
                                                 focusSeasonOrEpisode()
                                             } else {
@@ -1393,7 +1398,7 @@ fun DetailScreen(
                         }
 
                         if (
-                            type == "series" &&
+                            normalizedType == "series" &&
                             seasons.isNotEmpty()
                         ) {
                             item(key = "episodesheader") {
@@ -2004,7 +2009,7 @@ fun DetailScreen(
                             tmdbDetail?.networks.orEmpty()
 
                         if (
-                            type == "series" &&
+                            normalizedType == "series" &&
                             networks.isNotEmpty()
                         ) {
                             item(key = "networkheader") {
@@ -2325,7 +2330,7 @@ fun DetailScreen(
                                                     viewModel
                                                         .posterLookupKey(
                                                             rec.id,
-                                                            type.lowercase()
+                                                            normalizedType
                                                         )
                                                 ]?.let {
                                                     imdbId ->
