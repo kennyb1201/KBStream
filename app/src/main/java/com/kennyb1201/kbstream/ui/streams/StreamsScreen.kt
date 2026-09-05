@@ -289,7 +289,7 @@ private fun StreamsHeader(
                     sourceLabel
                 ).joinToString(" · ")
             },
-            color = KBTextLo,
+            color = KBTextHi,
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.padding(top = 8.dp)
         )
@@ -363,7 +363,7 @@ private fun StreamCard(
                 ?.let { name ->
                     Text(
                         text = name,
-                        color = if (isFocused) KBAccent else KBTextLo,
+                        color = if (isFocused) KBAccent else KBTextHi,
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
