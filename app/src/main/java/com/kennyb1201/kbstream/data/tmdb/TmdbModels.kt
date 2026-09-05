@@ -267,6 +267,8 @@ val seasons: List<TmdbSeasonSummary> = emptyList(),
     val genres: List<TmdbGenre> = emptyList(),
     val keywords: TmdbKeywords? = null,
     val images: TmdbImagesResponse? = null,
+    val awards: String? = null,
+    val tagline: String? = null,
 
     @Json(name = "belongs_to_collection")
     val belongsToCollection: TmdbCollectionRef? = null,

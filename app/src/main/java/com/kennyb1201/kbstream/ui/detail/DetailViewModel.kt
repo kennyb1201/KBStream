@@ -132,6 +132,11 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
 
     fun posterLookupKey(tmdbId: Int, mediaType: String): String = "${mediaType.lowercase()}::$tmdbId"
 
+    private fun normalizeMediaType(type: String): String = when (type.lowercase()) {
+        "tv", "show" -> "series"
+        else -> type.lowercase()
+    }
+
     // Hot reactive check to observe if the current item is marked watched in real-time
     fun observeIsWatched(id: String, type: String): StateFlow<Boolean> {
         return watchedStatusRepository.observeIsWatched(id, type)
@@ -236,7 +241,7 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
             _error.value = null
 
             try {
-                val normalizedType = type.lowercase()
+                val normalizedType = normalizeMediaType(type)
                 Log.e("KBStream", "detail load start type=$normalizedType id=$id initialSeason=$initialSeason")
 
                 val addonsDeferred = async { addonManager.getInstalledAddons() }
@@ -321,65 +326,116 @@ for (metaAddon in metaAddons) {
     if (resolvedMeta != null) break
 }
 
-if (resolvedMeta != null) {
-    val savedMeta = initialMeta
-    _meta.value = resolvedMeta!!.copy(
-        poster = resolvedMeta!!.poster ?: savedMeta?.poster,
-        background = resolvedMeta!!.background ?: savedMeta?.background,
-        logo = resolvedMeta!!.logo ?: savedMeta?.logo,
-        description = resolvedMeta!!.description ?: savedMeta?.description
-    )
-} else {
-    // Every meta add-on failed (down, removed, or network error). Fall back
-    // to the TMDB data we already fetched so the detail screen still renders
-    // instead of going blank, and only surface an error if TMDB failed too.
-    val fallbackDetail = tmdbDetailResult.getOrNull()
-
-    if (fallbackDetail != null) {
-        _meta.value = Meta(
-            id = id,
-            type = normalizedType,
-            name = fallbackDetail.name
-                ?: fallbackDetail.title
-                ?: id,
-            poster = fallbackDetail.posterPath?.let {
-                TmdbRepository.POSTER_BASE + it
-            },
-            background = fallbackDetail.backdropPath?.let {
-                TmdbRepository.BACKDROP_BASE + it
-            },
-            description = fallbackDetail.overview,
-            releaseInfo = fallbackDetail.releaseDate
-                ?.takeIf { it.isNotBlank() }
-                ?.take(4),
-            imdbRating = fallbackDetail.voteAverage?.let {
-                "%.1f".format(it)
-            }
-        ).let { fallback ->
-            val savedMeta = initialMeta
-            fallback.copy(
-                poster = fallback.poster ?: savedMeta?.poster,
-                background = fallback.background ?: savedMeta?.background,
-                logo = fallback.logo ?: savedMeta?.logo,
-                description = fallback.description ?: savedMeta?.description
+    private fun buildMergedMeta(
+        tmdbDetail: TmdbDetail?,
+        addonMeta: Meta?,
+        initialMeta: Meta?
+    ): Meta {
+        val tmdbMeta = tmdbDetail?.let { detail ->
+            Meta(
+                id = id,
+                type = normalizedType,
+                name = detail.name ?: detail.title ?: id,
+                poster = detail.posterPath?.let { TmdbRepository.POSTER_BASE + it },
+                background = detail.backdropPath?.let { TmdbRepository.BACKDROP_BASE + it },
+                logo = null,
+                description = detail.overview,
+                releaseInfo = if (normalizedType == "series") {
+                    detail.firstAirDate?.takeIf { it.isNotBlank() }?.take(4)
+                } else {
+                    detail.releaseDate?.takeIf { it.isNotBlank() }?.take(4)
+                },
+                imdbRating = detail.voteAverage?.let { "%.1f".format(it) },
+                runtime = if (normalizedType == "series") {
+                    detail.episodeRunTime.firstOrNull()?.toString()
+                } else {
+                    detail.runtime?.toString()
+                },
+                language = detail.originalLanguage,
+                country = detail.originCountries.firstOrNull(),
+                awards = detail.awards,
+                website = null,
+                genres = detail.genres.map { it.name },
+                cast = detail.credits?.cast?.map { it.name },
+                director = detail.credits?.crew
+                    ?.filter { it.job.equals("Director", ignoreCase = true) }
+                    ?.map { it.name },
+                videos = detail.videos?.results?.map { video ->
+                    VideoEntry(
+                        id = video.key,
+                        title = video.name,
+                        description = video.site,
+                        thumbnail = video.thumbnail
+                    )
+                }
             )
         }
-    } else if (initialMeta != null) {
-        _meta.value = initialMeta
+
+        val releaseFromAddon = addonMeta?.releaseInfo?.takeIf { it.isNotBlank() }
+        val releaseFromTmdb = tmdbMeta?.releaseInfo?.takeIf { it.isNotBlank() }
+
+        return Meta(
+            id = id,
+            type = normalizedType,
+            name = tmdbMeta?.name ?: addonMeta?.name ?: initialMeta?.name ?: id,
+            poster = tmdbMeta?.poster ?: addonMeta?.poster ?: initialMeta?.poster,
+            background = tmdbMeta?.background ?: addonMeta?.background ?: initialMeta?.background,
+            logo = addonMeta?.logo ?: initialMeta?.logo,
+            description = tmdbMeta?.description ?: addonMeta?.description ?: initialMeta?.description,
+            releaseInfo = releaseFromAddon ?: releaseFromTmdb,
+            imdbRating = tmdbMeta?.imdbRating ?: addonMeta?.imdbRating,
+            runtime = tmdbMeta?.runtime ?: addonMeta?.runtime,
+            language = tmdbMeta?.language ?: addonMeta?.language,
+            country = tmdbMeta?.country ?: addonMeta?.country,
+            awards = tmdbMeta?.awards ?: addonMeta?.awards,
+            website = addonMeta?.website ?: initialMeta?.website,
+            genres = tmdbMeta?.genres?.takeIf { it.isNotEmpty() }
+                ?: addonMeta?.genres?.takeIf { it.isNotEmpty() }
+                ?: initialMeta?.genres,
+            cast = tmdbMeta?.cast?.takeIf { it.isNotEmpty() }
+                ?: addonMeta?.cast?.takeIf { it.isNotEmpty() }
+                ?: initialMeta?.cast,
+            director = tmdbMeta?.director?.takeIf { it.isNotEmpty() }
+                ?: addonMeta?.director?.takeIf { it.isNotEmpty() }
+                ?: initialMeta?.director,
+            videos = tmdbMeta?.videos?.takeIf { it.isNotEmpty() }
+                ?: addonMeta?.videos?.takeIf { it.isNotEmpty() }
+                ?: initialMeta?.videos
+        )
     }
 
-    Log.e(
-        "KBStream",
-        "detail meta unresolved type=$normalizedType id=$id",
-        lastMetaError
-    )
+    if (resolvedMeta != null) {
+        val savedMeta = initialMeta
+        _meta.value = buildMergedMeta(
+            tmdbDetail = tmdbDetailResult.getOrNull(),
+            addonMeta = resolvedMeta,
+            initialMeta = savedMeta
+        )
+    } else {
+        val fallbackDetail = tmdbDetailResult.getOrNull()
 
-    if (_meta.value == null) {
-        _error.value =
-            "Couldn't load details for this title. " +
-                "Check that your add-ons are reachable, then try again."
+        if (fallbackDetail != null) {
+            _meta.value = buildMergedMeta(
+                tmdbDetail = fallbackDetail,
+                addonMeta = null,
+                initialMeta = initialMeta
+            )
+        } else if (initialMeta != null) {
+            _meta.value = initialMeta
+        }
+
+        Log.e(
+            "KBStream",
+            "detail meta unresolved type=$normalizedType id=$id",
+            lastMetaError
+        )
+
+        if (_meta.value == null) {
+            _error.value =
+                "Couldn't load details for this title. " +
+                    "Check that your add-ons are reachable, then try again."
+        }
     }
-}
 
                 tmdbDetailResult.onSuccess { detail ->
                     _tmdbDetail.value = detail
