@@ -57,7 +57,7 @@ fun KBCard(
             focusedContainerColor = KBSurfaceRaised,
             focusedContentColor = KBAccent
         ),
-        scale = CardDefaults.scale(scale = 1f, focusedScale = 1.08f),
+        scale = CardDefaults.scale(scale = 1f, focusedScale = 1.05f),
         border = CardDefaults.border(
             focusedBorder = Border(
                 border = BorderStroke(2.dp, KBAccent),
