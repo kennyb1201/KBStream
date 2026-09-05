@@ -2657,7 +2657,7 @@ class NativePlayerActivity : ComponentActivity() {
         // Best effort: fetch the next episode's name + still from TMDB so the
         // popup shows real episode details instead of just S#E#.
         scope?.launch {
-            val nextEp = withContext(Dispatchers.IO) {
+            val nextEp: com.kennyb1201.kbstream.data.tmdb.TmdbEpisode? = withContext(Dispatchers.IO) {
                 val repo = TmdbRepository(this@NativePlayerActivity)
                 val tmdbId = resolveParentTmdbId() ?: return@withContext null
                 val episodes = runCatching {
