@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
@@ -261,14 +262,37 @@ fun ActorScreen(
                         ) {
                             if (!p.biography.isNullOrBlank()) {
                                 item(key = "biography") {
-                                    Text(
-                                        p.biography!!,
-                                        color = KBTextHi,
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        maxLines = 4,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 20.dp)
-                                    )
+                                    Column(modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 20.dp)) {
+                                        var bioExpanded by remember { mutableStateOf(false) }
+                                        var bioOverflows by remember { mutableStateOf(false) }
+                                        Text(
+                                            p.biography!!,
+                                            color = KBTextHi,
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            maxLines = if (bioExpanded) Int.MAX_VALUE else 4,
+                                            overflow = TextOverflow.Ellipsis,
+                                            onTextLayout = { textLayoutResult ->
+                                                if (!bioExpanded && textLayoutResult.hasVisualOverflow) {
+                                                    bioOverflows = true
+                                                }
+                                            }
+                                        )
+                                        if (bioOverflows) {
+                                            Text(
+                                                text = if (bioExpanded) "View less" else "View more",
+                                                color = KBTextLo,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                modifier = Modifier
+                                                    .padding(top = 8.dp)
+                                                    .focusable()
+                                                    .clickable(
+                                                        onClick = { bioExpanded = !bioExpanded },
+                                                        indication = null,
+                                                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                                                    )
+                                            )
+                                        }
+                                    }
                                 }
                             }
 
