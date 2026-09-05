@@ -70,7 +70,8 @@ data class TmdbVideo(
     val key: String,
     val site: String,
     val type: String,
-    val name: String? = null
+    val name: String? = null,
+    val thumbnail: String? = null
 )
 
 @JsonClass(generateAdapter = true)
