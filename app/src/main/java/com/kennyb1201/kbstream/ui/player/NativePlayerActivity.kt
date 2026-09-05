@@ -367,9 +367,9 @@ class NativePlayerActivity : ComponentActivity() {
     // software-decoder rebuild.
     private var blackVideoSurfaceRetried = false
     private var blackVideoWatchdogToken = 0
-    private val blackVideoWatchdogMs = 8_000L
-    private val blackVideoSurfaceRecheckMs = 5_000L
-    private val blackVideoSwTimeoutMs = 25_000L
+    private val blackVideoWatchdogMs = 3_000L
+    private val blackVideoSurfaceRecheckMs = 2_000L
+    private val blackVideoSwTimeoutMs = 12_000L
 
     // Startup watchdog: the black-video and stall watchdogs are only armed
     // from READY / isPlaying, so a session that never leaves BUFFERING (no
