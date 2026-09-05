@@ -230,10 +230,10 @@ private class VideoCompatTrackOutput(
             if (format.sampleMimeType == MimeTypes.VIDEO_DOLBY_VISION) {
                 builder = builder.setSampleMimeType(MimeTypes.VIDEO_H265)
             }
-            // Clear the codec initialization data since DV csd is incompatible
-            // with plain HDR10 playback. The decoder will initialize fresh with
-            // the stripped HDR10 stream instead of using DV-specific CSD.
-            builder = builder.setInitializationData(emptyList())
+            val filteredInit = format.initializationData.filter { buf ->
+                !isDvNalUnit(buf)
+            }
+            builder = builder.setInitializationData(filteredInit)
             delegate.format(builder.build())
         } else {
             delegate.format(format)
@@ -400,6 +400,26 @@ private class VideoCompatTrackOutput(
         if (csd.size <= 21) return 4
         if (csd[0].toInt() != 1) return 4
         return (csd[21].toInt() and 0x03) + 1
+    }
+
+    private fun isDvNalUnit(data: ByteArray): Boolean {
+        if (data.size < 4) return false
+        val b0 = data[0].toInt() and 0xFF
+        val b1 = data[1].toInt() and 0xFF
+        val b2 = data[2].toInt() and 0xFF
+        val startCodeLen: Int
+        val isFourByte = b0 == 0 && b1 == 0 && b2 == 0
+        if (isFourByte && data.size >= 5 && data[3].toInt() and 0xFF == 1) {
+            startCodeLen = 4
+        } else if (!isFourByte && b2 == 1) {
+            startCodeLen = 3
+        } else {
+            return false
+        }
+        if (data.size < startCodeLen + 1) return false
+        val nalHeader = data[startCodeLen].toInt() and 0xFF
+        val nalType = (nalHeader ushr 1) and 0x3F
+        return nalType == 62 || nalType == 63
     }
 
     private companion object {
