@@ -1355,6 +1355,14 @@ class NativePlayerActivity : ComponentActivity() {
                     Log.i("PLAYER_TUNNEL", "Tunneled via TrackSelector")
                 }
 
+                exoPlayer = player
+                playerView.player = player
+                applyResizeMode(when (resizeModeIndex) {
+                    1 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                    2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+                    else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+                })
+
                 prepare()
             }
 
@@ -1368,7 +1376,6 @@ class NativePlayerActivity : ComponentActivity() {
         posStallTicks = 0
 
         exoPlayer = player
-        playerView.player = player
         applyResizeMode(when (resizeModeIndex) {
             1 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
             2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
