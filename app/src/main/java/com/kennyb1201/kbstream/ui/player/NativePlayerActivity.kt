@@ -441,7 +441,7 @@ class NativePlayerActivity : ComponentActivity() {
     private var sources: List<Stream> = emptyList()
     private var currentSourceIndex = -1
     private var autoSourceSwitchCount = 0
-    private const val MAX_AUTO_SOURCE_SWITCHES = 2
+    private val MAX_AUTO_SOURCE_SWITCHES = 2
     private var castMembers: List<PlayerCastMember> = emptyList()
     private var totalEpisodesInSeason: Int? = null
     private var streamHeaders = emptyMap<String, String>()
