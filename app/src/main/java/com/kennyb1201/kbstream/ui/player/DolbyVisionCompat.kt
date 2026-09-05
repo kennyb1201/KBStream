@@ -71,12 +71,10 @@ internal object DolbyVisionCompat {
         val matches = if (convertAllProfiles) {
             DV_CODEC_ALL_PROFILES.containsMatchIn(trimmed)
         } else {
-            // Auto mode: rewrite Profile 7/8 so the track selector never selects
-            // a DV-only decoder on non-DV displays. Profile 5 remains pass-through
-            // because it has no HDR10 base and would only produce a best-effort
-            // fallback picture.
-            Regex("(?i)^(dvhe|dvh1)\\.(07|7|08|8)\\..+$").containsMatchIn(trimmed)
+            DV_CODEC_PROFILE_7.containsMatchIn(trimmed)
         }
+        return if (matches) HDR10_CODEC else null
+    }
         return if (matches) HDR10_CODEC else null
     }
 
