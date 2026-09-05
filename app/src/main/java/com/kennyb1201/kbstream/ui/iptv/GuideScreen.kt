@@ -86,7 +86,6 @@ import com.kennyb1201.kbstream.data.iptv.EpgMatchType
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.iptv.IptvPlaylist
 import com.kennyb1201.kbstream.ui.components.KBCard
-import com.kennyb1201.kbstream.ui.components.SuppressImeWhileFocused
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -695,9 +694,8 @@ private fun SetupPanel(
         var playlistNameFocused by remember { mutableStateOf(false) }
         val focusManager = LocalFocusManager.current
         val keyboardController = LocalSoftwareKeyboardController.current
-        // Same TV-safe input as everywhere else: no leanback IME over the
-        // screen; atvTools "Send text" types straight into the focused box.
-        SuppressImeWhileFocused(playlistNameFocused)
+        // TV-safe input: the leanback IME is allowed here so the user can
+        // type with the remote D-pad if no external keyboard is available.
 
         OutlinedTextField(
             value = playlistName,

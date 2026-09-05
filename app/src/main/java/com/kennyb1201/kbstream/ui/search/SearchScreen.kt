@@ -63,7 +63,6 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
-import com.kennyb1201.kbstream.ui.components.SuppressImeWhileFocused
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -487,9 +486,6 @@ private fun SearchHero(
     var searchFocused by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
-    // Keep the leanback IME off this field: search-as-you-type + atvTools
-    // "Send text" into the focused box is the intended input path on TV.
-    SuppressImeWhileFocused(searchFocused)
 
     Column(
         modifier = Modifier

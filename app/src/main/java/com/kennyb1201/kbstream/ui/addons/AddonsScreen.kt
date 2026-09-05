@@ -94,7 +94,6 @@ import com.kennyb1201.kbstream.data.addon.CatalogConfiguration
 import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.data.addon.ManifestCatalog
 import com.kennyb1201.kbstream.ui.components.KBCard
-import com.kennyb1201.kbstream.ui.components.SuppressImeWhileFocused
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBSuccess
@@ -1721,8 +1720,6 @@ private fun UrlField(
     var focused by remember { mutableStateOf(false) }
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
-
-    SuppressImeWhileFocused(focused)
 
     BasicTextField(
         value = value,
