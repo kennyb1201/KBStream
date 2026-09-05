@@ -253,7 +253,7 @@ fun SettingsScreen(
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(
-                AppPreferences.DV_COMPAT_AUTO to "Auto",
+                AppPreferences.DV_COMPAT_AUTO to "Profile 7",
                 AppPreferences.DV_COMPAT_OFF to "Off",
                 AppPreferences.DV_COMPAT_ALL to "All DV"
             ).forEach { (value, label) ->

@@ -110,7 +110,7 @@ internal object DolbyVisionCompat {
                 val b1 = buf[header + 1].toInt() and 0xFF
                 val nalType = (b0 ushr 1) and 0x3F
                 val layerId = ((b0 and 0x01) shl 5) or ((b1 and 0xF8) ushr 3)
-                if (stripDv && (nalType == NAL_DV_RPU || nalType == NAL_DV_EL || layerId > 0)) {
+                if (stripDv && (nalType == NAL_DV_RPU || nalType == NAL_DV_EL)) {
                     keep = false
                 }
                 if (keep && stripHdr10Plus && nalType == NAL_PREFIX_SEI &&
@@ -167,7 +167,7 @@ internal object DolbyVisionCompat {
                 val b1 = buf[payload + 1].toInt() and 0xFF
                 val nalType = (b0 ushr 1) and 0x3F
                 val layerId = ((b0 and 0x01) shl 5) or ((b1 and 0xF8) ushr 3)
-                if (stripDv && (nalType == NAL_DV_RPU || nalType == NAL_DV_EL || layerId > 0)) {
+                if (stripDv && (nalType == NAL_DV_RPU || nalType == NAL_DV_EL)) {
                     keep = false
                 }
                 if (keep && stripHdr10Plus && nalType == NAL_PREFIX_SEI &&
