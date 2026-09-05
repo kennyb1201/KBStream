@@ -65,6 +65,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
@@ -1749,6 +1754,29 @@ private fun UrlField(
                 RoundedCornerShape(12.dp)
             )
             .onFocusChanged { focused = it.isFocused }
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) {
+                    false
+                } else {
+                    when (event.key) {
+                        Key.DirectionDown -> {
+                            val moved = focusManager.moveFocus(FocusDirection.Down)
+                            if (moved) {
+                                keyboardController?.hide()
+                            }
+                            moved
+                        }
+                        Key.DirectionUp -> {
+                            val moved = focusManager.moveFocus(FocusDirection.Up)
+                            if (moved) {
+                                keyboardController?.hide()
+                            }
+                            moved
+                        }
+                        else -> false
+                    }
+                }
+            }
             .padding(horizontal = 14.dp, vertical = 13.dp),
         decorationBox = { innerTextField ->
             if (value.isBlank()) {

@@ -57,6 +57,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -714,6 +715,29 @@ private fun SetupPanel(
             modifier = Modifier
                 .fillMaxWidth()
                 .onFocusChanged { playlistNameFocused = it.isFocused }
+                .onPreviewKeyEvent { event ->
+                    if (event.type != KeyEventType.KeyDown) {
+                        false
+                    } else {
+                        when (event.key) {
+                            Key.DirectionDown -> {
+                                val moved = focusManager.moveFocus(FocusDirection.Down)
+                                if (moved) {
+                                    keyboardController?.hide()
+                                }
+                                moved
+                            }
+                            Key.DirectionUp -> {
+                                val moved = focusManager.moveFocus(FocusDirection.Up)
+                                if (moved) {
+                                    keyboardController?.hide()
+                                }
+                                moved
+                            }
+                            else -> false
+                        }
+                    }
+                }
         )
 
         if (!error.isNullOrBlank()) {
