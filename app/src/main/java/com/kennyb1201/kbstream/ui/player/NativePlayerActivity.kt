@@ -1474,7 +1474,7 @@ class NativePlayerActivity : ComponentActivity() {
         }
 
         override fun onTracksChanged(tracks: Tracks) {
-            var disabledGroupIndex = -1
+            var dvGroup: androidx.media3.common.TrackGroup? = null
             for (group in tracks.groups) {
                 for (i in 0 until group.length) {
                     val fmt = group.getTrackFormat(i)
@@ -1499,21 +1499,21 @@ class NativePlayerActivity : ComponentActivity() {
                                 (streamDeclaredDvCodec?.let { " rewrittenFrom=$it" } ?: "")
                         )
                         preemptHeavyFfmpegSession(fmt)
-                        if (dvRewriteEnabled && disabledGroupIndex < 0) {
+                        if (dvRewriteEnabled && dvGroup == null) {
                             val mime = fmt.sampleMimeType ?: ""
                             if (mime == "video/dolby-vision" || codec.startsWith("dv")) {
-                                disabledGroupIndex = tracks.indexOf(group)
-                                Log.i("PLAYER_DV", "Disabling DV track group index $disabledGroupIndex, falling back to HDR10/HEVC")
+                                dvGroup = group.mediaTrackGroup
+                                Log.i("PLAYER_DV", "Disabling DV track group, falling back to HDR10/HEVC")
                             }
                         }
                     }
                 }
             }
-            if (disabledGroupIndex >= 0) {
+            if (dvGroup != null) {
                 exoPlayer?.trackSelector?.setParameters(
                     androidx.media3.exoplayer.trackselection.DefaultTrackSelector
                         .Parameters.Builder(this@NativePlayerActivity)
-                        .setDisabledTrackGroups(disabledGroupIndex)
+                        .setTrackGroupDisabled(dvGroup, true)
                         .build()
                 )
             }
