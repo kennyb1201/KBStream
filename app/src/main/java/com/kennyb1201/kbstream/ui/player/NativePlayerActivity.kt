@@ -471,6 +471,7 @@ class NativePlayerActivity : ComponentActivity() {
     private var pendingNextSeason: Int? = null
     private var pendingNextEpisode: Int? = null
     private var pendingNextEpisodeName: String? = null
+    private var pendingNextEpisodeRuntime: Int? = null
     private var nextUpCountdownRemaining = 0
     private val nextUpCountdownHandler = Handler(Looper.getMainLooper())
     private val nextUpCountdownRunnable = object : Runnable {
@@ -480,7 +481,8 @@ class NativePlayerActivity : ComponentActivity() {
                 launchNextEpisode(
                     pendingNextSeason ?: return,
                     pendingNextEpisode ?: return,
-                    pendingNextEpisodeName
+                    pendingNextEpisodeName,
+                    pendingNextEpisodeRuntime
                 )
             } else {
                 nextUpCountdown.text = "Playing next in $nextUpCountdownRemaining"
@@ -883,7 +885,8 @@ class NativePlayerActivity : ComponentActivity() {
             launchNextEpisode(
                 pendingNextSeason ?: return@setOnClickListener,
                 pendingNextEpisode ?: return@setOnClickListener,
-                pendingNextEpisodeName
+                pendingNextEpisodeName,
+                pendingNextEpisodeRuntime
             )
         }
         btnNextDismiss.setOnClickListener { finish() }
@@ -2665,6 +2668,7 @@ class NativePlayerActivity : ComponentActivity() {
             if (nextEp != null && nextUpPanel.visibility == View.VISIBLE) {
                 pendingNextEpisodeName = nextEp.name
                 nextUpEpisodeTitle.text = nextEp.name ?: "S${targetSeason}E$targetEpisode"
+                nextEp.runtime?.takeIf { it > 0 }?.let { pendingNextEpisodeRuntime = it }
                 val still = nextEp.thumbnail
                 if (!still.isNullOrBlank()) {
                     try {
@@ -2679,7 +2683,8 @@ class NativePlayerActivity : ComponentActivity() {
     private fun launchNextEpisode(
         targetSeason: Int,
         targetEpisode: Int,
-        episodeName: String? = null
+        episodeName: String? = null,
+        runtimeMinutes: Int? = null
     ) {
         nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
         val label = buildString {
@@ -2690,7 +2695,8 @@ class NativePlayerActivity : ComponentActivity() {
             season = targetSeason,
             episode = targetEpisode,
             title = label,
-            streamId = nextStreamId(targetSeason, targetEpisode)
+            streamId = nextStreamId(targetSeason, targetEpisode),
+            runtimeMinutes = runtimeMinutes
         )
         // Release the media session synchronously so it is unregistered from the
         // process-wide session map before the next player activity builds its own

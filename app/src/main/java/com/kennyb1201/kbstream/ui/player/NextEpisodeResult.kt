@@ -12,7 +12,8 @@ object NextEpisodeResult {
         val season: Int,
         val episode: Int,
         val title: String,
-        val streamId: String
+        val streamId: String,
+        val runtimeMinutes: Int? = null
     )
 
     fun consume(): PendingNext? = synchronized(this) {

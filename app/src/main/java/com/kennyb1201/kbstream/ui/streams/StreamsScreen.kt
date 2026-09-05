@@ -87,7 +87,9 @@ fun StreamsScreen(
     // "Show Name S1 E2 • Episode Name". Extract everything after the
     // season/episode marker so the guide can show the real episode name.
     val episodeTitle = if (season != null && episode != null) {
-        val episodeMarker = Regex("S\\s*${season}\\s*E\\s*${episode}\\b", RegexOption.IGNORE_CASE)
+        val paddedSeason = season.toString().padStart(2, '0')
+        val paddedEpisode = episode.toString().padStart(2, '0')
+        val episodeMarker = Regex("S\\s*(?:${season}|$paddedSeason)\\s*E\\s*(?:${episode}|$paddedEpisode)\\b", RegexOption.IGNORE_CASE)
         episodeMarker.find(title)?.let { match ->
             // Trim first, then strip a single leading separator: titles arrive
             // as "Show S4 E4 • Episode Name", so the remainder after the
