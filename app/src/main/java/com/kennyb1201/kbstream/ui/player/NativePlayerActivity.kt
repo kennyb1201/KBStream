@@ -206,6 +206,7 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var btnSkipIntro: TextView
     private lateinit var controlsOverlay: LinearLayout
     private lateinit var playerClock: TextView
+    private lateinit var endsAtClock: TextView
     private lateinit var splashContainer: View
     private lateinit var splashBackdrop: ImageView
     private lateinit var splashClearLogo: ImageView
@@ -754,6 +755,7 @@ class NativePlayerActivity : ComponentActivity() {
         btnSkipIntro = findViewById(R.id.btn_skip_intro)
         controlsOverlay = findViewById(R.id.controls_overlay)
         playerClock = findViewById(R.id.player_clock)
+        endsAtClock = findViewById(R.id.ends_at_clock)
         splashContainer = findViewById(R.id.splash_container)
         splashBackdrop = findViewById(R.id.splash_backdrop)
         splashClearLogo = findViewById(R.id.splash_clear_logo)
@@ -2242,6 +2244,12 @@ class NativePlayerActivity : ComponentActivity() {
         val now = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
             .format(java.util.Date())
         playerClock.text = now
+        val durationMs = exoPlayer?.duration ?: 0L
+        val positionMs = exoPlayer?.currentPosition ?: 0L
+        val remainingMs = (durationMs - positionMs).coerceAtLeast(0L)
+        val endsAt = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+            .format(java.util.Date(System.currentTimeMillis() + remainingMs))
+        endsAtClock.text = "Ends at $endsAt"
     }
 
     private fun updateControlsInfo() {
@@ -2363,6 +2371,7 @@ class NativePlayerActivity : ComponentActivity() {
         updateControlsInfo()
         updateClock()
         playerClock.visibility = View.VISIBLE
+        endsAtClock.visibility = View.VISIBLE
         clockHandler.removeCallbacks(clockRunnable)
         clockHandler.post(clockRunnable)
         controlsOverlay.post { btnPlayPause.requestFocus() }

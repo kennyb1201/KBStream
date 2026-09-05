@@ -204,7 +204,18 @@
             android:layout_gravity="end"
             android:fontFamily="@font/oswald_medium"
             android:textColor="@color/kb_text_hi"
-            android:textSize="14sp"
+            android:textSize="18sp"
+            android:maxLines="1"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/ends_at_clock"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="end"
+            android:fontFamily="@font/oswald_medium"
+            android:textColor="@color/kb_text_hi"
+            android:textSize="12sp"
             android:maxLines="1"
             android:visibility="gone" />
 
@@ -249,9 +260,8 @@
 
                 <TextView
                     android:id="@+id/episode_label"
-                    android:layout_width="0dp"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
                     android:fontFamily="@font/oswald_medium"
                     android:textColor="@color/kb_text_hi"
                     android:textSize="16sp"
@@ -261,7 +271,7 @@
                     android:id="@+id/episode_title"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="12dp"
+                    android:layout_marginStart="8dp"
                     android:fontFamily="@font/oswald_medium"
                     android:textColor="@color/kb_text_hi"
                     android:textSize="14sp"
