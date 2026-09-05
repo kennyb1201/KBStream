@@ -7,6 +7,7 @@ import android.util.Log
 import androidx.media3.common.C
 import androidx.media3.common.DataReader
 import androidx.media3.common.ColorInfo
+import androidx.media3.common.Format
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.ParsableByteArray
 import androidx.media3.extractor.Extractor
@@ -236,13 +237,13 @@ private class VideoCompatTrackOutput(
             builder = builder.setInitializationData(filteredInit)
             val rewritten = builder.build()
             if (rewritten.colorInfo == null) {
-                val hdr10ColorInfo = ColorInfo(
-                    colorTransfer = C.COLOR_TRANSFER_2084,
-                    colorPrimaries = C.COLOR_PRIMARIES_BT2020,
-                    colorRange = C.COLOR_RANGE_LIMITED,
-                    lumaBitdepth = 10,
-                    chromaBitdepth = 10
-                )
+                val hdr10ColorInfo = ColorInfo.Builder()
+                    .setColorTransfer(C.COLOR_TRANSFER_ST2084)
+                    .setColorSpace(C.COLOR_SPACE_BT2020)
+                    .setColorRange(C.COLOR_RANGE_LIMITED)
+                    .setLumaBitdepth(10)
+                    .setChromaBitdepth(10)
+                    .build()
                 delegate.format(rewritten.buildUpon().setColorInfo(hdr10ColorInfo).build())
             } else {
                 delegate.format(rewritten)
