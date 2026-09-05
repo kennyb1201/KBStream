@@ -41,7 +41,7 @@ object AppPreferences {
 
     // ── Buffer mode ──────────────────────────────────────────────────
     fun getDefaultBufferMode(context: Context): Int =
-        prefs(context).getInt(KEY_DEFAULT_BUFFER_MODE, 2)
+        prefs(context).getInt(KEY_DEFAULT_BUFFER_MODE, 0)
 
     fun setDefaultBufferMode(context: Context, mode: Int) {
         prefs(context).edit().putInt(KEY_DEFAULT_BUFFER_MODE, mode).apply()
@@ -196,7 +196,7 @@ object AppPreferences {
 
     fun getDvCompatMode(context: Context): Int {
         val p = prefs(context)
-        val mode = p.getInt(KEY_DV_COMPAT_MODE, DV_COMPAT_AUTO)
+        val mode = p.getInt(KEY_DV_COMPAT_MODE, DV_COMPAT_OFF)
         if (mode == DV_COMPAT_AUTO_HDR10_PLUS_LEGACY) {
             // The old Auto+ mode was split into Auto + the HDR10+ strip toggle;
             // preserve the user's intent by migrating the stored value.
