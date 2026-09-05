@@ -1374,7 +1374,7 @@ class NativePlayerActivity : ComponentActivity() {
                 2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
                 else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
             })
-            player.prepare()
+            playerView.post { player.prepare() }
 
             mediaSession?.release()
             // media3 keys sessions by their session ID in a process-wide static map. The real fix
