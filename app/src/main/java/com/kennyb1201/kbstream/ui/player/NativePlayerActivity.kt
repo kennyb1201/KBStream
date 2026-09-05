@@ -1103,12 +1103,12 @@ class NativePlayerActivity : ComponentActivity() {
         // Restore SurfaceView for the fresh attempt so tunneling and the
         // normal hardware path are available. The TextureView fallback only
         // runs if SurfaceView's native window is actually lost.
-        if (playerView.useTextureView) {
-            playerView.useTextureView = false
-            playerView.useSurfaceView = true
-            playerView.requestLayout()
-            playerView.invalidate()
-        }
+        // Restore SurfaceView for the fresh attempt so tunneling and the
+        // normal hardware path are available. The TextureView fallback only
+        // runs if SurfaceView's native window is actually lost.
+        playerView.setSurfaceType(androidx.media3.ui.PlayerView.SURFACE_TYPE_SURFACE_VIEW)
+        playerView.requestLayout()
+        playerView.invalidate()
         blackVideoWatchdogToken++
         ffmpegOnlySession = false
         ffmpegSessionSwappedToHw = false
@@ -1976,8 +1976,7 @@ class NativePlayerActivity : ComponentActivity() {
         if (blackVideoSurfaceTypeSwitched) return
         blackVideoSurfaceTypeSwitched = true
         Log.w("PLAYER_VIDEO", "Switching PlayerView to TextureView fallback")
-        playerView.useSurfaceView = false
-        playerView.useTextureView = true
+        playerView.setSurfaceType(androidx.media3.ui.PlayerView.SURFACE_TYPE_TEXTURE_VIEW)
         playerView.requestLayout()
         playerView.invalidate()
     }
