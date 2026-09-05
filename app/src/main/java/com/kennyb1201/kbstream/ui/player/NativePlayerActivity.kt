@@ -439,6 +439,9 @@ class NativePlayerActivity : ComponentActivity() {
     private var backdropUrl: String? = null
     private var overview: String? = null
     private var sources: List<Stream> = emptyList()
+    private var currentSourceIndex = -1
+    private var autoSourceSwitchCount = 0
+    private const val MAX_AUTO_SOURCE_SWITCHES = 2
     private var castMembers: List<PlayerCastMember> = emptyList()
     private var totalEpisodesInSeason: Int? = null
     private var streamHeaders = emptyMap<String, String>()
@@ -723,6 +726,7 @@ class NativePlayerActivity : ComponentActivity() {
         currentSourceLabel = sources.firstOrNull { it.url == currentUrl }?.displayLabel()
             ?: sources.firstOrNull()?.displayLabel()
             ?: "Current source"
+        currentSourceIndex = sources.indexOfFirst { it.url == currentUrl }
 
         // Now that season/episode are parsed, set dynamic visibility
         btnNext.visibility = if (season != null && episode != null) View.VISIBLE else View.GONE
@@ -1125,6 +1129,7 @@ class NativePlayerActivity : ComponentActivity() {
         if (!forceSoftwareDecoder) blackVideoSwRetried = false
         // Same rule for the reverse retry (FFmpeg-only session -> hardware).
         if (!forceHardwareDecoder) blackVideoHwRetried = false
+        autoSourceSwitchCount = 0
 
         val agent = streamHeaders["User-Agent"] ?: streamHeaders["user-agent"]
             ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
@@ -1949,6 +1954,10 @@ class NativePlayerActivity : ComponentActivity() {
         val codecInfo = streamCodec?.let { codec ->
             if (streamWidth > 0) " ($codec ${streamWidth}x$streamHeight)" else " ($codec)"
         } ?: ""
+        val triedOtherSources = autoSourceSwitchCount > 0
+        if (!triedOtherSources && sources.size > 1) {
+            if (tryNextSource()) return
+        }
         Log.w(
             "PLAYER_VIDEO",
             "Black-video notice: no first frame after surface reset + software retry$codecInfo " +
@@ -1960,6 +1969,7 @@ class NativePlayerActivity : ComponentActivity() {
         errorMessage.text =
             "Playback started but no video frames are rendering$codecInfo. " +
                 "The video surface and hardware + software decoders were all tried on this TV. " +
+                (if (triedOtherSources) "Other sources were also tried automatically. " else "") +
                 "If Dolby Vision playback is on, try setting it to Off for this file, or choose " +
                 "a different source — a 1080p H.264 release usually plays on any device."
         errorContainer.visibility = View.VISIBLE
@@ -3110,9 +3120,27 @@ class NativePlayerActivity : ComponentActivity() {
         currentSourceLabel = stream.displayLabel()
         currentUrl = newUrl
         currentAudioUrl = stream.audioUrl
+        currentSourceIndex = sources.indexOfFirst { it.url == newUrl }
         retryAttempt = 0; retryExhausted = false; errorMessageStr = null; forceSoftwareDecoder = false; forceHardwareDecoder = false; languagesAutoSelected = false
         dismissPicker()
         recreatePlayer()
+    }
+
+    private fun tryNextSource(): Boolean {
+        if (autoSourceSwitchCount >= MAX_AUTO_SOURCE_SWITCHES) return false
+        val nextIndex = currentSourceIndex + 1
+        if (nextIndex >= sources.size) return false
+        val nextStream = sources[nextIndex]
+        autoSourceSwitchCount++
+        Log.w(
+            "PLAYER_VIDEO",
+            "Auto-switching to next source: ${nextStream.displayLabel()} (index=$nextIndex/${sources.size})"
+        )
+        reconnectingContainer.visibility = View.VISIBLE
+        bufferingSpinner.visibility = View.GONE
+        reconnectingText.text = "Trying next source: ${nextStream.displayLabel()}…"
+        switchToSource(nextStream)
+        return true
     }
 
     companion object {
