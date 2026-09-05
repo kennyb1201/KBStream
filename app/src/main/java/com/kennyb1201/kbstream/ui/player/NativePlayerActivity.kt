@@ -1133,18 +1133,15 @@ class NativePlayerActivity : ComponentActivity() {
 
         val agent = streamHeaders["User-Agent"] ?: streamHeaders["user-agent"]
             ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-        // AIOStreams' usenet/NNTP playback endpoints can take a while before
-        // the first bytes arrive (the addon host must fetch the NZB and start
-        // pulling articles from the provider first), so give those streams a
-        // much longer read timeout. With the default 20s, a slow-but-valid
-        // usenet stream gets killed as an error and enters a retry loop of
-        // loading screens.
-        val slowStartUrl =
-            currentUrl.contains("/usenet/stream/") ||
-                currentUrl.contains("/api/v1/debrid/playback/")
+        // Some addon hosts / CDNs need more than the default 20 s connect
+        // timeout, especially during peak hours or on first-byte waits.
+        // Give every playback attempt a slightly more generous ceiling so
+        // a slow-but-valid source does not get killed before the retry
+        // ladder can act. The startup / stall / black-video watchdogs still
+        // bound total wait time.
         val okHttpClient = OkHttpClient.Builder()
-            .connectTimeout(if (slowStartUrl) 45L else 20L, TimeUnit.SECONDS)
-            .readTimeout(if (slowStartUrl) 90L else 20L, TimeUnit.SECONDS)
+            .connectTimeout(30L, TimeUnit.SECONDS)
+            .readTimeout(60L, TimeUnit.SECONDS)
             .build()
         val httpFactory = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(okHttpClient)
             .setUserAgent(agent)
