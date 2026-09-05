@@ -1106,7 +1106,7 @@ class NativePlayerActivity : ComponentActivity() {
         // Restore SurfaceView for the fresh attempt so tunneling and the
         // normal hardware path are available. The TextureView fallback only
         // runs if SurfaceView's native window is actually lost.
-        playerView.setSurfaceType(androidx.media3.ui.PlayerView.SURFACE_TYPE_SURFACE_VIEW)
+        playerView.setSurfaceType(0)
         playerView.requestLayout()
         playerView.invalidate()
         blackVideoWatchdogToken++
@@ -1976,7 +1976,7 @@ class NativePlayerActivity : ComponentActivity() {
         if (blackVideoSurfaceTypeSwitched) return
         blackVideoSurfaceTypeSwitched = true
         Log.w("PLAYER_VIDEO", "Switching PlayerView to TextureView fallback")
-        playerView.setSurfaceType(androidx.media3.ui.PlayerView.SURFACE_TYPE_TEXTURE_VIEW)
+        playerView.setSurfaceType(1)
         playerView.requestLayout()
         playerView.invalidate()
     }
