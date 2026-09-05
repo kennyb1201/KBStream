@@ -1406,11 +1406,14 @@ class NativePlayerActivity : ComponentActivity() {
                 hasPlayedOnce = true
                 hideSplash()
                 armStallWatchdog()
-                // Resume auto-hide when playback resumes while controls are visible
                 if (controlsVisible && !showSettingsPanel && !isPickerShowing) {
                     scheduleAutoHide()
                 }
                 scrobbleSimkl("start")
+                if (enableTunneling && !firstFrameRendered && exoPlayer?.currentPosition ?: 0L < 500L) {
+                    val pos = exoPlayer?.currentPosition ?: 0L
+                    exoPlayer?.seekTo(pos + 100L)
+                }
             } else {
                 scrobbleSimkl("pause")
             }
