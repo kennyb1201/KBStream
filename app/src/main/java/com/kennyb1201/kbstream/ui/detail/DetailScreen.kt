@@ -1111,6 +1111,7 @@ fun DetailScreen(
                                     ?.takeIf { it > 0 }
                                     ?.let { "${it} min" }
                                     ?: m.runtime,
+                                m.language?.takeIf { it.isNotBlank() },
                                 m.imdbRating?.let {
                                     "IMDb $it"
                                 }
@@ -1281,18 +1282,7 @@ fun DetailScreen(
                                     )
                                 }
 
-                            m.language
-                                ?.takeIf { it.isNotBlank() }
-                                ?.let {
-                                    add(
-                                        DetailFactItem(
-                                            "Language",
-                                            it
-                                        )
-                                    )
-                                }
-
-                            tmdbDetail?.awards
+                            m.awards
                                 ?.takeIf { it.isNotBlank() }
                                 ?.let {
                                     add(
