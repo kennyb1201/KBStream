@@ -75,8 +75,6 @@ internal object DolbyVisionCompat {
         }
         return if (matches) HDR10_CODEC else null
     }
-        return if (matches) HDR10_CODEC else null
-    }
 
     /**
      * Strips RPU / enhancement-layer NAL units (and optionally HDR10+ SEI) from
