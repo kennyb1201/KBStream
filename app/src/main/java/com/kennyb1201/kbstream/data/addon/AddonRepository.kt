@@ -288,6 +288,27 @@ class AddonRepository {
         ).metas
     }
 
+    suspend fun search(
+        baseUrl: String,
+        type: String,
+        query: String
+    ): List<MetaPreview> {
+        val base =
+            normalizeBaseUrl(
+                baseUrl
+            )
+
+        val encoded =
+            URLEncoder.encode(
+                query,
+                "UTF-8"
+            )
+
+        return api.getSearch(
+            "$base/search/$type/$encoded.json"
+        ).metas
+    }
+
     suspend fun getMeta(
         baseUrl: String,
         type: String,

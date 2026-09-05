@@ -478,23 +478,20 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         val addons = addonManager.getInstalledAddons()
 
         for (addon in addons) {
-            if (!addon.resources.contains("catalog")) continue
+            if (!addon.resources.contains("search")) continue
 
             val baseUrl =
                 addon.manifestUrl.removeSuffix("/manifest.json")
 
             val collected = mutableListOf<MetaPreview>()
 
-            for (catalog in addon.catalogs) {
-                try {
-                    collected += repository.searchCatalog(
-                        baseUrl,
-                        catalog.type,
-                        catalog.id,
-                        query
-                    )
-                } catch (_: Exception) {
-                }
+            try {
+                collected += repository.search(
+                    baseUrl,
+                    "*",
+                    query
+                )
+            } catch (_: Exception) {
             }
 
             if (collected.isEmpty()) continue
