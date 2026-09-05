@@ -366,7 +366,6 @@ class NativePlayerActivity : ComponentActivity() {
     // find corresponding native window for surface') before paying for a full
     // software-decoder rebuild.
     private var blackVideoSurfaceRetried = false
-    private var blackVideoSurfaceTypeSwitched = false
     private var blackVideoWatchdogToken = 0
     private val blackVideoWatchdogMs = 3_000L
     private val blackVideoSurfaceRecheckMs = 2_000L
@@ -1099,16 +1098,6 @@ class NativePlayerActivity : ComponentActivity() {
         // The surface reset is cheap and valid on every attempt (including the
         // software one); only the software retry itself is once-per-session.
         blackVideoSurfaceRetried = false
-        blackVideoSurfaceTypeSwitched = false
-        // Restore SurfaceView for the fresh attempt so tunneling and the
-        // normal hardware path are available. The TextureView fallback only
-        // runs if SurfaceView's native window is actually lost.
-        // Restore SurfaceView for the fresh attempt so tunneling and the
-        // normal hardware path are available. The TextureView fallback only
-        // runs if SurfaceView's native window is actually lost.
-        playerView.setSurfaceType(0)
-        playerView.requestLayout()
-        playerView.invalidate()
         blackVideoWatchdogToken++
         ffmpegOnlySession = false
         ffmpegSessionSwappedToHw = false
@@ -1417,11 +1406,14 @@ class NativePlayerActivity : ComponentActivity() {
                 hasPlayedOnce = true
                 hideSplash()
                 armStallWatchdog()
-                // Resume auto-hide when playback resumes while controls are visible
                 if (controlsVisible && !showSettingsPanel && !isPickerShowing) {
                     scheduleAutoHide()
                 }
                 scrobbleSimkl("start")
+                if (enableTunneling && !firstFrameRendered && exoPlayer?.currentPosition ?: 0L < 500L) {
+                    val pos = exoPlayer?.currentPosition ?: 0L
+                    exoPlayer?.seekTo(pos + 100L)
+                }
             } else {
                 scrobbleSimkl("pause")
             }
@@ -1827,48 +1819,6 @@ class NativePlayerActivity : ComponentActivity() {
             return
         }
 
-        // Stage 1.5: on Fire TV and similar boxes the SurfaceView native window
-        // can be lost at startup (logcat: 'Could not find corresponding native
-        // window for surface'). If the visibility bounce didn't help, switch
-        // the PlayerView to TextureView, which has no native window to lose.
-        // Tunneling is not compatible with TextureView, but this fallback only
-        // runs when SurfaceView already failed, so video at least displays.
-        if (!blackVideoSurfaceTypeSwitched) {
-            blackVideoSurfaceTypeSwitched = true
-            Log.w(
-                "PLAYER_VIDEO",
-                "Black video: surface bounce failed$codecInfo " +
-                    "mime=${streamMimeType ?: "?"} — switching to TextureView"
-            )
-            reconnectingContainer.visibility = View.VISIBLE
-            bufferingSpinner.visibility = View.GONE
-            reconnectingText.text = "Video isn't displaying — retrying with alternate surface…"
-            handler.postDelayed(
-                {
-                    if (token != blackVideoWatchdogToken) return@postDelayed
-                    if (blackVideoNoticeShown || firstFrameRendered) return@postDelayed
-                    switchPlayerViewToTextureView()
-                    forceSoftwareDecoder = false
-                    forceHardwareDecoder = false
-                    errorMessageStr = null
-                    recreatePlayer()
-                },
-                300L
-            )
-            // Give the TextureView rebuild a fair chance before falling back
-            // to software decoding.
-            handler.postDelayed(
-                {
-                    if (token != blackVideoWatchdogToken) return@postDelayed
-                    if (blackVideoNoticeShown || firstFrameRendered) return@postDelayed
-                    if (errorContainer.visibility == View.VISIBLE) return@postDelayed
-                    showBlackVideoNotice()
-                },
-                blackVideoSwTimeoutMs
-            )
-            return
-        }
-
         // Stage 2: swap renderer families. Auto sessions started on hardware,
         // so the retry rebuilds with the software decoder (plays many files
         // whose video the TV's hardware decoder accepts but cannot actually
@@ -1970,15 +1920,6 @@ class NativePlayerActivity : ComponentActivity() {
             }
         }
         return null
-    }
-
-    private fun switchPlayerViewToTextureView() {
-        if (blackVideoSurfaceTypeSwitched) return
-        blackVideoSurfaceTypeSwitched = true
-        Log.w("PLAYER_VIDEO", "Switching PlayerView to TextureView fallback")
-        playerView.setSurfaceType(1)
-        playerView.requestLayout()
-        playerView.invalidate()
     }
 
     private fun showBlackVideoNotice() {

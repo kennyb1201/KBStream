@@ -13,8 +13,7 @@
         android:layout_height="match_parent"
         android:background="@android:color/black"
         app:surface_type="surface_view"
-        app:use_controller="false"
-        app:keep_content_on_player_reset="true" />
+        app:use_controller="false" />
 
     <!-- Loading splash: backdrop + clearlogo (shown while buffering) -->
     <FrameLayout
