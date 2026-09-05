@@ -1461,6 +1461,7 @@ class NativePlayerActivity : ComponentActivity() {
         }
 
         override fun onTracksChanged(tracks: Tracks) {
+            var dvGroupToDisable: androidx.media3.common.TrackGroup? = null
             for (group in tracks.groups) {
                 for (i in 0 until group.length) {
                     val fmt = group.getTrackFormat(i)
@@ -1485,8 +1486,24 @@ class NativePlayerActivity : ComponentActivity() {
                                 (streamDeclaredDvCodec?.let { " rewrittenFrom=$it" } ?: "")
                         )
                         preemptHeavyFfmpegSession(fmt)
+                        // Method 2: if DV compat is enabled, disable any DV track
+                        // group so ExoPlayer falls back to the HDR10/HEVC base
+                        // layer instead of selecting the DV enhancement layer.
+                        if (dvRewriteEnabled && dvGroupToDisable == null) {
+                            val mime = fmt.sampleMimeType
+                            if (mime == "video/dolby-vision" || codec.startsWith("dv")) {
+                                dvGroupToDisable = group
+                            }
+                        }
                     }
                 }
+            }
+            dvGroupToDisable?.let { group ->
+                exoPlayer?.trackSelector?.setParameters(
+                    exoPlayer!!.trackSelector.buildUponParameters()
+                        .setTrackGroupDisabled(group, true)
+                )
+                Log.i("PLAYER_DV", "Disabled DV track group, falling back to HDR10/HEVC")
             }
             updateStreamHealthDisplay()
         }
