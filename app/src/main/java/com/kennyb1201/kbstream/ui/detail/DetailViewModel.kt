@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.Meta
+import com.kennyb1201.kbstream.data.addon.VideoEntry
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
@@ -326,7 +327,7 @@ for (metaAddon in metaAddons) {
     if (resolvedMeta != null) break
 }
 
-    private fun buildMergedMeta(
+    fun buildMergedMeta(
         tmdbDetail: TmdbDetail?,
         addonMeta: Meta?,
         initialMeta: Meta?
