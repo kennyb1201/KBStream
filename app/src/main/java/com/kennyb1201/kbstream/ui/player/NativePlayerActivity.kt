@@ -2657,7 +2657,7 @@ class NativePlayerActivity : ComponentActivity() {
         // Best effort: fetch the next episode's name + still from TMDB so the
         // popup shows real episode details instead of just S#E#.
         scope?.launch {
-            val nextEp: com.kennyb1201.kbstream.data.tmdb.TmdbEpisode? = withContext(Dispatchers.IO) {
+            val nextEp: com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode? = withContext(Dispatchers.IO) {
                 val repo = TmdbRepository(this@NativePlayerActivity)
                 val tmdbId = resolveParentTmdbId() ?: return@withContext null
                 val episodes = runCatching {
@@ -2668,7 +2668,7 @@ class NativePlayerActivity : ComponentActivity() {
             if (nextEp != null && nextUpPanel.visibility == View.VISIBLE) {
                 pendingNextEpisodeName = nextEp.name
                 nextUpEpisodeTitle.text = nextEp.name ?: "S${targetSeason}E$targetEpisode"
-                nextEp.runtime?.takeIf { it > 0 }?.let { pendingNextEpisodeRuntime = it }
+                nextEp.runtimeMinutes?.takeIf { it > 0 }?.let { pendingNextEpisodeRuntime = it }
                 val still = nextEp.thumbnail
                 if (!still.isNullOrBlank()) {
                     try {
