@@ -1355,42 +1355,35 @@ class NativePlayerActivity : ComponentActivity() {
                     Log.i("PLAYER_TUNNEL", "Tunneled via TrackSelector")
                 }
 
-                exoPlayer = player
-                playerView.player = player
-                applyResizeMode(when (resizeModeIndex) {
-                    1 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                    2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
-                    else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-                })
-
-                prepare()
+                playWhenReady = true
             }
 
-        player.addListener(createPlayerListener())
-        player.addAnalyticsListener(createAnalyticsListener())
-        armStartupWatchdog()
+            player.addListener(createPlayerListener())
+            player.addAnalyticsListener(createAnalyticsListener())
+            armStartupWatchdog()
 
-        // New media: re-arm the ended fallback for this playback session.
-        playbackEndedHandled = false
-        lastPolledPos = -1L
-        posStallTicks = 0
+            playbackEndedHandled = false
+            lastPolledPos = -1L
+            posStallTicks = 0
 
-        exoPlayer = player
-        applyResizeMode(when (resizeModeIndex) {
-            1 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-            2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
-            else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-        })
+            exoPlayer = player
+            playerView.player = player
+            applyResizeMode(when (resizeModeIndex) {
+                1 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+                else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+            })
+            player.prepare()
 
-        mediaSession?.release()
-        // media3 keys sessions by their session ID in a process-wide static map. The real fix
-        // for "Session ID must be unique" is giving every session a unique id, so a freshly
-        // launched player can coexist with a previous one whose session hasn't been released
-        // yet (the old synchronous-release approach was racy and still crashed on this path).
-        mediaSession =
-            MediaSession.Builder(this, player)
-                .setId("kbstream-" + System.nanoTime() + "-" + sessionSequence++)
-                .build()
+            mediaSession?.release()
+            // media3 keys sessions by their session ID in a process-wide static map. The real fix
+            // for "Session ID must be unique" is giving every session a unique id, so a freshly
+            // launched player can coexist with a previous one whose session hasn't been released
+            // yet (the old synchronous-release approach was racy and still crashed on this path).
+            mediaSession =
+                MediaSession.Builder(this, player)
+                    .setId("kbstream-" + System.nanoTime() + "-" + sessionSequence++)
+                    .build()
 
         // Start position polling
         startPositionPolling()
