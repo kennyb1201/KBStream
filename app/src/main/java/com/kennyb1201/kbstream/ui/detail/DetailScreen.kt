@@ -1292,7 +1292,7 @@ fun DetailScreen(
                                     )
                                 }
 
-                            m.awards
+                            tmdbDetail?.awards
                                 ?.takeIf { it.isNotBlank() }
                                 ?.let {
                                     add(
