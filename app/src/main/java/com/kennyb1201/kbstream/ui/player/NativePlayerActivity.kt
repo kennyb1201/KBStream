@@ -345,6 +345,7 @@ class NativePlayerActivity : ComponentActivity() {
     private var videoTrackPresent = false
     private var streamMimeType: String? = null
     private var firstFrameRendered = false
+    private var firstFrameRenderedAtMs = 0L
     private var blackVideoNoticeShown = false
     private var blackVideoSwRetried = false
     // Whether an FFmpeg-only session has already been rebuilt with the
@@ -1098,7 +1099,7 @@ class NativePlayerActivity : ComponentActivity() {
         // The surface reset is cheap and valid on every attempt (including the
         // software one); only the software retry itself is once-per-session.
         blackVideoSurfaceRetried = false
-        blackVideoWatchdogToken++
+        // blackVideoWatchdogToken++ # delayed to allow native window recovery
         ffmpegOnlySession = false
         ffmpegSessionSwappedToHw = false
         // Reset the black-video software-decoder retry only for fresh attempts
@@ -1446,12 +1447,11 @@ class NativePlayerActivity : ComponentActivity() {
         }
 
         override fun onRenderedFirstFrame() {
-            // A frame reached the display — nothing to watch for.
+            if (firstFrameRendered) return
             firstFrameRendered = true
-            // Cancel any in-flight recovery messaging (surface reset / SW switch).
+            firstFrameRenderedAtMs = System.currentTimeMillis()
             reconnectingContainer.visibility = View.GONE
             bufferingSpinner.visibility = View.GONE
-            blackVideoWatchdogToken++
         }
 
         override fun onTracksChanged(tracks: Tracks) {
@@ -1638,10 +1638,11 @@ class NativePlayerActivity : ComponentActivity() {
         bufferingSpinner.visibility = View.GONE
         reconnectingText.text = "Too heavy for software decoding — switching to hardware…"
         // Invalidate any pending watchdog work; this rebuild supersedes it.
-        blackVideoWatchdogToken++
+        // blackVideoWatchdogToken++ # delayed to allow native window recovery
         handler.postDelayed(
             {
-                if (blackVideoNoticeShown || firstFrameRendered) return@postDelayed
+                if (blackVideoNoticeShown) return@postDelayed
+                    if (firstFrameRendered && System.currentTimeMillis() - firstFrameRenderedAtMs > 2000L) return@postDelayed
                 forceHardwareDecoder = true
                 errorMessageStr = null
                 recreatePlayer()
@@ -1760,8 +1761,8 @@ class NativePlayerActivity : ComponentActivity() {
      */
     private fun handleBlackVideoTimeout(token: Int, requirePlaying: Boolean = true) {
         if (token != blackVideoWatchdogToken) return
-        if (blackVideoNoticeShown || firstFrameRendered) return
-        // Only flag while actually playing (READY + advancing); a slow
+        if (blackVideoNoticeShown) return
+        if (firstFrameRendered && System.currentTimeMillis() - firstFrameRenderedAtMs > 2000L) return
         // buffering start or rebuffer must not trip the notice. The startup
         // watchdog bypasses this gate — a session that never reached READY
         // needs the same recovery ladder, not an eternal splash.
@@ -1797,7 +1798,8 @@ class NativePlayerActivity : ComponentActivity() {
             handler.postDelayed(
                 {
                     if (token != blackVideoWatchdogToken) return@postDelayed
-                    if (blackVideoNoticeShown || firstFrameRendered) return@postDelayed
+                    if (blackVideoNoticeShown) return@postDelayed
+                    if (firstFrameRendered && System.currentTimeMillis() - firstFrameRenderedAtMs > 2000L) return@postDelayed
                     if (surfaceView == null) {
                         // No SurfaceView to bounce (unexpected layout) — skip
                         // straight to the software-decoder stage.
@@ -1851,7 +1853,8 @@ class NativePlayerActivity : ComponentActivity() {
             handler.postDelayed(
                 {
                     if (token != blackVideoWatchdogToken) return@postDelayed
-                    if (blackVideoNoticeShown || firstFrameRendered) return@postDelayed
+                    if (blackVideoNoticeShown) return@postDelayed
+                    if (firstFrameRendered && System.currentTimeMillis() - firstFrameRenderedAtMs > 2000L) return@postDelayed
                     forceHardwareDecoder = true
                     errorMessageStr = null
                     recreatePlayer()
@@ -1863,7 +1866,8 @@ class NativePlayerActivity : ComponentActivity() {
             handler.postDelayed(
                 {
                     if (token != blackVideoWatchdogToken) return@postDelayed
-                    if (blackVideoNoticeShown || firstFrameRendered) return@postDelayed
+                    if (blackVideoNoticeShown) return@postDelayed
+                    if (firstFrameRendered && System.currentTimeMillis() - firstFrameRenderedAtMs > 2000L) return@postDelayed
                     if (errorContainer.visibility == View.VISIBLE) return@postDelayed
                     showBlackVideoNotice()
                 },
@@ -1886,7 +1890,8 @@ class NativePlayerActivity : ComponentActivity() {
             handler.postDelayed(
                 {
                     if (token != blackVideoWatchdogToken) return@postDelayed
-                    if (blackVideoNoticeShown || firstFrameRendered) return@postDelayed
+                    if (blackVideoNoticeShown) return@postDelayed
+                    if (firstFrameRendered && System.currentTimeMillis() - firstFrameRenderedAtMs > 2000L) return@postDelayed
                     forceSoftwareDecoder = true
                     errorMessageStr = null
                     recreatePlayer()
@@ -1899,7 +1904,8 @@ class NativePlayerActivity : ComponentActivity() {
             handler.postDelayed(
                 {
                     if (token != blackVideoWatchdogToken) return@postDelayed
-                    if (blackVideoNoticeShown || firstFrameRendered) return@postDelayed
+                    if (blackVideoNoticeShown) return@postDelayed
+                    if (firstFrameRendered && System.currentTimeMillis() - firstFrameRenderedAtMs > 2000L) return@postDelayed
                     if (errorContainer.visibility == View.VISIBLE) return@postDelayed
                     showBlackVideoNotice()
                 },
