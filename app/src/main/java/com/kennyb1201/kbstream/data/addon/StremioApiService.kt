@@ -26,4 +26,9 @@ interface StremioApiService {
     suspend fun getManifest(
         @Url url: String
     ): AddonManifest
+
+    @GET
+    suspend fun getSearch(
+        @Url url: String
+    ): CatalogResponse
 }
