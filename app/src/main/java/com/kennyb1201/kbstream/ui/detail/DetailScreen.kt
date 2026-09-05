@@ -1111,7 +1111,7 @@ fun DetailScreen(
                                     ?.takeIf { it > 0 }
                                     ?.let { "${it} min" }
                                     ?: m.runtime,
-                                m.language?.takeIf { it.isNotBlank() },
+                                m.language?.takeIf { it.isNotBlank() }?.uppercase(),
                                 m.imdbRating?.let {
                                     "IMDb $it"
                                 }

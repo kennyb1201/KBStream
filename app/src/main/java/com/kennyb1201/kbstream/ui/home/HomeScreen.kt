@@ -118,7 +118,7 @@ private val RailSectionGap = 20.dp
 
 private val HeroToFirstRailGap = 2.dp
 
-private val PosterFocusHeadroom = 16.dp
+private val PosterFocusHeadroom = 24.dp
 
 private val TvSafeAreaHorizontal = 12.dp
 private val TvSafeAreaVertical = 0.dp
