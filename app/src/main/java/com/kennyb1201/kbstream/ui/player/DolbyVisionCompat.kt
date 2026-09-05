@@ -37,13 +37,13 @@ internal object DolbyVisionCompat {
     // this is the only profile that is rewritten: everything else (single-layer
     // P4/P8 web encodes, P5) is passed through untouched so Dolby-Vision
     // displays get the real thing.
-    private val DV_CODEC_PROFILE_7 = Regex("(?i)^(dvhe|dvh1)\\.(07|7)\\.")
+    private val DV_CODEC_PROFILE_7 = Regex("(?i)^(dvhe|dvh1)\\.(07|7)\\..+$")
 
     // Every DV profile, used by the explicit "All DV" mode (the fallback for
     // TVs without Dolby Vision). Profile 5 (ICtCp, no HDR10 base) can only be
     // force-decoded as plain HEVC — a picture appears, but colors can be off;
     // a true conversion would need a color-mapping pipeline.
-    private val DV_CODEC_ALL_PROFILES = Regex("(?i)^(dvhe|dvh1)\\.(04|4|05|5|07|7|08|8)\\.")
+    private val DV_CODEC_ALL_PROFILES = Regex("(?i)^(dvhe|dvh1)\\.(04|4|05|5|07|7|08|8)\\..+$")
 
     /** Generic Main10@L5.1 HEVC identifier describing the stripped base layer. */
     const val HDR10_CODEC: String = "hvc1.2.4.L153.B0"
