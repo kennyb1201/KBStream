@@ -196,7 +196,6 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var playerView: PlayerView
     private lateinit var p5VideoGlesView: P5VideoGlesView
     // Whether P5 color correction via GLES is currently active
-    private var p5GlesActive = false
     private lateinit var liveBadge: TextView
     private lateinit var bufferingSpinner: ProgressBar
     private lateinit var reconnectingContainer: LinearLayout
@@ -332,6 +331,18 @@ class NativePlayerActivity : ComponentActivity() {
     private var streamHeight = 0
     private var streamBitrate = 0
     private var streamCodec: String? = null
+    // Original declared codec of the current video track (e.g. "dvhe.07.06")
+    // before any DV→HDR10 rewrite. Used for P5 detection to select correction path.
+    private var currentCodecs: String? = null
+    // When P5 content is detected and DV conversion is enabled, force FFmpeg
+    // for pixel-level ICtCp→HDR10 color conversion.
+    private var forceP5SoftwareDecode = false
+    // When the black-video watchdog tries TextureView as an automatic fallback
+    // after SurfaceView fails (stage 1.5 in the recovery ladder).
+    private var forceTextureViewFallback = false
+        p5GlesActive = false
+    // Whether P5 color correction via GLES is currently active
+    private var p5GlesActive = false
     // Original declared DV codec (e.g. "dvhe.07.06") of the current video
     // track when the DV → HDR10 strip rewrote it; null for everything else.
     // Surfaced in the codec badge so the exact DV profile stays visible
@@ -1068,6 +1079,13 @@ class NativePlayerActivity : ComponentActivity() {
 
 }
 
+    private fun setSurfaceType(playerView: PlayerView, type: Int) {
+        playerView.setPlayerViewSurfaceType(when (type) {
+            1 -> "texture_view"
+            else -> "surface_view"
+        })
+    }
+
     private fun setupKeyboardHandler() {
         playerView.isFocusable = true
         playerView.isClickable = true
@@ -1442,7 +1460,7 @@ class NativePlayerActivity : ComponentActivity() {
                 })
                 // Apply surface type: TextureView (1) if the black-video watchdog triggered
                 // the automatic fallback, otherwise SurfaceView (0) for normal playback.
-                setSurfaceType(playerView, if (useTextureView) 1 else 0)
+                setSurfaceType(playerView, if (forceTextureViewFallback) 1 else 0)
                 playerView.post { player.prepare() }
             }
 
@@ -1536,6 +1554,7 @@ class NativePlayerActivity : ComponentActivity() {
                         streamHeight = fmt.height
                         streamBitrate = fmt.bitrate
                         streamCodec = codec.ifBlank { null }
+                        currentCodecs = codec
                         streamMimeType = fmt.sampleMimeType
                         // A declared-DV track that the DV → HDR10 strip rewrote
                         // carries its original codec ("dvhe.07.06") in the
