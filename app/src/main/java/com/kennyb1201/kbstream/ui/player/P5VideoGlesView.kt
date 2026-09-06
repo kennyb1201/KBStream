@@ -92,13 +92,9 @@ class P5VideoGlesView(
         eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
         if (eglDisplay == null) return
 
-        if (!EGL14.eglInitialize(eglDisplay, null, null)) return
+        EGL14.eglInitialize(eglDisplay, null)
 
         val attribs = intArrayOf(
-            EGL14.EGL_RED_SIZE, 8,
-            EGL14.EGL_GREEN_SIZE, 8,
-            EGL14.EGL_BLUE_SIZE, 8,
-            EGL14.EGL_ALPHA_SIZE, 8,
             EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
             EGL14.EGL_SURFACE_TYPE, EGL14.EGL_PBUFFER_BIT,
             EGL14.EGL_NONE
@@ -106,8 +102,9 @@ class P5VideoGlesView(
 
         val configs = arrayOfNulls<EGLConfig>(1)
         val numConfigs = IntArray(1)
-        if (!EGL14.eglChooseConfig(eglDisplay, attribs, configs, configs.size, numConfigs)) return
+        EGL14.eglChooseConfig(eglDisplay, attribs, configs, configs.size, numConfigs)
 
+        if (configs[0] == null) return
         eglConfig = configs[0]
 
         val ctxAttribs = intArrayOf(
@@ -115,12 +112,11 @@ class P5VideoGlesView(
             EGL14.EGL_NONE
         )
         eglContext = EGL14.eglCreateContext(eglDisplay, eglConfig, EGL14.eglGetCurrentContext(), ctxAttribs)
+        if (eglContext == null) return
 
-        val pw = if (width > 0) width else 1
-        val ph = if (height > 0) height else 1
         val surfAttribs = intArrayOf(
-            EGL14.EGL_WIDTH, pw,
-            EGL14.EGL_HEIGHT, ph,
+            EGL14.EGL_WIDTH, this.width,
+            EGL14.EGL_HEIGHT, this.height,
             EGL14.EGL_NONE
         )
         eglSurface = EGL14.eglCreatePbufferSurface(eglDisplay, eglConfig, surfAttribs)
