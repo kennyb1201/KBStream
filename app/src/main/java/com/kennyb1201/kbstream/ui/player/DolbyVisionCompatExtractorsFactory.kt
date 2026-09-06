@@ -64,7 +64,8 @@ internal class DolbyVisionCompatExtractorsFactory(
     private val delegate: ExtractorsFactory,
     private val stripHdr10Plus: Boolean = false,
     private val convertAllProfiles: Boolean = false,
-    private val dvRewriteEnabled: Boolean = true
+    private val dvRewriteEnabled: Boolean = true,
+    private val convertTo81: Boolean = false
 ) : ExtractorsFactory {
 
     override fun createExtractors(): Array<Extractor> {
@@ -100,9 +101,11 @@ internal class DolbyVisionCompatExtractorsFactory(
             "PLAYER_DV",
             "Wrapping extractor=$simpleName framing=$framing " +
                 "allProfiles=$convertAllProfiles rewriteEnabled=$dvRewriteEnabled " +
-                "stripHdr10Plus=$stripHdr10Plus"
+                "stripHdr10Plus=$stripHdr10Plus convertTo81=$convertTo81"
         )
-        return VideoCompatExtractor(extractor, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled)
+        return VideoCompatExtractor(
+            extractor, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled, convertTo81
+        )
     }
 }
 
@@ -115,13 +118,16 @@ private class VideoCompatExtractor(
     private val framing: NalFraming,
     private val stripHdr10Plus: Boolean,
     private val convertAllProfiles: Boolean,
-    private val dvRewriteEnabled: Boolean
+    private val dvRewriteEnabled: Boolean,
+    private val convertTo81: Boolean
 ) : Extractor {
 
     override fun init(output: ExtractorOutput) {
         Log.i("PLAYER_DV", "Compat extractor initialized=${delegate.javaClass.simpleName}")
         delegate.init(
-            VideoCompatExtractorOutput(output, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled)
+            VideoCompatExtractorOutput(
+                output, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled, convertTo81
+            )
         )
     }
 
@@ -142,13 +148,16 @@ private class VideoCompatExtractorOutput(
     private val framing: NalFraming,
     private val stripHdr10Plus: Boolean,
     private val convertAllProfiles: Boolean,
-    private val dvRewriteEnabled: Boolean
+    private val dvRewriteEnabled: Boolean,
+    private val convertTo81: Boolean
 ) : ExtractorOutput {
 
     override fun track(id: Int, type: Int): TrackOutput {
         val track = delegate.track(id, type)
         return if (type == C.TRACK_TYPE_VIDEO) {
-            VideoCompatTrackOutput(track, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled)
+            VideoCompatTrackOutput(
+                track, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled, convertTo81
+            )
         } else {
             track
         }
@@ -169,7 +178,8 @@ private class VideoCompatTrackOutput(
     private val framing: NalFraming,
     private val stripHdr10Plus: Boolean,
     private val convertAllProfiles: Boolean,
-    private val dvRewriteEnabled: Boolean
+    private val dvRewriteEnabled: Boolean,
+    private val convertTo81: Boolean
 ) : TrackOutput {
 
     private enum class Mode { NORMAL, SNIFFING, STRIPPING }
@@ -199,11 +209,38 @@ private class VideoCompatTrackOutput(
         // HDR10+ strip toggle is on), declared DV tracks must pass through
         // untouched — no codec rewrite, no RPU strip.
         val dvRewrite =
-            if (dvRewriteEnabled) {
+            if (dvRewriteEnabled && !convertTo81) {
                 DolbyVisionCompat.hdr10Codec(format.codecs, convertAllProfiles)
             } else {
                 null
             }
+        // "8.1" mode: P5 / P7 declared streams are rewritten to Profile 8.1 —
+        // the codec stays in the dvhe/dvh1 family (so the Dolby Vision
+        // pipeline still engages) with the profile digits changed to 08, the
+        // VPS is forced to a single layer, the enhancement layer NALs are
+        // dropped, and every RPU is rewritten to 8.1 metadata with a fresh
+        // CRC. P4 / P8 declared streams have no matching to81Codec and pass
+        // through untouched as native Dolby Vision.
+        val to81Rewrite = if (convertTo81) DolbyVisionCompat.to81Codec(format.codecs) else null
+        if (to81Rewrite != null) {
+            Log.i(
+                "PLAYER_DV",
+                "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — converting to " +
+                    "Profile 8.1 ($to81Rewrite): single-layer VPS, EL dropped, RPUs rewritten"
+            )
+            var builder = format.buildUpon().setCodecs(to81Rewrite)
+            // Keep the original declared DV codec (e.g. "dvhe.07.06") on the
+            // label so the player UI / P5 detection can badge the source profile.
+            if (!format.codecs.isNullOrBlank()) {
+                builder = builder.setLabel(format.codecs)
+            }
+            builder = builder.setInitializationData(
+                DolbyVisionCompat.rewriteInitDataVps(format.initializationData)
+            )
+            delegate.format(builder.build())
+            mode = Mode.STRIPPING
+            return
+        }
         // Profiles 4/8 are single-layer streams whose base layer is already
         // standard HDR10 HEVC. Forwarding the in-band DV RPU / HDR10+ metadata
         // NALs untouched makes MTK-class decoders re-emit their output format on
@@ -386,9 +423,10 @@ private class VideoCompatTrackOutput(
             }
             if (dvFound && dvRewriteEnabled) {
                 mode = Mode.STRIPPING
+                val action = if (convertTo81) "converting to Profile 8.1" else "stripping to HDR10"
                 Log.i(
                     "PLAYER_DV",
-                    "In-band Dolby Vision RPU detected (no dvcc marker, codecs=${currentCodecs ?: "?"}) — stripping to HDR10"
+                    "In-band Dolby Vision RPU detected (no dvcc marker, codecs=${currentCodecs ?: "?"}) — $action"
                 )
                 // Fall through and strip this very sample: samples that contain
                 // DV NALs are never forwarded untouched to the decoder.
@@ -447,24 +485,44 @@ private class VideoCompatTrackOutput(
         // decoder would have seen untouched.
         val inventory =
             if (!stripReported) DolbyVisionCompat.describeNals(pendingBuf, sampleEnd) else ""
-        val stripped = when (framing) {
-            NalFraming.ANNEX_B ->
-                DolbyVisionCompat.transformAnnexB(
-                    pendingBuf, sampleEnd, stripHdr10Plus = stripHdr10Plus, stats = stats
-                )
-            NalFraming.LENGTH_DELIMITED ->
-                DolbyVisionCompat.transformLengthDelimited(
-                    pendingBuf, sampleEnd, nalLengthFieldLength,
-                    stripHdr10Plus = stripHdr10Plus, stats = stats
-                )
+        val stripped = if (convertTo81) {
+            when (framing) {
+                NalFraming.ANNEX_B ->
+                    DolbyVisionCompat.transformAnnexBTo81(
+                        pendingBuf, sampleEnd, stripHdr10Plus = stripHdr10Plus, stats = stats
+                    )
+                NalFraming.LENGTH_DELIMITED ->
+                    DolbyVisionCompat.transformLengthDelimitedTo81(
+                        pendingBuf, sampleEnd, nalLengthFieldLength,
+                        stripHdr10Plus = stripHdr10Plus, stats = stats
+                    )
+            }
+        } else {
+            when (framing) {
+                NalFraming.ANNEX_B ->
+                    DolbyVisionCompat.transformAnnexB(
+                        pendingBuf, sampleEnd, stripHdr10Plus = stripHdr10Plus, stats = stats
+                    )
+                NalFraming.LENGTH_DELIMITED ->
+                    DolbyVisionCompat.transformLengthDelimited(
+                        pendingBuf, sampleEnd, nalLengthFieldLength,
+                        stripHdr10Plus = stripHdr10Plus, stats = stats
+                    )
+            }
         }
         if (stripped >= 0 && !stripReported) {
             stripReported = true
             Log.i(
                 "PLAYER_DV",
-                "First stripped sample (codecs=${currentCodecs ?: "?"}) — " +
-                    "dropped RPU=${stats.rpuBytes}B EL=${stats.elBytes}B HDR10+SEI=${stats.hdr10PlusBytes}B " +
-                    "vpsRewritten=${stats.vpsRewritten} nals=$inventory"
+                if (convertTo81) {
+                    "First 8.1-converted sample (codecs=${currentCodecs ?: "?"}) — " +
+                        "RPU rewritten=${stats.rpuRewritten} EL=${stats.elBytes}B " +
+                        "HDR10+SEI=${stats.hdr10PlusBytes}B vpsRewritten=${stats.vpsRewritten} nals=$inventory"
+                } else {
+                    "First stripped sample (codecs=${currentCodecs ?: "?"}) — " +
+                        "dropped RPU=${stats.rpuBytes}B EL=${stats.elBytes}B HDR10+SEI=${stats.hdr10PlusBytes}B " +
+                        "vpsRewritten=${stats.vpsRewritten} nals=$inventory"
+                }
             )
         }
         emit(if (stripped >= 0) stripped else sampleEnd)

@@ -394,6 +394,9 @@ class NativePlayerActivity : ComponentActivity() {
     // sitting on black until the watchdog fires.
     private var ffmpegOnlySession = false
     private var ffmpegSessionSwappedToHw = false
+    // True while the DV setting is "8.1" (P5/P7 converted to Profile 8.1) so
+    // the codec badge can report "DV P7 → 8.1" instead of "→ HDR10".
+    private var dvTo81Session = false
     // One surface bounce is allowed per player attempt: flipping the
     // SurfaceView's visibility destroys/recreates its native surface and
     // Media3 re-queues output, which recovers the silent "decoder outputs
@@ -1286,16 +1289,28 @@ class NativePlayerActivity : ComponentActivity() {
         // other profiles pass through untouched so a Dolby-Vision display plays
         // them as real DV. "All DV" rewrites every profile (4/5/7/8) for
         // displays without Dolby Vision (P5 has no HDR10 base, so it is
-        // force-decoded as plain HEVC — best effort, colors may be off). Off
-        // plays DV exactly as provided. HDR10+ (ST 2094-40) stripping is an
-        // independent toggle that composes with any DV mode; with DV = Off it
-        // strips HDR10+ only and never touches DV.
+        // force-decoded as plain HEVC — best effort, colors may be off). "8.1"
+        // converts P5 and P7 to Profile 8.1 in the bitstream (RPU metadata per
+        // dovi_tool convert mode 2, EL dropped, single-layer VPS, dvhe/dvh1.08)
+        // for Dolby Vision displays that accept 8.1 but not Blu-ray P7 or
+        // ICtCp P5; P4/P8 pass through as native DV. Off plays DV exactly as
+        // provided. HDR10+ (ST 2094-40) stripping is an independent toggle
+        // that composes with any DV mode; with DV = Off it strips HDR10+ only
+        // and never touches DV.
         val dvCompatMode = AppPreferences.getDvCompatMode(this)
         val stripHdr10Plus = AppPreferences.getStripHdr10Plus(this)
         val videoDecoder = AppPreferences.getVideoDecoder(this)
         val audioDecoderPriority = AppPreferences.getAudioDecoder(this)
         val dvRewriteEnabled = dvCompatMode != AppPreferences.DV_COMPAT_OFF
-        val convertAllProfiles = dvCompatMode == AppPreferences.DV_COMPAT_ALL                // P5 (single-layer ICtCp) content needs color conversion for correct HDR colors.
+        val convertAllProfiles = dvCompatMode == AppPreferences.DV_COMPAT_ALL
+        // "8.1" mode: convert declared P5/P7 streams to Profile 8.1 instead of
+        // stripping to HDR10 (see DolbyVisionCompatExtractorsFactory). The P5
+        // GLES/FFmpeg color path below stays engaged — the pixels remain ICtCp
+        // after the bitstream rewrite, so the color converter is what makes a
+        // P5 → 8.1 stream look right on the display.
+        val convertTo81 = dvCompatMode == AppPreferences.DV_COMPAT_TO_81
+        dvTo81Session = convertTo81 // badge: "DV P7 → 8.1"
+        // P5 (single-layer ICtCp) content needs color conversion for correct HDR colors.
         // When P5 is detected and DV conversion is enabled, we have two options:
         // 1. Force FFmpeg software decoder (true pixel-level conversion, slower)
         // 2. Use GLSurfaceView with ICtCp→PQ shader (GPU-accelerated, faster for 4K)
@@ -1378,7 +1393,7 @@ class NativePlayerActivity : ComponentActivity() {
         Log.i(
             "PLAYER_DV",
             "DV settings mode=$dvCompatMode rewriteEnabled=$dvRewriteEnabled " +
-                "allProfiles=$convertAllProfiles stripHdr10Plus=$stripHdr10Plus " +
+                "allProfiles=$convertAllProfiles to81=$convertTo81 stripHdr10Plus=$stripHdr10Plus " +
                 "videoDecoder=$videoDecoder audioDecoder=$audioDecoderPriority " +
                 "forceSoftware=$softwareDecoderActive " +
                 "audioSeparate=${!currentAudioUrl.isNullOrBlank()}"
@@ -1393,7 +1408,8 @@ class NativePlayerActivity : ComponentActivity() {
                     DefaultExtractorsFactory(),
                     stripHdr10Plus = stripHdr10Plus,
                     convertAllProfiles = convertAllProfiles,
-                    dvRewriteEnabled = dvRewriteEnabled
+                    dvRewriteEnabled = dvRewriteEnabled,
+                    convertTo81 = convertTo81
                 )
             }
         val mediaSourceFactory = DefaultMediaSourceFactory(httpFactory, extractorsFactory)
@@ -2390,7 +2406,7 @@ class NativePlayerActivity : ComponentActivity() {
             streamHealth.text = buildString {
                 append(normalizeResolution(streamWidth, streamHeight))
                 if (streamBitrate > 0) append(" • ${streamBitrate / 1_000} kbps")
-                val codecLabel = normalizeCodec(streamCodec, streamDeclaredDvCodec)
+                val codecLabel = normalizeCodec(streamCodec, streamDeclaredDvCodec, dvTo81Session)
                 if (codecLabel != "—") append(" • $codecLabel")
             }
     }
@@ -2608,7 +2624,7 @@ class NativePlayerActivity : ComponentActivity() {
                 settingsBitrate.text = "Bitrate: ${streamBitrate / 1_000} kbps"
                 settingsBitrate.visibility = View.VISIBLE
             }
-            val codecLabel = normalizeCodec(streamCodec, streamDeclaredDvCodec)
+            val codecLabel = normalizeCodec(streamCodec, streamDeclaredDvCodec, dvTo81Session)
             if (codecLabel != "—") {
                 settingsCodec.text = "Codec: $codecLabel"
                 settingsCodec.visibility = View.VISIBLE
@@ -3566,10 +3582,16 @@ internal fun dvLabelFromCodec(codec: String?): String? {
  * "hev1.1.6.L150" → "H.265", "avc1.640028" → "H.264",
  * "vp09.00" → "VP9", "av01" → "AV1".
  */
-internal fun normalizeCodec(codec: String?, dvOriginalCodec: String? = null): String {
+internal fun normalizeCodec(
+    codec: String?,
+    dvOriginalCodec: String? = null,
+    convertedTo81: Boolean = false
+): String {
     // Declared Dolby Vision that the DV → HDR10 strip rewrote to plain HEVC:
     // surface the original profile so the badge still shows what the file was.
-    dvLabelFromCodec(dvOriginalCodec)?.let { return "$it → HDR10" }
+    dvLabelFromCodec(dvOriginalCodec)?.let {
+        return if (convertedTo81) "$it → 8.1" else "$it → HDR10"
+    }
     if (codec.isNullOrBlank()) return "—"
     dvLabelFromCodec(codec)?.let { return it }
     val lower = codec.lowercase()

@@ -255,7 +255,8 @@ fun SettingsScreen(
             listOf(
                 AppPreferences.DV_COMPAT_AUTO to "Profile 7",
                 AppPreferences.DV_COMPAT_OFF to "Off",
-                AppPreferences.DV_COMPAT_ALL to "All DV"
+                AppPreferences.DV_COMPAT_ALL to "All DV",
+                AppPreferences.DV_COMPAT_TO_81 to "8.1"
             ).forEach { (value, label) ->
                 KBCard(onClick = {
                     dvCompatMode = value
@@ -271,6 +272,7 @@ fun SettingsScreen(
                 AppPreferences.DV_COMPAT_AUTO -> "Profile 7 (remux) \u2192 HDR10; P4/P5/P8 play as Dolby Vision"
                 AppPreferences.DV_COMPAT_OFF -> "Play files exactly as provided (device must handle DV)"
                 AppPreferences.DV_COMPAT_ALL -> "Convert every DV profile (P4/P5/P7/P8) \u2192 HDR10/HEVC — for non-DV TVs (P5 colors may be off)"
+                AppPreferences.DV_COMPAT_TO_81 -> "Convert P5 & P7 \u2192 Profile 8.1 for DV-capable TVs; P4/P8 play as Dolby Vision (P5 colors corrected by GLES/FFmpeg)"
                 else -> ""
             },
             color = KBTextLo,

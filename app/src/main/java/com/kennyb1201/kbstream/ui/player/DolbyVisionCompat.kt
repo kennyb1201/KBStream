@@ -94,6 +94,22 @@ internal object DolbyVisionCompat {
     }
 
     /**
+     * Codec string for the Profile 8.1 rewrite target of a declared P5/P7
+     * stream: keeps the dvhe/dvh1 family (so Media3 still routes the track
+     * through the Dolby Vision pipeline) but changes the profile digits to 08.
+     * Returns null for every other codec (P4/P8/plain HEVC), which must pass
+     * through untouched in 8.1 mode.
+     */
+    private val DV_CODEC_TO_81 = Regex("(?i)^(dvhe|dvh1)\\.0*(7|5)\\.(.+)$")
+
+    fun to81Codec(codecs: String?): String? {
+        if (codecs.isNullOrBlank()) return null
+        val m = DV_CODEC_TO_81.find(codecs.trim()) ?: return null
+        // "dvhe.07.06" / "dvh1.05.06" -> "dvhe.08.06" / "dvh1.08.06"
+        return m.groupValues[1] + ".08." + m.groupValues[3]
+    }
+
+    /**
      * Converts ICtCp pixel data to Rec.2020 PQ (ST.2084) color space.
      *
      * ICtCp is a perceptual color encoding used by Dolby Vision Profile 5.
@@ -394,6 +410,7 @@ internal object DolbyVisionCompat {
         var elBytes = 0
         var hdr10PlusBytes = 0
         var vpsRewritten = false
+        var rpuRewritten = 0
     }
 
     // ── VPS rewriting ──────────────────────────────────────────────────────
@@ -987,5 +1004,766 @@ internal object DolbyVisionCompat {
             }
         }
         return p == HDR10_PLUS_MARKER.size
+    }
+
+    // ── Profile 7 / Profile 5 → Profile 8.1 conversion ───────────────────
+    // The "Convert to 8.1" mode (DV setting "8.1") rewrites DV streams to
+    // Profile 8.1 on the fly so Dolby Vision-capable displays that choke on
+    // Profile 7 (dual-layer Blu-ray remuxes) or Profile 5 (single-layer ICtCp)
+    // can play them as real Dolby Vision instead of black-screening. The
+    // bitstream-level change is small but structural:
+    //
+    //  - Profile 7 → 8.1: drop the enhancement layer NALs (layerId > 0 / 63),
+    //    force the VPS to a single-layer parameter set, and in every RPU set
+    //    el_spatial_resampling_filter_flag = 0 / disable_residual_flag = 1
+    //    (which is exactly what makes the RPU read as profile 8, per
+    //    dovi_tool's get_dovi_profile). FEL RPUs additionally get their
+    //    luma/chroma mapping replaced with the fixed no-op 8.1 mapping and
+    //    the DM coefficients replaced with the standard 8.1 (BT.2020) ones.
+    //  - Profile 5 → 8.1: set vdr_rpu_profile = 1, bl_video_full_range_flag =
+    //    false, replace the ICtCp mapping with the no-op 8.1 mapping and the
+    //    DM coefficients with the 8.1 ones. The PIXELS are still ICtCp (a
+    //    bitstream cannot recolor them) — that is exactly what the existing
+    //    P5 GLES shader / FFmpeg color path converts for display, so P5→8.1
+    //    and the P5 color converter compose rather than conflict.
+    //
+    // This mirrors dovi_tool's `convert --mode 2` (To81) field-for-field:
+    // same header/mapping/DM bit layouts (ITU-T H.265 / Dolby Vision RPU),
+    // same CRC-32/MPEG-2 checksum recomputed over the rewritten payload.
+    // Any parse failure bails out and leaves the RPU untouched — a converted
+    // stream never carries a corrupt RPU, worst case it stays P7/P5.
+
+    private const val RPU_NUM_COMPONENTS = 3
+    private const val RPU_MMR_MAX_COEFFS = 7
+    private const val RPU_NLQ_NUM_PIVOTS = 2
+
+    /** Bit-level reader over an RPU payload (emulation-prevention bytes removed). */
+    private class RpuBitReader(private val data: ByteArray, private val bitLen: Int) {
+        var pos = 0
+            private set
+
+        fun bits(n: Int): Long? {
+            if (n < 0 || n > 32 || pos + n > bitLen) return null
+            var v = 0L
+            for (i in 0 until n) {
+                val byte = data[pos ushr 3].toInt() and 0xFF
+                val bit = (byte ushr (7 - (pos and 7))) and 1
+                v = (v shl 1) or bit.toLong()
+                pos++
+            }
+            return v
+        }
+
+        /** Unsigned Exp-Golomb (ue(v)). Returns null on overrun. */
+        fun ue(): Long? {
+            var zeros = 0
+            while (true) {
+                val b = bits(1) ?: return null
+                if (b == 1L) break
+                zeros++
+                if (zeros > 32) return null
+            }
+            val rest = bits(zeros) ?: return null
+            return (1L shl zeros) - 1L + rest
+        }
+
+        /** Signed Exp-Golomb (se(v)). Returns null on overrun. */
+        fun se(): Long? {
+            val ue = ue() ?: return null
+            return if (ue and 1L == 0L) -(ue ushr 1) else (ue + 1) ushr 1
+        }
+
+        fun skipAlignmentZeros(): Boolean {
+            while (pos and 7 != 0) {
+                val b = bits(1) ?: return false
+                if (b != 0L) return false
+            }
+            return true
+        }
+
+        /** Copies every remaining bit (up to the CRC region) into [w]. */
+        fun copyRemainingBitsTo(w: RpuBitWriter): Boolean {
+            while (pos < bitLen) {
+                val b = bits(1) ?: return false
+                w.writeBits(b, 1)
+            }
+            return true
+        }
+    }
+
+    /** Bit-level writer that packs bits into bytes (mirror of VpsBitWriter). */
+    private class RpuBitWriter {
+        private val out = ByteArrayOutputStream()
+        private var acc = 0
+        private var nBits = 0
+
+        fun writeBits(value: Long, n: Int) {
+            for (i in n - 1 downTo 0) {
+                acc = (acc shl 1) or (((value ushr i) and 1L).toInt())
+                nBits++
+                if (nBits == 8) {
+                    out.write(acc)
+                    acc = 0
+                    nBits = 0
+                }
+            }
+        }
+
+        fun writeUe(value: Long) {
+            if (value < 0) return
+            var zeros = 0
+            var t = value + 1
+            while (t > 1) {
+                zeros++
+                t = t ushr 1
+            }
+            writeBits(0, zeros)
+            writeBits(1, 1)
+            if (zeros > 0) writeBits(value - ((1L shl zeros) - 1), zeros)
+        }
+
+        fun writeSe(value: Long) {
+            if (value > 0) writeUe(value * 2 - 1) else writeUe(-value * 2)
+        }
+
+        fun byteAlign() {
+            if (nBits > 0) writeBits(0, 8 - nBits)
+        }
+
+        fun finish(): ByteArray {
+            byteAlign()
+            return out.toByteArray()
+        }
+    }
+
+    /** CRC-32/MPEG-2 (poly 0x04C11DB7, init 0xFFFFFFFF, MSB-first, no final XOR) over [from, to). */
+    private fun crc32Mpeg2(buf: ByteArray, from: Int, to: Int): Int {
+        var crc = 0xFFFFFFFF.toInt()
+        for (i in from until to) {
+            crc = crc xor ((buf[i].toInt() and 0xFF) shl 24)
+            for (b in 0 until 8) {
+                crc = if (crc and 0x80000000.toInt() != 0) {
+                    (crc shl 1) xor 0x04C11DB7
+                } else {
+                    crc shl 1
+                }
+            }
+        }
+        return crc
+    }
+
+    private class RpuHeaderFields {
+        var rpuType = 0L
+        var rpuFormat = 0L
+        var vdrRpuProfile = 0L
+        var vdrRpuLevel = 0L
+        var seqInfoPresent = false
+        var chromaResamplingExplicitFilterFlag = 0L
+        var coefficientDataType = 0L
+        var coefficientLog2Denom = 0L
+        var coefficientLog2DenomLength = 0L
+        var vdrRpuNormalizedIdc = 0L
+        var blVideoFullRangeFlag = 0L
+        var blBitDepthMinus8 = 0L
+        var elBitDepthMinus8Full = 0L
+        var elBitDepthMinus8Low = 0L
+        var vdrBitDepthMinus8 = 0L
+        var spatialResamplingFilterFlag = 0L
+        var reservedZero3Bits = 0L
+        var elSpatialResamplingFilterFlag = 0L
+        var disableResidualFlag = 1L
+        var vdrDmMetadataPresentFlag = 0L
+        var usePrevVdrRpuFlag = 0L
+        var prevVdrRpuId = 0L
+    }
+
+    private class RpuMappingPiece(
+        val mappingIdc: Long,
+        val polyOrderMinus1: Long,
+        val linearInterpFlag: Boolean,
+        val polyCoefInt: LongArray,
+        val polyCoef: LongArray,
+        val mmrOrderMinus1: Long,
+        val mmrConstantInt: Long,
+        val mmrConstant: Long,
+        val mmrCoefInt: Array<LongArray>,
+        val mmrCoef: Array<LongArray>
+    )
+
+    private class RpuMappingData(
+        val vdrRpuId: Long,
+        val mappingColorSpace: Long,
+        val mappingChromaFormatIdc: Long,
+        val numPivotsMinus2: Long,
+        val pivots: LongArray,
+        val pieces: List<RpuMappingPiece>,
+        val elTypeFel: Boolean
+    )
+
+    private class RpuDmData {
+        var compressed = false
+        var affectedDmMetadataId = 0L
+        var currentDmMetadataId = 0L
+        var sceneRefreshFlag = 0L
+        var yccToRgb = LongArray(9)
+        var yccOffsets = LongArray(3)
+        var rgbToLms = LongArray(9)
+        var signalEotf = 0L
+        var signalEotfParam0 = 0L
+        var signalEotfParam1 = 0L
+        var signalEotfParam2 = 0L
+        var signalBitDepth = 0L
+        var signalColorSpace = 0L
+        var signalChromaFormat = 0L
+        var signalFullRangeFlag = 0L
+        var sourceMinPq = 0L
+        var sourceMaxPq = 0L
+        var sourceDiagonal = 0L
+    }
+
+    /**
+     * Parses the RPU data header (format 1), mirroring dovi_tool's
+     * RpuDataHeader::parse. Returns null when the stream does not parse.
+     */
+    private fun parseRpuHeader(r: RpuBitReader): RpuHeaderFields? {
+        val h = RpuHeaderFields()
+        h.rpuType = r.bits(6) ?: return null
+        if (h.rpuType != 2L) return null
+        h.rpuFormat = r.bits(11) ?: return null
+        h.vdrRpuProfile = r.bits(4) ?: return null
+        h.vdrRpuLevel = r.bits(4) ?: return null
+        h.seqInfoPresent = r.bits(1) == 1L
+        if (h.seqInfoPresent) {
+            h.chromaResamplingExplicitFilterFlag = r.bits(1) ?: return null
+            h.coefficientDataType = r.bits(2) ?: return null
+            if (h.coefficientDataType == 0L) {
+                h.coefficientLog2Denom = r.ue() ?: return null
+            }
+            h.vdrRpuNormalizedIdc = r.bits(2) ?: return null
+            h.blVideoFullRangeFlag = r.bits(1) ?: return null
+            if ((h.rpuFormat and 0x700L) == 0L) {
+                h.blBitDepthMinus8 = r.ue() ?: return null
+                h.elBitDepthMinus8Full = r.ue() ?: return null
+                h.elBitDepthMinus8Low = h.elBitDepthMinus8Full and 0xFF
+                h.vdrBitDepthMinus8 = r.ue() ?: return null
+                h.spatialResamplingFilterFlag = r.bits(1) ?: return null
+                h.reservedZero3Bits = r.bits(3) ?: return null
+                h.elSpatialResamplingFilterFlag = r.bits(1) ?: return null
+                h.disableResidualFlag = r.bits(1) ?: return null
+            }
+            h.coefficientLog2DenomLength =
+                if (h.coefficientDataType == 0L) h.coefficientLog2Denom else 32L
+        }
+        h.vdrDmMetadataPresentFlag = r.bits(1) ?: return null
+        h.usePrevVdrRpuFlag = r.bits(1) ?: return null
+        if (h.usePrevVdrRpuFlag == 1L) {
+            h.prevVdrRpuId = r.ue() ?: return null
+        }
+        return h
+    }
+
+    /** Parses rpu_data_mapping (and its NLQ section), mirroring dovi_tool. */
+    private fun parseRpuMapping(
+        r: RpuBitReader,
+        h: RpuHeaderFields,
+        blBitDepth: Long
+    ): RpuMappingData? {
+        val vdrRpuId = r.ue() ?: return null
+        val colorSpace = r.ue() ?: return null
+        val chromaFormat = r.ue() ?: return null
+        val numPivotsMinus2 = r.ue() ?: return null
+        val numPivots = numPivotsMinus2 + 2
+        if (numPivots > 64) return null
+        val pivots = LongArray(numPivots.toInt())
+        for (i in pivots.indices) {
+            pivots[i] = r.bits(blBitDepth.toInt()) ?: return null
+        }
+        var nlqMethodIdc: Long? = null
+        if ((h.rpuFormat and 0x700L) == 0L && h.disableResidualFlag == 0L) {
+            nlqMethodIdc = r.bits(3) ?: return null
+            // nlq_num_pivots_minus2 is fixed 0 in dovi_tool; two pivot values follow.
+            for (i in 0 until RPU_NLQ_NUM_PIVOTS) {
+                if (r.bits(blBitDepth.toInt()) == null) return null
+            }
+        }
+        val numX = r.ue() ?: return null
+        val numY = r.ue() ?: return null
+        val cdt = h.coefficientDataType
+        val coeffLen = h.coefficientLog2DenomLength.toInt()
+        val pieces = ArrayList<RpuMappingPiece>()
+        for (cmp in 0 until RPU_NUM_COMPONENTS) {
+            for (piece in 0 until (numPivotsMinus2 + 1).toInt()) {
+                val mappingIdc = r.ue() ?: return null
+                if (mappingIdc == 0L) {
+                    val order = r.ue() ?: return null
+                    if (order > 1) return null
+                    val linear = order == 0L && r.bits(1) == 1L
+                    val coefCount = (order + 2).toInt()
+                    val coefInt = LongArray(coefCount)
+                    val coef = LongArray(coefCount)
+                    for (j in 0 until coefCount) {
+                        coefInt[j] = if (cdt == 0L) r.se() ?: return null else 0L
+                        coef[j] = r.bits(coeffLen) ?: return null
+                    }
+                    pieces.add(
+                        RpuMappingPiece(
+                            mappingIdc, order, linear, coefInt, coef,
+                            0, 0, 0, emptyArray(), emptyArray()
+                        )
+                    )
+                } else if (mappingIdc == 1L) {
+                    val mmrOrder = r.bits(2) ?: return null
+                    if (mmrOrder > 2) return null
+                    val constInt = if (cdt == 0L) r.se() ?: return null else 0L
+                    val constant = r.bits(coeffLen) ?: return null
+                    val rows = (mmrOrder + 1).toInt()
+                    val coefInt = Array(rows) { LongArray(RPU_MMR_MAX_COEFFS) }
+                    val coef = Array(rows) { LongArray(RPU_MMR_MAX_COEFFS) }
+                    for (j in 0 until rows) {
+                        for (k in 0 until RPU_MMR_MAX_COEFFS) {
+                            coefInt[j][k] = if (cdt == 0L) r.se() ?: return null else 0L
+                            coef[j][k] = r.bits(coeffLen) ?: return null
+                        }
+                    }
+                    pieces.add(
+                        RpuMappingPiece(
+                            mappingIdc, 0, false, LongArray(0), LongArray(0),
+                            mmrOrder, constInt, constant, coefInt, coef
+                        )
+                    )
+                } else {
+                    return null
+                }
+            }
+        }
+        // NLQ residual data (Profile 7 FEL only). MEL RPUs have all-zero
+        // parameters; FEL have real residuals — matching dovi_tool's
+        // RpuDataNlq::is_mel / el_type() distinction.
+        var elTypeFel = false
+        if (nlqMethodIdc != null) {
+            val elBitDepth = (h.elBitDepthMinus8Low + 8).toInt()
+            var allMel = true
+            for (cmp in 0 until RPU_NUM_COMPONENTS) {
+                val nlqOffset = r.bits(elBitDepth) ?: return null
+                val vdrInMaxInt = if (cdt == 0L) r.ue() ?: return null else 0L
+                val vdrInMax = r.bits(coeffLen) ?: return null
+                if (nlqMethodIdc == 0L) {
+                    val slopeInt = if (cdt == 0L) r.ue() ?: return null else 0L
+                    val slope = r.bits(coeffLen) ?: return null
+                    val thresholdInt = if (cdt == 0L) r.ue() ?: return null else 0L
+                    val threshold = r.bits(coeffLen) ?: return null
+                    if (nlqOffset != 0L || vdrInMaxInt != 1L || vdrInMax != 0L ||
+                        slopeInt != 0L || slope != 0L || thresholdInt != 0L || threshold != 0L
+                    ) {
+                        allMel = false
+                    }
+                } else {
+                    allMel = false
+                }
+            }
+            elTypeFel = !allMel
+        }
+        // numX/numY are parsed for resync only; the conversion forces them to 0.
+        return RpuMappingData(vdrRpuId, colorSpace, chromaFormat, numPivotsMinus2, pivots, pieces, elTypeFel)
+    }
+
+    /** Parses the fixed vdr_dm_data fields (extension blocks ride in "remaining"). */
+    private fun parseRpuDm(r: RpuBitReader, h: RpuHeaderFields): RpuDmData? {
+        val d = RpuDmData()
+        d.compressed = h.reservedZero3Bits == 1L
+        d.affectedDmMetadataId = r.ue() ?: return null
+        d.currentDmMetadataId = r.ue() ?: return null
+        d.sceneRefreshFlag = r.ue() ?: return null
+        if (!d.compressed) {
+            for (i in 0..8) d.yccToRgb[i] = r.bits(16) ?: return null
+            for (i in 0..2) d.yccOffsets[i] = r.bits(32) ?: return null
+            for (i in 0..8) d.rgbToLms[i] = r.bits(16) ?: return null
+            d.signalEotf = r.bits(16) ?: return null
+            d.signalEotfParam0 = r.bits(16) ?: return null
+            d.signalEotfParam1 = r.bits(16) ?: return null
+            d.signalEotfParam2 = r.bits(32) ?: return null
+            d.signalBitDepth = r.bits(5) ?: return null
+            d.signalColorSpace = r.bits(2) ?: return null
+            d.signalChromaFormat = r.bits(2) ?: return null
+            d.signalFullRangeFlag = r.bits(2) ?: return null
+            d.sourceMinPq = r.bits(12) ?: return null
+            d.sourceMaxPq = r.bits(12) ?: return null
+            d.sourceDiagonal = r.bits(10) ?: return null
+        }
+        return d
+    }
+
+    private fun writeRpuHeader(w: RpuBitWriter, h: RpuHeaderFields, isP5: Boolean, isP7: Boolean) {
+        w.writeBits(h.rpuType, 6)
+        w.writeBits(h.rpuFormat, 11)
+        w.writeBits(if (isP5) 1L else h.vdrRpuProfile, 4)
+        w.writeBits(h.vdrRpuLevel, 4)
+        w.writeBits(if (h.seqInfoPresent) 1L else 0L, 1)
+        if (h.seqInfoPresent) {
+            w.writeBits(h.chromaResamplingExplicitFilterFlag, 1)
+            w.writeBits(h.coefficientDataType, 2)
+            if (h.coefficientDataType == 0L) w.writeUe(h.coefficientLog2Denom)
+            w.writeBits(h.vdrRpuNormalizedIdc, 2)
+            w.writeBits(if (isP5) 0L else h.blVideoFullRangeFlag, 1)
+            if ((h.rpuFormat and 0x700L) == 0L) {
+                w.writeUe(h.blBitDepthMinus8)
+                w.writeUe(h.elBitDepthMinus8Full)
+                w.writeUe(h.vdrBitDepthMinus8)
+                w.writeBits(h.spatialResamplingFilterFlag, 1)
+                w.writeBits(h.reservedZero3Bits, 3)
+                w.writeBits(if (isP7) 0L else h.elSpatialResamplingFilterFlag, 1)
+                w.writeBits(if (isP7) 1L else h.disableResidualFlag, 1)
+            }
+        }
+        w.writeBits(h.vdrDmMetadataPresentFlag, 1)
+        w.writeBits(h.usePrevVdrRpuFlag, 1)
+        if (h.usePrevVdrRpuFlag == 1L) w.writeUe(h.prevVdrRpuId)
+    }
+
+    /** The fixed no-op mapping dovi_tool writes for 8.1 (set_empty_p81_mapping). */
+    private fun writeEmptyP81Mapping(
+        w: RpuBitWriter,
+        h: RpuHeaderFields,
+        blBitDepth: Long,
+        vdrRpuId: Long,
+        colorSpace: Long,
+        chromaFormat: Long
+    ) {
+        val cdt = h.coefficientDataType
+        val coeffLen = h.coefficientLog2DenomLength.toInt()
+        w.writeUe(vdrRpuId)
+        w.writeUe(colorSpace)
+        w.writeUe(chromaFormat)
+        for (cmp in 0 until RPU_NUM_COMPONENTS) {
+            w.writeUe(0) // num_pivots_minus2
+            w.writeBits(0, blBitDepth.toInt())
+            w.writeBits(1023, blBitDepth.toInt())
+        }
+        // No NLQ section: disable_residual_flag is now 1.
+        w.writeUe(0) // num_x_partitions_minus1
+        w.writeUe(0) // num_y_partitions_minus1
+        for (cmp in 0 until RPU_NUM_COMPONENTS) {
+            w.writeUe(0) // mapping_idc = polynomial
+            w.writeUe(0) // poly_order_minus1
+            w.writeBits(0, 1) // linear_interp_flag
+            // coef_int [0, 1], coef [0, 0] (identity polynomial)
+            if (cdt == 0L) w.writeSe(0)
+            w.writeBits(0, coeffLen)
+            if (cdt == 0L) w.writeSe(1)
+            w.writeBits(0, coeffLen)
+        }
+    }
+
+    /** Re-emits a parsed mapping with partitions forced to 0 (dovi_tool convert_to_p81). */
+    private fun writeMappingPreserved(
+        w: RpuBitWriter,
+        h: RpuHeaderFields,
+        m: RpuMappingData,
+        blBitDepth: Long
+    ) {
+        val cdt = h.coefficientDataType
+        val coeffLen = h.coefficientLog2DenomLength.toInt()
+        w.writeUe(m.vdrRpuId)
+        w.writeUe(m.mappingColorSpace)
+        w.writeUe(m.mappingChromaFormatIdc)
+        w.writeUe(m.numPivotsMinus2)
+        for (p in m.pivots) w.writeBits(p, blBitDepth.toInt())
+        w.writeUe(0)
+        w.writeUe(0)
+        for (piece in m.pieces) {
+            w.writeUe(piece.mappingIdc)
+            if (piece.mappingIdc == 0L) {
+                w.writeUe(piece.polyOrderMinus1)
+                if (piece.polyOrderMinus1 == 0L) {
+                    w.writeBits(if (piece.linearInterpFlag) 1L else 0L, 1)
+                }
+                for (j in piece.polyCoefInt.indices) {
+                    if (cdt == 0L) w.writeSe(piece.polyCoefInt[j])
+                    w.writeBits(piece.polyCoef[j], coeffLen)
+                }
+            } else {
+                w.writeBits(piece.mmrOrderMinus1, 2)
+                if (cdt == 0L) w.writeSe(piece.mmrConstantInt)
+                w.writeBits(piece.mmrConstant, coeffLen)
+                for (j in 0 until piece.mmrCoefInt.size) {
+                    for (k in 0 until RPU_MMR_MAX_COEFFS) {
+                        if (cdt == 0L) w.writeSe(piece.mmrCoefInt[j][k])
+                        w.writeBits(piece.mmrCoef[j][k], coeffLen)
+                    }
+                }
+            }
+        }
+    }
+
+    /** Fixed DM fields with the standard 8.1 (BT.2020) coefficients (set_p81_coeffs). */
+    private fun writeRpuDm(w: RpuBitWriter, d: RpuDmData) {
+        w.writeUe(d.affectedDmMetadataId)
+        w.writeUe(d.currentDmMetadataId)
+        w.writeUe(d.sceneRefreshFlag)
+        if (!d.compressed) {
+            val ycc = longArrayOf(9574, 0, 13802, 9574, -1540, -5348, 9574, 17610, 0)
+            val off = longArrayOf(16777216, 134217728, 134217728)
+            val lms = longArrayOf(7222, 8771, 390, 2654, 12430, 1300, 0, 422, 15962)
+            for (v in ycc) w.writeBits(v, 16)
+            for (v in off) w.writeBits(v, 32)
+            for (v in lms) w.writeBits(v, 16)
+            w.writeBits(d.signalEotf, 16)
+            w.writeBits(d.signalEotfParam0, 16)
+            w.writeBits(d.signalEotfParam1, 16)
+            w.writeBits(d.signalEotfParam2, 32)
+            w.writeBits(d.signalBitDepth, 5)
+            w.writeBits(0, 2) // signal_color_space = 0 (8.1)
+            w.writeBits(d.signalChromaFormat, 2)
+            w.writeBits(d.signalFullRangeFlag, 2)
+            w.writeBits(d.sourceMinPq, 12)
+            w.writeBits(d.sourceMaxPq, 12)
+            w.writeBits(d.sourceDiagonal, 10)
+        }
+    }
+
+    /**
+     * Converts one RPU payload (EPB removed, incl. the 0x19 prefix) to
+     * Profile 8.1 per dovi_tool `convert --mode 2`. Returns the rewritten
+     * payload with a recomputed CRC-32/MPEG-2, or null when the RPU is not
+     * P5/P7 or does not parse (caller keeps the original).
+     */
+    internal fun convertRpuPayloadTo81(rbsp: ByteArray): ByteArray? {
+        if (rbsp.size < 25) return null
+        var trailingZeros = 0
+        var i = rbsp.size - 1
+        while (i >= 0 && rbsp[i].toInt() == 0) {
+            trailingZeros++
+            i--
+        }
+        val rpuEnd = rbsp.size - trailingZeros
+        if (rpuEnd < 7) return null
+        if (rbsp[rpuEnd - 1].toInt() != 0x80) return null
+        val crcStart = rpuEnd - 5
+        if (crcStart <= 1) return null
+
+        val r = RpuBitReader(rbsp, crcStart * 8)
+        if (r.bits(8) != 25L) return null
+        val h = parseRpuHeader(r) ?: return null
+
+        val isP5 = h.seqInfoPresent && h.vdrRpuProfile == 0L && h.blVideoFullRangeFlag == 1L
+        val isP7 = h.seqInfoPresent && h.vdrRpuProfile == 1L &&
+            h.elSpatialResamplingFilterFlag == 1L && h.disableResidualFlag == 0L &&
+            h.vdrBitDepthMinus8 == 4L && (h.rpuFormat and 0x700L) == 0L
+        if (!isP5 && !isP7) return null
+
+        val blBitDepth = h.blBitDepthMinus8 + 8
+        var mapping: RpuMappingData? = null
+        if (h.usePrevVdrRpuFlag == 0L) {
+            mapping = parseRpuMapping(r, h, blBitDepth) ?: return null
+        }
+        var dm: RpuDmData? = null
+        if (h.vdrDmMetadataPresentFlag == 1L) {
+            dm = parseRpuDm(r, h) ?: return null
+        }
+        if (!r.skipAlignmentZeros()) return null
+
+        val w = RpuBitWriter()
+        w.writeBits(0x19L, 8) // rpu_nal_prefix
+        writeRpuHeader(w, h, isP5 = isP5, isP7 = isP7)
+        if (h.usePrevVdrRpuFlag == 0L && mapping != null) {
+            val replaceMapping = isP5 || mapping.elTypeFel
+            if (replaceMapping) {
+                writeEmptyP81Mapping(
+                    w, h, blBitDepth,
+                    mapping.vdrRpuId, mapping.mappingColorSpace, mapping.mappingChromaFormatIdc
+                )
+            } else {
+                writeMappingPreserved(w, h, mapping, blBitDepth)
+            }
+        }
+        if (dm != null) writeRpuDm(w, dm)
+        if (!r.copyRemainingBitsTo(w)) return null
+        w.byteAlign()
+        val payload = w.finish()
+        val crc = crc32Mpeg2(payload, 1, payload.size)
+        val out = ByteArrayOutputStream(payload.size + 5 + trailingZeros)
+        out.write(payload, 0, payload.size)
+        out.write((crc ushr 24).toInt() and 0xFF)
+        out.write((crc ushr 16).toInt() and 0xFF)
+        out.write((crc ushr 8).toInt() and 0xFF)
+        out.write(crc and 0xFF)
+        out.write(0x80)
+        repeat(trailingZeros) { out.write(0) }
+        return out.toByteArray()
+    }
+
+    /**
+     * Rewrites one RPU NAL (NAL header at [from], NAL end at [to]) to
+     * Profile 8.1, handling emulation-prevention bytes. Returns the rewritten
+     * RBSP-with-EPB (ready to splice after the 2-byte NAL header), or null
+     * when the RPU is not P5/P7 or cannot be converted.
+     */
+    fun rewriteRpuTo81(buf: ByteArray, from: Int, to: Int): ByteArray? {
+        if (to - from < 4) return null
+        val rbsp = removeEmulationPrevention(buf, from + 2, to)
+        val converted = convertRpuPayloadTo81(rbsp) ?: return null
+        return addEmulationPrevention(converted)
+    }
+
+    /**
+     * 8.1 transform for Annex-B samples: rewrites every P5/P7 RPU to Profile
+     * 8.1, rewrites the VPS to a single-layer parameter set, drops the
+     * enhancement layer (NAL 63 / layerId &gt; 0) and, per toggle, HDR10+ SEIs.
+     * Returns the new length, or -1 when nothing changed.
+     */
+    fun transformAnnexBTo81(
+        buf: ByteArray,
+        length: Int,
+        stripHdr10Plus: Boolean,
+        stats: StripStats?
+    ): Int {
+        if (length < 5) return -1
+        var write = 0
+        var read = 0
+        var changed = false
+        while (read < length) {
+            val code = indexOfStartCode(buf, read, length)
+            if (code < 0) {
+                if (write != read) System.arraycopy(buf, read, buf, write, length - read)
+                write += length - read
+                break
+            }
+            val codeLen =
+                if (code + 3 < length && buf[code + 2].toInt() == 0 && buf[code + 3].toInt() == 1) 4 else 3
+            val header = code + codeLen
+            var nalEnd = indexOfStartCode(buf, header, length)
+            if (nalEnd < 0) nalEnd = length
+            val nalBytes = nalEnd - header
+            var keep = true
+            if (nalBytes >= 2) {
+                val b0 = buf[header].toInt() and 0xFF
+                val b1 = buf[header + 1].toInt() and 0xFF
+                val nalType = (b0 ushr 1) and 0x3F
+                val layerId = ((b0 and 0x01) shl 5) or ((b1 and 0xF8) ushr 3)
+                when {
+                    nalType == NAL_VPS -> {
+                        val rewritten = rewriteVpsToHdr10(buf, header + 2, nalEnd)
+                        if (rewritten != null) {
+                            changed = true
+                            stats?.vpsRewritten = true
+                            System.arraycopy(buf, code, buf, write, codeLen)
+                            System.arraycopy(buf, header, buf, write + codeLen, 2)
+                            System.arraycopy(rewritten, 0, buf, write + codeLen + 2, rewritten.size)
+                            write += codeLen + 2 + rewritten.size
+                            keep = false
+                        }
+                    }
+                    nalType == NAL_DV_RPU -> {
+                        val rewritten = rewriteRpuTo81(buf, header, nalEnd)
+                        if (rewritten != null) {
+                            changed = true
+                            stats?.rpuRewritten = (stats?.rpuRewritten ?: 0) + 1
+                            System.arraycopy(buf, code, buf, write, codeLen)
+                            System.arraycopy(buf, header, buf, write + codeLen, 2)
+                            System.arraycopy(rewritten, 0, buf, write + codeLen + 2, rewritten.size)
+                            write += codeLen + 2 + rewritten.size
+                            keep = false
+                        }
+                    }
+                    nalType == NAL_DV_EL || layerId > 0 -> {
+                        keep = false
+                        changed = true
+                        if (stats != null) stats.elBytes += nalBytes
+                    }
+                    nalType == NAL_PREFIX_SEI && stripHdr10Plus &&
+                        seiCarriesHdr10Plus(buf, header + 2, nalEnd) -> {
+                        keep = false
+                        changed = true
+                        if (stats != null) stats.hdr10PlusBytes += nalBytes
+                    }
+                }
+            }
+            if (keep) {
+                if (write != read) System.arraycopy(buf, read, buf, write, nalEnd - read)
+                write += nalEnd - read
+            }
+            read = nalEnd
+        }
+        return if (changed) write else -1
+    }
+
+    /**
+     * Length-delimited (MP4/fMP4) counterpart of [transformAnnexBTo81].
+     * Malformed samples are forwarded untouched.
+     */
+    fun transformLengthDelimitedTo81(
+        buf: ByteArray,
+        length: Int,
+        nalLengthFieldLength: Int,
+        stripHdr10Plus: Boolean,
+        stats: StripStats?
+    ): Int {
+        val fieldLen = nalLengthFieldLength.coerceIn(1, 4)
+        if (length <= fieldLen) return -1
+        var p = 0
+        while (p + fieldLen <= length) {
+            val nal = readLength(buf, p, fieldLen)
+            if (nal <= 0 || p + fieldLen + nal > length) return -1
+            p += fieldLen + nal
+        }
+        if (p != length) return -1
+
+        var write = 0
+        var read = 0
+        var changed = false
+        while (read + fieldLen <= length) {
+            val nal = readLength(buf, read, fieldLen)
+            val payload = read + fieldLen
+            var keep = true
+            if (nal >= 2) {
+                val b0 = buf[payload].toInt() and 0xFF
+                val b1 = buf[payload + 1].toInt() and 0xFF
+                val nalType = (b0 ushr 1) and 0x3F
+                val layerId = ((b0 and 0x01) shl 5) or ((b1 and 0xF8) ushr 3)
+                when {
+                    nalType == NAL_VPS -> {
+                        val rewritten = rewriteVpsToHdr10(buf, payload + 2, payload + nal)
+                        if (rewritten != null) {
+                            changed = true
+                            stats?.vpsRewritten = true
+                            writeLength(buf, write, rewritten.size + 2, fieldLen)
+                            System.arraycopy(buf, payload, buf, write + fieldLen, 2)
+                            System.arraycopy(rewritten, 0, buf, write + fieldLen + 2, rewritten.size)
+                            write += fieldLen + 2 + rewritten.size
+                            keep = false
+                        }
+                    }
+                    nalType == NAL_DV_RPU -> {
+                        val rewritten = rewriteRpuTo81(buf, payload, payload + nal)
+                        if (rewritten != null) {
+                            changed = true
+                            stats?.rpuRewritten = (stats?.rpuRewritten ?: 0) + 1
+                            writeLength(buf, write, rewritten.size + 2, fieldLen)
+                            System.arraycopy(buf, payload, buf, write + fieldLen, 2)
+                            System.arraycopy(rewritten, 0, buf, write + fieldLen + 2, rewritten.size)
+                            write += fieldLen + 2 + rewritten.size
+                            keep = false
+                        }
+                    }
+                    nalType == NAL_DV_EL || layerId > 0 -> {
+                        keep = false
+                        changed = true
+                        if (stats != null) stats.elBytes += nal
+                    }
+                    nalType == NAL_PREFIX_SEI && stripHdr10Plus &&
+                        nal >= 4 && seiCarriesHdr10Plus(buf, payload + 2, payload + nal) -> {
+                        keep = false
+                        changed = true
+                        if (stats != null) stats.hdr10PlusBytes += nal
+                    }
+                }
+            }
+            if (keep) {
+                if (write != read) System.arraycopy(buf, read, buf, write, fieldLen + nal)
+                write += fieldLen + nal
+            }
+            read += fieldLen + nal
+        }
+        return if (changed) write else -1
     }
 }

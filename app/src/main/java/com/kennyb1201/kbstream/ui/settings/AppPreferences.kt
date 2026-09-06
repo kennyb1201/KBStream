@@ -184,6 +184,12 @@ object AppPreferences {
     // 3 = All: rewrite every DV profile — 4/5/7/8 — for TVs without Dolby
     //     Vision. P5 is a best-effort plain-HEVC fallback (no HDR10 base,
     //     colors may be off).
+    // 4 = 8.1: convert P5 and P7 to Profile 8.1 in the bitstream (RPU
+    //     metadata rewritten per dovi_tool convert mode 2, enhancement layer
+    //     dropped, single-layer VPS, codec dvhe/dvh1.08) for Dolby Vision
+    //     displays that accept 8.1 but not Blu-ray P7 or ICtCp P5. P4/P8 pass
+    //     through untouched as native DV. P5 pixels stay ICtCp in the stream —
+    //     the GLES shader / FFmpeg color path converts them for display.
     // HDR10+ (ST 2094-40) stripping is a separate toggle: getStripHdr10Plus.
     const val DV_COMPAT_AUTO = 0
     const val DV_COMPAT_OFF = 1
@@ -192,6 +198,7 @@ object AppPreferences {
     // HDR10+ strip toggle turned on.
     const val DV_COMPAT_AUTO_HDR10_PLUS_LEGACY = 2
     const val DV_COMPAT_ALL = 3
+    const val DV_COMPAT_TO_81 = 4
 
     fun getDvCompatMode(context: Context): Int {
         val p = prefs(context)
