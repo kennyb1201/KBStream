@@ -55,6 +55,27 @@ internal object DolbyVisionCompat {
     /** P5 (single-layer ICtCp) codec pattern: dvhe.05.xxxx or dvh1.05.xxxx. */
     private val DV_CODEC_PROFILE_5 = Regex("(?i)^(dvhe|dvh1)\\.0*5\\..+$")
 
+    /**
+     * Single-layer profiles whose base layer is already standard HDR10 HEVC
+     * (dvhe.04 / dvh1.04, dvhe.08 / dvh1.08 web encodes). Unlike Profile 7
+     * (dual-layer Blu-ray remuxes) there is no enhancement layer that must be
+     * removed, and unlike Profile 5 the pixels are not ICtCp — the stream
+     * decodes as plain HDR10 the moment the decoder ignores the in-band RPU
+     * NALs, which is exactly what other players feed the hardware decoder.
+     */
+    private val DV_CODEC_HDR10_BASE_LAYER = Regex("(?i)^(dvhe|dvh1)\\.0*[48]\\..+$")
+
+    /**
+     * True when the codec string declares a single-layer DV profile with a
+     * standard HDR10 base layer (Profile 4 or Profile 8). Such streams play as
+     * plain HDR10 without any NAL stripping or codec rewriting — mutating them
+     * is what some hardware decoders choke on (configure OK, never output).
+     */
+    fun isHdr10BaseLayerProfile(codecs: String?): Boolean {
+        if (codecs.isNullOrBlank()) return false
+        return DV_CODEC_HDR10_BASE_LAYER.containsMatchIn(codecs.trim())
+    }
+
     /** Generic Main10@L5.1 HEVC identifier describing the stripped base layer. */
     const val HDR10_CODEC: String = "hvc1.2.4.L153.B0"
 

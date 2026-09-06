@@ -39,8 +39,11 @@ import java.io.EOFException
  * [dvRewriteEnabled] is set (DV mode Auto or "All DV"). In Auto mode only
  * Profile 7 qualifies (every other DV profile is passed through so DV displays
  * get the real thing); with [convertAllProfiles] set ("All DV") every profile
- * — 4/5/7/8 — is rewritten for displays without Dolby Vision (P5 has no HDR10
- * base, so that one is a best-effort plain-HEVC fallback). Tracks reported as
+ * — 4/5/7/8 — is converted for displays without Dolby Vision. Profiles 4/8
+ * already carry a standard HDR10 base layer, so they are only re-advertised
+ * as hvc1 and passed through bit-exact (mutating them is what some decoders
+ * choke on); P5 has no HDR10 base, so it stays a best-effort plain-HEVC
+ * fallback that the GLES shader / FFmpeg path color-corrects. Tracks reported as
  * plain HEVC (hvc1/hev1 — muxers that omitted the dvcc marker) are sniffed
  * over the first samples: in-band RPU NALs engage the same strip (DV remuxes,
  * when DV conversion is enabled), and with [stripHdr10Plus] set, ST 2094-40
@@ -198,11 +201,38 @@ private class VideoCompatTrackOutput(
             } else {
                 null
             }
+        // Profiles 4/8 are single-layer streams whose base layer is already
+        // standard HDR10 HEVC. Rewriting the VPS or stripping the in-band
+        // RPU/SEI NALs is exactly what some hardware decoders choke on (they
+        // configure fine but never output a frame), while other players feed
+        // the identical untouched stream to the same decoder and it plays.
+        // So for these profiles: re-advertise as plain HEVC for decoder
+        // matching and forward every sample bit-exact.
+        if (dvRewrite != null && DolbyVisionCompat.isHdr10BaseLayerProfile(format.codecs)) {
+            Log.i(
+                "PLAYER_DV",
+                "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — HDR10 base layer, passing stream through untouched"
+            )
+            var builder = format.buildUpon().setCodecs(dvRewrite)
+            // Keep the original declared DV codec (e.g. "dvhe.08.06") on the
+            // label so the player UI can badge the profile playing as HDR10.
+            if (!format.codecs.isNullOrBlank()) {
+                builder = builder.setLabel(format.codecs)
+            }
+            if (format.sampleMimeType == MimeTypes.VIDEO_DOLBY_VISION) {
+                builder = builder.setSampleMimeType(MimeTypes.VIDEO_H265)
+            }
+            delegate.format(builder.build())
+            mode = Mode.NORMAL
+            return
+        }
         mode = when {
             // Declared Dolby Vision (dvcc present) with DV conversion enabled:
             // Auto rewrites only Profile 7, "All DV" rewrites every profile
             // (4/5/7/8). Strip from the first sample and rewrite the codec
-            // string so Media3 never queries a DV decoder.
+            // string so Media3 never queries a DV decoder. P5 (ICtCp) keeps
+            // this path: its pixels are not HDR10, so the downstream GLES
+            // shader / FFmpeg conversion needs the rewritten stream.
             dvRewrite != null -> Mode.STRIPPING
             // No DV marker in the codec string — plain HEVC might still carry
             // in-band RPU when the muxer omitted the dvcc box (remuxes). Sniff

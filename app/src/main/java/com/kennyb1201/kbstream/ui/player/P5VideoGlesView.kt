@@ -4,6 +4,8 @@ import android.content.Context
 import android.graphics.SurfaceTexture
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
+import android.os.Handler
+import android.os.Looper
 import android.util.AttributeSet
 import android.view.Surface
 import androidx.media3.exoplayer.ExoPlayer
@@ -23,6 +25,12 @@ import javax.microedition.khronos.opengles.GL10
  *                               GLSurfaceView.Renderer with P5ColorShader
  *                                                           ↓
  *                                                       Screen
+ *
+ * Threading: the SurfaceTexture is created on the GL thread, but ExoPlayer
+ * requires every player call on the thread the player was created on (main).
+ * All setVideoSurface/prepare calls are therefore funneled through
+ * [mainHandler]; the attach/prepare flags make delivery order-independent
+ * between [setPlayer] (main) and [onSurfaceCreated] (GL thread).
  */
 class P5VideoGlesView(
     context: Context,
@@ -30,11 +38,16 @@ class P5VideoGlesView(
 ) : GLSurfaceView(context, attrs), GLSurfaceView.Renderer, SurfaceTexture.OnFrameAvailableListener {
 
     private var player: ExoPlayer? = null
+    // Written on the GL thread; read on main only to seed attach() after
+    // setPlayer(), where the GL-thread post already ran.
     private var surfaceTexture: SurfaceTexture? = null
     private var videoSurface: Surface? = null
-    // Set when setPlayer() ran before the GL surface existed; onSurfaceCreated
-    // then calls prepare() once the decoder has a Surface to output into.
-    private var pendingPrepare = false
+    private val mainHandler = Handler(Looper.getMainLooper())
+    // Main-thread only: which player/surface have been delivered, and whether
+    // prepare() has been delivered for the current player.
+    private var attachedPlayer: ExoPlayer? = null
+    private var attachedSurface: Surface? = null
+    private var prepareDelivered = false
 
     init {
         setEGLContextClientVersion(2)
@@ -51,14 +64,15 @@ class P5VideoGlesView(
         // Create the SurfaceTexture on the GL thread using the shader's OES
         // texture, so decoder frames land in the exact texture the conversion
         // shader samples.
-        surfaceTexture = SurfaceTexture(P5ColorShader.getTextureId())
-        videoSurface = Surface(surfaceTexture)
-        surfaceTexture?.setOnFrameAvailableListener(this)
-        player?.setVideoSurface(videoSurface)
-        if (pendingPrepare) {
-            pendingPrepare = false
-            player?.prepare()
-        }
+        val st = SurfaceTexture(P5ColorShader.getTextureId())
+        surfaceTexture = st
+        val surface = Surface(st)
+        videoSurface = surface
+        st.setOnFrameAvailableListener(this)
+        // New EGL surface → the player must be re-pointed at it. Hand the
+        // player calls off to the main thread (post establishes a happens-
+        // before edge, so the player/prepare state read inside is safe).
+        mainHandler.post { attach(surface) }
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
@@ -94,25 +108,37 @@ class P5VideoGlesView(
 
     fun setPlayer(player: ExoPlayer) {
         this.player = player
+        prepareDelivered = false
         // If the GL surface already exists, attach and start immediately;
-        // otherwise onSurfaceCreated (GL thread) attaches and calls prepare
-        // once the SurfaceTexture is live. prepare() is only called from the
-        // view because the activity's non-GLES branch owns its own prepare.
-        if (videoSurface != null) {
-            player.setVideoSurface(videoSurface)
-            player.prepare()
-        } else {
-            pendingPrepare = true
-        }
+        // otherwise onSurfaceCreated (GL thread) creates it and posts the same
+        // attach() here on main. prepare() is only called from the view
+        // because the activity's non-GLES branch owns its own prepare.
+        videoSurface?.let { attach(it) }
     }
 
     fun release() {
         // Detach only — the activity owns the player lifecycle and releases it.
         player?.setVideoSurface(null)
         player = null
-        pendingPrepare = false
+        attachedPlayer = null
+        attachedSurface = null
+        prepareDelivered = false
         surfaceTexture?.release()
         surfaceTexture = null
         videoSurface = null
+    }
+
+    /** Main-thread only: deliver the surface and one prepare() to the player. */
+    private fun attach(surface: Surface) {
+        val p = player ?: return
+        if (attachedPlayer !== p || attachedSurface !== surface) {
+            attachedPlayer = p
+            attachedSurface = surface
+            p.setVideoSurface(surface)
+        }
+        if (!prepareDelivered) {
+            prepareDelivered = true
+            p.prepare()
+        }
     }
 }
