@@ -1,5 +1,7 @@
 package com.kennyb1201.kbstream.ui.player
 
+import java.io.ByteArrayOutputStream
+
 /**
  * On-the-fly Dolby Vision -> HDR10 compatibility stripping.
  *
@@ -381,6 +383,487 @@ internal object DolbyVisionCompat {
             read += fieldLen + nal
         }
         return if (changed) write else -1
+    }
+
+    /**
+     * Aggregate strip/rewrite counters for one stream's first processed sample,
+     * used to report exactly what was removed so device quirks stay diagnosable.
+     */
+    internal class StripStats {
+        var rpuBytes = 0
+        var elBytes = 0
+        var hdr10PlusBytes = 0
+        var vpsRewritten = false
+    }
+
+    // ── VPS rewriting ──────────────────────────────────────────────────────
+    // Dolby Vision HEVC streams advertise themselves through a VPS extension
+    // (vps_extension_flag + Dolby Vision signaling). Once the RPU / EL NALs are
+    // stripped, a decoder that keys off that extension sits in "DV mode" waiting
+    // for RPUs that will never arrive — MediaTek-class decoders in particular
+    // stall completely (input frames in, zero output). Rewriting the VPS to a
+    // clean single-layer parameter set (extension removed, layer count forced to
+    // 1) is the companion step to the strip. Bit layouts mirror hevc_parser (the
+    // parser dovi_tool uses) — ITU-T H.265 7.3.2.1 / 7.3.3.
+
+    private const val NAL_VPS = 32
+
+    /** Bit-level reader over an RBSP (emulation-prevention bytes removed). */
+    private class VpsBitReader(private val data: ByteArray) {
+        var pos = 0
+        private val bitLen = data.size * 8
+
+        fun readBits(n: Int): Long {
+            if (pos + n > bitLen) return -1
+            var v = 0L
+            for (i in 0 until n) {
+                val byte = data[pos ushr 3].toInt() and 0xFF
+                val bit = (byte ushr (7 - (pos and 7))) and 1
+                v = (v shl 1) or bit.toLong()
+                pos++
+            }
+            return v
+        }
+
+        /** Unsigned Exp-Golomb (ue(v)). Returns -1 on overrun. */
+        fun readUe(): Long {
+            var zeros = 0
+            while (true) {
+                val b = readBits(1)
+                if (b == -1L) return -1
+                if (b == 1L) break
+                zeros++
+                if (zeros > 32) return -1
+            }
+            val rest = readBits(zeros)
+            if (rest == -1L) return -1
+            return (1L shl zeros) - 1L + rest
+        }
+
+        fun skipBits(n: Int): Boolean {
+            if (pos + n > bitLen) return false
+            pos += n
+            return true
+        }
+
+        /** Copies [from, to) bits into [out]; does not disturb the reader position. */
+        fun copyBits(from: Int, to: Int, out: VpsBitWriter): Boolean {
+            if (from < 0 || to > bitLen || from > to) return false
+            val saved = pos
+            pos = from
+            while (pos < to) {
+                val b = readBits(1)
+                if (b == -1L) {
+                    pos = saved
+                    return false
+                }
+                out.writeBits(b, 1)
+            }
+            pos = saved
+            return true
+        }
+    }
+
+    /** Bit-level writer that packs bits into bytes. */
+    private class VpsBitWriter {
+        private val out = ByteArrayOutputStream()
+        private var acc = 0
+        private var nBits = 0
+
+        fun writeBits(value: Long, n: Int) {
+            for (i in n - 1 downTo 0) {
+                acc = (acc shl 1) or (((value ushr i) and 1L).toInt())
+                nBits++
+                if (nBits == 8) {
+                    out.write(acc)
+                    acc = 0
+                    nBits = 0
+                }
+            }
+        }
+
+        fun finish(): ByteArray {
+            if (nBits > 0) {
+                out.write(acc shl (8 - nBits))
+                nBits = 0
+            }
+            return out.toByteArray()
+        }
+    }
+
+    /** Removes emulation-prevention bytes (0x03 after 0x00 0x00) from an RBSP slice. */
+    private fun removeEmulationPrevention(buf: ByteArray, from: Int, to: Int): ByteArray {
+        val out = ByteArrayOutputStream(to - from)
+        var i = from
+        while (i < to) {
+            val b = buf[i].toInt() and 0xFF
+            if (b == 0x03 && i - from >= 2 && (buf[i - 1].toInt() and 0xFF) == 0 &&
+                (buf[i - 2].toInt() and 0xFF) == 0 && i + 1 < to &&
+                (buf[i + 1].toInt() and 0xFF) <= 0x03
+            ) {
+                i++
+                continue
+            }
+            out.write(b)
+            i++
+        }
+        return out.toByteArray()
+    }
+
+    /** Re-inserts emulation-prevention bytes so the RBSP can ride in an Annex-B stream. */
+    private fun addEmulationPrevention(rbsp: ByteArray): ByteArray {
+        val out = ByteArrayOutputStream(rbsp.size + 8)
+        var zeros = 0
+        for (b in rbsp) {
+            val v = b.toInt() and 0xFF
+            if (zeros >= 2 && v <= 0x03) {
+                out.write(0x03)
+                zeros = 0
+            }
+            out.write(v)
+            zeros = if (v == 0) zeros + 1 else 0
+        }
+        return out.toByteArray()
+    }
+
+    /**
+     * Rewrites a Dolby Vision VPS payload (RBSP, EPB bytes allowed) into a clean
+     * single-layer HDR10 VPS: the Dolby Vision extension is removed and the layer
+     * count forced to 1. Returns the rewritten RBSP (with EPB re-applied), or null
+     * when the VPS has no DV extension / does not parse (caller keeps it as-is).
+     */
+    fun rewriteVpsToHdr10(buf: ByteArray, from: Int, to: Int): ByteArray? {
+        if (to - from < 4) return null
+        val rbsp = removeEmulationPrevention(buf, from, to)
+        if (rbsp.size < 6) return null
+        val br = VpsBitReader(rbsp)
+
+        // Fixed header: id(4) reserved(=3)(2) max_layers(6) max_sub_layers(3)
+        // nesting(1) reserved_ffff(16) = 32 bits.
+        if (br.readBits(4) == -1L) return null
+        if (br.readBits(2) != 3L) return null
+        val maxLayers = br.readBits(6).toInt() + 1
+        if (maxLayers <= 0) return null
+        val maxSubLayers = br.readBits(3).toInt() + 1
+        if (maxSubLayers <= 0) return null
+        if (br.readBits(1) == -1L) return null
+        if (br.readBits(16) == -1L) return null
+
+        // profile_tier_level(1, maxSubLayers - 1): general fields (2+1+5+32 +
+        // 4 constraint flags + 44 reserved + 8 level), sub-layer flags, then
+        // per-sub-layer profile/level blocks.
+        br.readBits(2); br.readBits(1); br.readBits(5); br.readBits(32)
+        br.readBits(1); br.readBits(1); br.readBits(1); br.readBits(1)
+        br.readBits(44)
+        if (br.readBits(8) == -1L) return null
+        val subLayerProfile = BooleanArray(maxSubLayers - 1)
+        val subLayerLevel = BooleanArray(maxSubLayers - 1)
+        for (i in 0 until maxSubLayers - 1) {
+            val p = br.readBits(1)
+            val l = br.readBits(1)
+            if (p == -1L || l == -1L) return null
+            subLayerProfile[i] = p == 1L
+            subLayerLevel[i] = l == 1L
+        }
+        if (maxSubLayers - 1 > 0) {
+            for (i in maxSubLayers - 1 until 8) {
+                if (br.readBits(2) == -1L) return null
+            }
+        }
+        for (i in 0 until maxSubLayers - 1) {
+            if (subLayerProfile[i]) {
+                br.readBits(2); br.readBits(1); br.readBits(5); br.readBits(32)
+                br.readBits(1); br.readBits(1); br.readBits(1); br.readBits(1)
+                if (br.readBits(44) == -1L) return null
+            }
+            if (subLayerLevel[i]) {
+                if (br.readBits(8) == -1L) return null
+            }
+        }
+
+        // Ordering info is ue(v) — self-delimiting, so it is copied verbatim
+        // even when the layer count changes below.
+        val orderingPresent = br.readBits(1) == 1L
+        val start = if (orderingPresent) 0 else maxSubLayers - 1
+        for (i in start until maxSubLayers) {
+            if (br.readUe() == -1L || br.readUe() == -1L || br.readUe() == -1L) return null
+        }
+
+        val maxLayerId = br.readBits(6).toInt()
+        if (maxLayerId < 0) return null
+        val numLayerSets = br.readUe().toInt() + 1
+        if (numLayerSets <= 0) return null
+        for (i in 1 until numLayerSets) {
+            if (!br.skipBits(maxLayerId + 1)) return null
+        }
+
+        // Timing/HRD present: bail rather than risk misparsing (rare on DV
+        // web encodes, and an untouched VPS beats a corrupted one).
+        val timingPresent = br.readBits(1)
+        if (timingPresent == -1L) return null
+        if (timingPresent == 1L) return null
+        val extBit = br.pos
+        val extFlag = br.readBits(1)
+        if (extFlag == -1L) return null
+        if (extFlag == 0L) return null // no DV extension — nothing to rewrite
+
+        // Rebuild: header with vps_max_layers_minus1 = 0, everything from the
+        // end of the layer-count field through the extension flag verbatim,
+        // extension flag cleared, rbsp trailing bits.
+        val out = VpsBitWriter()
+        if (!br.copyBits(0, 6, out)) return null
+        out.writeBits(0L, 6)
+        if (!br.copyBits(12, extBit, out)) return null
+        out.writeBits(0L, 1) // vps_extension_flag = 0
+        out.writeBits(1L, 1) // rbsp_stop_one_bit
+        return addEmulationPrevention(out.finish())
+    }
+
+    /**
+     * Rewrites every VPS NAL found in codec-private (initialization data)
+     * buffers to single-layer HDR10, returning new buffers (or the same list
+     * when nothing changed). Keeps the decoder's parameter set from
+     * advertising Dolby Vision after the strip.
+     */
+    fun rewriteInitDataVps(initData: List<ByteArray>): List<ByteArray> {
+        var any = false
+        val out = ArrayList<ByteArray>(initData.size)
+        for (buf in initData) {
+            val rewritten = rewriteVpsInAnnexBBuffer(buf)
+            if (rewritten != null) {
+                out.add(rewritten)
+                any = true
+            } else {
+                out.add(buf)
+            }
+        }
+        return if (any) out else initData
+    }
+
+    /** Returns a copy of an Annex-B buffer with VPS NALs rewritten, or null if unchanged. */
+    private fun rewriteVpsInAnnexBBuffer(buf: ByteArray): ByteArray? {
+        if (buf.size < 5) return null
+        val out = ByteArray(buf.size)
+        var write = 0
+        var read = 0
+        var changed = false
+        while (read < buf.size) {
+            val code = indexOfStartCode(buf, read, buf.size)
+            if (code < 0) {
+                System.arraycopy(buf, read, out, write, buf.size - read)
+                write += buf.size - read
+                break
+            }
+            val codeLen =
+                if (code + 3 < buf.size && buf[code + 2].toInt() == 0 && buf[code + 3].toInt() == 1) 4 else 3
+            val header = code + codeLen
+            var nalEnd = indexOfStartCode(buf, header, buf.size)
+            if (nalEnd < 0) nalEnd = buf.size
+            var nalWritten = false
+            if (nalEnd - header >= 2) {
+                val nalType = ((buf[header].toInt() and 0xFF) ushr 1) and 0x3F
+                if (nalType == NAL_VPS) {
+                    val rewritten = rewriteVpsToHdr10(buf, header + 2, nalEnd)
+                    if (rewritten != null) {
+                        System.arraycopy(buf, code, out, write, codeLen)
+                        System.arraycopy(buf, header, out, write + codeLen, 2)
+                        System.arraycopy(rewritten, 0, out, write + codeLen + 2, rewritten.size)
+                        write += codeLen + 2 + rewritten.size
+                        changed = true
+                        nalWritten = true
+                    }
+                }
+            }
+            if (!nalWritten) {
+                System.arraycopy(buf, read, out, write, nalEnd - read)
+                write += nalEnd - read
+            }
+            read = nalEnd
+        }
+        return if (changed) out.copyOf(write) else null
+    }
+
+    /**
+     * DV-strip transform for Annex-B samples: rewrites the VPS to plain
+     * single-layer HDR10, drops RPU (62) / EL (63 and any layerId &gt; 0) NALs,
+     * and removes HDR10+ prefix SEIs when [stripHdr10Plus]. Returns the new
+     * length, or -1 when nothing changed. This is dovi_tool's `remove` plus the
+     * VPS rewrite that keeps DV-signaled decoders from stalling.
+     */
+    fun transformAnnexB(
+        buf: ByteArray,
+        length: Int,
+        stripHdr10Plus: Boolean,
+        stats: StripStats?
+    ): Int {
+        if (length < 5) return -1
+        var write = 0
+        var read = 0
+        var changed = false
+        while (read < length) {
+            val code = indexOfStartCode(buf, read, length)
+            if (code < 0) {
+                if (write != read) System.arraycopy(buf, read, buf, write, length - read)
+                write += length - read
+                break
+            }
+            val codeLen =
+                if (code + 3 < length && buf[code + 2].toInt() == 0 && buf[code + 3].toInt() == 1) 4 else 3
+            val header = code + codeLen
+            var nalEnd = indexOfStartCode(buf, header, length)
+            if (nalEnd < 0) nalEnd = length
+            val nalBytes = nalEnd - header
+            var keep = true
+            if (nalBytes >= 2) {
+                val b0 = buf[header].toInt() and 0xFF
+                val b1 = buf[header + 1].toInt() and 0xFF
+                val nalType = (b0 ushr 1) and 0x3F
+                val layerId = ((b0 and 0x01) shl 5) or ((b1 and 0xF8) ushr 3)
+                when {
+                    nalType == NAL_VPS -> {
+                        val rewritten = rewriteVpsToHdr10(buf, header + 2, nalEnd)
+                        if (rewritten != null) {
+                            changed = true
+                            stats?.vpsRewritten = true
+                            // start code + 2-byte NAL header + rewritten RBSP
+                            System.arraycopy(buf, code, buf, write, codeLen)
+                            System.arraycopy(buf, header, buf, write + codeLen, 2)
+                            System.arraycopy(rewritten, 0, buf, write + codeLen + 2, rewritten.size)
+                            write += codeLen + 2 + rewritten.size
+                            keep = false
+                        }
+                    }
+                    nalType == NAL_DV_RPU -> {
+                        keep = false
+                        changed = true
+                        if (stats != null) stats.rpuBytes += nalBytes
+                    }
+                    nalType == NAL_DV_EL || layerId > 0 -> {
+                        keep = false
+                        changed = true
+                        if (stats != null) stats.elBytes += nalBytes
+                    }
+                    nalType == NAL_PREFIX_SEI && stripHdr10Plus &&
+                        seiCarriesHdr10Plus(buf, header + 2, nalEnd) -> {
+                        keep = false
+                        changed = true
+                        if (stats != null) stats.hdr10PlusBytes += nalBytes
+                    }
+                }
+            }
+            if (keep) {
+                if (write != read) System.arraycopy(buf, read, buf, write, nalEnd - read)
+                write += nalEnd - read
+            }
+            read = nalEnd
+        }
+        return if (changed) write else -1
+    }
+
+    /**
+     * Length-delimited (MP4/fMP4) counterpart of [transformAnnexB]. Malformed
+     * samples are forwarded untouched.
+     */
+    fun transformLengthDelimited(
+        buf: ByteArray,
+        length: Int,
+        nalLengthFieldLength: Int,
+        stripHdr10Plus: Boolean,
+        stats: StripStats?
+    ): Int {
+        val fieldLen = nalLengthFieldLength.coerceIn(1, 4)
+        if (length <= fieldLen) return -1
+        var p = 0
+        while (p + fieldLen <= length) {
+            val nal = readLength(buf, p, fieldLen)
+            if (nal <= 0 || p + fieldLen + nal > length) return -1
+            p += fieldLen + nal
+        }
+        if (p != length) return -1
+
+        var write = 0
+        var read = 0
+        var changed = false
+        while (read + fieldLen <= length) {
+            val nal = readLength(buf, read, fieldLen)
+            val payload = read + fieldLen
+            var keep = true
+            if (nal >= 2) {
+                val b0 = buf[payload].toInt() and 0xFF
+                val b1 = buf[payload + 1].toInt() and 0xFF
+                val nalType = (b0 ushr 1) and 0x3F
+                val layerId = ((b0 and 0x01) shl 5) or ((b1 and 0xF8) ushr 3)
+                when {
+                    nalType == NAL_VPS -> {
+                        val rewritten = rewriteVpsToHdr10(buf, payload + 2, payload + nal)
+                        if (rewritten != null) {
+                            changed = true
+                            stats?.vpsRewritten = true
+                            writeLength(buf, write, rewritten.size, fieldLen)
+                            System.arraycopy(buf, payload, buf, write + fieldLen, 2)
+                            System.arraycopy(rewritten, 0, buf, write + fieldLen + 2, rewritten.size)
+                            write += fieldLen + 2 + rewritten.size
+                            keep = false
+                        }
+                    }
+                    nalType == NAL_DV_RPU -> {
+                        keep = false
+                        changed = true
+                        if (stats != null) stats.rpuBytes += nal
+                    }
+                    nalType == NAL_DV_EL || layerId > 0 -> {
+                        keep = false
+                        changed = true
+                        if (stats != null) stats.elBytes += nal
+                    }
+                    nalType == NAL_PREFIX_SEI && stripHdr10Plus &&
+                        nal >= 4 && seiCarriesHdr10Plus(buf, payload + 2, payload + nal) -> {
+                        keep = false
+                        changed = true
+                        if (stats != null) stats.hdr10PlusBytes += nal
+                    }
+                }
+            }
+            if (keep) {
+                if (write != read) System.arraycopy(buf, read, buf, write, fieldLen + nal)
+                write += fieldLen + nal
+            }
+            read += fieldLen + nal
+        }
+        return if (changed) write else -1
+    }
+
+    private fun writeLength(buf: ByteArray, offset: Int, value: Int, lengthBytes: Int) {
+        var v = value
+        for (i in lengthBytes - 1 downTo 0) {
+            buf[offset + i] = (v and 0xFF).toByte()
+            v = v ushr 8
+        }
+    }
+
+    /**
+     * One-line inventory of an Annex-B sample's NAL units (type:bytes pairs),
+     * used by the extractor's first-sample diagnostics.
+     */
+    fun describeNals(buf: ByteArray, length: Int): String {
+        val sb = StringBuilder()
+        var read = 0
+        while (read < length) {
+            val code = indexOfStartCode(buf, read, length)
+            if (code < 0) break
+            val codeLen =
+                if (code + 3 < length && buf[code + 2].toInt() == 0 && buf[code + 3].toInt() == 1) 4 else 3
+            val header = code + codeLen
+            var nalEnd = indexOfStartCode(buf, header, length)
+            if (nalEnd < 0) nalEnd = length
+            if (nalEnd - header >= 2) {
+                val nalType = ((buf[header].toInt() and 0xFF) ushr 1) and 0x3F
+                if (sb.isNotEmpty()) sb.append(',')
+                sb.append(nalType).append(':').append(nalEnd - header)
+            }
+            read = nalEnd
+        }
+        return sb.toString()
     }
 
     /**
