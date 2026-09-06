@@ -3,7 +3,6 @@ package com.kennyb1201.kbstream.ui.player
 import android.graphics.SurfaceTexture
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
-import android.opengl.GLES30
 import android.opengl.Matrix
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -144,12 +143,19 @@ internal object P5ColorShader {
         return tid
     }
 
-    /** Returns whether GLES 3.0 is available. */
+    /**
+     * Returns whether the GLES 3.0 API surface is available.
+     *
+     * The conversion shader only needs GLES 2.0 (samplerExternalOES), so this
+     * is deliberately a loose availability check: the previous reflection probe
+     * passed the wrong parameter types for glClientWaitSync and always returned
+     * false, silently disabling the GLES path.
+     */
     fun hasGles3(): Boolean {
         return try {
-            GLES30::class.java.getDeclaredMethod("glClientWaitSync", Long::class.java, Int::class.java, Int::class.java)
+            Class.forName("android.opengl.GLES30")
             true
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             false
         }
     }
