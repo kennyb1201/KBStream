@@ -48,7 +48,7 @@ class P5VideoGlesView(
 
     private fun checkGles3(): Boolean {
         return try {
-            GLES30.class.getDeclaredMethod("glClientWaitSync", Long::class.javaPrimitiveType, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
+            val method = GLES30::class.java.getDeclaredMethod("glClientWaitSync", Long::class.java, Int::class.java, Int::class.java)
             true
         } catch (e: Exception) {
             false

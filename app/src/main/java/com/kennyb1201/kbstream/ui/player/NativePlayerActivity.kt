@@ -340,7 +340,6 @@ class NativePlayerActivity : ComponentActivity() {
     // When the black-video watchdog tries TextureView as an automatic fallback
     // after SurfaceView fails (stage 1.5 in the recovery ladder).
     private var forceTextureViewFallback = false
-        p5GlesActive = false
     // Whether P5 color correction via GLES is currently active
     private var p5GlesActive = false
     // Original declared DV codec (e.g. "dvhe.07.06") of the current video

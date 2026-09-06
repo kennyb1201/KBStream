@@ -137,7 +137,14 @@ internal object P5ColorShader {
     }
 
     /** Returns whether GLES 3.0 is available. */
-    fun hasGles3(): Boolean = GLES30.glClientWaitSync != null
+    fun hasGles3(): Boolean {
+        return try {
+            GLES30::class.java.getDeclaredMethod("glClientWaitSync", Long::class.java, Int::class.java, Int::class.java)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
 
     /** Returns the shader program. */
     fun getProgram(): Int = program
