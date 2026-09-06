@@ -86,8 +86,8 @@ class P5VideoGlesView(
     }
 
     fun release() {
+        // Detach only — the activity owns the player lifecycle and releases it.
         player?.setVideoSurface(null)
-        player?.release()
         player = null
         surfaceTexture?.release()
         surfaceTexture = null

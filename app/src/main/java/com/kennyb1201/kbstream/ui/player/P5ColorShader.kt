@@ -4,6 +4,7 @@ import android.graphics.SurfaceTexture
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.opengl.Matrix
+import android.util.Log
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -102,6 +103,10 @@ internal object P5ColorShader {
     private fun createProgram(vertexSrc: String, fragmentSrc: String): Int {
         val vShader = loadShader(GLES20.GL_VERTEX_SHADER, vertexSrc)
         val fShader = loadShader(GLES20.GL_FRAGMENT_SHADER, fragmentSrc)
+        if (vShader == 0 || fShader == 0) {
+            Log.e("P5_SHADER", "Shader compile failed: vertex=$vShader fragment=$fShader")
+            return 0
+        }
         val prog = GLES20.glCreateProgram()
         GLES20.glAttachShader(prog, vShader)
         GLES20.glAttachShader(prog, fShader)
@@ -110,6 +115,7 @@ internal object P5ColorShader {
         val linked = IntArray(1)
         GLES20.glGetProgramiv(prog, GLES20.GL_LINK_STATUS, linked, 0)
         if (linked[0] != GLES20.GL_TRUE) {
+            Log.e("P5_SHADER", "Program link failed: ${GLES20.glGetProgramInfoLog(prog)}")
             GLES20.glDeleteProgram(prog)
             return 0
         }
@@ -125,6 +131,7 @@ internal object P5ColorShader {
         val compiled = IntArray(1)
         GLES20.glGetShaderiv(shader, GLES20.GL_COMPILE_STATUS, compiled, 0)
         if (compiled[0] != GLES20.GL_TRUE) {
+            Log.e("P5_SHADER", "Shader compile failed (type=$type): ${GLES20.glGetShaderInfoLog(shader)}")
             GLES20.glDeleteShader(shader)
             return 0
         }
