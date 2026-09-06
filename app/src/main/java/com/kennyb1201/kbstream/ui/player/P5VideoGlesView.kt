@@ -13,7 +13,6 @@ import android.view.Surface
 import android.view.ViewGroup
 import androidx.media3.exoplayer.ExoPlayer
 
-
 /**
  * GLSurface-based video renderer for P5 (ICtCp) content.
  *
@@ -93,7 +92,7 @@ class P5VideoGlesView(
         eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
         if (eglDisplay == null) return
 
-        if (EGL14.eglInitialize(eglDisplay, null, null) == EGL14.EGL_FALSE) return
+        if (!EGL14.eglInitialize(eglDisplay, null, null)) return
 
         val attribs = intArrayOf(
             EGL14.EGL_RED_SIZE, 8,
@@ -105,9 +104,9 @@ class P5VideoGlesView(
             EGL14.EGL_NONE
         )
 
-        val configs = Array(1) { EGLConfig() }
+        val configs = arrayOfNulls<EGLConfig>(1)
         val numConfigs = IntArray(1)
-        if (EGL14.eglChooseConfig(eglDisplay, attribs, configs, 1, numConfigs) == EGL14.EGL_FALSE) return
+        if (!EGL14.eglChooseConfig(eglDisplay, attribs, configs, configs.size, numConfigs)) return
 
         eglConfig = configs[0]
 
@@ -117,9 +116,11 @@ class P5VideoGlesView(
         )
         eglContext = EGL14.eglCreateContext(eglDisplay, eglConfig, EGL14.eglGetCurrentContext(), ctxAttribs)
 
+        val pw = if (width > 0) width else 1
+        val ph = if (height > 0) height else 1
         val surfAttribs = intArrayOf(
-            EGL14.EGL_WIDTH, width.coerceAtLeast(1),
-            EGL14.EGL_HEIGHT, height.coerceAtLeast(1),
+            EGL14.EGL_WIDTH, pw,
+            EGL14.EGL_HEIGHT, ph,
             EGL14.EGL_NONE
         )
         eglSurface = EGL14.eglCreatePbufferSurface(eglDisplay, eglConfig, surfAttribs)
@@ -127,7 +128,7 @@ class P5VideoGlesView(
 
     private fun makeCurrent(): Boolean {
         if (eglDisplay == null || eglContext == null || eglSurface == null) return false
-        return EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext) == EGL14.EGL_TRUE
+        return EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
     }
 
     private fun swapBuffers() {
@@ -153,8 +154,8 @@ class P5VideoGlesView(
         val st = surfaceTexture ?: return
         val ply = player ?: return
 
-        val vw = ply.videoSize.width()
-        val vh = ply.videoSize.height()
+        val vw = ply.videoSize.width
+        val vh = ply.videoSize.height
         if (vw <= 0 || vh <= 0) return
 
         if (!makeCurrent()) return
