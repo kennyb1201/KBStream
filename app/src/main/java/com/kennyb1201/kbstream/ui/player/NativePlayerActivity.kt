@@ -394,8 +394,8 @@ class NativePlayerActivity : ComponentActivity() {
     // sitting on black until the watchdog fires.
     private var ffmpegOnlySession = false
     private var ffmpegSessionSwappedToHw = false
-    // True while the DV setting is "8.1" (P5/P7 converted to Profile 8.1) so
-    // the codec badge can report "DV P7 → 8.1" instead of "→ HDR10".
+    // True while either per-profile 8.1 conversion (P5/P7) is active so the
+    // codec badge can report "DV P7 → 8.1" instead of "→ HDR10".
     private var dvTo81Session = false
     // One surface bounce is allowed per player attempt: flipping the
     // SurfaceView's visibility destroys/recreates its native surface and
@@ -1284,31 +1284,40 @@ class NativePlayerActivity : ComponentActivity() {
             .filterValues { it.isNotBlank() }
         if (extraHeaders.isNotEmpty()) httpFactory.setDefaultRequestProperties(extraHeaders)
 
-        // Dolby Vision handling (Settings → Playback): in the Auto mode only
-        // dual-layer Profile 7 (remuxes) is rewritten to HDR10 on the fly — the
-        // other profiles pass through untouched so a Dolby-Vision display plays
-        // them as real DV. "All DV" rewrites every profile (4/5/7/8) for
-        // displays without Dolby Vision (P5 has no HDR10 base, so it is
-        // force-decoded as plain HEVC — best effort, colors may be off). "8.1"
-        // converts P5 and P7 to Profile 8.1 in the bitstream (RPU metadata per
-        // dovi_tool convert mode 2, EL dropped, single-layer VPS, dvhe/dvh1.08)
-        // for Dolby Vision displays that accept 8.1 but not Blu-ray P7 or
-        // ICtCp P5; P4/P8 pass through as native DV. Off plays DV exactly as
-        // provided. HDR10+ (ST 2094-40) stripping is an independent toggle
-        // that composes with any DV mode; with DV = Off it strips HDR10+ only
-        // and never touches DV.
+        // Dolby Vision handling (Settings → Playback): the "P7 → 8.1" mode
+        // (Auto) rewrites declared/sniffed dual-layer Profile 7 (Blu-ray
+        // remuxes) to Profile 8.1 on the fly so Dolby-Vision displays that
+        // reject P7 can play them — every other profile passes through
+        // untouched as real DV. "Strip All" rewrites every profile (4/5/7/8)
+        // for displays without Dolby Vision (P5 has no HDR10 base, so it is
+        // force-decoded as plain HEVC — best effort, colors may be off). The
+        // P5 → 8.1 toggle adds P5 (ICtCp) to the 8.1 rewrite for Dolby Vision
+        // displays that accept 8.1 but not ICtCp P5. P4/P8 are never
+        // 8.1-converted and follow the mode (stripped in Strip All, otherwise
+        // native DV). "None" plays DV exactly as provided. HDR10+
+        // (ST 2094-40) stripping is an independent toggle that composes with
+        // any DV mode; with DV = None it strips HDR10+ only and never touches
+        // DV.
         val dvCompatMode = AppPreferences.getDvCompatMode(this)
         val stripHdr10Plus = AppPreferences.getStripHdr10Plus(this)
         val videoDecoder = AppPreferences.getVideoDecoder(this)
         val audioDecoderPriority = AppPreferences.getAudioDecoder(this)
         val dvRewriteEnabled = dvCompatMode != AppPreferences.DV_COMPAT_OFF
         val convertAllProfiles = dvCompatMode == AppPreferences.DV_COMPAT_ALL
-        // "8.1" mode: convert declared P5/P7 streams to Profile 8.1 instead of
-        // stripping to HDR10 (see DolbyVisionCompatExtractorsFactory). The P5
-        // GLES/FFmpeg color path below stays engaged — the pixels remain ICtCp
-        // after the bitstream rewrite, so the color converter is what makes a
-        // P5 → 8.1 stream look right on the display.
-        val convertTo81 = dvCompatMode == AppPreferences.DV_COMPAT_TO_81
+        // Per-profile 8.1 conversion: the "P7 → 8.1" mode (Auto) always
+        // rewrites declared P7 streams to Profile 8.1 in the bitstream (RPU
+        // metadata per dovi_tool convert mode 2, EL dropped, single-layer VPS,
+        // dvhe/dvh1.08); the P5 → 8.1 toggle adds P5 (ICtCp) on top. Both are
+        // ignored in "Strip All" (every profile 4/5/7/8 → HDR10/HEVC for TVs
+        // without Dolby Vision) and "None" (pure pass-through) — see
+        // DolbyVisionCompatExtractorsFactory. The P5 GLES/FFmpeg color path
+        // below stays engaged — the pixels remain ICtCp after the bitstream
+        // rewrite, so the color converter is what makes a P5 → 8.1 stream look
+        // right on the display.
+        val convertP7To81 = dvCompatMode == AppPreferences.DV_COMPAT_AUTO
+        val convertP5To81 = dvCompatMode == AppPreferences.DV_COMPAT_AUTO &&
+            AppPreferences.getConvertP5To81(this)
+        val convertTo81 = convertP7To81 || convertP5To81
         dvTo81Session = convertTo81 // badge: "DV P7 → 8.1"
         // P5 (single-layer ICtCp) content needs color conversion for correct HDR colors.
         // When P5 is detected and DV conversion is enabled, we have two options:
@@ -1393,7 +1402,8 @@ class NativePlayerActivity : ComponentActivity() {
         Log.i(
             "PLAYER_DV",
             "DV settings mode=$dvCompatMode rewriteEnabled=$dvRewriteEnabled " +
-                "allProfiles=$convertAllProfiles to81=$convertTo81 stripHdr10Plus=$stripHdr10Plus " +
+                "allProfiles=$convertAllProfiles to81=$convertTo81 " +
+                "(p7=$convertP7To81 p5=$convertP5To81) stripHdr10Plus=$stripHdr10Plus " +
                 "videoDecoder=$videoDecoder audioDecoder=$audioDecoderPriority " +
                 "forceSoftware=$softwareDecoderActive " +
                 "audioSeparate=${!currentAudioUrl.isNullOrBlank()}"
@@ -1401,7 +1411,7 @@ class NativePlayerActivity : ComponentActivity() {
         // The compat extractor is needed when DV conversion is on OR the
         // HDR10+ strip toggle is on — both run inside it.
         val extractorsFactory: androidx.media3.extractor.ExtractorsFactory =
-            if (!dvRewriteEnabled && !stripHdr10Plus) {
+            if (!dvRewriteEnabled && !convertTo81 && !stripHdr10Plus) {
                 DefaultExtractorsFactory()
             } else {
                 DolbyVisionCompatExtractorsFactory(
@@ -1409,7 +1419,8 @@ class NativePlayerActivity : ComponentActivity() {
                     stripHdr10Plus = stripHdr10Plus,
                     convertAllProfiles = convertAllProfiles,
                     dvRewriteEnabled = dvRewriteEnabled,
-                    convertTo81 = convertTo81
+                    convertP7To81 = convertP7To81,
+                    convertP5To81 = convertP5To81
                 )
             }
         val mediaSourceFactory = DefaultMediaSourceFactory(httpFactory, extractorsFactory)

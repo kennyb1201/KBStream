@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.player
 
+import android.util.Log
 import java.io.ByteArrayOutputStream
 
 /**
@@ -11,11 +12,13 @@ import java.io.ByteArrayOutputStream
  * this transform.
  *
  * Which profiles are rewritten depends on the mode the player selects:
- *  - Auto (default): only dual-layer Profile 7 (dvhe.07/dvh1.07, Blu-ray
- *    remuxes — base + RPU (NAL type 62) + enhancement layer (layerId > 0)).
- *    Every other DV profile is passed through untouched so a Dolby-Vision
- *    display plays it as real Dolby Vision.
- *  - All DV: every profile — 4, 5, 7 and 8 (dvhe/dvh1.04/.05/.07/.08). For
+ *  - P7 → 8.1 (default): only dual-layer Profile 7 (dvhe.07/dvh1.07, Blu-ray
+ *    remuxes — base + RPU (NAL type 62) + enhancement layer (layerId > 0)),
+ *    rewritten to Profile 8.1 so Dolby Vision displays that reject P7 can
+ *    play it (the P5 → 8.1 toggle adds single-layer ICtCp P5 on top). Every
+ *    other DV profile is passed through untouched so a Dolby-Vision display
+ *    plays it as real Dolby Vision.
+ *  - Strip All: every profile — 4, 5, 7 and 8 (dvhe/dvh1.04/.05/.07/.08). For
  *    displays without Dolby Vision. Profile 5 (single-layer ICtCp) has no
  *    HDR10 base; stripping yields a plain-HEVC fallback picture with possibly
  *    off colors rather than a true conversion.
@@ -35,14 +38,16 @@ internal object DolbyVisionCompat {
 
     // Dual-layer Profile 7 (Blu-ray remuxes) is the DV flavor that routinely
     // fails on players/TVs — its HDR10-compatible base layer plays everywhere
-    // once the DV RPU / enhancement-layer NALs are stripped. In the Auto modes
-    // this is the only profile that is rewritten: everything else (single-layer
-    // P4/P8 web encodes, P5) is passed through untouched so Dolby-Vision
-    // displays get the real thing.
+    // once the DV RPU / enhancement-layer NALs are stripped or the stream is
+    // rewritten to Profile 8.1. In the "P7 → 8.1" mode this is the only
+    // profile that is rewritten: everything else (single-layer P4/P8 web
+    // encodes, P5 unless its 8.1 toggle is on) is passed through untouched so
+    // Dolby-Vision displays get the real thing.
     private val DV_CODEC_PROFILE_7 = Regex("(?i)^(dvhe|dvh1)\\.(07|7)\\..+$")
 
-    // Every DV profile, used by the explicit "All DV" mode (the fallback for
-    // TVs without Dolby Vision. Profile 5 (ICtCp, no HDR10 base) can only be
+    // Every DV profile, used by the explicit "Strip All" mode (the fallback
+    // for TVs without Dolby Vision. Profile 5 (ICtCp, no HDR10 base) can only
+    // be
     // force-decoded as plain HEVC — a picture appears, but colors can be off;
     // a true conversion would need a color-mapping pipeline. The extractor
     // layer injects HDR10 color metadata (ST.2084 / BT.2020) on the rewritten
@@ -97,14 +102,25 @@ internal object DolbyVisionCompat {
      * Codec string for the Profile 8.1 rewrite target of a declared P5/P7
      * stream: keeps the dvhe/dvh1 family (so Media3 still routes the track
      * through the Dolby Vision pipeline) but changes the profile digits to 08.
-     * Returns null for every other codec (P4/P8/plain HEVC), which must pass
-     * through untouched in 8.1 mode.
+     * Returns null when the profile's 8.1 toggle is off, and for every other
+     * codec (P4/P8/plain HEVC), which must pass through untouched.
      */
     private val DV_CODEC_TO_81 = Regex("(?i)^(dvhe|dvh1)\\.0*(7|5)\\.(.+)$")
 
-    fun to81Codec(codecs: String?): String? {
+    fun to81Codec(
+        codecs: String?,
+        convertP7To81: Boolean,
+        convertP5To81: Boolean
+    ): String? {
         if (codecs.isNullOrBlank()) return null
         val m = DV_CODEC_TO_81.find(codecs.trim()) ?: return null
+        val profile = m.groupValues[2]
+        val enabled = when (profile) {
+            "7" -> convertP7To81
+            "5" -> convertP5To81
+            else -> false
+        }
+        if (!enabled) return null
         // "dvhe.07.06" / "dvh1.05.06" -> "dvhe.08.06" / "dvh1.08.06"
         return m.groupValues[1] + ".08." + m.groupValues[3]
     }
@@ -261,8 +277,21 @@ internal object DolbyVisionCompat {
     }
 
     private const val NAL_PREFIX_SEI = 39
+    private const val NAL_SUFFIX_SEI = 40
     private const val NAL_DV_RPU = 62
     private const val NAL_DV_EL = 63
+
+    /**
+     * HDR10+ (ST 2094-40) user data can ride in either a prefix SEI (39) or a
+     * suffix SEI (40) NAL — most muxers use prefix, but a suffix-carried
+     * payload reaches the display pipeline exactly the same way and must be
+     * stripped too, or the black-screen-on-HDR10+ TVs this module targets get
+     * the metadata anyway.
+     */
+    private fun isHdr10PlusSeiNal(nalType: Int): Boolean = when (nalType) {
+        NAL_PREFIX_SEI, NAL_SUFFIX_SEI -> true
+        else -> false
+    }
 
     // HDR10+ (SMPTE ST 2094-40) user data: ITU-T T.35 country 0xB5, provider
     // code 0x003C, provider-orientation 0x0001, application id 0x04.
@@ -272,10 +301,11 @@ internal object DolbyVisionCompat {
      * The plain-HEVC rewrite target for a declared DV codec, or null when the
      * track must be left untouched.
      *
-     * Auto behavior ([convertAllProfiles] = false): only Profile 7 qualifies —
-     * the other profiles pass through so DV displays play them as Dolby Vision.
-     * "All DV" ([convertAllProfiles] = true): every profile (4/5/7/8) qualifies,
-     * for displays without Dolby Vision (P5 is a best-effort HEVC fallback).
+     * "P7 → 8.1" mode behavior ([convertAllProfiles] = false): only Profile 7
+     * qualifies — the other profiles pass through so DV displays play them as
+     * Dolby Vision. "Strip All" ([convertAllProfiles] = true): every profile
+     * (4/5/7/8) qualifies, for displays without Dolby Vision (P5 is a
+     * best-effort HEVC fallback).
      */
     fun hdr10Codec(codecs: String?, convertAllProfiles: Boolean = false): String? {
         if (codecs.isNullOrBlank()) return null
@@ -325,7 +355,7 @@ internal object DolbyVisionCompat {
                 if (stripDv && (nalType == NAL_DV_RPU || nalType == NAL_DV_EL)) {
                     keep = false
                 }
-                if (keep && stripHdr10Plus && nalType == NAL_PREFIX_SEI &&
+                if (keep && stripHdr10Plus && isHdr10PlusSeiNal(nalType) &&
                     seiCarriesHdr10Plus(buf, header + 2, nalEnd)
                 ) {
                     keep = false
@@ -382,7 +412,7 @@ internal object DolbyVisionCompat {
                 if (stripDv && (nalType == NAL_DV_RPU || nalType == NAL_DV_EL)) {
                     keep = false
                 }
-                if (keep && stripHdr10Plus && nalType == NAL_PREFIX_SEI &&
+                if (keep && stripHdr10Plus && isHdr10PlusSeiNal(nalType) &&
                     nal >= 4 && seiCarriesHdr10Plus(buf, payload + 2, payload + nal)
                 ) {
                     keep = false
@@ -410,6 +440,7 @@ internal object DolbyVisionCompat {
         var elBytes = 0
         var hdr10PlusBytes = 0
         var vpsRewritten = false
+        var vpsRewriteFailedReason: String? = null
         var rpuRewritten = 0
     }
 
@@ -544,27 +575,44 @@ internal object DolbyVisionCompat {
     }
 
     /**
+     * Outcome of one VPS rewrite attempt. A DV VPS left in-band after the RPU
+     * strip is exactly the black-screen-with-audio failure this module exists
+     * to prevent, so a parse failure is reported (and logged), never silently
+     * conflated with "no DV extension".
+     */
+    internal sealed class VpsRewriteOutcome {
+        /** Rewritten single-layer HDR10 RBSP (emulation-prevention re-applied). */
+        data class Rewritten(val rbsp: ByteArray) : VpsRewriteOutcome()
+
+        /** VPS carried no Dolby Vision extension — keep the original as-is. */
+        object NoDvExtension : VpsRewriteOutcome()
+
+        /** VPS did not parse ([reason] for diagnostics); the original is kept. */
+        data class Failed(val reason: String) : VpsRewriteOutcome()
+    }
+
+    /**
      * Rewrites a Dolby Vision VPS payload (RBSP, EPB bytes allowed) into a clean
      * single-layer HDR10 VPS: the Dolby Vision extension is removed and the layer
-     * count forced to 1. Returns the rewritten RBSP (with EPB re-applied), or null
-     * when the VPS has no DV extension / does not parse (caller keeps it as-is).
+     * count forced to 1. See [VpsRewriteOutcome] for the three outcomes; a
+     * failed parse keeps the original VPS rather than corrupting it.
      */
-    fun rewriteVpsToHdr10(buf: ByteArray, from: Int, to: Int): ByteArray? {
-        if (to - from < 4) return null
+    fun rewriteVpsToHdr10(buf: ByteArray, from: Int, to: Int): VpsRewriteOutcome {
+        if (to - from < 4) return VpsRewriteOutcome.Failed("short-nal")
         val rbsp = removeEmulationPrevention(buf, from, to)
-        if (rbsp.size < 6) return null
+        if (rbsp.size < 6) return VpsRewriteOutcome.Failed("short-rbsp")
         val br = VpsBitReader(rbsp)
 
         // Fixed header: id(4) reserved(=3)(2) max_layers(6) max_sub_layers(3)
         // nesting(1) reserved_ffff(16) = 32 bits.
-        if (br.readBits(4) == -1L) return null
-        if (br.readBits(2) != 3L) return null
+        if (br.readBits(4) == -1L) return VpsRewriteOutcome.Failed("header")
+        if (br.readBits(2) != 3L) return VpsRewriteOutcome.Failed("reserved-3bits")
         val maxLayers = br.readBits(6).toInt() + 1
-        if (maxLayers <= 0) return null
+        if (maxLayers <= 0) return VpsRewriteOutcome.Failed("max-layers")
         val maxSubLayers = br.readBits(3).toInt() + 1
-        if (maxSubLayers <= 0) return null
-        if (br.readBits(1) == -1L) return null
-        if (br.readBits(16) == -1L) return null
+        if (maxSubLayers <= 0) return VpsRewriteOutcome.Failed("max-sub-layers")
+        if (br.readBits(1) == -1L) return VpsRewriteOutcome.Failed("nesting")
+        if (br.readBits(16) == -1L) return VpsRewriteOutcome.Failed("reserved-ffff")
 
         // profile_tier_level(1, maxSubLayers - 1): general fields (2+1+5+32 +
         // 4 constraint flags + 44 reserved + 8 level), sub-layer flags, then
@@ -572,29 +620,29 @@ internal object DolbyVisionCompat {
         br.readBits(2); br.readBits(1); br.readBits(5); br.readBits(32)
         br.readBits(1); br.readBits(1); br.readBits(1); br.readBits(1)
         br.readBits(44)
-        if (br.readBits(8) == -1L) return null
+        if (br.readBits(8) == -1L) return VpsRewriteOutcome.Failed("ptl-general")
         val subLayerProfile = BooleanArray(maxSubLayers - 1)
         val subLayerLevel = BooleanArray(maxSubLayers - 1)
         for (i in 0 until maxSubLayers - 1) {
             val p = br.readBits(1)
             val l = br.readBits(1)
-            if (p == -1L || l == -1L) return null
+            if (p == -1L || l == -1L) return VpsRewriteOutcome.Failed("ptl-subflags")
             subLayerProfile[i] = p == 1L
             subLayerLevel[i] = l == 1L
         }
         if (maxSubLayers - 1 > 0) {
             for (i in maxSubLayers - 1 until 8) {
-                if (br.readBits(2) == -1L) return null
+                if (br.readBits(2) == -1L) return VpsRewriteOutcome.Failed("ptl-reserved")
             }
         }
         for (i in 0 until maxSubLayers - 1) {
             if (subLayerProfile[i]) {
                 br.readBits(2); br.readBits(1); br.readBits(5); br.readBits(32)
                 br.readBits(1); br.readBits(1); br.readBits(1); br.readBits(1)
-                if (br.readBits(44) == -1L) return null
+                if (br.readBits(44) == -1L) return VpsRewriteOutcome.Failed("ptl-sub-profile")
             }
             if (subLayerLevel[i]) {
-                if (br.readBits(8) == -1L) return null
+                if (br.readBits(8) == -1L) return VpsRewriteOutcome.Failed("ptl-sub-level")
             }
         }
 
@@ -603,37 +651,161 @@ internal object DolbyVisionCompat {
         val orderingPresent = br.readBits(1) == 1L
         val start = if (orderingPresent) 0 else maxSubLayers - 1
         for (i in start until maxSubLayers) {
-            if (br.readUe() == -1L || br.readUe() == -1L || br.readUe() == -1L) return null
+            if (br.readUe() == -1L || br.readUe() == -1L || br.readUe() == -1L) {
+                return VpsRewriteOutcome.Failed("ordering-info")
+            }
         }
 
         val maxLayerId = br.readBits(6).toInt()
-        if (maxLayerId < 0) return null
+        if (maxLayerId < 0) return VpsRewriteOutcome.Failed("max-layer-id")
         val numLayerSets = br.readUe().toInt() + 1
-        if (numLayerSets <= 0) return null
+        if (numLayerSets <= 0) return VpsRewriteOutcome.Failed("layer-sets")
         for (i in 1 until numLayerSets) {
-            if (!br.skipBits(maxLayerId + 1)) return null
+            if (!br.skipBits(maxLayerId + 1)) return VpsRewriteOutcome.Failed("layer-set-flags")
         }
 
-        // Timing/HRD present: bail rather than risk misparsing (rare on DV
-        // web encodes, and an untouched VPS beats a corrupted one).
+        // Timing/HRD block — parsed, not skipped, so the surgical copy below
+        // keeps it bit-exact while still locating the extension flag. Layout
+        // mirrors hevc_parser (the parser dovi_tool uses), ITU-T H.265 7.3.2.1.
+        // Bailing here would leave the Dolby Vision VPS in-band on a stripped
+        // stream — the exact black-screen-with-audio failure this module
+        // exists to prevent (decoders that key off the DV VPS extension sit
+        // in DV mode waiting for RPUs that never arrive). Streaming P8 / web
+        // encodes are where vps_timing_info_present_flag shows up.
         val timingPresent = br.readBits(1)
-        if (timingPresent == -1L) return null
-        if (timingPresent == 1L) return null
+        if (timingPresent == -1L) return VpsRewriteOutcome.Failed("timing-flag")
+        if (timingPresent == 1L && !skipVpsTimingInfo(br, maxSubLayers)) {
+            return VpsRewriteOutcome.Failed("timing-info")
+        }
         val extBit = br.pos
         val extFlag = br.readBits(1)
-        if (extFlag == -1L) return null
-        if (extFlag == 0L) return null // no DV extension — nothing to rewrite
+        if (extFlag == -1L) return VpsRewriteOutcome.Failed("extension-flag")
+        if (extFlag == 0L) return VpsRewriteOutcome.NoDvExtension
 
         // Rebuild: header with vps_max_layers_minus1 = 0, everything from the
         // end of the layer-count field through the extension flag verbatim,
         // extension flag cleared, rbsp trailing bits.
         val out = VpsBitWriter()
-        if (!br.copyBits(0, 6, out)) return null
+        if (!br.copyBits(0, 6, out)) return VpsRewriteOutcome.Failed("copy-header")
         out.writeBits(0L, 6)
-        if (!br.copyBits(12, extBit, out)) return null
+        if (!br.copyBits(12, extBit, out)) return VpsRewriteOutcome.Failed("copy-body")
         out.writeBits(0L, 1) // vps_extension_flag = 0
         out.writeBits(1L, 1) // rbsp_stop_one_bit
-        return addEmulationPrevention(out.finish())
+        return VpsRewriteOutcome.Rewritten(addEmulationPrevention(out.finish()))
+    }
+
+    /**
+     * Skips the vps_timing_info block (ITU-T H.265 7.3.2.1): 32-bit
+     * num_units_in_tick / time_scale, the POC-proportional flag and its
+     * Exp-Golomb, then vps_num_hrd_parameters hrd_parameters() payloads
+     * (bit layouts per hevc_parser's HrdParameters::parse). Returns false on
+     * any parse failure so the caller can bail and keep the original VPS.
+     */
+    private fun skipVpsTimingInfo(br: VpsBitReader, maxSubLayers: Int): Boolean {
+        if (br.readBits(32) == -1L) return false // vps_num_units_in_tick
+        if (br.readBits(32) == -1L) return false // vps_time_scale
+        val pocProportional = br.readBits(1)
+        if (pocProportional == -1L) return false
+        if (pocProportional == 1L) {
+            if (br.readUe() == -1L) return false // vps_num_ticks_poc_diff_one_minus1
+        }
+        val numHrd = br.readUe()
+        if (numHrd == -1L || numHrd > 32) return false // vps_num_hrd_parameters
+        for (i in 0 until numHrd.toInt()) {
+            if (br.readUe() == -1L) return false // hrd_layer_set_idx
+            var cprmsPresent = false
+            if (i > 0) {
+                val b = br.readBits(1)
+                if (b == -1L) return false
+                cprmsPresent = b == 1L
+            }
+            if (!skipHrdParameters(br, cprmsPresent, maxSubLayers)) return false
+        }
+        return true
+    }
+
+    /**
+     * Skips one hrd_parameters() payload (hevc_parser HrdParameters::parse):
+     * common-level present flags and fixed field widths, then per-sub-layer
+     * rate/CPB parameters with Exp-Golomb values. When fixed rate is signaled
+     * low_delay is inferred false and cpb_cnt_minus1 still follows.
+     */
+    private fun skipHrdParameters(
+        br: VpsBitReader,
+        cprmsPresent: Boolean,
+        maxSubLayers: Int
+    ): Boolean {
+        var nalParams = false
+        var vclParams = false
+        var subpicParams = false
+        if (cprmsPresent) {
+            val nal = br.readBits(1)
+            val vcl = br.readBits(1)
+            if (nal == -1L || vcl == -1L) return false
+            nalParams = nal == 1L
+            vclParams = vcl == 1L
+            if (nalParams || vclParams) {
+                val subpic = br.readBits(1)
+                if (subpic == -1L) return false
+                subpicParams = subpic == 1L
+                if (subpicParams) {
+                    // tick_divisor_minus2(8) + du_cpb_removal_delay_increment(5)
+                    // + sub_pic_cpb_params_in_pic_timing_sei(1) + dpb_output_delay_du(5)
+                    if (!br.skipBits(8 + 5 + 1 + 5)) return false
+                }
+                // bit_rate_scale(4) + cpb_size_scale(4)
+                if (!br.skipBits(8)) return false
+                if (subpicParams && !br.skipBits(4)) return false // cpb_size_du_scale
+                // initial_cpb_removal_delay(5) + au_cpb_removal_delay(5)
+                // + dpb_output_delay(5)
+                if (!br.skipBits(15)) return false
+            }
+        }
+        for (i in 0 until maxSubLayers) {
+            var lowDelay = false
+            var nbCpb = 1
+            val fixedGeneral = br.readBits(1)
+            if (fixedGeneral == -1L) return false
+            var fixed = fixedGeneral == 1L
+            if (!fixed) {
+                val within = br.readBits(1)
+                if (within == -1L) return false
+                fixed = within == 1L
+            }
+            if (fixed) {
+                if (br.readUe() == -1L) return false // elemental_duration_in_tc_minus1
+            } else {
+                val low = br.readBits(1)
+                if (low == -1L) return false
+                lowDelay = low == 1L
+            }
+            if (!lowDelay) {
+                val cpb = br.readUe()
+                if (cpb == -1L || cpb > 31) return false
+                nbCpb = cpb.toInt() + 1
+            }
+            if (nalParams && !skipSubLayerHrd(br, nbCpb, subpicParams)) return false
+            if (vclParams && !skipSubLayerHrd(br, nbCpb, subpicParams)) return false
+        }
+        return true
+    }
+
+    /** Skips one sub_layer_hrd_parameters() payload (hevc_parser SubLayerHrdParameter). */
+    private fun skipSubLayerHrd(
+        br: VpsBitReader,
+        nbCpb: Int,
+        subpicParams: Boolean
+    ): Boolean {
+        for (j in 0 until nbCpb) {
+            if (br.readUe() == -1L) return false // bit_rate_value_minus1
+            if (br.readUe() == -1L) return false // cpb_size_value_minus1
+            if (subpicParams) {
+                if (br.readUe() == -1L) return false // cpb_size_du_value_minus1
+                if (br.readUe() == -1L) return false // bit_rate_du_value_minus1
+            }
+            if (br.readBits(1) == -1L) return false // cbr_flag
+        }
+        return true
     }
 
     /**
@@ -680,14 +852,20 @@ internal object DolbyVisionCompat {
             if (nalEnd - header >= 2) {
                 val nalType = ((buf[header].toInt() and 0xFF) ushr 1) and 0x3F
                 if (nalType == NAL_VPS) {
-                    val rewritten = rewriteVpsToHdr10(buf, header + 2, nalEnd)
-                    if (rewritten != null) {
-                        System.arraycopy(buf, code, out, write, codeLen)
-                        System.arraycopy(buf, header, out, write + codeLen, 2)
-                        System.arraycopy(rewritten, 0, out, write + codeLen + 2, rewritten.size)
-                        write += codeLen + 2 + rewritten.size
-                        changed = true
-                        nalWritten = true
+                    when (val res = rewriteVpsToHdr10(buf, header + 2, nalEnd)) {
+                        is VpsRewriteOutcome.Rewritten -> {
+                            System.arraycopy(buf, code, out, write, codeLen)
+                            System.arraycopy(buf, header, out, write + codeLen, 2)
+                            System.arraycopy(res.rbsp, 0, out, write + codeLen + 2, res.rbsp.size)
+                            write += codeLen + 2 + res.rbsp.size
+                            changed = true
+                            nalWritten = true
+                        }
+                        is VpsRewriteOutcome.Failed -> Log.i(
+                            "PLAYER_DV",
+                            "VPS rewrite failed (${res.reason}) — keeping original VPS in codec config"
+                        )
+                        VpsRewriteOutcome.NoDvExtension -> Unit
                     }
                 }
             }
@@ -738,16 +916,20 @@ internal object DolbyVisionCompat {
                 val layerId = ((b0 and 0x01) shl 5) or ((b1 and 0xF8) ushr 3)
                 when {
                     nalType == NAL_VPS -> {
-                        val rewritten = rewriteVpsToHdr10(buf, header + 2, nalEnd)
-                        if (rewritten != null) {
-                            changed = true
-                            stats?.vpsRewritten = true
-                            // start code + 2-byte NAL header + rewritten RBSP
-                            System.arraycopy(buf, code, buf, write, codeLen)
-                            System.arraycopy(buf, header, buf, write + codeLen, 2)
-                            System.arraycopy(rewritten, 0, buf, write + codeLen + 2, rewritten.size)
-                            write += codeLen + 2 + rewritten.size
-                            keep = false
+                        when (val res = rewriteVpsToHdr10(buf, header + 2, nalEnd)) {
+                            is VpsRewriteOutcome.Rewritten -> {
+                                changed = true
+                                stats?.vpsRewritten = true
+                                // start code + 2-byte NAL header + rewritten RBSP
+                                System.arraycopy(buf, code, buf, write, codeLen)
+                                System.arraycopy(buf, header, buf, write + codeLen, 2)
+                                System.arraycopy(res.rbsp, 0, buf, write + codeLen + 2, res.rbsp.size)
+                                write += codeLen + 2 + res.rbsp.size
+                                keep = false
+                            }
+                            is VpsRewriteOutcome.Failed ->
+                                stats?.vpsRewriteFailedReason = res.reason
+                            VpsRewriteOutcome.NoDvExtension -> Unit
                         }
                     }
                     nalType == NAL_DV_RPU -> {
@@ -760,7 +942,7 @@ internal object DolbyVisionCompat {
                         changed = true
                         if (stats != null) stats.elBytes += nalBytes
                     }
-                    nalType == NAL_PREFIX_SEI && stripHdr10Plus &&
+                    isHdr10PlusSeiNal(nalType) && stripHdr10Plus &&
                         seiCarriesHdr10Plus(buf, header + 2, nalEnd) -> {
                         keep = false
                         changed = true
@@ -812,15 +994,19 @@ internal object DolbyVisionCompat {
                 val layerId = ((b0 and 0x01) shl 5) or ((b1 and 0xF8) ushr 3)
                 when {
                     nalType == NAL_VPS -> {
-                        val rewritten = rewriteVpsToHdr10(buf, payload + 2, payload + nal)
-                        if (rewritten != null) {
-                            changed = true
-                            stats?.vpsRewritten = true
-                            writeLength(buf, write, rewritten.size, fieldLen)
-                            System.arraycopy(buf, payload, buf, write + fieldLen, 2)
-                            System.arraycopy(rewritten, 0, buf, write + fieldLen + 2, rewritten.size)
-                            write += fieldLen + 2 + rewritten.size
-                            keep = false
+                        when (val res = rewriteVpsToHdr10(buf, payload + 2, payload + nal)) {
+                            is VpsRewriteOutcome.Rewritten -> {
+                                changed = true
+                                stats?.vpsRewritten = true
+                                writeLength(buf, write, res.rbsp.size + 2, fieldLen)
+                                System.arraycopy(buf, payload, buf, write + fieldLen, 2)
+                                System.arraycopy(res.rbsp, 0, buf, write + fieldLen + 2, res.rbsp.size)
+                                write += fieldLen + 2 + res.rbsp.size
+                                keep = false
+                            }
+                            is VpsRewriteOutcome.Failed ->
+                                stats?.vpsRewriteFailedReason = res.reason
+                            VpsRewriteOutcome.NoDvExtension -> Unit
                         }
                     }
                     nalType == NAL_DV_RPU -> {
@@ -833,7 +1019,7 @@ internal object DolbyVisionCompat {
                         changed = true
                         if (stats != null) stats.elBytes += nal
                     }
-                    nalType == NAL_PREFIX_SEI && stripHdr10Plus &&
+                    isHdr10PlusSeiNal(nalType) && stripHdr10Plus &&
                         nal >= 4 && seiCarriesHdr10Plus(buf, payload + 2, payload + nal) -> {
                         keep = false
                         changed = true
@@ -1007,11 +1193,12 @@ internal object DolbyVisionCompat {
     }
 
     // ── Profile 7 / Profile 5 → Profile 8.1 conversion ───────────────────
-    // The "Convert to 8.1" mode (DV setting "8.1") rewrites DV streams to
-    // Profile 8.1 on the fly so Dolby Vision-capable displays that choke on
-    // Profile 7 (dual-layer Blu-ray remuxes) or Profile 5 (single-layer ICtCp)
-    // can play them as real Dolby Vision instead of black-screening. The
-    // bitstream-level change is small but structural:
+    // The "P7 → 8.1" mode (the default DV setting) rewrites Profile 7
+    // (dual-layer Blu-ray remuxes) to Profile 8.1 on the fly, and the P5 → 8.1
+    // toggle does the same for Profile 5 (single-layer ICtCp) on top of that
+    // mode — so Dolby Vision-capable displays that choke on P7 or P5 can play
+    // them as real Dolby Vision instead of black-screening. The bitstream-
+    // level change is small but structural:
     //
     //  - Profile 7 → 8.1: drop the enhancement layer NALs (layerId > 0 / 63),
     //    force the VPS to a single-layer parameter set, and in every RPU set
@@ -1642,15 +1829,19 @@ internal object DolbyVisionCompat {
                 val layerId = ((b0 and 0x01) shl 5) or ((b1 and 0xF8) ushr 3)
                 when {
                     nalType == NAL_VPS -> {
-                        val rewritten = rewriteVpsToHdr10(buf, header + 2, nalEnd)
-                        if (rewritten != null) {
-                            changed = true
-                            stats?.vpsRewritten = true
-                            System.arraycopy(buf, code, buf, write, codeLen)
-                            System.arraycopy(buf, header, buf, write + codeLen, 2)
-                            System.arraycopy(rewritten, 0, buf, write + codeLen + 2, rewritten.size)
-                            write += codeLen + 2 + rewritten.size
-                            keep = false
+                        when (val res = rewriteVpsToHdr10(buf, header + 2, nalEnd)) {
+                            is VpsRewriteOutcome.Rewritten -> {
+                                changed = true
+                                stats?.vpsRewritten = true
+                                System.arraycopy(buf, code, buf, write, codeLen)
+                                System.arraycopy(buf, header, buf, write + codeLen, 2)
+                                System.arraycopy(res.rbsp, 0, buf, write + codeLen + 2, res.rbsp.size)
+                                write += codeLen + 2 + res.rbsp.size
+                                keep = false
+                            }
+                            is VpsRewriteOutcome.Failed ->
+                                stats?.vpsRewriteFailedReason = res.reason
+                            VpsRewriteOutcome.NoDvExtension -> Unit
                         }
                     }
                     nalType == NAL_DV_RPU -> {
@@ -1670,7 +1861,7 @@ internal object DolbyVisionCompat {
                         changed = true
                         if (stats != null) stats.elBytes += nalBytes
                     }
-                    nalType == NAL_PREFIX_SEI && stripHdr10Plus &&
+                    isHdr10PlusSeiNal(nalType) && stripHdr10Plus &&
                         seiCarriesHdr10Plus(buf, header + 2, nalEnd) -> {
                         keep = false
                         changed = true
@@ -1722,15 +1913,19 @@ internal object DolbyVisionCompat {
                 val layerId = ((b0 and 0x01) shl 5) or ((b1 and 0xF8) ushr 3)
                 when {
                     nalType == NAL_VPS -> {
-                        val rewritten = rewriteVpsToHdr10(buf, payload + 2, payload + nal)
-                        if (rewritten != null) {
-                            changed = true
-                            stats?.vpsRewritten = true
-                            writeLength(buf, write, rewritten.size + 2, fieldLen)
-                            System.arraycopy(buf, payload, buf, write + fieldLen, 2)
-                            System.arraycopy(rewritten, 0, buf, write + fieldLen + 2, rewritten.size)
-                            write += fieldLen + 2 + rewritten.size
-                            keep = false
+                        when (val res = rewriteVpsToHdr10(buf, payload + 2, payload + nal)) {
+                            is VpsRewriteOutcome.Rewritten -> {
+                                changed = true
+                                stats?.vpsRewritten = true
+                                writeLength(buf, write, res.rbsp.size + 2, fieldLen)
+                                System.arraycopy(buf, payload, buf, write + fieldLen, 2)
+                                System.arraycopy(res.rbsp, 0, buf, write + fieldLen + 2, res.rbsp.size)
+                                write += fieldLen + 2 + res.rbsp.size
+                                keep = false
+                            }
+                            is VpsRewriteOutcome.Failed ->
+                                stats?.vpsRewriteFailedReason = res.reason
+                            VpsRewriteOutcome.NoDvExtension -> Unit
                         }
                     }
                     nalType == NAL_DV_RPU -> {
@@ -1750,7 +1945,7 @@ internal object DolbyVisionCompat {
                         changed = true
                         if (stats != null) stats.elBytes += nal
                     }
-                    nalType == NAL_PREFIX_SEI && stripHdr10Plus &&
+                    isHdr10PlusSeiNal(nalType) && stripHdr10Plus &&
                         nal >= 4 && seiCarriesHdr10Plus(buf, payload + 2, payload + nal) -> {
                         keep = false
                         changed = true

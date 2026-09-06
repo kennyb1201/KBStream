@@ -27,6 +27,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -69,6 +70,7 @@ fun SettingsScreen(
     var videoDecoder by remember { mutableIntStateOf(AppPreferences.getVideoDecoder(context)) }
     var audioDecoder by remember { mutableIntStateOf(AppPreferences.getAudioDecoder(context)) }
     var dvCompatMode by remember { mutableIntStateOf(AppPreferences.getDvCompatMode(context)) }
+    var convertP5To81 by remember { mutableStateOf(AppPreferences.getConvertP5To81(context)) }
     var stripHdr10Plus by remember { mutableStateOf(AppPreferences.getStripHdr10Plus(context)) }
     var aspectRatio by remember { mutableIntStateOf(AppPreferences.getDefaultAspectRatio(context)) }
     var preferredAudioLang by remember { mutableStateOf(AppPreferences.getPreferredAudioLanguage(context)) }
@@ -251,12 +253,17 @@ fun SettingsScreen(
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(bottom = 4.dp)
         )
+        Text(
+            text = "Handling for Dolby Vision files on TVs that don't support every profile",
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(
-                AppPreferences.DV_COMPAT_AUTO to "Profile 7",
-                AppPreferences.DV_COMPAT_OFF to "Off",
-                AppPreferences.DV_COMPAT_ALL to "All DV",
-                AppPreferences.DV_COMPAT_TO_81 to "8.1"
+                AppPreferences.DV_COMPAT_AUTO to "P7 \u2192 8.1",
+                AppPreferences.DV_COMPAT_OFF to "None",
+                AppPreferences.DV_COMPAT_ALL to "Strip All"
             ).forEach { (value, label) ->
                 KBCard(onClick = {
                     dvCompatMode = value
@@ -269,14 +276,39 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(2.dp))
         Text(
             text = when (dvCompatMode) {
-                AppPreferences.DV_COMPAT_AUTO -> "Profile 7 (remux) \u2192 HDR10; P4/P5/P8 play as Dolby Vision"
+                AppPreferences.DV_COMPAT_AUTO -> "Convert Blu-ray Profile 7 remuxes to Profile 8.1; P4/P5/P8 play as Dolby Vision"
                 AppPreferences.DV_COMPAT_OFF -> "Play files exactly as provided (device must handle DV)"
                 AppPreferences.DV_COMPAT_ALL -> "Convert every DV profile (P4/P5/P7/P8) \u2192 HDR10/HEVC — for non-DV TVs (P5 colors may be off)"
-                AppPreferences.DV_COMPAT_TO_81 -> "Convert P5 & P7 \u2192 Profile 8.1 for DV-capable TVs; P4/P8 play as Dolby Vision (P5 colors corrected by GLES/FFmpeg)"
                 else -> ""
             },
             color = KBTextLo,
             style = MaterialTheme.typography.labelSmall
+        )
+        if (dvCompatMode != AppPreferences.DV_COMPAT_AUTO) {
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = when (dvCompatMode) {
+                    AppPreferences.DV_COMPAT_OFF ->
+                        "None passes everything through — the P5 \u2192 8.1 toggle below is ignored"
+                    else ->
+                        "Strip All strips every profile — the P5 \u2192 8.1 toggle below is ignored"
+                },
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        ToggleRow(
+            label = "P5 \u2192 8.1",
+            description = "Convert Profile 5 (ICtCp) streams to Profile 8.1 — colors corrected for display",
+            checked = convertP5To81,
+            enabled = dvCompatMode == AppPreferences.DV_COMPAT_AUTO,
+            onToggle = {
+                convertP5To81 = it
+                AppPreferences.setConvertP5To81(context, it)
+            }
         )
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -590,10 +622,11 @@ private fun ToggleRow(
     label: String,
     description: String,
     checked: Boolean,
-    onToggle: (Boolean) -> Unit
+    onToggle: (Boolean) -> Unit,
+    enabled: Boolean = true
 ) {
     KBCard(
-        onClick = { onToggle(!checked) },
+        onClick = { if (enabled) onToggle(!checked) },
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
@@ -607,7 +640,7 @@ private fun ToggleRow(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = label,
-                    color = KBTextHi,
+                    color = if (enabled) KBTextHi else KBTextLo,
                     style = MaterialTheme.typography.bodySmall
                 )
                 Text(
@@ -625,6 +658,7 @@ private fun ToggleRow(
                         if (checked) KBAccent else KBSurface,
                         RoundedCornerShape(6.dp)
                     )
+                    .alpha(if (enabled) 1f else 0.35f)
                     .padding(horizontal = 14.dp, vertical = 8.dp)
             )
         }

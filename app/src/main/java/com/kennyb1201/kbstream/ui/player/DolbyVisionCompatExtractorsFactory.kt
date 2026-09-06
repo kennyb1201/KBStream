@@ -36,9 +36,10 @@ import java.io.EOFException
  * Detection happens in two stages. Tracks whose codec string declares Dolby
  * Vision (dvhe/dvh1 via a dvcc box) strip immediately and have their codec
  * rewritten so Media3 never queries a Dolby Vision decoder — but only when
- * [dvRewriteEnabled] is set (DV mode Auto or "All DV"). In Auto mode only
- * Profile 7 qualifies (every other DV profile is passed through so DV displays
- * get the real thing); with [convertAllProfiles] set ("All DV") every profile
+ * [dvRewriteEnabled] is set (DV mode "P7 → 8.1" or "Strip All"). In the
+ * "P7 → 8.1" mode only Profile 7 qualifies (every other DV profile is passed
+ * through so DV displays get the real thing); with [convertAllProfiles] set
+ * ("Strip All") every profile
  * — 4/5/7/8 — is converted for displays without Dolby Vision. Profiles 4/8
  * already carry a standard HDR10 base layer, so they are re-advertised as hvc1,
  * their VPS is rewritten to a clean single-layer parameter set (a DV VPS left
@@ -52,8 +53,14 @@ import java.io.EOFException
  * SEIs are removed from plain-HDR10+ releases so HDR10+-intolerant TVs don't
  * black-screen. With DV conversion disabled but the HDR10+ strip on (DV mode
  * Off + toggle), only the HDR10+ SEIs are removed and DV streams are never
- * touched. Verified-clean samples are forwarded untouched, so a false
- * negative only ever costs a few buffered samples, never picture data.
+ * touched. DV→HDR10 conversions themselves (Strip All) always drop
+ * HDR10+ SEI NALs from the samples regardless of the toggle — the converted
+ * stream is static HDR10, and HDR10+ dynamic metadata black-screens the same
+ * HDR10+-intolerant TVs these modes exist for (common on P8 WEB-DL encodes
+ * that carry DV + HDR10+ in one track). Media3 1.9 has no Format-level HDR10+
+ * passthrough, so the sample-level strip is the whole story. Verified-clean
+ * samples are forwarded untouched, so a false negative only ever costs a few
+ * buffered samples, never picture data.
  *
  * MKV variants where the RPU only exists as BlockAdditional side data are not
  * reachable here (stock Media3 discards that data before TrackOutput); on those
@@ -65,7 +72,8 @@ internal class DolbyVisionCompatExtractorsFactory(
     private val stripHdr10Plus: Boolean = false,
     private val convertAllProfiles: Boolean = false,
     private val dvRewriteEnabled: Boolean = true,
-    private val convertTo81: Boolean = false
+    private val convertP7To81: Boolean = false,
+    private val convertP5To81: Boolean = false
 ) : ExtractorsFactory {
 
     override fun createExtractors(): Array<Extractor> {
@@ -101,10 +109,11 @@ internal class DolbyVisionCompatExtractorsFactory(
             "PLAYER_DV",
             "Wrapping extractor=$simpleName framing=$framing " +
                 "allProfiles=$convertAllProfiles rewriteEnabled=$dvRewriteEnabled " +
-                "stripHdr10Plus=$stripHdr10Plus convertTo81=$convertTo81"
+                "stripHdr10Plus=$stripHdr10Plus convertP7To81=$convertP7To81 convertP5To81=$convertP5To81"
         )
         return VideoCompatExtractor(
-            extractor, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled, convertTo81
+            extractor, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
+            convertP7To81, convertP5To81
         )
     }
 }
@@ -119,14 +128,16 @@ private class VideoCompatExtractor(
     private val stripHdr10Plus: Boolean,
     private val convertAllProfiles: Boolean,
     private val dvRewriteEnabled: Boolean,
-    private val convertTo81: Boolean
+    private val convertP7To81: Boolean,
+    private val convertP5To81: Boolean
 ) : Extractor {
 
     override fun init(output: ExtractorOutput) {
         Log.i("PLAYER_DV", "Compat extractor initialized=${delegate.javaClass.simpleName}")
         delegate.init(
             VideoCompatExtractorOutput(
-                output, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled, convertTo81
+                output, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
+                convertP7To81, convertP5To81
             )
         )
     }
@@ -149,14 +160,16 @@ private class VideoCompatExtractorOutput(
     private val stripHdr10Plus: Boolean,
     private val convertAllProfiles: Boolean,
     private val dvRewriteEnabled: Boolean,
-    private val convertTo81: Boolean
+    private val convertP7To81: Boolean,
+    private val convertP5To81: Boolean
 ) : ExtractorOutput {
 
     override fun track(id: Int, type: Int): TrackOutput {
         val track = delegate.track(id, type)
         return if (type == C.TRACK_TYPE_VIDEO) {
             VideoCompatTrackOutput(
-                track, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled, convertTo81
+                track, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
+                convertP7To81, convertP5To81
             )
         } else {
             track
@@ -179,8 +192,12 @@ private class VideoCompatTrackOutput(
     private val stripHdr10Plus: Boolean,
     private val convertAllProfiles: Boolean,
     private val dvRewriteEnabled: Boolean,
-    private val convertTo81: Boolean
+    private val convertP7To81: Boolean,
+    private val convertP5To81: Boolean
 ) : TrackOutput {
+
+    /** True when either per-profile 8.1 conversion (P5/P7) is active. */
+    private val convertTo81 = convertP7To81 || convertP5To81
 
     private enum class Mode { NORMAL, SNIFFING, STRIPPING }
 
@@ -205,23 +222,16 @@ private class VideoCompatTrackOutput(
         )
         // A (re)emitted format starts a fresh sample window (seek / re-init).
         pendingLen = 0
-        // When DV conversion is disabled (the DV setting is Off and only the
-        // HDR10+ strip toggle is on), declared DV tracks must pass through
-        // untouched — no codec rewrite, no RPU strip.
-        val dvRewrite =
-            if (dvRewriteEnabled && !convertTo81) {
-                DolbyVisionCompat.hdr10Codec(format.codecs, convertAllProfiles)
-            } else {
-                null
-            }
-        // "8.1" mode: P5 / P7 declared streams are rewritten to Profile 8.1 —
-        // the codec stays in the dvhe/dvh1 family (so the Dolby Vision
-        // pipeline still engages) with the profile digits changed to 08, the
-        // VPS is forced to a single layer, the enhancement layer NALs are
-        // dropped, and every RPU is rewritten to 8.1 metadata with a fresh
-        // CRC. P4 / P8 declared streams have no matching to81Codec and pass
-        // through untouched as native Dolby Vision.
-        val to81Rewrite = if (convertTo81) DolbyVisionCompat.to81Codec(format.codecs) else null
+        // 8.1 conversion is per-profile: only declared P5/P7 streams whose
+        // toggle is on are rewritten — the codec stays in the dvhe/dvh1 family
+        // (so the Dolby Vision pipeline still engages) with the profile digits
+        // changed to 08, the VPS is forced to a single layer, the enhancement
+        // layer NALs are dropped, and every RPU is rewritten to 8.1 metadata
+        // with a fresh CRC. P4 / P8 declared streams have no matching to81Codec
+        // and follow the mode's default handling below.
+        val to81Rewrite =
+            if (convertTo81) DolbyVisionCompat.to81Codec(format.codecs, convertP7To81, convertP5To81)
+            else null
         if (to81Rewrite != null) {
             Log.i(
                 "PLAYER_DV",
@@ -241,6 +251,13 @@ private class VideoCompatTrackOutput(
             mode = Mode.STRIPPING
             return
         }
+        // When DV conversion is disabled (the DV setting is Off and only the
+        // HDR10+ strip / 8.1 toggles are on), declared DV tracks whose profile
+        // is not 8.1-converted must pass through untouched — no codec rewrite,
+        // no RPU strip.
+        val dvRewrite =
+            if (dvRewriteEnabled) DolbyVisionCompat.hdr10Codec(format.codecs, convertAllProfiles)
+            else null
         // Profiles 4/8 are single-layer streams whose base layer is already
         // standard HDR10 HEVC. Forwarding the in-band DV RPU / HDR10+ metadata
         // NALs untouched makes MTK-class decoders re-emit their output format on
@@ -277,11 +294,12 @@ private class VideoCompatTrackOutput(
         }
         mode = when {
             // Declared Dolby Vision (dvcc present) with DV conversion enabled:
-            // Auto rewrites only Profile 7, "All DV" rewrites every profile
-            // (4/5/7/8). Strip from the first sample and rewrite the codec
-            // string so Media3 never queries a DV decoder. P5 (ICtCp) keeps
-            // this path: its pixels are not HDR10, so the downstream GLES
-            // shader / FFmpeg conversion needs the rewritten stream.
+            // the "P7 → 8.1" mode rewrites only Profile 7 (via to81Codec above),
+            // "Strip All" rewrites every profile (4/5/7/8). Strip from the
+            // first sample and rewrite the codec string so Media3 never queries
+            // a DV decoder. P5 (ICtCp) keeps this path: its pixels are not
+            // HDR10, so the downstream GLES shader / FFmpeg conversion needs
+            // the rewritten stream.
             dvRewrite != null -> Mode.STRIPPING
             // No DV marker in the codec string — plain HEVC might still carry
             // in-band RPU when the muxer omitted the dvcc box (remuxes). Sniff
@@ -421,7 +439,7 @@ private class VideoCompatTrackOutput(
                         pendingBuf, sampleEnd, nalLengthFieldLength
                     )
             }
-            if (dvFound && dvRewriteEnabled) {
+            if (dvFound && (dvRewriteEnabled || convertTo81)) {
                 mode = Mode.STRIPPING
                 val action = if (convertTo81) "converting to Profile 8.1" else "stripping to HDR10"
                 Log.i(
@@ -485,43 +503,57 @@ private class VideoCompatTrackOutput(
         // decoder would have seen untouched.
         val inventory =
             if (!stripReported) DolbyVisionCompat.describeNals(pendingBuf, sampleEnd) else ""
+        // Every DV→HDR10 conversion (all non-8.1 strip paths) outputs static
+        // HDR10, so HDR10+ SEI NALs are dropped unconditionally — an
+        // HDR10+-intolerant TV black-screens on them just like DV. The separate
+        // "Strip HDR10+" toggle still governs plain-HDR10+ (non-DV) streams via
+        // the sniff path, and 8.1 conversion keeps toggle-driven behavior.
+        val effectiveStripHdr10Plus = stripHdr10Plus || !convertTo81
+        if (!stripHdr10Plus && !convertTo81 && !stripReported) {
+            Log.i(
+                "PLAYER_DV",
+                "DV→HDR10 conversion — stripping HDR10+ SEI from samples (toggle off: " +
+                    "HDR10+ survives only in 8.1 mode)"
+            )
+        }
         val stripped = if (convertTo81) {
             when (framing) {
                 NalFraming.ANNEX_B ->
                     DolbyVisionCompat.transformAnnexBTo81(
-                        pendingBuf, sampleEnd, stripHdr10Plus = stripHdr10Plus, stats = stats
+                        pendingBuf, sampleEnd, stripHdr10Plus = effectiveStripHdr10Plus, stats = stats
                     )
                 NalFraming.LENGTH_DELIMITED ->
                     DolbyVisionCompat.transformLengthDelimitedTo81(
                         pendingBuf, sampleEnd, nalLengthFieldLength,
-                        stripHdr10Plus = stripHdr10Plus, stats = stats
+                        stripHdr10Plus = effectiveStripHdr10Plus, stats = stats
                     )
             }
         } else {
             when (framing) {
                 NalFraming.ANNEX_B ->
                     DolbyVisionCompat.transformAnnexB(
-                        pendingBuf, sampleEnd, stripHdr10Plus = stripHdr10Plus, stats = stats
+                        pendingBuf, sampleEnd, stripHdr10Plus = effectiveStripHdr10Plus, stats = stats
                     )
                 NalFraming.LENGTH_DELIMITED ->
                     DolbyVisionCompat.transformLengthDelimited(
                         pendingBuf, sampleEnd, nalLengthFieldLength,
-                        stripHdr10Plus = stripHdr10Plus, stats = stats
+                        stripHdr10Plus = effectiveStripHdr10Plus, stats = stats
                     )
             }
         }
         if (stripped >= 0 && !stripReported) {
             stripReported = true
+            val vpsFail = stats.vpsRewriteFailedReason?.let { " vpsFail=$it" } ?: ""
             Log.i(
                 "PLAYER_DV",
                 if (convertTo81) {
                     "First 8.1-converted sample (codecs=${currentCodecs ?: "?"}) — " +
                         "RPU rewritten=${stats.rpuRewritten} EL=${stats.elBytes}B " +
-                        "HDR10+SEI=${stats.hdr10PlusBytes}B vpsRewritten=${stats.vpsRewritten} nals=$inventory"
+                        "HDR10+SEI=${stats.hdr10PlusBytes}B vpsRewritten=${stats.vpsRewritten}$vpsFail nals=$inventory"
                 } else {
                     "First stripped sample (codecs=${currentCodecs ?: "?"}) — " +
                         "dropped RPU=${stats.rpuBytes}B EL=${stats.elBytes}B HDR10+SEI=${stats.hdr10PlusBytes}B " +
-                        "vpsRewritten=${stats.vpsRewritten} nals=$inventory"
+                        "vpsRewritten=${stats.vpsRewritten}$vpsFail nals=$inventory"
                 }
             )
         }

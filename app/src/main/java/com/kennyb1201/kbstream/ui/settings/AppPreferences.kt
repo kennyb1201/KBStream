@@ -30,8 +30,10 @@ object AppPreferences {
     private const val KEY_DECODER_PRIORITY = "decoder_priority" // combined (one release), migrated below
     private const val KEY_VIDEO_DECODER = "video_decoder"
     private const val KEY_AUDIO_DECODER = "audio_decoder"                      // 0=auto, 1=ffmpeg-only
-    private const val KEY_DV_COMPAT_MODE = "dv_compat_mode"                  // 0=auto, 1=off, 3=all (2=legacy auto+hdr10+)
+    private const val KEY_DV_COMPAT_MODE = "dv_compat_mode"                  // 0=p7->8.1, 1=none, 3=strip all (2=legacy auto+hdr10+, 4=legacy combined 8.1)
     private const val KEY_STRIP_HDR10_PLUS = "strip_hdr10_plus"             // independent of the DV mode
+    private const val KEY_CONVERT_P7_TO_81 = "dv_convert_p7_to_81"          // P7 → Profile 8.1 (independent of the DV mode)
+    private const val KEY_CONVERT_P5_TO_81 = "dv_convert_p5_to_81"          // P5 → Profile 8.1 (independent of the DV mode)
     private const val KEY_DEFAULT_ASPECT_RATIO = "default_aspect_ratio"     // 0=fit, 1=zoom, 2=fill
     private const val KEY_PREFERRED_AUDIO_LANG = "preferred_audio_language"   // BCP-47 tag or "" for auto
     private const val KEY_PREFERRED_SUBTITLE_LANG = "preferred_subtitle_language" // BCP-47 tag or "" for auto
@@ -175,29 +177,38 @@ object AppPreferences {
     }
 
     // ── Dolby Vision compatibility ─────────────────────────────────────
-    // 0 = Auto: rewrite only dual-layer Profile 7 (dvcc-declared, or sniffed
-    //     in-band on plain-HEVC remuxes) to HDR10 so it plays through the
-    //     hardware HEVC decoder. Every other DV profile (4/5/8) passes through
-    //     untouched so a Dolby-Vision display plays it as real Dolby Vision.
-    // 1 = Off: pass streams through untouched (for devices that handle DV
+    // 0 = "P7 → 8.1" (Auto): convert dual-layer Profile 7 (dvcc-declared, or
+    //     sniffed in-band on plain-HEVC remuxes) to Profile 8.1 in the
+    //     bitstream so it plays through the hardware HEVC decoder on Dolby
+    //     Vision displays that accept 8.1 but not Blu-ray P7. Every other DV
+    //     profile (4/5/8) passes through untouched so a Dolby-Vision display
+    //     plays it as real Dolby Vision — unless the P5 → 8.1 toggle below is
+    //     on, which converts P5 (ICtCp) to 8.1 too.
+    // 1 = None: pass streams through untouched (for devices that handle DV
     //     natively, or to compare against the default behavior).
-    // 3 = All: rewrite every DV profile — 4/5/7/8 — for TVs without Dolby
-    //     Vision. P5 is a best-effort plain-HEVC fallback (no HDR10 base,
-    //     colors may be off).
-    // 4 = 8.1: convert P5 and P7 to Profile 8.1 in the bitstream (RPU
-    //     metadata rewritten per dovi_tool convert mode 2, enhancement layer
-    //     dropped, single-layer VPS, codec dvhe/dvh1.08) for Dolby Vision
-    //     displays that accept 8.1 but not Blu-ray P7 or ICtCp P5. P4/P8 pass
-    //     through untouched as native DV. P5 pixels stay ICtCp in the stream —
-    //     the GLES shader / FFmpeg color path converts them for display.
+    // 3 = Strip All: rewrite every DV profile — 4/5/7/8 — for TVs without
+    //     Dolby Vision. P5 is a best-effort plain-HEVC fallback (no HDR10
+    //     base, colors may be off).
+    // The P5 → 8.1 conversion is an independent toggle that composes with the
+    // "P7 → 8.1" mode: when on, P5 is converted to Profile 8.1 in the
+    // bitstream (RPU metadata rewritten per dovi_tool convert mode 2,
+    // enhancement layer dropped, single-layer VPS, codec dvhe/dvh1.08) for
+    // Dolby Vision displays that accept 8.1 but not ICtCp P5. It is ignored
+    // in "None" and "Strip All" modes. P5 pixels stay ICtCp in the stream —
+    // the GLES shader / FFmpeg color path converts them for display. P4/P8
+    // are never 8.1-converted; they follow the mode (Strip All strips them to
+    // HDR10, otherwise they pass through as native DV).
     // HDR10+ (ST 2094-40) stripping is a separate toggle: getStripHdr10Plus.
     const val DV_COMPAT_AUTO = 0
     const val DV_COMPAT_OFF = 1
     // Legacy value of the old "Auto + strip HDR10+" mode. Kept so prefs from
-    // earlier builds migrate cleanly — reading it now behaves as Auto with the
-    // HDR10+ strip toggle turned on.
+    // earlier builds migrate cleanly — reading it now behaves as the "P7 →
+    // 8.1" mode with the HDR10+ strip toggle turned on.
     const val DV_COMPAT_AUTO_HDR10_PLUS_LEGACY = 2
     const val DV_COMPAT_ALL = 3
+    // Legacy value of the old combined "8.1" mode (converted both P5 and P7).
+    // Reading it now migrates to the "P7 → 8.1" mode with the P5 → 8.1
+    // toggle on.
     const val DV_COMPAT_TO_81 = 4
 
     fun getDvCompatMode(context: Context): Int {
@@ -212,6 +223,18 @@ object AppPreferences {
                 .apply()
             return DV_COMPAT_AUTO
         }
+        if (mode == DV_COMPAT_TO_81) {
+            // The old combined "8.1" mode converted P5 AND P7. It was replaced
+            // by the "P7 → 8.1" mode (P7 conversion is implied by the mode
+            // itself) plus the P5 → 8.1 toggle — P4/P8 pass through untouched,
+            // exactly like 8.1 mode did.
+            p.edit()
+                .putInt(KEY_DV_COMPAT_MODE, DV_COMPAT_AUTO)
+                .putBoolean(KEY_CONVERT_P7_TO_81, true)
+                .putBoolean(KEY_CONVERT_P5_TO_81, true)
+                .apply()
+            return DV_COMPAT_AUTO
+        }
         return mode
     }
 
@@ -219,11 +242,34 @@ object AppPreferences {
         prefs(context).edit().putInt(KEY_DV_COMPAT_MODE, mode).apply()
     }
 
+    // ── Per-profile 8.1 conversion toggles ───────────────────────────────
+    // P7 → 8.1 is now the "P7 → 8.1" mode itself (DV_COMPAT_AUTO), not a
+    // separate UI toggle. The P5 → 8.1 toggle below composes with that mode:
+    // when on, declared P5 (ICtCp) streams are converted to Profile 8.1 in the
+    // bitstream instead of passing through as native DV — for Dolby Vision
+    // displays that accept 8.1 but not ICtCp P5. Ignored in "None" and
+    // "Strip All" modes. The stored P7 flag is kept only for legacy-pref
+    // migration (the old combined "8.1" mode); DV_COMPAT_AUTO always implies
+    // P7 → 8.1.
+    fun getConvertP7To81(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_CONVERT_P7_TO_81, false)
+
+    fun setConvertP7To81(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_CONVERT_P7_TO_81, enabled).apply()
+    }
+
+    fun getConvertP5To81(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_CONVERT_P5_TO_81, false)
+
+    fun setConvertP5To81(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_CONVERT_P5_TO_81, enabled).apply()
+    }
+
     // ── HDR10+ (ST 2094-40) stripping ──────────────────────────────────
     // Independent of the DV mode above: removes dynamic HDR10+ metadata from
     // plain-HEVC (HDR10+ without DV) and DV-converted streams, for displays
-    // that black-screen on HDR10+ content. Works alongside Auto/All DV; in
-    // Off mode it strips HDR10+ only and never touches DV.
+    // that black-screen on HDR10+ content. Works alongside the P7 → 8.1 and
+    // Strip All modes; in None mode it strips HDR10+ only and never touches DV.
     fun getStripHdr10Plus(context: Context): Boolean =
         prefs(context).getBoolean(KEY_STRIP_HDR10_PLUS, false)
 
