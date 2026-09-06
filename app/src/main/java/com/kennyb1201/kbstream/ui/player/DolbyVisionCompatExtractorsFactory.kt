@@ -40,10 +40,11 @@ import java.io.EOFException
  * Profile 7 qualifies (every other DV profile is passed through so DV displays
  * get the real thing); with [convertAllProfiles] set ("All DV") every profile
  * — 4/5/7/8 — is converted for displays without Dolby Vision. Profiles 4/8
- * already carry a standard HDR10 base layer, so they are only re-advertised
- * as hvc1 and passed through bit-exact (mutating them is what some decoders
- * choke on); P5 has no HDR10 base, so it stays a best-effort plain-HEVC
- * fallback that the GLES shader / FFmpeg path color-corrects. Tracks reported as
+ * already carry a standard HDR10 base layer, so they are re-advertised as hvc1
+ * and forwarded with only the DV RPU / EL and (per toggle) HDR10+ SEI NALs
+ * stripped — every other byte stays bit-exact, since deeper mutation is what
+ * some decoders choke on; P5 has no HDR10 base, so it stays a best-effort
+ * plain-HEVC fallback that the GLES shader / FFmpeg path color-corrects. Tracks reported as
  * plain HEVC (hvc1/hev1 — muxers that omitted the dvcc marker) are sniffed
  * over the first samples: in-band RPU NALs engage the same strip (DV remuxes,
  * when DV conversion is enabled), and with [stripHdr10Plus] set, ST 2094-40
@@ -179,6 +180,7 @@ private class VideoCompatTrackOutput(
     private var nalLengthFieldLength = 4
     private var pendingBuf = ByteArray(0)
     private var pendingLen = 0
+    private var stripReported = false
     private val scratch = ParsableByteArray()
 
     override fun durationUs(durationUs: Long) = delegate.durationUs(durationUs)
@@ -202,16 +204,20 @@ private class VideoCompatTrackOutput(
                 null
             }
         // Profiles 4/8 are single-layer streams whose base layer is already
-        // standard HDR10 HEVC. Rewriting the VPS or stripping the in-band
-        // RPU/SEI NALs is exactly what some hardware decoders choke on (they
-        // configure fine but never output a frame), while other players feed
-        // the identical untouched stream to the same decoder and it plays.
-        // So for these profiles: re-advertise as plain HEVC for decoder
-        // matching and forward every sample bit-exact.
+        // standard HDR10 HEVC. Deep mutation (VPS rewriting, init-data
+        // filtering, color injection) is what some hardware decoders choke on
+        // (they configure fine but never output a frame). But forwarding the
+        // in-band DV RPU / HDR10+ metadata NALs untouched is also wrong: MTK-
+        // class decoders re-emit their output format on every such NAL and the
+        // compositor drops the frames — black screen with audio. So for these
+        // profiles: re-advertise as plain HEVC and strip only those metadata
+        // NALs (62/63 + HDR10+ SEI per toggle), forwarding every other byte
+        // bit-exact.
         if (dvRewrite != null && DolbyVisionCompat.isHdr10BaseLayerProfile(format.codecs)) {
             Log.i(
                 "PLAYER_DV",
-                "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — HDR10 base layer, passing stream through untouched"
+                "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — HDR10 base layer: " +
+                    "re-advertising as hvc1, stripping DV RPU/HDR10+ metadata NALs only"
             )
             var builder = format.buildUpon().setCodecs(dvRewrite)
             // Keep the original declared DV codec (e.g. "dvhe.08.06") on the
@@ -223,7 +229,15 @@ private class VideoCompatTrackOutput(
                 builder = builder.setSampleMimeType(MimeTypes.VIDEO_H265)
             }
             delegate.format(builder.build())
-            mode = Mode.NORMAL
+            // Samples stay bit-exact EXCEPT the DV RPU / EL NALs (types 62/63)
+            // and, when the user's toggle is on, the HDR10+ SEIs. Feeding those
+            // to MTK-class HEVC decoders makes them re-emit their output format
+            // on every frame ("Resolution change XxX to XxX" at video fps) and
+            // the compositor drops the frames — black screen with audio, which
+            // is exactly what other players avoid by stripping this metadata.
+            // stripAnnexB returns -1 (forward untouched) for clean samples, so
+            // the rest of the stream is never mutated.
+            mode = Mode.STRIPPING
             return
         }
         mode = when {
@@ -441,6 +455,14 @@ private class VideoCompatTrackOutput(
                     pendingBuf, sampleEnd, nalLengthFieldLength,
                     stripDv = dvRewriteEnabled, stripHdr10Plus = stripHdr10Plus
                 )
+        }
+        if (stripped >= 0 && !stripReported) {
+            stripReported = true
+            Log.i(
+                "PLAYER_DV",
+                "First sample with DV RPU/HDR10+ NALs removed " +
+                    "(codecs=${currentCodecs ?: "?"}) — ${sampleEnd - stripped} bytes dropped"
+            )
         }
         emit(if (stripped >= 0) stripped else sampleEnd)
 
