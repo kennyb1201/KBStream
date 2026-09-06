@@ -159,43 +159,37 @@ internal object DolbyVisionCompat {
         private const val ICtCp_TO_REC2020_B_Cp = 0.1744
 
         /**
-         * ST.2084 (PQ) electro-optical transfer function parameters.
-         * V = ((C1 + C2 * L^n) / (1 + C3 * L^n)) * L - C4
-         * where L is the linear signal (0..1) and V is the PQ-encoded value (0..1).
+         * ST.2084 (PQ) transfer function parameters (ITU-R BT.2100):
+         *   EOTF:  L = (max(V^(1/m2) - c1, 0) / (c2 - c3 * V^(1/m2)))^(1/m1)
+         *   OETF:  V = ((c1 + c2 * L^m1) / (1 + c3 * L^m1))^m2
+         * where L is linear light (0..1) and V is the PQ-encoded value (0..1).
          */
-        private const val PQ_M1 = 61900.0 / 1000000.0  // C1
-        private const val PQ_M2 = 13081.0 / 1000000.0   // C2
-        private const val PQ_M3 = 3424.0 / 1000000.0    // C3
-        private const val PQ_M4 = 2523.0 / 1000000.0    // C4
-        private const val PQ_M5 = 2410.0 / 1000000.0    // n
-        private const val PQ_M6 = 8816.0 / 1000000.0    // m (for inverse)
-        private const val PQ_M7 = 181.0 / 1000000.0     // (for inverse)
+        private const val PQ_M1 = 0.1593017578125   // 2610 / 16384
+        private const val PQ_M2 = 78.84375           // 2523 / 32
+        private const val PQ_C1 = 0.8359375          // 3424 / 4096
+        private const val PQ_C2 = 18.8515625         // 2413 / 128
+        private const val PQ_C3 = 18.6875            // 2392 / 128
 
         /**
-         * Encodes a linear signal (0..1) to PQ (ST.2084) value (0..1).
-         * V = ((C1 + C2 * L^n) / (1 + C3 * L^n)) * L - C4
+         * Encodes a linear signal (0..1) to a PQ (ST.2084) value (0..1).
+         * V = ((c1 + c2 * L^m1) / (1 + c3 * L^m1))^m2
          */
         fun linearToPq(linear: Double): Double {
-            val lN = Math.pow(linear, PQ_M5)
-            return ((PQ_M1 + PQ_M2 * lN) / (1.0 + PQ_M3 * lN)) * linear - PQ_M4
+            val l = Math.max(linear, 0.0)
+            val lp = Math.pow(l, PQ_M1)
+            return Math.pow((PQ_C1 + PQ_C2 * lp) / (1.0 + PQ_C3 * lp), PQ_M2)
         }
 
         /**
-         * Decodes a PQ value (0..1) to linear signal (0..1).
-         * L = ((P4-1) * V / (P5 - P5 * V))^(1/m)
-         * Simplified inverse of the PQ EOTF.
+         * Decodes a PQ value (0..1) to a linear signal (0..1).
+         * L = (max(V^(1/m2) - c1, 0) / (c2 - c3 * V^(1/m2)))^(1/m1)
          */
         fun pqToLinear(pq: Double): Double {
-            val v = pq
-            val p3 = PQ_M3
-            val p4 = PQ_M4
-            val p5 = PQ_M5
-            val p1 = PQ_M1
-            val p2 = PQ_M2
-            // Inverse PQ: solve for L given V
-            // Using the approximation from ITU-R BT.2100-2
-            val lN = Math.pow((p1 - p2 * v) / (v - p3 - p4 * v), 1.0 / p5)
-            return lN
+            val v = Math.max(pq, 0.0)
+            val vp = Math.pow(v, 1.0 / PQ_M2)
+            val num = Math.max(vp - PQ_C1, 0.0)
+            val den = Math.max(PQ_C2 - PQ_C3 * vp, 1e-6)
+            return Math.pow(num / den, 1.0 / PQ_M1)
         }
 
         /**

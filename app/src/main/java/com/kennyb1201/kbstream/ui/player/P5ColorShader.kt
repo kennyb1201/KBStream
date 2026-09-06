@@ -1,6 +1,5 @@
 package com.kennyb1201.kbstream.ui.player
 
-import android.graphics.SurfaceTexture
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.opengl.Matrix
@@ -28,11 +27,14 @@ internal object P5ColorShader {
         uniform samplerExternalOES texICtCp;
         uniform mat4 texMatrix;
 
-        const float PQ_M1 = 61900.0 / 1000000.0;
-        const float PQ_M2 = 13081.0 / 1000000.0;
-        const float PQ_M3 = 3424.0 / 1000000.0;
-        const float PQ_M4 = 2523.0 / 1000000.0;
-        const float PQ_M5 = 2410.0 / 1000000.0;
+        // SMPTE ST 2084 (PQ) transfer function constants (ITU-R BT.2100):
+        //   EOTF:  L = (max(V^(1/m2) - c1, 0) / (c2 - c3 * V^(1/m2)))^(1/m1)
+        //   OETF:  V = ((c1 + c2 * L^m1) / (1 + c3 * L^m1))^m2
+        const float PQ_M1 = 0.1593017578125;   // 2610 / 16384
+        const float PQ_M2 = 78.84375;           // 2523 / 32
+        const float PQ_C1 = 0.8359375;          // 3424 / 4096
+        const float PQ_C2 = 18.8515625;         // 2413 / 128
+        const float PQ_C3 = 18.6875;            // 2392 / 128
 
         const mat3 ICtCp_TO_LINEAR = mat3(
             1.0,  0.3479,  0.1193,
@@ -40,16 +42,20 @@ internal object P5ColorShader {
             1.0, -0.3101,  0.1744
         );
 
+        // PQ EOTF: decode a PQ-encoded sample back to linear light.
         float decodeICtCpComponent(float pqValue) {
             float v = max(pqValue, 0.0);
-            float lN = pow((PQ_M1 - PQ_M2 * v) / (v - PQ_M3 - PQ_M4 * v), 1.0 / PQ_M5);
-            return lN;
+            float vp = pow(v, 1.0 / PQ_M2);
+            float num = max(vp - PQ_C1, 0.0);
+            float den = max(PQ_C2 - PQ_C3 * vp, 1e-6);
+            return pow(num / den, 1.0 / PQ_M1);
         }
 
+        // PQ OETF: re-encode linear light as a PQ sample.
         float encodePQ(float linear) {
             float l = max(linear, 0.0);
-            float lN = pow(l, PQ_M5);
-            return ((PQ_M1 + PQ_M2 * lN) / (1.0 + PQ_M3 * lN)) * l - PQ_M4;
+            float lp = pow(l, PQ_M1);
+            return pow((PQ_C1 + PQ_C2 * lp) / (1.0 + PQ_C3 * lp), PQ_M2);
         }
 
         void main() {
@@ -184,12 +190,11 @@ internal object P5ColorShader {
         System.arraycopy(matrix, 0, texMatrix, 0, 16)
     }
 
-    /** Uploads the SurfaceTexture frame into the sampled texture. */
-    fun uploadTexture(surfaceTexture: SurfaceTexture) {
+    /** Binds the OES texture for sampling (the caller already updated the frame). */
+    fun bindTexture() {
         ensureInitialized()
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texId)
-        surfaceTexture.updateTexImage()
     }
 
     /** Binds the texture uniform. */
@@ -230,6 +235,19 @@ internal object P5ColorShader {
             val textures = intArrayOf(texId)
             GLES20.glDeleteTextures(1, textures, 0)
         }
+        program = 0
+        texId = 0
+        initialized = false
+    }
+
+    /**
+     * Drops the compiled program / texture handles without issuing GL calls
+     * (safe from any thread). Call when the GLSurfaceView's EGL context is
+     * (re)created: ids from a dead context are invalid in the new one, so
+     * reusing them renders garbage (green/black) with no GL error. The next
+     * [ensureInitialized] then rebuilds everything in the fresh context.
+     */
+    fun reset() {
         program = 0
         texId = 0
         initialized = false

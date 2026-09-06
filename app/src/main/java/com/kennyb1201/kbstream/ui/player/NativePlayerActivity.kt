@@ -342,6 +342,11 @@ class NativePlayerActivity : ComponentActivity() {
     private var forceTextureViewFallback = false
     // Whether P5 color correction via GLES is currently active
     private var p5GlesActive = false
+    // One-shot latch: P5 is only known after onTracksChanged delivers the
+    // declared (pre-rewrite) codec, which is after the player was built. When
+    // that happens before the first frame, rebuild once so the GLES/FFmpeg
+    // color path engages from the start.
+    private var p5ReroutePending = false
     // Original declared DV codec (e.g. "dvhe.07.06") of the current video
     // track when the DV → HDR10 strip rewrote it; null for everything else.
     // Surfaced in the codec badge so the exact DV profile stays visible
@@ -1139,6 +1144,7 @@ class NativePlayerActivity : ComponentActivity() {
         videoTrackPresent = false
         firstFrameRendered = false
         blackVideoNoticeShown = false
+        p5ReroutePending = false
         // The surface reset is cheap and valid on every attempt (including the
         // software one); only the software retry itself is once-per-session.
         blackVideoSurfaceRetried = false
@@ -1196,22 +1202,14 @@ class NativePlayerActivity : ComponentActivity() {
         // (giving wrong colors). Reset each attempt so the setting only applies to the
         // current stream.
         val p5Content = currentCodecs?.let { DolbyVisionCompat.isP5Profile(it) } ?: false
-        if (p5Content && dvRewriteEnabled && !forceSoftwareDecoder) {
-            forceP5SoftwareDecode = true
-            forceSoftwareDecoder = true
-            Log.i(
-                "PLAYER_DV",
-                "P5 (ICtCp) content detected — forcing FFmpeg software decoder " +
-                    "for ICtCp→HDR10 color conversion"
-            )
-        }
-        // Decide which video view to use for P5 content:
-        // - P5VideoGlesView: P5 + no FFmpeg + GLES 3.0 available (GPU color conversion)
-        // - FFmpeg: P5 + user selected software decoder
+        val userWantsFfmpeg = videoDecoder == AppPreferences.VIDEO_DECODER_FFMPEG
+        // Decide which video path to use for P5 content:
+        // - P5VideoGlesView: P5 + no FFmpeg + GLES available (GPU color conversion)
+        // - FFmpeg: P5 + user selected software decoder, or GLES unavailable
         // - PlayerView: everything else
         val useP5GlesView = p5Content &&
             !forceSoftwareDecoder &&
-            videoDecoder != AppPreferences.VIDEO_DECODER_FFMPEG &&
+            !userWantsFfmpeg &&
             P5ColorShader.hasGles3()
         if (useP5GlesView && !p5GlesActive) {
             Log.i(
@@ -1226,6 +1224,20 @@ class NativePlayerActivity : ComponentActivity() {
             p5VideoGlesView.visibility = View.GONE
             playerView.visibility = View.VISIBLE
             p5GlesActive = false
+        }
+        // Force the FFmpeg fallback only when the GLES path can't run (user
+        // picked software, or the device lacks GLES). The previous version
+        // forced software for every P5, which made the GLES branch above dead
+        // code — hardware P5 without either correction renders ICtCp pixels as
+        // Rec.2020 PQ (green tint).
+        if (p5Content && dvRewriteEnabled && !forceSoftwareDecoder && !useP5GlesView) {
+            forceP5SoftwareDecode = true
+            forceSoftwareDecoder = true
+            Log.i(
+                "PLAYER_DV",
+                "P5 (ICtCp) content detected — forcing FFmpeg software decoder " +
+                    "for ICtCp→HDR10 color conversion"
+            )
         }
         // Audio extension mode follows the independent audio decoder priority
         // (Nuvio-style): 0 = device only (no FFmpeg at all), 1 = FFmpeg
@@ -1552,13 +1564,46 @@ class NativePlayerActivity : ComponentActivity() {
                         streamHeight = fmt.height
                         streamBitrate = fmt.bitrate
                         streamCodec = codec.ifBlank { null }
-                        currentCodecs = codec
                         streamMimeType = fmt.sampleMimeType
                         // A declared-DV track that the DV → HDR10 strip rewrote
                         // carries its original codec ("dvhe.07.06") in the
                         // format label — remember it for the codec badge.
-                        streamDeclaredDvCodec =
+                        val declaredDvCodec =
                             fmt.label?.takeIf { dvLabelFromCodec(it) != null }
+                        streamDeclaredDvCodec = declaredDvCodec
+                        // P5 detection keys off the DECLARED codec, not the
+                        // rewritten codecs string: the extractor already turned
+                        // dvhe.05.06 into hvc1.2.4 by the time the track arrives,
+                        // and isP5Profile() never matches the rewritten one. That
+                        // left P5 undetected (no GLES view, no FFmpeg force) and
+                        // hardware decode rendered ICtCp as Rec.2020 PQ.
+                        currentCodecs = declaredDvCodec ?: codec.ifBlank { null }
+                        // P5 is only known now (the rewriter delivers the declared
+                        // codec in the label), which is after createPlayer() ran.
+                        // If the player was built before P5 was detected and has
+                        // not rendered a frame yet, rebuild once so the GLES (or
+                        // FFmpeg fallback) color path engages from the start.
+                        if (declaredDvCodec != null &&
+                            DolbyVisionCompat.isP5Profile(declaredDvCodec) &&
+                            !p5GlesActive && !forceSoftwareDecoder &&
+                            !firstFrameRendered && !p5ReroutePending
+                        ) {
+                            p5ReroutePending = true
+                            Log.i(
+                                "PLAYER_DV",
+                                "P5 content detected after player start — rebuilding " +
+                                    "player to activate color correction"
+                            )
+                            handler.post {
+                                if (!p5GlesActive && !forceSoftwareDecoder && !firstFrameRendered) {
+                                    recreatePlayer()
+                                } else {
+                                    // State changed meanwhile (watchdog recovery,
+                                    // surface reset, frame rendered) — nothing to do.
+                                    p5ReroutePending = false
+                                }
+                            }
+                        }
                         Log.i(
                             "PLAYER_CODEC",
                             "video codec=$codec mime=${fmt.sampleMimeType} " +
