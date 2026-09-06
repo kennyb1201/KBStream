@@ -7,6 +7,8 @@ import android.opengl.GLSurfaceView
 import android.util.AttributeSet
 import android.view.Surface
 import androidx.media3.exoplayer.ExoPlayer
+import javax.microedition.khronos.opengles.GL10
+import javax.microedition.khronos.egl.EGLConfig
 
 /**
  * GLSurfaceView-based video renderer for P5 (ICtCp) content.
@@ -38,7 +40,7 @@ class P5VideoGlesView(
         renderMode = RENDERMODE_WHEN_DIRTY
     }
 
-    override fun onSurfaceCreated(gl: javax.microedition.khronos.opengles.GL10?, config: javax.microedition.khronos.egl.EGLConfig?) {
+    override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         videoTextureId = createTexture()
         surfaceTexture = SurfaceTexture(videoTextureId)
         videoSurface = Surface(surfaceTexture)
@@ -46,18 +48,24 @@ class P5VideoGlesView(
         player?.setVideoSurface(videoSurface)
     }
 
-    override fun onSurfaceChanged(gl: javax.microedition.khronos.opengles.GL10?, width: Int, height: Int) {
+    override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
         GLES20.glViewport(0, 0, width, height)
     }
 
-    override fun onDrawFrame(gl: javax.microedition.khronos.opengles.GL10?) {
+    override fun onDrawFrame(gl: GL10?) {
         val st = surfaceTexture ?: return
         st.updateTexImage()
 
-        // TODO: Apply P5ColorShader ICtCp→PQ conversion here
-        // For now, just render the surface texture directly (no color conversion)
-        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
-        GLES20.glClearColor(0f, 0f, 0f, 1f)
+        // Apply P5ColorShader ICtCp→PQ conversion (skip if program failed to compile)
+        if (P5ColorShader.getProgram() != 0) {
+            P5ColorShader.uploadTexture(st)
+            P5ColorShader.bind()
+            P5ColorShader.renderFullscreenQuad()
+            P5ColorShader.unbind()
+        } else {
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+            GLES20.glClearColor(0f, 0f, 0f, 1f)
+        }
     }
 
     fun setPlayer(player: ExoPlayer) {

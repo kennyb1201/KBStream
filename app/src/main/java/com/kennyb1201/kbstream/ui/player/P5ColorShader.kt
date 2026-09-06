@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.player
 
+import android.graphics.SurfaceTexture
 import android.opengl.GLES20
 import android.opengl.GLES30
 import android.opengl.GLUtils
@@ -8,9 +9,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
 
-/**
- * OpenGL ES shader utilities for P5 (ICtCp) → Rec.2020 PQ color conversion.
- */
+/** OpenGL ES shader utilities for P5 (ICtCp) → Rec.2020 PQ color conversion. */
 internal object P5ColorShader {
 
     private const val VERTEX_SHADER = """
@@ -28,14 +27,12 @@ internal object P5ColorShader {
         uniform sampler2D texICtCp;
         uniform mat4 texMatrix;
 
-        // ST.2084 (PQ) EOTF parameters
         const float PQ_M1 = 61900.0 / 1000000.0;
         const float PQ_M2 = 13081.0 / 1000000.0;
         const float PQ_M3 = 3424.0 / 1000000.0;
         const float PQ_M4 = 2523.0 / 1000000.0;
         const float PQ_M5 = 2410.0 / 1000000.0;
 
-        // ICtCp to linear Rec.2020 RGB matrix (ISO 20941)
         const mat3 ICtCp_TO_LINEAR = mat3(
             1.0,  0.3479,  0.1193,
             1.0, -0.0378, -0.0550,
@@ -85,11 +82,14 @@ internal object P5ColorShader {
         .order(ByteOrder.nativeOrder())
         .asFloatBuffer()
         .put(floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f))
-        
+        .position(0)
+
+    private val texMatrix = FloatArray(16)
 
     init {
         program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER)
         texId = createTexture()
+        Matrix.setIdentityM(texMatrix, 0)
     }
 
     private fun createProgram(vertexSrc: String, fragmentSrc: String): Int {
@@ -150,7 +150,7 @@ internal object P5ColorShader {
     fun getProgram(): Int = program
 
     /** Uploads the SurfaceTexture as a GLES texture. */
-    fun uploadTexture(surfaceTexture: android.graphics.SurfaceTexture) {
+    fun uploadTexture(surfaceTexture: SurfaceTexture) {
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texId)
         surfaceTexture.updateTexImage()
@@ -160,6 +160,29 @@ internal object P5ColorShader {
     fun bindTextureUniform(prog: Int) {
         val loc = GLES20.glGetUniformLocation(prog, "texICtCp")
         if (loc >= 0) GLES20.glUniform1i(loc, 0)
+        val matLoc = GLES20.glGetUniformLocation(prog, "texMatrix")
+        if (matLoc >= 0) GLES20.glUniformMatrix4fv(matLoc, 1, false, texMatrix, 0)
+    }
+
+    /** Bind shader and set common state. */
+    fun bind() {
+        GLES20.glUseProgram(program)
+        bindTextureUniform(program)
+    }
+
+    /** Unbind shader. */
+    fun unbind() {
+        GLES20.glUseProgram(0)
+    }
+
+    /** Renders a full-screen quad. */
+    fun renderFullscreenQuad() {
+        val posLoc = GLES20.glGetAttribLocation(program, "aPosition")
+        vertexBuffer.position(0)
+        GLES20.glVertexAttribPointer(posLoc, 2, GLES20.GL_FLOAT, false, 0, vertexBuffer)
+        GLES20.glEnableVertexAttribArray(posLoc)
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+        GLES20.glDisableVertexAttribArray(posLoc)
     }
 
     /** Releases resources. */
