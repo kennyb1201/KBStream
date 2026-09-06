@@ -1,9 +1,9 @@
 package com.kennyb1201.kbstream.ui.player
 
 import android.graphics.SurfaceTexture
+import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.opengl.GLES30
-import android.opengl.GLUtils
 import android.opengl.Matrix
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -22,9 +22,10 @@ internal object P5ColorShader {
     """
 
     private const val FRAGMENT_SHADER = """
+        #extension GL_OES_EGL_image_external : require
         precision highp float;
         varying vec2 vTexCoord;
-        uniform sampler2D texICtCp;
+        uniform samplerExternalOES texICtCp;
         uniform mat4 texMatrix;
 
         const float PQ_M1 = 61900.0 / 1000000.0;
@@ -76,17 +77,24 @@ internal object P5ColorShader {
 
     private var program = 0
     private var texId = 0
+    private var initialized = false
 
-    private val vertexBuffer: FloatBuffer = ByteBuffer
-        .allocateDirect(8 * 4)
-        .order(ByteOrder.nativeOrder())
-        .asFloatBuffer()
-        .put(floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f))
-        .position(0)
+    private val vertexBuffer: FloatBuffer =
+        ByteBuffer.allocateDirect(8 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
+            put(floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f))
+            position(0)
+        }
 
     private val texMatrix = FloatArray(16)
 
-    init {
+    /**
+     * Creates the shader program and OES texture on the calling (GL) thread.
+     * Called lazily so first-touch from a non-GL thread (e.g. hasGles3())
+     * never issues GL calls without a context.
+     */
+    private fun ensureInitialized() {
+        if (initialized) return
+        initialized = true
         program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER)
         texId = createTexture()
         Matrix.setIdentityM(texMatrix, 0)
@@ -128,11 +136,11 @@ internal object P5ColorShader {
         val textures = IntArray(1)
         GLES20.glGenTextures(1, textures, 0)
         val tid = textures[0]
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, tid)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, tid)
+        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
         return tid
     }
 
@@ -146,13 +154,28 @@ internal object P5ColorShader {
         }
     }
 
-    /** Returns the shader program. */
-    fun getProgram(): Int = program
+    /** Returns the shader program (initializing on the GL thread if needed). */
+    fun getProgram(): Int {
+        ensureInitialized()
+        return program
+    }
 
-    /** Uploads the SurfaceTexture as a GLES texture. */
+    /** Returns the OES texture used for the SurfaceTexture (initializing on the GL thread). */
+    fun getTextureId(): Int {
+        ensureInitialized()
+        return texId
+    }
+
+    /** Applies the SurfaceTexture crop/transform matrix. */
+    fun setTextureMatrix(matrix: FloatArray) {
+        System.arraycopy(matrix, 0, texMatrix, 0, 16)
+    }
+
+    /** Uploads the SurfaceTexture frame into the sampled texture. */
     fun uploadTexture(surfaceTexture: SurfaceTexture) {
+        ensureInitialized()
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texId)
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texId)
         surfaceTexture.updateTexImage()
     }
 
@@ -166,6 +189,7 @@ internal object P5ColorShader {
 
     /** Bind shader and set common state. */
     fun bind() {
+        ensureInitialized()
         GLES20.glUseProgram(program)
         bindTextureUniform(program)
     }
@@ -177,6 +201,7 @@ internal object P5ColorShader {
 
     /** Renders a full-screen quad. */
     fun renderFullscreenQuad() {
+        ensureInitialized()
         val posLoc = GLES20.glGetAttribLocation(program, "aPosition")
         vertexBuffer.position(0)
         GLES20.glVertexAttribPointer(posLoc, 2, GLES20.GL_FLOAT, false, 0, vertexBuffer)
@@ -194,5 +219,6 @@ internal object P5ColorShader {
         }
         program = 0
         texId = 0
+        initialized = false
     }
 }

@@ -7,8 +7,8 @@ import android.opengl.GLSurfaceView
 import android.util.AttributeSet
 import android.view.Surface
 import androidx.media3.exoplayer.ExoPlayer
-import javax.microedition.khronos.opengles.GL10
 import javax.microedition.khronos.egl.EGLConfig
+import javax.microedition.khronos.opengles.GL10
 
 /**
  * GLSurfaceView-based video renderer for P5 (ICtCp) content.
@@ -18,7 +18,7 @@ import javax.microedition.khronos.egl.EGLConfig
  * ICtCp→Rec.2020 PQ conversion shader.
  *
  * Architecture:
- *   ExoPlayer → Surface (from SurfaceTexture) → SurfaceTexture → GLES texture
+ *   ExoPlayer → Surface (from SurfaceTexture) → SurfaceTexture → GLES OES texture
  *                                                           ↓
  *                               GLSurfaceView.Renderer with P5ColorShader
  *                                                           ↓
@@ -32,7 +32,6 @@ class P5VideoGlesView(
     private var player: ExoPlayer? = null
     private var surfaceTexture: SurfaceTexture? = null
     private var videoSurface: Surface? = null
-    private var videoTextureId = 0
 
     init {
         setEGLContextClientVersion(2)
@@ -41,8 +40,10 @@ class P5VideoGlesView(
     }
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
-        videoTextureId = createTexture()
-        surfaceTexture = SurfaceTexture(videoTextureId)
+        // Create the SurfaceTexture on the GL thread using the shader's OES
+        // texture, so decoder frames land in the exact texture the conversion
+        // shader samples.
+        surfaceTexture = SurfaceTexture(P5ColorShader.getTextureId())
         videoSurface = Surface(surfaceTexture)
         surfaceTexture?.setOnFrameAvailableListener(this)
         player?.setVideoSurface(videoSurface)
@@ -56,6 +57,10 @@ class P5VideoGlesView(
         val st = surfaceTexture ?: return
         st.updateTexImage()
 
+        val matrix = FloatArray(16)
+        st.getTransformMatrix(matrix)
+        P5ColorShader.setTextureMatrix(matrix)
+
         // Apply P5ColorShader ICtCp→PQ conversion (skip if program failed to compile)
         if (P5ColorShader.getProgram() != 0) {
             P5ColorShader.uploadTexture(st)
@@ -66,6 +71,10 @@ class P5VideoGlesView(
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
             GLES20.glClearColor(0f, 0f, 0f, 1f)
         }
+    }
+
+    override fun onFrameAvailable(surfaceTexture: SurfaceTexture) {
+        requestRender()
     }
 
     fun setPlayer(player: ExoPlayer) {
@@ -83,17 +92,5 @@ class P5VideoGlesView(
         surfaceTexture?.release()
         surfaceTexture = null
         videoSurface = null
-    }
-
-    private fun createTexture(): Int {
-        val textures = IntArray(1)
-        GLES20.glGenTextures(1, textures, 0)
-        val tid = textures[0]
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, tid)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
-        return tid
     }
 }
