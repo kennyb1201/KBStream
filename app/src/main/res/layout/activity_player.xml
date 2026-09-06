@@ -13,7 +13,18 @@
         android:layout_height="match_parent"
         android:background="@android:color/black"
         app:surface_type="surface_view"
-        app:use_controller="false" />
+        app:use_controller="false"
+        android:nextFocusDown="@id/btn_play_pause"
+        android:nextFocusUp="@id/btn_settings"
+        android:nextFocusLeft="@id/btn_settings"
+        android:nextFocusRight="@id/btn_settings" />
+
+    <!-- P5 color correction renderer (GLSurfaceView-based, shown only for P5 content without FFmpeg) -->
+    <com.kennyb1201.kbstream.ui.player.P5VideoGlesView
+        android:id="@+id/p5_video_gles_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
 
     <!-- Loading splash: backdrop + clearlogo (shown while buffering) -->
     <FrameLayout
@@ -984,6 +995,7 @@
                     android:textSize="11sp"
                     android:focusable="true" />
             </LinearLayout>
+
         </LinearLayout>
     </ScrollView>
 

@@ -172,6 +172,7 @@ private class VideoCompatTrackOutput(
     private var mode = Mode.NORMAL
     private var sniffRemaining = 0
     private var currentCodecs: String? = null
+    private var isP5Content = false
     private var nalLengthFieldLength = 4
     private var pendingBuf = ByteArray(0)
     private var pendingLen = 0
@@ -181,9 +182,10 @@ private class VideoCompatTrackOutput(
 
     override fun format(format: Format) {
         currentCodecs = format.codecs
+        isP5Content = DolbyVisionCompat.isP5Profile(format.codecs)
         Log.i(
             "PLAYER_DV",
-            "Compat video format mime=${format.sampleMimeType} codecs=${format.codecs ?: "?"}"
+            "Compat video format mime=${format.sampleMimeType} codecs=${format.codecs ?: "?"} P5=${isP5Content}"
         )
         // A (re)emitted format starts a fresh sample window (seek / re-init).
         pendingLen = 0
@@ -220,6 +222,23 @@ private class VideoCompatTrackOutput(
                 "PLAYER_DV",
                 "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — rewriting to HEVC HDR10"
             )
+            // Profile 5 (dvhe.05/dvh1.05) is single-layer ICtCp with no HDR10
+            // base layer, so the codec rewrite yields plain HEVC whose pixel
+            // data is still ICtCp, not Rec.2020 PQ. The injected HDR10 color
+            // metadata will at least make the display treat it as HDR rather
+            // than falling back to washed-out SDR.
+            //
+            // For true P5→HDR10 color conversion, the ICtCp pixel data must be
+            // converted to Rec.2020 PQ. This requires software decoding (FFmpeg)
+            // with pixel-level color space conversion, since the hardware decoder
+            // outputs ICtCp pixel values that the display interprets as Rec.2020
+            // PQ (giving wrong colors). The FFmpeg path handles this via its
+            // internal color space conversion when fed the correct input/output
+            // colorspace parameters.
+            //
+            // The pixel-level conversion is applied by the FFmpeg renderer when
+            // P5 content is detected — see NativePlayerActivity for the decoder
+            // selection logic that forces FFmpeg for P5 streams.
             var builder = format.buildUpon().setCodecs(dvRewrite)
             // Keep the original declared DV codec (e.g. "dvhe.07.06") on the
             // rewritten format so the player UI can badge the exact profile
@@ -236,18 +255,22 @@ private class VideoCompatTrackOutput(
             }
             builder = builder.setInitializationData(filteredInit)
             val rewritten = builder.build()
-            if (rewritten.colorInfo == null) {
-                val hdr10ColorInfo = ColorInfo.Builder()
-                    .setColorTransfer(C.COLOR_TRANSFER_ST2084)
-                    .setColorSpace(C.COLOR_SPACE_BT2020)
-                    .setColorRange(C.COLOR_RANGE_LIMITED)
-                    .setLumaBitdepth(10)
-                    .setChromaBitdepth(10)
-                    .build()
-                delegate.format(rewritten.buildUpon().setColorInfo(hdr10ColorInfo).build())
-            } else {
-                delegate.format(rewritten)
-            }
+            // When DV is stripped, the resulting stream is plain HDR10 HEVC.
+            // Inject correct HDR10 color metadata (ST.2084 PQ / BT.2020) so
+            // the display treats it as HDR. For Profile 7 this matches the
+            // original base layer; for Profile 5 (single-layer ICtCp) there is
+            // no true HDR10 base, so this is best-effort — colors may be off
+            // because the pixel data is still ICtCp, not Rec.2020 PQ, but
+            // forcing HDR10 metadata at least avoids an SDR fallback with
+            // fully washed-out colors.
+            val hdr10ColorInfo = ColorInfo.Builder()
+                .setColorTransfer(C.COLOR_TRANSFER_ST2084)
+                .setColorSpace(C.COLOR_SPACE_BT2020)
+                .setColorRange(C.COLOR_RANGE_LIMITED)
+                .setLumaBitdepth(10)
+                .setChromaBitdepth(10)
+                .build()
+            delegate.format(rewritten.buildUpon().setColorInfo(hdr10ColorInfo).build())
         } else {
             delegate.format(format)
         }

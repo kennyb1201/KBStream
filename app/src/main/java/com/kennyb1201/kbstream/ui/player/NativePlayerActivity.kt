@@ -194,6 +194,9 @@ class NativePlayerActivity : ComponentActivity() {
 
     // Views
     private lateinit var playerView: PlayerView
+    private lateinit var p5VideoGlesView: P5VideoGlesView
+    // Whether P5 color correction via GLES is currently active
+    private var p5GlesActive = false
     private lateinit var liveBadge: TextView
     private lateinit var bufferingSpinner: ProgressBar
     private lateinit var reconnectingContainer: LinearLayout
@@ -743,6 +746,7 @@ class NativePlayerActivity : ComponentActivity() {
 
     private fun bindViews() {
         playerView = findViewById(R.id.player_view)
+        p5VideoGlesView = findViewById(R.id.p5_video_gles_view)
         liveBadge = findViewById(R.id.live_badge)
         bufferingSpinner = findViewById(R.id.buffering_spinner)
         reconnectingContainer = findViewById(R.id.reconnecting_container)
@@ -1168,6 +1172,45 @@ class NativePlayerActivity : ComponentActivity() {
         val audioDecoderPriority = AppPreferences.getAudioDecoder(this)
         val dvRewriteEnabled = dvCompatMode != AppPreferences.DV_COMPAT_OFF
         val convertAllProfiles = dvCompatMode == AppPreferences.DV_COMPAT_ALL
+        // P5 (single-layer ICtCp) content needs color conversion for correct HDR colors.
+        // When P5 is detected and DV conversion is enabled, we have two options:
+        // 1. Force FFmpeg software decoder (true pixel-level conversion, slower)
+        // 2. Use GLSurfaceView with ICtCp→PQ shader (GPU-accelerated, faster for 4K)
+        // The hardware decoder would output ICtCp pixel values that the display interprets as Rec.2020 PQ
+        // (giving wrong colors). Reset each attempt so the setting only applies to the
+        // current stream.
+        val p5Content = currentCodecs?.let { DolbyVisionCompat.isP5Profile(it) } ?: false
+        if (p5Content && dvRewriteEnabled && !forceSoftwareDecoder) {
+            forceP5SoftwareDecode = true
+            forceSoftwareDecoder = true
+            Log.i(
+                "PLAYER_DV",
+                "P5 (ICtCp) content detected — forcing FFmpeg software decoder " +
+                    "for ICtCp→HDR10 color conversion"
+            )
+        }
+        // Decide which video view to use for P5 content:
+        // - P5VideoGlesView: P5 + no FFmpeg + GLES 3.0 available (GPU color conversion)
+        // - FFmpeg: P5 + user selected software decoder
+        // - PlayerView: everything else
+        val useP5GlesView = p5Content &&
+            !forceSoftwareDecoder &&
+            videoDecoder != AppPreferences.VIDEO_DECODER_FFMPEG &&
+            P5ColorShader.hasGles3()
+        if (useP5GlesView && !p5GlesActive) {
+            Log.i(
+                "PLAYER_DV",
+                "P5 content detected, no FFmpeg — activating GLSurfaceView color correction"
+            )
+            playerView.visibility = View.GONE
+            p5VideoGlesView.visibility = View.VISIBLE
+            p5GlesActive = true
+        } else if (!useP5GlesView && p5GlesActive) {
+            p5VideoGlesView.release()
+            p5VideoGlesView.visibility = View.GONE
+            playerView.visibility = View.VISIBLE
+            p5GlesActive = false
+        }
         // Audio extension mode follows the independent audio decoder priority
         // (Nuvio-style): 0 = device only (no FFmpeg at all), 1 = FFmpeg
         // fallback behind MediaCodec, 2 = prefer FFmpeg — decoding DTS/TrueHD
@@ -1388,13 +1431,20 @@ class NativePlayerActivity : ComponentActivity() {
             posStallTicks = 0
 
             exoPlayer = player
-            playerView.player = player
-            applyResizeMode(when (resizeModeIndex) {
-                1 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
-                else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-            })
-            playerView.post { player.prepare() }
+            if (p5GlesActive) {
+                p5VideoGlesView.setPlayer(player)
+            } else {
+                playerView.player = player
+                applyResizeMode(when (resizeModeIndex) {
+                    1 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                    2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+                    else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+                })
+                // Apply surface type: TextureView (1) if the black-video watchdog triggered
+                // the automatic fallback, otherwise SurfaceView (0) for normal playback.
+                setSurfaceType(playerView, if (useTextureView) 1 else 0)
+                playerView.post { player.prepare() }
+            }
 
             mediaSession?.release()
             // media3 keys sessions by their session ID in a process-wide static map. The real fix
@@ -3097,6 +3147,7 @@ class NativePlayerActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        p5VideoGlesView.release()
         handler.removeCallbacksAndMessages(null)
         nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
         scope?.cancel()
