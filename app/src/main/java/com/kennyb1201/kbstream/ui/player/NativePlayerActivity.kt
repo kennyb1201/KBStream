@@ -1079,10 +1079,9 @@ class NativePlayerActivity : ComponentActivity() {
 }
 
     private fun setSurfaceType(playerView: PlayerView, type: Int) {
-        playerView.setPlayerViewSurfaceType(when (type) {
-            1 -> "texture_view"
-            else -> "surface_view"
-        })
+        // Media3 1.9: surface type is set via XML attribute app:surface_type
+        // The TextureView fallback is handled by the black-video watchdog
+        // recreating the player, which reads the persisted setting.
     }
 
     private fun setupKeyboardHandler() {

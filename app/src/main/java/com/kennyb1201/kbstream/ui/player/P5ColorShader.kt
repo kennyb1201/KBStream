@@ -85,7 +85,7 @@ internal object P5ColorShader {
         .order(ByteOrder.nativeOrder())
         .asFloatBuffer()
         .put(floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f))
-        .rewind()
+        
 
     init {
         program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER)
@@ -154,12 +154,6 @@ internal object P5ColorShader {
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texId)
         surfaceTexture.updateTexImage()
-        GLES20.glTexImage2D(
-            GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA,
-            surfaceTexture.width(), surfaceTexture.height(),
-            0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null
-        )
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
     }
 
     /** Binds the texture uniform. */
