@@ -340,6 +340,11 @@ class NativePlayerActivity : ComponentActivity() {
     // When the black-video watchdog tries TextureView as an automatic fallback
     // after SurfaceView fails (stage 1.5 in the recovery ladder).
     private var forceTextureViewFallback = false
+    // The TextureView installed by that fallback (Media3 1.9's PlayerView has
+    // no public setSurfaceType, so the internal surface view is swapped via
+    // reflection). Kept across player rebuilds so every session routes the
+    // player to the same view.
+    private var fallbackTextureView: android.view.TextureView? = null
     // Whether P5 color correction via GLES is currently active
     private var p5GlesActive = false
     // One-shot latch: P5 is only known after onTracksChanged delivers the
@@ -940,8 +945,7 @@ class NativePlayerActivity : ComponentActivity() {
         btnSpeed.setOnClickListener { showPicker(PickerMode.SPEED) }
         btnAspect.setOnClickListener {
             resizeModeIndex = (resizeModeIndex + 1) % 3
-            applyResizeMode(when (resizeModeIndex) {
-                1 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            applyResizeMode(when (resizeModeIndex) {                    1 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                 2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
                 else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
             })
@@ -1083,10 +1087,108 @@ class NativePlayerActivity : ComponentActivity() {
 
 }
 
-    private fun setSurfaceType(playerView: PlayerView, type: Int) {
-        // Media3 1.9: surface type is set via XML attribute app:surface_type
-        // The TextureView fallback is handled by the black-video watchdog
-        // recreating the player, which reads the persisted setting.
+    /**
+     * Switches the PlayerView's internal video surface to a TextureView (or
+     * back to a SurfaceView) at runtime. Media3 1.9's PlayerView only reads
+     * app:surface_type when it is constructed — there is no public
+     * setSurfaceType() — so the private surfaceView field's view is swapped
+     * inside the content frame instead, before the player is attached.
+     * PlayerView.setPlayer then routes the player to the new surface via the
+     * public setVideoTextureView / setVideoSurfaceView calls.
+     *
+     * This is the black-video watchdog's TextureView fallback: on some boxes
+     * the SurfaceView's native window is lost (logcat: 'Could not find
+     * corresponding native window for surface') — the decoder produces frames
+     * but output goes nowhere. TextureView renders through the view hierarchy
+     * instead of a separate native window, which is why other apps play the
+     * same file on the same TV.
+     */
+    private fun switchPlayerViewSurface(wantTexture: Boolean) {
+        val currentIsTexture = try {
+            val f = playerView.javaClass.getDeclaredField("surfaceView")
+            f.isAccessible = true
+            (f.get(playerView) as? android.view.View) is android.view.TextureView
+        } catch (e: Exception) {
+            Log.w("PLAYER_VIDEO", "Could not read PlayerView surface type", e)
+            false
+        }
+        if (currentIsTexture == wantTexture) return
+
+        try {
+            // Detach the stale player first: PlayerView.setPlayer(null) clears
+            // the old surface from it while the field still points at the
+            // outgoing view.
+            val attached = playerView.player
+            playerView.player = null
+
+            val clazz = playerView.javaClass
+            val surfaceField = clazz.getDeclaredField("surfaceView")
+            surfaceField.isAccessible = true
+            val oldSurface = surfaceField.get(playerView) as? android.view.View
+            val contentFrame = findPlayerViewContentFrame()
+            if (contentFrame == null) {
+                Log.w("PLAYER_VIDEO", "Surface switch: PlayerView content frame not found")
+                if (attached != null) playerView.player = attached
+                return
+            }
+
+            val newSurface: android.view.View = if (wantTexture) {
+                android.view.TextureView(this)
+            } else {
+                android.view.SurfaceView(this).apply {
+                    // Mirror PlayerView's own construction: on Android 14+ the
+                    // surface lifecycle follows attachment so the surface is
+                    // not torn down when the view is briefly detached.
+                    if (Build.VERSION.SDK_INT >= 34) {
+                        setSurfaceLifecycle(android.view.SurfaceView.SURFACE_LIFECYCLE_FOLLOWS_ATTACHMENT)
+                    }
+                }
+            }
+            newSurface.layoutParams = oldSurface?.layoutParams
+                ?: android.view.ViewGroup.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                )
+            // PlayerView's own internal surface is clickable=false so touch
+            // events bubble to the activity's playerView listeners; keep that.
+            newSurface.isClickable = false
+
+            oldSurface?.let { contentFrame.removeView(it) }
+            contentFrame.addView(newSurface, 0)
+            try {
+                surfaceField.set(playerView, newSurface)
+            } catch (e: Exception) {
+                // Final-field write refused (exotic ART): the explicit
+                // setVideoTextureView re-assert in createPlayer still routes
+                // the player to the new surface (last call wins).
+                Log.w("PLAYER_VIDEO", "Could not swap PlayerView surface field", e)
+            }
+            if (wantTexture) {
+                fallbackTextureView = newSurface as android.view.TextureView
+            } else {
+                fallbackTextureView = null
+            }
+            Log.i(
+                "PLAYER_VIDEO",
+                "Switched PlayerView video surface to ${if (wantTexture) "TextureView" else "SurfaceView"}"
+            )
+        } catch (e: Exception) {
+            Log.w("PLAYER_VIDEO", "Surface switch failed", e)
+        }
+    }
+
+    private fun findPlayerViewContentFrame(): android.view.ViewGroup? {
+        fun walk(v: android.view.View?): android.view.ViewGroup? {
+            if (v == null) return null
+            if (v is AspectRatioFrameLayout) return v
+            if (v is android.view.ViewGroup) {
+                for (i in 0 until v.childCount) {
+                    walk(v.getChildAt(i))?.let { return it }
+                }
+            }
+            return null
+        }
+        return walk(playerView)
     }
 
     private fun setupKeyboardHandler() {
@@ -1193,8 +1295,7 @@ class NativePlayerActivity : ComponentActivity() {
         val videoDecoder = AppPreferences.getVideoDecoder(this)
         val audioDecoderPriority = AppPreferences.getAudioDecoder(this)
         val dvRewriteEnabled = dvCompatMode != AppPreferences.DV_COMPAT_OFF
-        val convertAllProfiles = dvCompatMode == AppPreferences.DV_COMPAT_ALL
-        // P5 (single-layer ICtCp) content needs color conversion for correct HDR colors.
+        val convertAllProfiles = dvCompatMode == AppPreferences.DV_COMPAT_ALL                // P5 (single-layer ICtCp) content needs color conversion for correct HDR colors.
         // When P5 is detected and DV conversion is enabled, we have two options:
         // 1. Force FFmpeg software decoder (true pixel-level conversion, slower)
         // 2. Use GLSurfaceView with ICtCp→PQ shader (GPU-accelerated, faster for 4K)
@@ -1251,8 +1352,7 @@ class NativePlayerActivity : ComponentActivity() {
                 DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
             else -> DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
         }
-        // Keep the automatic fallback latch separate from the persisted mode.
-        // A retry sets forceSoftwareDecoder before recreatePlayer(); overwriting
+        // Keep the automatic fallback latch separate from the persisted mode.            // A retry sets forceSoftwareDecoder before recreatePlayer(); overwriting
         // it here would silently switch that retry back to MediaCodec.
         //
         // The Video Decoder = "FFmpeg (software)" choice uses the software
@@ -1462,15 +1562,25 @@ class NativePlayerActivity : ComponentActivity() {
             if (p5GlesActive) {
                 p5VideoGlesView.setPlayer(player)
             } else {
+                // Apply the surface type BEFORE attaching the player: the
+                // black-video watchdog's TextureView fallback swaps the
+                // PlayerView's internal surface view here (Media3 1.9 reads
+                // app:surface_type only at construction, so there is no public
+                // setSurfaceType to call).
+                switchPlayerViewSurface(forceTextureViewFallback)
                 playerView.player = player
+                // Belt-and-braces: re-assert the fallback surface directly on
+                // the player so the TextureView still wins even if the
+                // internal-field swap above silently failed (setVideoTextureView
+                // runs after PlayerView's routing; the last surface set wins).
+                if (forceTextureViewFallback) {
+                    fallbackTextureView?.let { player.setVideoTextureView(it) }
+                }
                 applyResizeMode(when (resizeModeIndex) {
                     1 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                     2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
                     else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
                 })
-                // Apply surface type: TextureView (1) if the black-video watchdog triggered
-                // the automatic fallback, otherwise SurfaceView (0) for normal playback.
-                setSurfaceType(playerView, if (forceTextureViewFallback) 1 else 0)
                 playerView.post { player.prepare() }
             }
 
@@ -1915,8 +2025,10 @@ class NativePlayerActivity : ComponentActivity() {
         // visibility destroys and recreates its native surface; PlayerView then
         // hands the fresh surface back to the player and the video renderer
         // restarts output. Cheaper than a rebuild, and it also covers the
-        // software attempt that follows it.
-        if (!blackVideoSurfaceRetried) {
+        // software attempt that follows it. With the TextureView fallback
+        // active the SurfaceView is hidden, so bouncing it is pointless —
+        // skip straight to the software rebuild.
+        if (!blackVideoSurfaceRetried && !forceTextureViewFallback) {
             blackVideoSurfaceRetried = true
             Log.w(
                 "PLAYER_VIDEO",
@@ -1949,6 +2061,35 @@ class NativePlayerActivity : ComponentActivity() {
                     )
                 },
                 100L
+            )
+            return
+        }
+
+        // Stage 1.5: the surface bounce didn't help — rebuild with a TextureView.
+        // "Could not find corresponding native window for surface" means the
+        // SurfaceView's native window was lost: the decoder IS producing frames
+        // but output goes nowhere. TextureView renders through the view hierarchy
+        // (no separate native window), which is why other apps play the same file
+        // on this TV. Much cheaper than the software rebuild, and it keeps
+        // hardware decoding (4K HDR stays smooth).
+        if (!forceTextureViewFallback) {
+            forceTextureViewFallback = true
+            Log.w(
+                "PLAYER_VIDEO",
+                "Black video: no first frame (surface reset tried)$codecInfo — retrying with TextureView"
+            )
+            reconnectingContainer.visibility = View.VISIBLE
+            bufferingSpinner.visibility = View.GONE
+            reconnectingText.text = "Video isn't displaying — switching to TextureView…"
+            handler.postDelayed(
+                {
+                    if (token != blackVideoWatchdogToken) return@postDelayed
+                    if (blackVideoNoticeShown) return@postDelayed
+                    if (firstFrameRendered && System.currentTimeMillis() - firstFrameRenderedAtMs > 2000L) return@postDelayed
+                    errorMessageStr = null
+                    recreatePlayer()
+                },
+                500L
             )
             return
         }
@@ -2071,7 +2212,7 @@ class NativePlayerActivity : ComponentActivity() {
         }
         Log.w(
             "PLAYER_VIDEO",
-            "Black-video notice: no first frame after surface reset + software retry$codecInfo " +
+            "Black-video notice: no first frame after surface reset + TextureView retry + software retry$codecInfo " +
                 "mime=${streamMimeType ?: "?"} playing=${exoPlayer?.isPlaying} state=${exoPlayer?.playbackState}"
         )
         reconnectingContainer.visibility = View.GONE
@@ -2079,7 +2220,8 @@ class NativePlayerActivity : ComponentActivity() {
         errorTitle.text = "Video isn't displaying"
         errorMessage.text =
             "Playback started but no video frames are rendering$codecInfo. " +
-                "The video surface and hardware + software decoders were all tried on this TV. " +
+                "Both video surfaces (SurfaceView and TextureView) plus the hardware and " +
+                "software decoders were tried on this TV. " +
                 (if (triedOtherSources) "Other sources were also tried automatically. " else "") +
                 "If Dolby Vision playback is on, try setting it to Off for this file, or choose " +
                 "a different source — a 1080p H.264 release usually plays on any device."
@@ -3240,7 +3382,7 @@ class NativePlayerActivity : ComponentActivity() {
         currentUrl = newUrl
         currentAudioUrl = stream.audioUrl
         currentSourceIndex = sources.indexOfFirst { it.url == newUrl }
-        retryAttempt = 0; retryExhausted = false; errorMessageStr = null; forceSoftwareDecoder = false; forceHardwareDecoder = false; languagesAutoSelected = false
+        retryAttempt = 0; retryExhausted = false; errorMessageStr = null; forceSoftwareDecoder = false; forceHardwareDecoder = false; forceTextureViewFallback = false; languagesAutoSelected = false
         dismissPicker()
         recreatePlayer()
     }

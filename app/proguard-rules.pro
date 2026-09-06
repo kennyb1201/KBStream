@@ -36,6 +36,14 @@
 # --- ZXing QR generation ---
 -keep class com.google.zxing.** { *; }
 
+# --- Media3 PlayerView internal surface swap (black-video TextureView fallback) ---
+# NativePlayerActivity reflects into this private field to switch the PlayerView's
+# video surface at runtime (Media3 1.9 has no public setSurfaceType). R8 would
+# otherwise rename the field in release builds and silently break the fallback.
+-keepclassmembers class androidx.media3.ui.PlayerView {
+    private final android.view.View surfaceView;
+}
+
 # --- Reflection-loaded Jellyfin FFmpeg video renderer ---
 # FFmpeg-only playback instantiates this renderer by its published class name.
 -keep class androidx.media3.decoder.ffmpeg.ExperimentalFfmpegVideoRenderer { *; }
