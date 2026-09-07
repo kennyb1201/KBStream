@@ -89,76 +89,19 @@ private const val CONTROLS_HIDE_DELAY_MS = 6_000L
 private const val NEXT_UP_COUNTDOWN_SECONDS = 5
 
 /**
- * Renderer policy used by the explicit FFmpeg-only setting. Media3's
- * EXTENSION_RENDERER_MODE_PREFER only changes ordering; it still creates the
- * hardware MediaCodec renderer. This factory deliberately creates only the
- * bundled FFmpeg video renderer, so hardware cannot win track selection.
- */
-private class FfmpegOnlyRenderersFactory(
-    context: Context,
-    audioExtMode: Int
-) : DefaultRenderersFactory(context) {
-    init {
-        // This factory replaces the VIDEO renderer below with the experimental
-        // FFmpeg software renderer; audio keeps the platform renderer plus the
-        // FFmpeg extension at the priority-driven position (fallback behind
-        // MediaCodec, or preferred ahead of it). Without the FFmpeg audio
-        // renderer, DTS / DTS-HD / TrueHD tracks — which the Fire TV stick's
-        // MediaCodec can't decode — play video with no sound.
-        setExtensionRendererMode(audioExtMode)
-        setEnableDecoderFallback(true)
-    }
-
-    override fun buildVideoRenderers(
-        context: Context,
-        extensionRendererMode: Int,
-        mediaCodecSelector: MediaCodecSelector,
-        enableDecoderFallback: Boolean,
-        eventHandler: Handler,
-        eventListener: VideoRendererEventListener,
-        allowedVideoJoiningTimeMs: Long,
-        out: ArrayList<Renderer>
-    ) {
-        try {
-            val rendererClass = Class.forName(
-                "androidx.media3.decoder.ffmpeg.ExperimentalFfmpegVideoRenderer"
-            )
-            val constructor = rendererClass.getConstructor(
-                Long::class.javaPrimitiveType!!,
-                Handler::class.java,
-                VideoRendererEventListener::class.java,
-                Int::class.javaPrimitiveType!!
-            )
-            out.add(
-                constructor.newInstance(
-                    allowedVideoJoiningTimeMs,
-                    eventHandler,
-                    eventListener,
-                    DefaultRenderersFactory.MAX_DROPPED_VIDEO_FRAME_COUNT_TO_NOTIFY
-                ) as Renderer
-            )
-            Log.i("PLAYER_DV", "FFmpeg-only renderer installed; hardware video renderer excluded")
-        } catch (e: ClassNotFoundException) {
-            throw IllegalStateException("FFmpeg-only was selected but the FFmpeg video renderer is unavailable", e)
-        } catch (e: Exception) {
-            throw IllegalStateException("Could not create the FFmpeg-only video renderer", e)
-        }
-    }
-}
-
-/**
  * Decouples the video and audio extension policies, which stock
  * DefaultRenderersFactory ties to a single extensionRendererMode. Audio gets
  * the FFmpeg audio extension at the position set by the audio decoder
- * priority (OFF / fallback / preferred). The video extension mode is passed
- * per call site: ON keeps the FFmpeg software video renderer available as a
- * fallback behind MediaCodec ("Prefer device" video); OFF keeps video
- * strictly hardware (used when an FFmpeg-software session is bypassed by its
- * own guards — live IPTV and DV->HDR10-rewritten streams).
+ * priority (OFF / fallback / preferred) — that extension is the reason the
+ * FFmpeg decoder package is bundled at all (DTS / DTS-HD / TrueHD tracks,
+ * which the Fire TV stick's MediaCodec can't decode, play with no sound
+ * without it). Video is strictly hardware: the bundled FFmpeg build ships
+ * AUDIO decoders only (flac alac pcm mp3 aac ac3 eac3 dca mlp truehd — see
+ * jellyfin-androidx-media build.sh), so its video renderer claims no format
+ * and an FFmpeg-video session can only ever produce black video with audio.
  */
 private class SplitModeRenderersFactory(
     context: Context,
-    private val videoExtMode: Int,
     audioExtMode: Int
 ) : DefaultRenderersFactory(context) {
     init {
@@ -191,9 +134,11 @@ private class SplitModeRenderersFactory(
             )
             Log.i("PLAYER_DV", "P5 plane renderer prepended (raw-plane ICtCp path)")
         }
+        // No video extensions: the bundled FFmpeg has no video decoders, so
+        // its video renderer can never claim a track. Hardware only.
         super.buildVideoRenderers(
             context,
-            videoExtMode,
+            EXTENSION_RENDERER_MODE_OFF,
             mediaCodecSelector,
             enableDecoderFallback,
             eventHandler,
@@ -349,9 +294,6 @@ class NativePlayerActivity : ComponentActivity() {
     // Original declared codec of the current video track (e.g. "dvhe.07.06")
     // before any DV→HDR10 rewrite. Used for P5 detection to select correction path.
     private var currentCodecs: String? = null
-    // When P5 content is detected and DV conversion is enabled, force FFmpeg
-    // for pixel-level ICtCp→HDR10 color conversion.
-    private var forceP5SoftwareDecode = false
     // When the black-video watchdog tries TextureView as an automatic fallback
     // after SurfaceView fails (stage 1.5 in the recovery ladder).
     private var forceTextureViewFallback = false
@@ -377,13 +319,6 @@ class NativePlayerActivity : ComponentActivity() {
     private var retryAttempt = 0
     private var retryExhausted = false
     private var errorMessageStr: String? = null
-    private var forceSoftwareDecoder = false
-    // Black-video recovery in the reverse direction: a "Prefer app (FFmpeg)"
-    // session (video decoder = FFmpeg) whose renderer never presents a frame
-    // is rebuilt with
-    // the hardware decoder. Session latch mirroring forceSoftwareDecoder so
-    // createPlayer cannot silently undo the watchdog's decision.
-    private var forceHardwareDecoder = false
     private var manualRetryToken = 0
     private var rebufferStartedAtMs = 0L
 
@@ -396,19 +331,6 @@ class NativePlayerActivity : ComponentActivity() {
     private var firstFrameRendered = false
     private var firstFrameRenderedAtMs = 0L
     private var blackVideoNoticeShown = false
-    private var blackVideoSwRetried = false
-    // Whether an FFmpeg-only session has already been rebuilt with the
-    // hardware decoder (Stage 2 in reverse). Kept alongside the software
-    // marker so a second silent failure shows the notice instead of looping.
-    private var blackVideoHwRetried = false
-    // The current session runs the FFmpeg-only video renderer by persisted
-    // choice (video decoder = FFmpeg). Such sessions pre-empt themselves for
-    // formats
-    // software decode cannot keep up with (4K / 10-bit): as soon as the track
-    // format is known the session swaps to the hardware decoder instead of
-    // sitting on black until the watchdog fires.
-    private var ffmpegOnlySession = false
-    private var ffmpegSessionSwappedToHw = false
     // True while either per-profile 8.1 conversion (P5/P7) is active so the
     // codec badge can report "DV P7 → 8.1" instead of "→ HDR10".
     private var dvTo81Session = false
@@ -422,7 +344,6 @@ class NativePlayerActivity : ComponentActivity() {
     private var blackVideoWatchdogToken = 0
     private val blackVideoWatchdogMs = 3_000L
     private val blackVideoSurfaceRecheckMs = 2_000L
-    private val blackVideoSwTimeoutMs = 12_000L
 
     // Startup watchdog: the black-video and stall watchdogs are only armed
     // from READY / isPlaying, so a session that never leaves BUFFERING (no
@@ -1269,14 +1190,6 @@ class NativePlayerActivity : ComponentActivity() {
         // software one); only the software retry itself is once-per-session.
         blackVideoSurfaceRetried = false
         // blackVideoWatchdogToken++ # delayed to allow native window recovery
-        ffmpegOnlySession = false
-        ffmpegSessionSwappedToHw = false
-        // Reset the black-video software-decoder retry only for fresh attempts
-        // (new stream / source switch). The software retry itself must keep its
-        // marker so a second silent failure shows the notice instead of looping.
-        if (!forceSoftwareDecoder) blackVideoSwRetried = false
-        // Same rule for the reverse retry (FFmpeg-only session -> hardware).
-        if (!forceHardwareDecoder) blackVideoHwRetried = false
         autoSourceSwitchCount = 0
 
         val agent = streamHeaders["User-Agent"] ?: streamHeaders["user-agent"]
@@ -1315,7 +1228,6 @@ class NativePlayerActivity : ComponentActivity() {
         // DV.
         val dvCompatMode = AppPreferences.getDvCompatMode(this)
         val stripHdr10Plus = AppPreferences.getStripHdr10Plus(this)
-        val videoDecoder = AppPreferences.getVideoDecoder(this)
         val audioDecoderPriority = AppPreferences.getAudioDecoder(this)
         // True when the platform advertises a Dolby Vision decoder. On such
         // devices single-layer DV (P4/P8) normally passes through as native
@@ -1344,22 +1256,19 @@ class NativePlayerActivity : ComponentActivity() {
             AppPreferences.getConvertP5To81(this)
         val convertTo81 = convertP7To81 || convertP5To81
         dvTo81Session = convertTo81 // badge: "DV P7 → 8.1"
+        val p5Content = currentCodecs?.let { DolbyVisionCompat.isP5Profile(it) } ?: false
         // P5 (single-layer ICtCp) content needs color conversion for correct
         // colors. The raw-plane GLES path is the only path that actually
-        // works: the bundled FFmpeg video renderer is an upstream stub that
-        // supports no formats at all (black-video-with-audio), and the
-        // hardware Surface path applies an automatic dataspace conversion
-        // before the shader could ever sample real ICtCp values (green
-        // tint / washed out). P5PlaneVideoRenderer instead decodes in Media
-        // Codec buffer mode — raw planes, no conversion — and the GL shader
-        // does the ICtCp math on the GPU. Reset each attempt so the setting
-        // only applies to the current stream.
-        val p5Content = currentCodecs?.let { DolbyVisionCompat.isP5Profile(it) } ?: false
+        // works: the hardware Surface path applies an automatic dataspace
+        // conversion before the shader could ever sample real ICtCp values
+        // (green tint / washed out), and the bundled FFmpeg video renderer is
+        // a no-op (its build ships audio decoders only). P5PlaneVideoRenderer
+        // instead decodes in MediaCodec buffer mode — raw planes, no
+        // conversion — and the GL shader does the ICtCp math on the GPU.
+        // Reset each attempt so the setting only applies to the current stream.
         // Decide which video path to use for P5 content:
         // - P5VideoGlesView + P5PlaneVideoRenderer: P5 with GLES available
-        //   (raw planes → GPU color conversion). This replaces both the old
-        //   "no FFmpeg" GLES branch and the FFmpeg-force branch, neither of
-        //   which could deliver correct colors.
+        //   (raw planes → GPU color conversion).
         // - PlayerView (hardware Surface): everything else, and P5 on
         //   devices without GLES (colors uncorrected, as before).
         val useP5GlesView = p5Content && P5ColorShader.hasGles3()
@@ -1377,19 +1286,6 @@ class NativePlayerActivity : ComponentActivity() {
             playerView.visibility = View.VISIBLE
             p5GlesActive = false
         }
-        // The FFmpeg force only applies when the GLES path can't run (device
-        // lacks GLES). Note the bundled FFmpeg video renderer is an upstream
-        // stub that supports no formats — such sessions fall back via the
-        // black-video watchdog to the hardware decoder.
-        if (p5Content && dvRewriteEnabled && !forceSoftwareDecoder && !useP5GlesView) {
-            forceP5SoftwareDecode = true
-            forceSoftwareDecoder = true
-            Log.i(
-                "PLAYER_DV",
-                "P5 (ICtCp) content detected — forcing FFmpeg software decoder " +
-                    "for ICtCp→HDR10 color conversion"
-            )
-        }
         // Audio extension mode follows the independent audio decoder priority
         // (Nuvio-style): 0 = device only (no FFmpeg at all), 1 = FFmpeg
         // fallback behind MediaCodec, 2 = prefer FFmpeg — decoding DTS/TrueHD
@@ -1402,42 +1298,13 @@ class NativePlayerActivity : ComponentActivity() {
                 DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
             else -> DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
         }
-        // Keep the automatic fallback latch separate from the persisted mode.            // A retry sets forceSoftwareDecoder before recreatePlayer(); overwriting
-        // it here would silently switch that retry back to MediaCodec.
-        //
-        // The Video Decoder = "FFmpeg (software)" choice uses the software
-        // renderer as a VOD compatibility fallback for DV material the
-        // hardware decoder cannot take as-is (green tint). It is bypassed
-        // where it cannot help: live IPTV is plain H.264/HEVC HLS that the
-        // TV's hardware decoder handles reliably, and when the DV → HEVC
-        // rewrite is active the output stream is plain HEVC built precisely
-        // so the hardware decoder can play it. The experimental FFmpeg
-        // renderer has also produced black-video-with-audio on this TV, so the
-        // black-video watchdog can flip such a session to hardware
-        // (forceHardwareDecoder). An explicit software retry
-        // (forceSoftwareDecoder) still wins so the Auto recovery keeps working.
-        // P5 GLES sessions render video through P5PlaneVideoRenderer (hardware
-        // decode in buffer mode + GL color conversion), so the FFmpeg-only
-        // factory (whose video renderer is a no-op stub) must not be used for
-        // them even when the user's video decoder preference says FFmpeg.
-        val softwareDecoderActive =
-            (forceSoftwareDecoder ||
-                (videoDecoder == AppPreferences.VIDEO_DECODER_FFMPEG &&
-                    !isLiveChannel && !dvRewriteEnabled && !forceHardwareDecoder)) &&
-                !p5GlesActive
-        // Remember that this session is FFmpeg-video BY CHOICE (not a
-        // forceSoftwareDecoder retry) so onTracksChanged can pre-empt it for
-        // formats the software renderer cannot decode in real time.
-        ffmpegOnlySession = videoDecoder == AppPreferences.VIDEO_DECODER_FFMPEG &&
-            !isLiveChannel && !dvRewriteEnabled && !forceHardwareDecoder
         Log.i(
             "PLAYER_DV",
             "DV settings mode=$dvCompatMode rewriteEnabled=$dvRewriteEnabled " +
                 "allProfiles=$convertAllProfiles to81=$convertTo81 " +
                 "(p7=$convertP7To81 p5=$convertP5To81) stripHdr10Plus=$stripHdr10Plus " +
                 "nativeDv=$nativeDvSupported " +
-                "videoDecoder=$videoDecoder audioDecoder=$audioDecoderPriority " +
-                "forceSoftware=$softwareDecoderActive " +
+                "audioDecoder=$audioDecoderPriority " +
                 "audioSeparate=${!currentAudioUrl.isNullOrBlank()}"
         )
         // The compat extractor is needed when DV conversion is on OR the
@@ -1512,21 +1379,10 @@ class NativePlayerActivity : ComponentActivity() {
         // Gate the raw-plane renderer for THIS session before the player (and
         // its renderers) are built.
         P5PlaneVideoRenderer.enabled = p5GlesActive
-        val renderersFactory = if (softwareDecoderActive) {
-            FfmpegOnlyRenderersFactory(this, audioExtMode)
-        } else {
-            val videoExtMode =
-                if (videoDecoder == AppPreferences.VIDEO_DECODER_PREFER_DEVICE) {
-                    DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
-                } else {
-                    DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF
-                }
-            SplitModeRenderersFactory(this, videoExtMode, audioExtMode)
-        }
+        val renderersFactory = SplitModeRenderersFactory(this, audioExtMode)
         Log.i(
             "PLAYER_DV",
-            "Renderer policy videoDecoder=$videoDecoder audioDecoder=$audioDecoderPriority " +
-                "forceSoftware=$softwareDecoderActive ffmpegOnly=$softwareDecoderActive"
+            "Renderer policy audioDecoder=$audioDecoderPriority (video always hardware)"
         )
 
         val player = ExoPlayer.Builder(this, renderersFactory)
@@ -1602,7 +1458,7 @@ class NativePlayerActivity : ComponentActivity() {
                 // software-decoded PCM track gets created with FLAG_HW_AV_SYNC
                 // and AudioFlinger refuses it (createTrack error -38,
                 // "Cannot create AudioTrack"). Same rule Nuvio uses.
-                if (enableTunneling && !softwareDecoderActive && !isLiveChannel &&
+                if (enableTunneling && !isLiveChannel &&
                     audioExtMode != DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
                 ) {
                     trackSelectionParameters = androidx.media3.exoplayer.trackselection.DefaultTrackSelector
@@ -1707,7 +1563,7 @@ class NativePlayerActivity : ComponentActivity() {
                 Player.STATE_READY -> {
                     if (rebufferStartedAtMs != 0L) {
                         val stalledMs = System.currentTimeMillis() - rebufferStartedAtMs
-                        Log.w("PLAYER_PERF", "Rebuffer stall: ${stalledMs}ms (sw=$forceSoftwareDecoder)")
+                        Log.w("PLAYER_PERF", "Rebuffer stall: ${stalledMs}ms")
                         rebufferStartedAtMs = 0L
                     }
                     updateUIReady()
@@ -1765,7 +1621,7 @@ class NativePlayerActivity : ComponentActivity() {
                         // FFmpeg fallback) color path engages from the start.
                         if (declaredDvCodec != null &&
                             DolbyVisionCompat.isP5Profile(declaredDvCodec) &&
-                            !p5GlesActive && !forceSoftwareDecoder &&
+                            !p5GlesActive &&
                             !firstFrameRendered && !p5ReroutePending
                         ) {
                             p5ReroutePending = true
@@ -1775,7 +1631,7 @@ class NativePlayerActivity : ComponentActivity() {
                                     "player to activate color correction"
                             )
                             handler.post {
-                                if (!p5GlesActive && !forceSoftwareDecoder && !firstFrameRendered) {
+                                if (!p5GlesActive && !firstFrameRendered) {
                                     recreatePlayer()
                                 } else {
                                     // State changed meanwhile (watchdog recovery,
@@ -1790,7 +1646,6 @@ class NativePlayerActivity : ComponentActivity() {
                                 "${fmt.width}x${fmt.height} color=${colorInfo?.colorTransfer ?: -1}" +
                                 (streamDeclaredDvCodec?.let { " rewrittenFrom=$it" } ?: "")
                         )
-                        preemptHeavyFfmpegSession(fmt)
                     }
                 }
             }
@@ -1806,7 +1661,7 @@ class NativePlayerActivity : ComponentActivity() {
                     msg += "\nThis file's video ($codec$dims) can't be decoded on this TV."
                 }
             }
-            errorMessageStr = msg + if (forceSoftwareDecoder) " (software decoder)" else ""
+            errorMessageStr = msg
             if (isLikelyRetryable(error)) {
                 scheduleRetry()
             } else {
@@ -1824,7 +1679,7 @@ class NativePlayerActivity : ComponentActivity() {
             elapsedMs: Long
         ) {
             if (droppedFrames > 0) {
-                Log.w("PLAYER_PERF", "Dropped $droppedFrames frames over ${elapsedMs}ms (sw=$forceSoftwareDecoder)")
+                Log.w("PLAYER_PERF", "Dropped $droppedFrames frames over ${elapsedMs}ms")
             }
     }
 
@@ -1913,55 +1768,6 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     // --- Black-video watchdog ---
-
-    /**
-     * An FFmpeg-only session (persisted video decoder = FFmpeg) that tries to
-     * software-decode a stream it cannot keep up with produces audio with no
-     * first frame — the exact black-screen-with-audio failure seen on 4K /
-     * 10-bit HEVC. When the track format reveals such a stream, rebuild with
-     * the hardware decoder immediately instead of waiting out the black-video
-     * watchdog (which would reach the same swap ~8s later).
-     */
-    private fun preemptHeavyFfmpegSession(fmt: Format) {
-        if (!ffmpegOnlySession || ffmpegSessionSwappedToHw) return
-        val w = fmt.width
-        val h = fmt.height
-        if (w <= 0 || h <= 0) return
-        val pixels = w.toLong() * h.toLong()
-        // media3 ColorInfo exposes lumaBitdepth (Format.NO_VALUE when
-        // unknown); unknown or 8-bit color info falls back to 8, so only
-        // true 10-bit+ (HEVC Main10, DV base layers) triggers the
-        // bit-depth guard.
-        val colorLumaDepth = fmt.colorInfo?.lumaBitdepth ?: Format.NO_VALUE
-        val bitDepth = if (colorLumaDepth >= 10) colorLumaDepth else 8
-        // 1080p-class 8-bit is roughly the ceiling for the software renderer
-        // on a Fire TV Stick-class CPU; anything bigger — or 10-bit — goes to
-        // the hardware decoder (MediaCodec handles 10-bit HEVC natively).
-        val tooHeavy = pixels > 1_920L * 1_080L ||
-            (pixels >= 1_920L * 1_080L && bitDepth > 8)
-        if (!tooHeavy) return
-        ffmpegSessionSwappedToHw = true
-        Log.w(
-            "PLAYER_VIDEO",
-            "FFmpeg-only can't keep up with ${w}x$h bitDepth=$bitDepth " +
-                "mime=${streamMimeType ?: "?"} — switching to hardware decoder"
-        )
-        reconnectingContainer.visibility = View.VISIBLE
-        bufferingSpinner.visibility = View.GONE
-        reconnectingText.text = "Too heavy for software decoding — switching to hardware…"
-        // Invalidate any pending watchdog work; this rebuild supersedes it.
-        // blackVideoWatchdogToken++ # delayed to allow native window recovery
-        handler.postDelayed(
-            {
-                if (blackVideoNoticeShown) return@postDelayed
-                    if (firstFrameRendered && System.currentTimeMillis() - firstFrameRenderedAtMs > 2000L) return@postDelayed
-                forceHardwareDecoder = true
-                errorMessageStr = null
-                recreatePlayer()
-            },
-            300L
-        )
-    }
 
     private fun isDecoderError(errorCode: Int): Boolean =
         errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
@@ -2056,7 +1862,7 @@ class NativePlayerActivity : ComponentActivity() {
         // Live channels count too: IPTV no longer tunnels or forces FFmpeg by
         // default, so a READY player with audio but no first frame is a real
         // no-video failure (black screen with audio) and gets the same
-        // surface-bounce -> software -> notice recovery ladder as VOD.
+        // surface-bounce -> TextureView -> notice recovery ladder as VOD.
         // Audio-only channels are already filtered by !videoTrackPresent.
         val token = ++blackVideoWatchdogToken
         handler.postDelayed({ handleBlackVideoTimeout(token) }, blackVideoWatchdogMs)
@@ -2067,8 +1873,8 @@ class NativePlayerActivity : ComponentActivity() {
      *  1. surface bounce — destroy/recreate the SurfaceView's native surface
      *     (fixes the lost-native-window case where the decoder IS producing
      *     frames but output goes nowhere),
-     *  2. software decoder rebuild — for content the TV's hardware decoder
-     *     accepts but cannot actually present (DV-family / HEVC-10 quirks),
+     *  2. TextureView rebuild — renders through the view hierarchy when the
+     *     SurfaceView's native window is lost (hardware decoding stays on),
      *  3. explicit notice so the user is never left staring at a silent stall.
      */
     private fun handleBlackVideoTimeout(token: Int, requirePlaying: Boolean = true) {
@@ -2095,9 +1901,9 @@ class NativePlayerActivity : ComponentActivity() {
         // visibility destroys and recreates its native surface; PlayerView then
         // hands the fresh surface back to the player and the video renderer
         // restarts output. Cheaper than a rebuild, and it also covers the
-        // software attempt that follows it. With the TextureView fallback
+        // TextureView rebuild that follows it. With the TextureView fallback
         // active the SurfaceView is hidden, so bouncing it is pointless —
-        // skip straight to the software rebuild.
+        // skip straight to the TextureView rebuild.
         if (!blackVideoSurfaceRetried && !forceTextureViewFallback) {
             blackVideoSurfaceRetried = true
             Log.w(
@@ -2116,7 +1922,7 @@ class NativePlayerActivity : ComponentActivity() {
                     if (firstFrameRendered && System.currentTimeMillis() - firstFrameRenderedAtMs > 2000L) return@postDelayed
                     if (surfaceView == null) {
                         // No SurfaceView to bounce (unexpected layout) — skip
-                        // straight to the software-decoder stage.
+                        // straight to the TextureView stage.
                         handler.postDelayed({ handleBlackVideoTimeout(token, requirePlaying) }, 0L)
                         return@postDelayed
                     }
@@ -2164,100 +1970,9 @@ class NativePlayerActivity : ComponentActivity() {
             return
         }
 
-        // Stage 2: swap renderer families. Auto sessions started on hardware,
-        // so the retry rebuilds with the software decoder (plays many files
-        // whose video the TV's hardware decoder accepts but cannot actually
-        // present). A session started FFmpeg-only by persisted choice retries
-        // with the hardware decoder instead — the experimental FFmpeg renderer
-        // can produce no frames at all, and a "software retry" would rebuild
-        // the identical renderer (a no-op that always ends in the notice).
-        // Snapshot the persisted mode here too (createPlayer keeps its own
-        // local copy); a mid-session settings change only matters from the
-        // next player rebuild anyway.
-        val ffmpegOnlyByChoice =
-            AppPreferences.getVideoDecoder(this) == AppPreferences.VIDEO_DECODER_FFMPEG &&
-                !forceSoftwareDecoder
-        if (ffmpegOnlyByChoice) {
-            if (blackVideoHwRetried) {
-                // The hardware retry already ran and produced nothing — both
-                // renderer families failed, surface the notice.
-                showBlackVideoNotice()
-                return
-            }
-            blackVideoHwRetried = true
-            Log.w(
-                "PLAYER_VIDEO",
-                "Black video: no first frame (surface reset tried)$codecInfo " +
-                    "mime=${streamMimeType ?: "?"} — retrying with hardware decoder"
-            )
-            reconnectingContainer.visibility = View.VISIBLE
-            bufferingSpinner.visibility = View.GONE
-            reconnectingText.text = "Video isn't displaying — switching to hardware decoding…"
-            handler.postDelayed(
-                {
-                    if (token != blackVideoWatchdogToken) return@postDelayed
-                    if (blackVideoNoticeShown) return@postDelayed
-                    if (firstFrameRendered && System.currentTimeMillis() - firstFrameRenderedAtMs > 2000L) return@postDelayed
-                    forceHardwareDecoder = true
-                    errorMessageStr = null
-                    recreatePlayer()
-                },
-                500L
-            )
-            // Absolute deadline for the hardware attempt: if nothing rendered,
-            // surface the notice instead of leaving a silent stall.
-            handler.postDelayed(
-                {
-                    if (token != blackVideoWatchdogToken) return@postDelayed
-                    if (blackVideoNoticeShown) return@postDelayed
-                    if (firstFrameRendered && System.currentTimeMillis() - firstFrameRenderedAtMs > 2000L) return@postDelayed
-                    if (errorContainer.visibility == View.VISIBLE) return@postDelayed
-                    showBlackVideoNotice()
-                },
-                blackVideoSwTimeoutMs
-            )
-            return
-        }
-
-        // Stage 2 (Auto): first occurrence with the hardware decoder — rebuild
-        // with the software decoder.
-        if (!blackVideoSwRetried && !forceSoftwareDecoder) {
-            blackVideoSwRetried = true
-            Log.w(
-                "PLAYER_VIDEO",
-                "Black video: no first frame (surface reset tried)$codecInfo — retrying with software decoder"
-            )
-            reconnectingContainer.visibility = View.VISIBLE
-            bufferingSpinner.visibility = View.GONE
-            reconnectingText.text = "Video isn't displaying — switching to software decoding…"
-            handler.postDelayed(
-                {
-                    if (token != blackVideoWatchdogToken) return@postDelayed
-                    if (blackVideoNoticeShown) return@postDelayed
-                    if (firstFrameRendered && System.currentTimeMillis() - firstFrameRenderedAtMs > 2000L) return@postDelayed
-                    forceSoftwareDecoder = true
-                    errorMessageStr = null
-                    recreatePlayer()
-                },
-                500L
-            )
-            // Absolute deadline for the software attempt: if nothing rendered
-            // (or the decoder can't even keep up to READY), surface the notice
-            // instead of leaving a silent stall.
-            handler.postDelayed(
-                {
-                    if (token != blackVideoWatchdogToken) return@postDelayed
-                    if (blackVideoNoticeShown) return@postDelayed
-                    if (firstFrameRendered && System.currentTimeMillis() - firstFrameRenderedAtMs > 2000L) return@postDelayed
-                    if (errorContainer.visibility == View.VISIBLE) return@postDelayed
-                    showBlackVideoNotice()
-                },
-                blackVideoSwTimeoutMs
-            )
-            return
-        }
-
-        // Stage 3: hardware + software both produced nothing — surface the notice.
+        // Stage 2: video is always hardware now — the bundled FFmpeg ships
+        // audio decoders only, so there is no software video decoder left
+        // to swap to. Surface the actionable notice.
         showBlackVideoNotice()
     }
 
@@ -2282,7 +1997,7 @@ class NativePlayerActivity : ComponentActivity() {
         }
         Log.w(
             "PLAYER_VIDEO",
-            "Black-video notice: no first frame after surface reset + TextureView retry + software retry$codecInfo " +
+            "Black-video notice: no first frame after surface reset + TextureView retry$codecInfo " +
                 "mime=${streamMimeType ?: "?"} playing=${exoPlayer?.isPlaying} state=${exoPlayer?.playbackState}"
         )
         reconnectingContainer.visibility = View.GONE
@@ -2290,8 +2005,7 @@ class NativePlayerActivity : ComponentActivity() {
         errorTitle.text = "Video isn't displaying"
         errorMessage.text =
             "Playback started but no video frames are rendering$codecInfo. " +
-                "Both video surfaces (SurfaceView and TextureView) plus the hardware and " +
-                "software decoders were tried on this TV. " +
+                "Both video surfaces (SurfaceView and TextureView) were tried on this TV. " +
                 (if (triedOtherSources) "Other sources were also tried automatically. " else "") +
                 "If Dolby Vision playback is on, try setting it to Off for this file, or choose " +
                 "a different source — a 1080p H.264 release usually plays on any device."
@@ -2935,10 +2649,7 @@ class NativePlayerActivity : ComponentActivity() {
         bufferingSpinner.visibility = View.GONE
         reconnectingText.text = "Reconnecting... (${retryAttempt + 1}/$MAX_RETRY_ATTEMPTS)"
 
-        if (retryAttempt == 2 && !forceSoftwareDecoder) {
-            forceSoftwareDecoder = true
-            Log.i("PLAYER_RETRY", "Attempt ${retryAttempt + 1}: forcing software decoder")
-        } else if (retryAttempt >= 3) {
+        if (retryAttempt >= 3) {
             Log.i("PLAYER_RETRY", "Attempt ${retryAttempt + 1}: probing with raw extractor")
         }
 
@@ -3452,7 +3163,7 @@ class NativePlayerActivity : ComponentActivity() {
         currentUrl = newUrl
         currentAudioUrl = stream.audioUrl
         currentSourceIndex = sources.indexOfFirst { it.url == newUrl }
-        retryAttempt = 0; retryExhausted = false; errorMessageStr = null; forceSoftwareDecoder = false; forceHardwareDecoder = false; forceTextureViewFallback = false; languagesAutoSelected = false
+        retryAttempt = 0; retryExhausted = false; errorMessageStr = null; forceTextureViewFallback = false; languagesAutoSelected = false
         dismissPicker()
         recreatePlayer()
     }

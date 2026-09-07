@@ -44,9 +44,11 @@
     private final android.view.View surfaceView;
 }
 
-# --- Reflection-loaded Jellyfin FFmpeg video renderer ---
-# FFmpeg-only playback instantiates this renderer by its published class name.
--keep class androidx.media3.decoder.ffmpeg.ExperimentalFfmpegVideoRenderer { *; }
+# --- Jellyfin FFmpeg audio decoder ---
+# FFmpeg audio decoding (DTS / DTS-HD / TrueHD / E-AC3 / FLAC) is the reason
+# this package is bundled. Its video renderer ships with no video decoders
+# compiled in and is never referenced (video is always hardware MediaCodec).
+-dontwarn org.jellyfin.**
 
 -dontwarn javax.annotation.**
 -dontwarn org.conscrypt.**
