@@ -176,6 +176,21 @@ private class SplitModeRenderersFactory(
         allowedVideoJoiningTimeMs: Long,
         out: ArrayList<Renderer>
     ) {
+        // P5 (ICtCp) sessions: prepend the raw-plane renderer AHEAD of the
+        // stock MediaCodec video renderer. It reports FORMAT_HANDLED for HEVC
+        // only while enabled, so non-P5 sessions are unaffected. Winning the
+        // tie-break requires being earlier in the renderer list.
+        if (P5PlaneVideoRenderer.enabled) {
+            out.add(
+                P5PlaneVideoRenderer(
+                    allowedVideoJoiningTimeMs,
+                    eventHandler,
+                    eventListener,
+                    DefaultRenderersFactory.MAX_DROPPED_VIDEO_FRAME_COUNT_TO_NOTIFY
+                )
+            )
+            Log.i("PLAYER_DV", "P5 plane renderer prepended (raw-plane ICtCp path)")
+        }
         super.buildVideoRenderers(
             context,
             videoExtMode,
@@ -1329,27 +1344,29 @@ class NativePlayerActivity : ComponentActivity() {
             AppPreferences.getConvertP5To81(this)
         val convertTo81 = convertP7To81 || convertP5To81
         dvTo81Session = convertTo81 // badge: "DV P7 → 8.1"
-        // P5 (single-layer ICtCp) content needs color conversion for correct HDR colors.
-        // When P5 is detected and DV conversion is enabled, we have two options:
-        // 1. Force FFmpeg software decoder (true pixel-level conversion, slower)
-        // 2. Use GLSurfaceView with ICtCp→PQ shader (GPU-accelerated, faster for 4K)
-        // The hardware decoder would output ICtCp pixel values that the display interprets as Rec.2020 PQ
-        // (giving wrong colors). Reset each attempt so the setting only applies to the
-        // current stream.
+        // P5 (single-layer ICtCp) content needs color conversion for correct
+        // colors. The raw-plane GLES path is the only path that actually
+        // works: the bundled FFmpeg video renderer is an upstream stub that
+        // supports no formats at all (black-video-with-audio), and the
+        // hardware Surface path applies an automatic dataspace conversion
+        // before the shader could ever sample real ICtCp values (green
+        // tint / washed out). P5PlaneVideoRenderer instead decodes in Media
+        // Codec buffer mode — raw planes, no conversion — and the GL shader
+        // does the ICtCp math on the GPU. Reset each attempt so the setting
+        // only applies to the current stream.
         val p5Content = currentCodecs?.let { DolbyVisionCompat.isP5Profile(it) } ?: false
-        val userWantsFfmpeg = videoDecoder == AppPreferences.VIDEO_DECODER_FFMPEG
         // Decide which video path to use for P5 content:
-        // - P5VideoGlesView: P5 + no FFmpeg + GLES available (GPU color conversion)
-        // - FFmpeg: P5 + user selected software decoder, or GLES unavailable
-        // - PlayerView: everything else
-        val useP5GlesView = p5Content &&
-            !forceSoftwareDecoder &&
-            !userWantsFfmpeg &&
-            P5ColorShader.hasGles3()
+        // - P5VideoGlesView + P5PlaneVideoRenderer: P5 with GLES available
+        //   (raw planes → GPU color conversion). This replaces both the old
+        //   "no FFmpeg" GLES branch and the FFmpeg-force branch, neither of
+        //   which could deliver correct colors.
+        // - PlayerView (hardware Surface): everything else, and P5 on
+        //   devices without GLES (colors uncorrected, as before).
+        val useP5GlesView = p5Content && P5ColorShader.hasGles3()
         if (useP5GlesView && !p5GlesActive) {
             Log.i(
                 "PLAYER_DV",
-                "P5 content detected, no FFmpeg — activating GLSurfaceView color correction"
+                "P5 content detected — activating GLSurfaceView raw-plane color correction"
             )
             playerView.visibility = View.GONE
             p5VideoGlesView.visibility = View.VISIBLE
@@ -1360,11 +1377,10 @@ class NativePlayerActivity : ComponentActivity() {
             playerView.visibility = View.VISIBLE
             p5GlesActive = false
         }
-        // Force the FFmpeg fallback only when the GLES path can't run (user
-        // picked software, or the device lacks GLES). The previous version
-        // forced software for every P5, which made the GLES branch above dead
-        // code — hardware P5 without either correction renders ICtCp pixels as
-        // Rec.2020 PQ (green tint).
+        // The FFmpeg force only applies when the GLES path can't run (device
+        // lacks GLES). Note the bundled FFmpeg video renderer is an upstream
+        // stub that supports no formats — such sessions fall back via the
+        // black-video watchdog to the hardware decoder.
         if (p5Content && dvRewriteEnabled && !forceSoftwareDecoder && !useP5GlesView) {
             forceP5SoftwareDecode = true
             forceSoftwareDecoder = true
@@ -1400,10 +1416,15 @@ class NativePlayerActivity : ComponentActivity() {
         // black-video watchdog can flip such a session to hardware
         // (forceHardwareDecoder). An explicit software retry
         // (forceSoftwareDecoder) still wins so the Auto recovery keeps working.
+        // P5 GLES sessions render video through P5PlaneVideoRenderer (hardware
+        // decode in buffer mode + GL color conversion), so the FFmpeg-only
+        // factory (whose video renderer is a no-op stub) must not be used for
+        // them even when the user's video decoder preference says FFmpeg.
         val softwareDecoderActive =
-            forceSoftwareDecoder ||
+            (forceSoftwareDecoder ||
                 (videoDecoder == AppPreferences.VIDEO_DECODER_FFMPEG &&
-                    !isLiveChannel && !dvRewriteEnabled && !forceHardwareDecoder)
+                    !isLiveChannel && !dvRewriteEnabled && !forceHardwareDecoder)) &&
+                !p5GlesActive
         // Remember that this session is FFmpeg-video BY CHOICE (not a
         // forceSoftwareDecoder retry) so onTracksChanged can pre-empt it for
         // formats the software renderer cannot decode in real time.
@@ -1488,6 +1509,9 @@ class NativePlayerActivity : ComponentActivity() {
         // video decoder says FFmpeg AND its guards permit it; otherwise video
         // extension mode is ON ("Prefer device": FFmpeg fallback behind
         // hardware) or OFF (an FFmpeg session bypassed for live/DV-rewrite).
+        // Gate the raw-plane renderer for THIS session before the player (and
+        // its renderers) are built.
+        P5PlaneVideoRenderer.enabled = p5GlesActive
         val renderersFactory = if (softwareDecoderActive) {
             FfmpegOnlyRenderersFactory(this, audioExtMode)
         } else {
@@ -1599,7 +1623,14 @@ class NativePlayerActivity : ComponentActivity() {
 
             exoPlayer = player
             if (p5GlesActive) {
-                p5VideoGlesView.setPlayer(player)
+                // P5 raw-plane path: the view implements
+                // VideoDecoderOutputBufferRenderer, so setVideoSurfaceView
+                // routes the view itself (not a Surface) to the video
+                // renderer - it delivers raw YUV planes to the view and
+                // the shader does the ICtCp conversion. No decoder Surface,
+                // hence no automatic dataspace conversion in the way.
+                player.setVideoSurfaceView(p5VideoGlesView)
+                playerView.post { player.prepare() }
             } else {
                 // Apply the surface type BEFORE attaching the player: the
                 // black-video watchdog's TextureView fallback swaps the
