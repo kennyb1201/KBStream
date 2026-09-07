@@ -40,8 +40,17 @@ import java.io.EOFException
  * "P7 → 8.1" mode only Profile 7 qualifies (every other DV profile is passed
  * through so DV displays get the real thing); with [convertAllProfiles] set
  * ("Strip All") every profile
- * — 4/5/7/8 — is converted for displays without Dolby Vision. Profiles 4/8
- * already carry a standard HDR10 base layer, so they are re-advertised as hvc1,
+ * — 4/5/7/8 — is converted for displays without Dolby Vision. On devices with
+ * a native Dolby Vision decoder ([nativeDvSupported]) the HDR10-base profiles
+ * (4/8) pass through as real Dolby Vision — which those devices decode
+ * natively (mutating them is what makes MTK-class HEVC decoders stall with
+ * zero output frames) — EXCEPT in the explicit "Strip All" mode, where the
+ * user has told us the display has no Dolby Vision at all and P4/P8 are
+ * always stripped to HDR10 even on DV-capable devices (a DV decoder on the
+ * box does not mean the TV can show DV; on such combos the platform DV
+ * pipeline black-screens the non-DV display, so Strip All must win). Profiles 4/8
+ * already carry a standard HDR10 base layer, so on non-DV devices they are
+ * re-advertised as hvc1,
  * their VPS is rewritten to a clean single-layer parameter set (a DV VPS left
  * behind after the strip makes some decoders stall waiting for RPUs), and only
  * the DV RPU / EL and (per toggle) HDR10+ SEI NALs are dropped — every other
@@ -73,7 +82,8 @@ internal class DolbyVisionCompatExtractorsFactory(
     private val convertAllProfiles: Boolean = false,
     private val dvRewriteEnabled: Boolean = true,
     private val convertP7To81: Boolean = false,
-    private val convertP5To81: Boolean = false
+    private val convertP5To81: Boolean = false,
+    private val nativeDvSupported: Boolean = false
 ) : ExtractorsFactory {
 
     override fun createExtractors(): Array<Extractor> {
@@ -109,11 +119,12 @@ internal class DolbyVisionCompatExtractorsFactory(
             "PLAYER_DV",
             "Wrapping extractor=$simpleName framing=$framing " +
                 "allProfiles=$convertAllProfiles rewriteEnabled=$dvRewriteEnabled " +
-                "stripHdr10Plus=$stripHdr10Plus convertP7To81=$convertP7To81 convertP5To81=$convertP5To81"
+                "stripHdr10Plus=$stripHdr10Plus convertP7To81=$convertP7To81 convertP5To81=$convertP5To81 " +
+                "nativeDv=$nativeDvSupported"
         )
         return VideoCompatExtractor(
             extractor, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
-            convertP7To81, convertP5To81
+            convertP7To81, convertP5To81, nativeDvSupported
         )
     }
 }
@@ -129,7 +140,8 @@ private class VideoCompatExtractor(
     private val convertAllProfiles: Boolean,
     private val dvRewriteEnabled: Boolean,
     private val convertP7To81: Boolean,
-    private val convertP5To81: Boolean
+    private val convertP5To81: Boolean,
+    private val nativeDvSupported: Boolean
 ) : Extractor {
 
     override fun init(output: ExtractorOutput) {
@@ -137,7 +149,7 @@ private class VideoCompatExtractor(
         delegate.init(
             VideoCompatExtractorOutput(
                 output, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
-                convertP7To81, convertP5To81
+                convertP7To81, convertP5To81, nativeDvSupported
             )
         )
     }
@@ -161,7 +173,8 @@ private class VideoCompatExtractorOutput(
     private val convertAllProfiles: Boolean,
     private val dvRewriteEnabled: Boolean,
     private val convertP7To81: Boolean,
-    private val convertP5To81: Boolean
+    private val convertP5To81: Boolean,
+    private val nativeDvSupported: Boolean
 ) : ExtractorOutput {
 
     override fun track(id: Int, type: Int): TrackOutput {
@@ -169,7 +182,7 @@ private class VideoCompatExtractorOutput(
         return if (type == C.TRACK_TYPE_VIDEO) {
             VideoCompatTrackOutput(
                 track, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
-                convertP7To81, convertP5To81
+                convertP7To81, convertP5To81, nativeDvSupported
             )
         } else {
             track
@@ -193,7 +206,8 @@ private class VideoCompatTrackOutput(
     private val convertAllProfiles: Boolean,
     private val dvRewriteEnabled: Boolean,
     private val convertP7To81: Boolean,
-    private val convertP5To81: Boolean
+    private val convertP5To81: Boolean,
+    private val nativeDvSupported: Boolean
 ) : TrackOutput {
 
     /** True when either per-profile 8.1 conversion (P5/P7) is active. */
@@ -220,17 +234,29 @@ private class VideoCompatTrackOutput(
     private var mode = Mode.NORMAL
     private var sniffRemaining = 0
     private var currentCodecs: String? = null
+    // Original format (untouched init data) of the current track, kept so the
+    // sniff path can re-emit the format with rewritten VPS/SPS once in-band
+    // Dolby Vision is confirmed on a track whose codec config was forwarded
+    // verbatim (plain hvc1/hev1 remuxes).
+    private var lastFormat: Format? = null
     private var isP5Content = false
     private var nalLengthFieldLength = 4
     private var pendingBuf = ByteArray(0)
     private var pendingLen = 0
     private var stripReported = false
+    // True once this track's codec config (hvcC record / Annex-B parameter
+    // sets) was rewritten to single-layer HDR10 at format time. MP4/fMP4
+    // samples carry no VPS/SPS, so the per-sample stats below never see them;
+    // this flag makes the first-sample log report the config rewrite that
+    // actually happened.
+    private var initDataRewritten = false
     private val scratch = ParsableByteArray()
 
     override fun durationUs(durationUs: Long) = delegate.durationUs(durationUs)
 
     override fun format(format: Format) {
         currentCodecs = format.codecs
+        lastFormat = format
         isP5Content = DolbyVisionCompat.isP5Profile(format.codecs)
         Log.i(
             "PLAYER_DV",
@@ -261,7 +287,7 @@ private class VideoCompatTrackOutput(
                 builder = builder.setLabel(format.codecs)
             }
             builder = builder.setInitializationData(
-                DolbyVisionCompat.rewriteInitDataVps(format.initializationData)
+                rewriteInitData(format.initializationData)
             )
             delegate.format(builder.build())
             mode = Mode.STRIPPING
@@ -275,22 +301,49 @@ private class VideoCompatTrackOutput(
             if (dvRewriteEnabled) DolbyVisionCompat.hdr10Codec(format.codecs, convertAllProfiles)
             else null
         // Profiles 4/8 are single-layer streams whose base layer is already
-        // standard HDR10 HEVC. Forwarding the in-band DV RPU / HDR10+ metadata
-        // NALs untouched makes MTK-class decoders re-emit their output format on
-        // every frame ("Resolution change XxX to XxX" at video fps) and the
-        // compositor drops the frames — black screen with audio. But stripping
-        // the metadata while leaving the Dolby Vision VPS in place is worse:
-        // the decoder sits in DV mode waiting for RPUs that never arrive and
-        // stalls completely (input frames in, zero output). So for these
-        // profiles: re-advertise as plain HEVC, rewrite the VPS to a clean
-        // single-layer parameter set, and strip the metadata NALs (62/63 +
-        // layerId>0 + HDR10+ SEI per toggle) — every other byte bit-exact.
+        // standard HDR10 HEVC. On a device with a native Dolby Vision decoder
+        // they play untouched through the platform DV pipeline — the DV decoder
+        // consumes the RPU NALs and the platform downconverts for non-DV sinks —
+        // so no mutation is needed. Mutating them is exactly what MTK-class DV
+        // hardware chokes on: re-advertising as hvc1 and stripping the RPUs
+        // leaves the HEVC decoder configured OK but stalling with zero output
+        // frames. The strip path below is only for devices without a DV decoder
+        // (where the base layer must be played as plain HDR10) — except in the
+        // explicit "Strip All" mode, which is the user telling us the display
+        // has NO Dolby Vision at all and every profile must become HDR10.
+        // A DV-capable device (e.g. a Fire TV Stick advertising video/dolby-
+        // vision) does NOT imply a DV-capable display: on such combos the
+        // platform DV pipeline does not reliably downconvert for the non-DV TV
+        // (black screen with audio), so Strip All must override the passthrough
+        // and always strip P4/P8 to HDR10. On those devices without a DV
+        // decoder, forwarding the in-band DV RPU / HDR10+ metadata NALs
+        // untouched makes some decoders re-emit their output format on every
+        // frame ("Resolution change XxX to XxX" at video fps) and the compositor
+        // drops the frames — black screen with audio. But stripping the
+        // metadata while leaving the Dolby Vision VPS in place is worse: the
+        // decoder sits in DV mode waiting for RPUs that never arrive and stalls
+        // completely (input frames in, zero output). So for these profiles:
+        // re-advertise as plain HEVC, rewrite the VPS to a clean single-layer
+        // parameter set, and strip the metadata NALs (62/63 + layerId>0 +
+        // HDR10+ SEI per toggle) — every other byte bit-exact.
         if (dvRewrite != null && DolbyVisionCompat.isHdr10BaseLayerProfile(format.codecs)) {
+            if (nativeDvSupported && !convertAllProfiles) {
+                Log.i(
+                    "PLAYER_DV",
+                    "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — device has a " +
+                        "native Dolby Vision decoder: passing through as Dolby Vision " +
+                        "(no strip — HDR10-base profiles play natively)"
+                )
+                mode = Mode.NORMAL
+                delegate.format(format)
+                return
+            }
             Log.i(
                 "PLAYER_DV",
                 "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — HDR10 base layer: " +
                     "re-advertising as hvc1, rewriting VPS to single-layer HDR10, " +
-                    "stripping DV RPU/EL + HDR10+ metadata NALs"
+                    "stripping DV RPU/EL + HDR10+ metadata NALs " +
+                    "(nativeDv=$nativeDvSupported stripAll=$convertAllProfiles)"
             )
             var builder = format.buildUpon().setCodecs(dvRewrite)
             // Keep the original declared DV codec (e.g. "dvhe.08.06") on the
@@ -302,7 +355,7 @@ private class VideoCompatTrackOutput(
                 builder = builder.setSampleMimeType(MimeTypes.VIDEO_H265)
             }
             builder = builder.setInitializationData(
-                DolbyVisionCompat.rewriteInitDataVps(format.initializationData)
+                rewriteInitData(format.initializationData)
             )
             // The rewritten format must carry explicit HDR10 color metadata,
             // same as the general strip path below — declared DV tracks don't
@@ -374,7 +427,7 @@ private class VideoCompatTrackOutput(
                 builder = builder.setSampleMimeType(MimeTypes.VIDEO_H265)
             }
             builder = builder.setInitializationData(
-                DolbyVisionCompat.rewriteInitDataVps(format.initializationData)
+                rewriteInitData(format.initializationData)
             )
             val rewritten = builder.build()
             // When DV is stripped, the resulting stream is plain HDR10 HEVC.
@@ -465,6 +518,24 @@ private class VideoCompatTrackOutput(
                     "PLAYER_DV",
                     "In-band Dolby Vision RPU detected (no dvcc marker, codecs=${currentCodecs ?: "?"}) — $action"
                 )
+                // This track's codec config was emitted untouched (it looked
+                // like plain HEVC), so its VPS/SPS still declare the original
+                // Dolby Vision structure. Rewrite them to single-layer HDR10
+                // and re-emit the format now that in-band DV is confirmed — a
+                // decoder that configured from a DV VPS but never receives RPUs
+                // is exactly the stall that black-screens with audio.
+                val fmt = lastFormat
+                if (fmt != null && fmt.initializationData.isNotEmpty()) {
+                    val rewrittenInit = rewriteInitData(fmt.initializationData)
+                    if (rewrittenInit !== fmt.initializationData) {
+                        Log.i(
+                            "PLAYER_DV",
+                            "Re-emitting format with rewritten single-layer HDR10 codec config " +
+                                "(codecs=${fmt.codecs ?: "?"})"
+                        )
+                        delegate.format(fmt.buildUpon().setInitializationData(rewrittenInit).build())
+                    }
+                }
                 // Fall through and strip this very sample: samples that contain
                 // DV NALs are never forwarded untouched to the decoder.
             } else if (dvFound) {
@@ -563,16 +634,20 @@ private class VideoCompatTrackOutput(
         if (stripped >= 0 && !stripReported) {
             stripReported = true
             val vpsFail = stats.vpsRewriteFailedReason?.let { " vpsFail=$it" } ?: ""
+            val spsFail = stats.spsRewriteFailedReason?.let { " spsFail=$it" } ?: ""
             Log.i(
                 "PLAYER_DV",
                 if (convertTo81) {
                     "First 8.1-converted sample (codecs=${currentCodecs ?: "?"}) — " +
                         "RPU rewritten=${stats.rpuRewritten} EL=${stats.elBytes}B " +
-                        "HDR10+SEI=${stats.hdr10PlusBytes}B vpsRewritten=${stats.vpsRewritten}$vpsFail nals=$inventory"
+                        "HDR10+SEI=${stats.hdr10PlusBytes}B vpsRewritten=${stats.vpsRewritten}$vpsFail " +
+                        "initDataRewritten=$initDataRewritten spsRewritten=${stats.spsRewritten}$spsFail " +
+                        "nals=$inventory"
                 } else {
                     "First stripped sample (codecs=${currentCodecs ?: "?"}) — " +
                         "dropped RPU=${stats.rpuBytes}B EL=${stats.elBytes}B HDR10+SEI=${stats.hdr10PlusBytes}B " +
-                        "vpsRewritten=${stats.vpsRewritten}$vpsFail nals=$inventory"
+                        "vpsRewritten=${stats.vpsRewritten}$vpsFail initDataRewritten=$initDataRewritten " +
+                        "spsRewritten=${stats.spsRewritten}$spsFail nals=$inventory"
                 }
             )
         }
@@ -580,6 +655,15 @@ private class VideoCompatTrackOutput(
 
         if (carrySize > 0) System.arraycopy(pendingBuf, sampleEnd, pendingBuf, 0, carrySize)
         pendingLen = carrySize
+    }
+
+    /** Rewrites codec-private VPS/SPS to single-layer HDR10, tracking whether
+     * the config actually changed so the first-sample log reports it even for
+     * containers whose samples carry no parameter sets (MP4/fMP4). */
+    private fun rewriteInitData(initData: List<ByteArray>): List<ByteArray> {
+        val rewritten = DolbyVisionCompat.rewriteInitDataVps(initData)
+        if (rewritten !== initData) initDataRewritten = true
+        return rewritten
     }
 
     private fun isPlainHevc(format: Format): Boolean {

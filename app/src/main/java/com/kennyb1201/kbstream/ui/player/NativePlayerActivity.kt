@@ -1302,6 +1302,16 @@ class NativePlayerActivity : ComponentActivity() {
         val stripHdr10Plus = AppPreferences.getStripHdr10Plus(this)
         val videoDecoder = AppPreferences.getVideoDecoder(this)
         val audioDecoderPriority = AppPreferences.getAudioDecoder(this)
+        // True when the platform advertises a Dolby Vision decoder. On such
+        // devices single-layer DV (P4/P8) normally passes through as native
+        // Dolby Vision — the compat extractor does not strip it to hvc1
+        // (mutating it is what makes MTK-class HEVC decoders stall with zero
+        // output frames, and the platform downconverts DV for non-DV sinks).
+        // Exception: "Strip All" mode overrides this and always strips P4/P8
+        // to HDR10, because a DV-capable box (Fire TV Stick) does not imply a
+        // DV-capable display — the user picks Strip All precisely for TVs that
+        // black-screen on the DV passthrough.
+        val nativeDvSupported = DolbyVisionCompat.supportsNativeDolbyVision()
         val dvRewriteEnabled = dvCompatMode != AppPreferences.DV_COMPAT_OFF
         val convertAllProfiles = dvCompatMode == AppPreferences.DV_COMPAT_ALL
         // Per-profile 8.1 conversion: the "P7 → 8.1" mode (Auto) always
@@ -1404,6 +1414,7 @@ class NativePlayerActivity : ComponentActivity() {
             "DV settings mode=$dvCompatMode rewriteEnabled=$dvRewriteEnabled " +
                 "allProfiles=$convertAllProfiles to81=$convertTo81 " +
                 "(p7=$convertP7To81 p5=$convertP5To81) stripHdr10Plus=$stripHdr10Plus " +
+                "nativeDv=$nativeDvSupported " +
                 "videoDecoder=$videoDecoder audioDecoder=$audioDecoderPriority " +
                 "forceSoftware=$softwareDecoderActive " +
                 "audioSeparate=${!currentAudioUrl.isNullOrBlank()}"
@@ -1420,7 +1431,8 @@ class NativePlayerActivity : ComponentActivity() {
                     convertAllProfiles = convertAllProfiles,
                     dvRewriteEnabled = dvRewriteEnabled,
                     convertP7To81 = convertP7To81,
-                    convertP5To81 = convertP5To81
+                    convertP5To81 = convertP5To81,
+                    nativeDvSupported = nativeDvSupported
                 )
             }
         val mediaSourceFactory = DefaultMediaSourceFactory(httpFactory, extractorsFactory)

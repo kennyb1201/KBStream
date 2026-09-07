@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.player
 
+import android.media.MediaCodecList
 import android.util.Log
 import java.io.ByteArrayOutputStream
 
@@ -81,6 +82,38 @@ internal object DolbyVisionCompat {
     fun isHdr10BaseLayerProfile(codecs: String?): Boolean {
         if (codecs.isNullOrBlank()) return false
         return DV_CODEC_HDR10_BASE_LAYER.containsMatchIn(codecs.trim())
+    }
+
+    /**
+     * True when the device advertises a Dolby Vision decoder to MediaCodec
+     * (a codec whose supported types include video/dolby-vision). On such
+     * devices single-layer DV (Profile 4 / Profile 8) decodes natively through
+     * the platform's Dolby Vision pipeline — the platform handles sink
+     * downconversion (DV → HDR10/SDR on non-DV displays), so re-advertising
+     * the track as plain hvc1 and stripping the RPU NALs is unnecessary, and
+     * on MediaTek-class DV hardware it is actively harmful: the HEVC decoder
+     * accepts the mutated stream, sits waiting for RPUs that never arrive, and
+     * never outputs a frame (configure OK, zero output).
+     *
+     * IMPORTANT: a DV decoder on the box does not mean the display can show
+     * DV. The "Strip All" mode overrides this probe — the user has told us
+     * the display has no Dolby Vision, so P4/P8 are stripped to HDR10 even on
+     * DV-capable devices (e.g. Fire TV Sticks, where the DV pipeline does not
+     * reliably downconvert for non-DV TVs and P8 black-screens). Returns false
+     * on any codec-list read failure so callers keep their non-DV fallback
+     * behavior.
+     */
+    fun supportsNativeDolbyVision(): Boolean = try {
+        val codecList = MediaCodecList(MediaCodecList.REGULAR_CODECS)
+        for (info in codecList.codecInfos) {
+            if (info.isEncoder) continue
+            for (type in info.supportedTypes) {
+                if (type.equals("video/dolby-vision", ignoreCase = true)) return true
+            }
+        }
+        false
+    } catch (_: Exception) {
+        false
     }
 
     /** Generic Main10@L5.1 HEVC identifier describing the stripped base layer. */
@@ -440,7 +473,9 @@ internal object DolbyVisionCompat {
         var elBytes = 0
         var hdr10PlusBytes = 0
         var vpsRewritten = false
+        var spsRewritten = false
         var vpsRewriteFailedReason: String? = null
+        var spsRewriteFailedReason: String? = null
         var rpuRewritten = 0
     }
 
@@ -455,6 +490,41 @@ internal object DolbyVisionCompat {
     // parser dovi_tool uses) — ITU-T H.265 7.3.2.1 / 7.3.3.
 
     private const val NAL_VPS = 32
+    private const val NAL_SPS = 33
+
+    // H.265 (ITU-T H.265 / ISO/IEC 23008-2 A.3) profile identifiers: Main10
+    // is general_profile_idc 2 with general_profile_compatibility_flag[2]
+    // (bit 27 of the u(32) field = 0x20000000). 4 / flag[4] (0x08000000) is
+    // Range Extensions — a legacy patch wrongly used those for Main10, which
+    // makes decoders that key on the profile negotiate the wrong codec path.
+    private const val MAIN10_PROFILE_IDC = 2L
+    private const val MAIN10_COMPAT_FLAG = 0x20000000L
+    private const val RANGE_EXT_COMPAT_FLAG = 0x08000000L
+
+    /** True when a general PTL already declares clean Main10 and needs no patch. */
+    private fun ptlIsCleanMain10(
+        profileSpace: Long,
+        tierFlag: Long,
+        profileIdc: Long,
+        compatFlags: Long
+    ): Boolean = profileSpace == 0L && tierFlag == 0L &&
+        profileIdc == MAIN10_PROFILE_IDC && (compatFlags and MAIN10_COMPAT_FLAG) != 0L
+
+    /**
+     * Writes the general profile_tier_level fields of a clean Main10 profile:
+     * profile_space 0, Main tier, profile_idc 2, original compatibility bits
+     * plus the Main10 flag (and minus the Range-Extensions flag a legacy
+     * patch used to OR in).
+     */
+    private fun writeMain10GeneralPtl(out: VpsBitWriter, compatFlags: Long) {
+        out.writeBits(0L, 2) // general_profile_space = 0
+        out.writeBits(0L, 1) // general_tier_flag = 0 (Main)
+        out.writeBits(MAIN10_PROFILE_IDC, 5) // general_profile_idc = 2 (Main10)
+        out.writeBits(
+            (compatFlags or MAIN10_COMPAT_FLAG) and RANGE_EXT_COMPAT_FLAG.inv(),
+            32
+        )
+    }
 
     /** Bit-level reader over an RBSP (emulation-prevention bytes removed). */
     private class VpsBitReader(private val data: ByteArray) {
@@ -584,7 +654,8 @@ internal object DolbyVisionCompat {
         /** Rewritten single-layer HDR10 RBSP (emulation-prevention re-applied). */
         data class Rewritten(val rbsp: ByteArray) : VpsRewriteOutcome()
 
-        /** VPS carried no Dolby Vision extension — keep the original as-is. */
+        /** VPS is already plain single-layer Main10 (no DV extension, clean
+         * PTL) — keep the original as-is. */
         object NoDvExtension : VpsRewriteOutcome()
 
         /** VPS did not parse ([reason] for diagnostics); the original is kept. */
@@ -592,10 +663,14 @@ internal object DolbyVisionCompat {
     }
 
     /**
-     * Rewrites a Dolby Vision VPS payload (RBSP, EPB bytes allowed) into a clean
-     * single-layer HDR10 VPS: the Dolby Vision extension is removed and the layer
-     * count forced to 1. See [VpsRewriteOutcome] for the three outcomes; a
-     * failed parse keeps the original VPS rather than corrupting it.
+     * Rewrites a Dolby Vision VPS payload (RBSP, EPB bytes allowed) into a
+     * clean single-layer HDR10 VPS: the Dolby Vision extension is removed,
+     * the layer count forced to 1, and the general profile_tier_level patched
+     * to Main10 (profile_idc 2, Main tier, Main10 compatibility flag) — even
+     * on single-layer VPSs with no extension byte, whose PTL can still
+     * declare High tier or a DV-adjacent profile. See [VpsRewriteOutcome] for
+     * the three outcomes; a failed parse keeps the original VPS rather than
+     * corrupting it.
      */
     fun rewriteVpsToHdr10(buf: ByteArray, from: Int, to: Int): VpsRewriteOutcome {
         if (to - from < 4) return VpsRewriteOutcome.Failed("short-nal")
@@ -616,8 +691,17 @@ internal object DolbyVisionCompat {
 
         // profile_tier_level(1, maxSubLayers - 1): general fields (2+1+5+32 +
         // 4 constraint flags + 44 reserved + 8 level), sub-layer flags, then
-        // per-sub-layer profile/level blocks.
-        br.readBits(2); br.readBits(1); br.readBits(5); br.readBits(32)
+        // per-sub-layer profile/level blocks. The general fields are patched
+        // to clean Main10 during the rebuild — a decoder told "hvc1 Main10"
+        // via the codec string stalls when the in-band PTL still advertises
+        // the original profile structure (MTK decoders configure OK, feed
+        // nothing out). Dolby Vision VPSs commonly declare High tier
+        // (tier_flag = 1) even on single-layer streams, which is exactly such
+        // a mismatch.
+        val profileSpace = br.readBits(2)
+        val tierFlag = br.readBits(1)
+        val profileIdc = br.readBits(5)
+        val compatFlags = br.readBits(32)
         br.readBits(1); br.readBits(1); br.readBits(1); br.readBits(1)
         br.readBits(44)
         if (br.readBits(8) == -1L) return VpsRewriteOutcome.Failed("ptl-general")
@@ -680,15 +764,34 @@ internal object DolbyVisionCompat {
         val extBit = br.pos
         val extFlag = br.readBits(1)
         if (extFlag == -1L) return VpsRewriteOutcome.Failed("extension-flag")
-        if (extFlag == 0L) return VpsRewriteOutcome.NoDvExtension
+        // A single-layer VPS with no extension byte whose general PTL already
+        // declares clean Main10 is plain HEVC — nothing to patch. Everything
+        // else is rebuilt below: a multi-layer VPS without an extension byte
+        // is still Dolby Vision (dual-layer P7 remuxes) and must be rewritten
+        // because vps_max_layers_minus1 > 0 is exactly what keeps decoders
+        // waiting for the enhancement layer the strip removed; and even a
+        // single-layer VPS with no extension can be DV signaling — Dolby
+        // Vision encodes routinely declare High tier (tier_flag = 1) or ride
+        // on an SPS with a proprietary profile — so the PTL is patched to
+        // clean Main10 unless it already is.
+        if (extFlag == 0L && maxLayers <= 1 &&
+            ptlIsCleanMain10(profileSpace, tierFlag, profileIdc, compatFlags)
+        ) {
+            return VpsRewriteOutcome.NoDvExtension
+        }
 
-        // Rebuild: header with vps_max_layers_minus1 = 0, everything from the
-        // end of the layer-count field through the extension flag verbatim,
-        // extension flag cleared, rbsp trailing bits.
+        // Rebuild: header with vps_max_layers_minus1 = 0, the general PTL
+        // fields patched to clean Main10 (profile_space 0, Main tier,
+        // profile_idc 2, Main10 compatibility flag OR-ed into the original
+        // compatibility bits), everything else verbatim, extension flag
+        // cleared, rbsp trailing bits.
         val out = VpsBitWriter()
         if (!br.copyBits(0, 6, out)) return VpsRewriteOutcome.Failed("copy-header")
-        out.writeBits(0L, 6)
-        if (!br.copyBits(12, extBit, out)) return VpsRewriteOutcome.Failed("copy-body")
+        out.writeBits(0L, 6) // vps_max_layers_minus1 = 0
+        if (!br.copyBits(12, 32, out)) return VpsRewriteOutcome.Failed("copy-sublayer-flags")
+        writeMain10GeneralPtl(out, compatFlags)
+        if (!br.copyBits(72, 128, out)) return VpsRewriteOutcome.Failed("copy-ptl-tail")
+        if (!br.copyBits(128, extBit, out)) return VpsRewriteOutcome.Failed("copy-body")
         out.writeBits(0L, 1) // vps_extension_flag = 0
         out.writeBits(1L, 1) // rbsp_stop_one_bit
         return VpsRewriteOutcome.Rewritten(addEmulationPrevention(out.finish()))
@@ -809,16 +912,318 @@ internal object DolbyVisionCompat {
     }
 
     /**
-     * Rewrites every VPS NAL found in codec-private (initialization data)
+     * Outcome of one SPS rewrite attempt. Dolby Vision also signals itself
+     * through the SPS extension (sps_multilayer_extension_flag on dual-layer
+     * P7, sps_extension_data_flag carrying the DV profile on single-layer
+     * P8), so a DV SPS left in-band after the RPU strip keeps the decoder in
+     * DV mode exactly like a DV VPS would.
+     */
+    internal sealed class SpsRewriteOutcome {
+        /** Rewritten HDR10 RBSP (DV SPS extension removed, emulation-prevention re-applied). */
+        data class Rewritten(val rbsp: ByteArray) : SpsRewriteOutcome()
+
+        /** SPS already declares clean Main10 with no DV extension to remove —
+         * keep the original as-is. */
+        object NoDvExtension : SpsRewriteOutcome()
+
+        /** SPS did not parse ([reason] for diagnostics); the original is kept. */
+        data class Failed(val reason: String) : SpsRewriteOutcome()
+    }
+
+    /**
+     * Rewrites a Dolby Vision SPS payload (RBSP, EPB bytes allowed) into a
+     * clean single-layer HDR10 SPS: the general profile_tier_level is patched
+     * to Main10 (profile_idc 2, Main tier, Main10 compatibility flag) and the
+     * SPS extension that carries DV signaling is removed
+     * (sps_extension_present_flag = 0, then rbsp trailing bits). The full SPS
+     * is skip-parsed first (ITU-T H.265 7.3.2.2.1 — scaling lists, short-term
+     * ref pic sets with inter prediction, VUI and its hrd_parameters) so the
+     * extension can be located bit-exactly and everything before it copied
+     * verbatim; any parse failure keeps the original SPS. Only the Dolby
+     * Vision extension forms are stripped — a range / SCC / 3D extension and
+     * the no-extension form are preserved bit-exact apart from the PTL patch,
+     * so a non-DV stream is never corrupted.
+     */
+    fun rewriteSpsToHdr10(buf: ByteArray, from: Int, to: Int): SpsRewriteOutcome {
+        if (to - from < 4) return SpsRewriteOutcome.Failed("short-nal")
+        val rbsp = removeEmulationPrevention(buf, from, to)
+        if (rbsp.size < 10) return SpsRewriteOutcome.Failed("short-rbsp")
+        val br = VpsBitReader(rbsp)
+
+        // sps_video_parameter_set_id(4) sps_max_sub_layers_minus1(3)
+        // sps_temporal_id_nesting_flag(1) reserved_zero_2bits(2)
+        if (br.readBits(4) == -1L) return SpsRewriteOutcome.Failed("vps-id")
+        val maxSubLayersBits = br.readBits(3)
+        if (maxSubLayersBits == -1L) return SpsRewriteOutcome.Failed("sub-layers")
+        val maxSubLayers = maxSubLayersBits.toInt() + 1
+        if (br.readBits(1) == -1L) return SpsRewriteOutcome.Failed("nesting")
+        if (br.readBits(2) == -1L) return SpsRewriteOutcome.Failed("reserved")
+
+        // profile_tier_level(1, maxSubLayers - 1) — the SPS copy of the PTL is
+        // patched to clean Main10 during the rebuild below: Dolby Vision
+        // encodes routinely declare a proprietary profile here (profile_space
+        // 2 / profile_idc 8) or High tier, and a decoder that reads the SPS
+        // PTL then sees something other than plain Main10 while the track is
+        // re-advertised as hvc1 — exactly the "configure OK, no output" stall.
+        val profileSpace = br.readBits(2)
+        val tierFlag = br.readBits(1)
+        val profileIdc = br.readBits(5)
+        val compatFlags = br.readBits(32)
+        br.readBits(1); br.readBits(1); br.readBits(1); br.readBits(1)
+        br.readBits(44)
+        if (br.readBits(8) == -1L) return SpsRewriteOutcome.Failed("ptl-general")
+        val subLayerProfile = BooleanArray(maxSubLayers - 1)
+        val subLayerLevel = BooleanArray(maxSubLayers - 1)
+        for (i in 0 until maxSubLayers - 1) {
+            val p = br.readBits(1)
+            val l = br.readBits(1)
+            if (p == -1L || l == -1L) return SpsRewriteOutcome.Failed("ptl-subflags")
+            subLayerProfile[i] = p == 1L
+            subLayerLevel[i] = l == 1L
+        }
+        if (maxSubLayers - 1 > 0) {
+            for (i in maxSubLayers - 1 until 8) {
+                if (br.readBits(2) == -1L) return SpsRewriteOutcome.Failed("ptl-reserved")
+            }
+        }
+        for (i in 0 until maxSubLayers - 1) {
+            if (subLayerProfile[i]) {
+                br.readBits(2); br.readBits(1); br.readBits(5); br.readBits(32)
+                br.readBits(1); br.readBits(1); br.readBits(1); br.readBits(1)
+                if (br.readBits(44) == -1L) return SpsRewriteOutcome.Failed("ptl-sub-profile")
+            }
+            if (subLayerLevel[i]) {
+                if (br.readBits(8) == -1L) return SpsRewriteOutcome.Failed("ptl-sub-level")
+            }
+        }
+
+        if (br.readUe() == -1L) return SpsRewriteOutcome.Failed("sps-id") // sps_seq_parameter_set_id
+        val chromaFormat = br.readUe()
+        if (chromaFormat == -1L) return SpsRewriteOutcome.Failed("chroma-format")
+        if (chromaFormat == 3L && br.readBits(1) == -1L) return SpsRewriteOutcome.Failed("separate-colour")
+        if (br.readUe() == -1L || br.readUe() == -1L) return SpsRewriteOutcome.Failed("resolution")
+        if (br.readBits(1) == 1L) { // conformance_window_flag
+            for (i in 0 until 4) {
+                if (br.readUe() == -1L) return SpsRewriteOutcome.Failed("conformance-window")
+            }
+        }
+        if (br.readUe() == -1L || br.readUe() == -1L) return SpsRewriteOutcome.Failed("bit-depth")
+        val log2MaxPocLsbMinus4 = br.readUe()
+        if (log2MaxPocLsbMinus4 == -1L) return SpsRewriteOutcome.Failed("poc-lsb")
+        val orderingPresent = br.readBits(1) == 1L
+        val orderStart = if (orderingPresent) 0 else maxSubLayers - 1
+        for (i in orderStart until maxSubLayers) {
+            if (br.readUe() == -1L || br.readUe() == -1L || br.readUe() == -1L) {
+                return SpsRewriteOutcome.Failed("ordering-info")
+            }
+        }
+        // log2_min_luma_coding_block_size_minus3, log2_diff_max_min_luma_coding_block_size,
+        // log2_min_transform_block_size_minus2, log2_diff_max_min_transform_block_size,
+        // max_transform_hierarchy_depth_inter, max_transform_hierarchy_depth_intra
+        for (i in 0 until 6) {
+            if (br.readUe() == -1L) return SpsRewriteOutcome.Failed("block-sizes")
+        }
+        if (br.readBits(1) == 1L) { // scaling_list_enabled_flag
+            if (br.readBits(1) == 1L && !skipScalingListData(br)) { // sps_scaling_list_data_present_flag
+                return SpsRewriteOutcome.Failed("scaling-list")
+            }
+        }
+        if (br.readBits(1) == -1L) return SpsRewriteOutcome.Failed("amp")
+        if (br.readBits(1) == -1L) return SpsRewriteOutcome.Failed("sao")
+        if (br.readBits(1) == 1L) { // pcm_enabled_flag
+            if (br.readBits(4) == -1L || br.readBits(4) == -1L) return SpsRewriteOutcome.Failed("pcm-bit-depth")
+            if (br.readUe() == -1L || br.readUe() == -1L) return SpsRewriteOutcome.Failed("pcm-sizes")
+            if (br.readBits(1) == -1L) return SpsRewriteOutcome.Failed("pcm-loop-filter")
+        }
+        val numStRps = br.readUe()
+        if (numStRps == -1L || numStRps > 64) return SpsRewriteOutcome.Failed("num-st-rps")
+        var numDeltaPocs: LongArray? = null
+        for (i in 0 until numStRps.toInt()) {
+            val ndp = skipStRefPicSet(br, i, numStRps.toInt(), numDeltaPocs)
+                ?: return SpsRewriteOutcome.Failed("st-ref-pic-set")
+            if (numDeltaPocs == null) numDeltaPocs = LongArray(numStRps.toInt())
+            numDeltaPocs!![i] = ndp
+        }
+        if (br.readBits(1) == 1L) { // long_term_ref_pics_present_flag
+            val numLt = br.readUe()
+            if (numLt == -1L || numLt > 64) return SpsRewriteOutcome.Failed("num-lt-rps")
+            for (i in 0 until numLt.toInt()) {
+                if (br.readBits((log2MaxPocLsbMinus4 + 4).toInt()) == -1L) {
+                    return SpsRewriteOutcome.Failed("lt-poc")
+                }
+                if (br.readBits(1) == -1L) return SpsRewriteOutcome.Failed("lt-used")
+            }
+        }
+        if (br.readBits(1) == -1L) return SpsRewriteOutcome.Failed("tmvp")
+        if (br.readBits(1) == -1L) return SpsRewriteOutcome.Failed("intra-smoothing")
+        if (br.readBits(1) == 1L && !skipVui(br, maxSubLayers)) { // vui_parameters_present_flag
+            return SpsRewriteOutcome.Failed("vui")
+        }
+
+        val extFlagPos = br.pos
+        val extFlag = br.readBits(1)
+        if (extFlag == -1L) return SpsRewriteOutcome.Failed("extension-flag")
+        var stripDvExtension = false
+        if (extFlag == 1L) {
+            val range = br.readBits(1)
+            val multilayer = br.readBits(1)
+            val d3d = br.readBits(1)
+            val scc = br.readBits(1)
+            val ext4 = br.readBits(4)
+            if (range == -1L || multilayer == -1L || d3d == -1L || scc == -1L || ext4 == -1L) {
+                return SpsRewriteOutcome.Failed("extension-header")
+            }
+            // Only extensions that are Dolby Vision signaling get removed: the
+            // multilayer form (dual-layer P7) or the all-flags-zero form
+            // (single-layer P8 DV data). A range/SCC/3D extension belongs to a
+            // non-DV stream — it is preserved verbatim below.
+            stripDvExtension =
+                multilayer == 1L || (range == 0L && d3d == 0L && scc == 0L && ext4 == 0L)
+        }
+        // Nothing to do when there is no DV extension to remove and the SPS
+        // PTL already declares clean Main10. Everything else is rebuilt with
+        // the PTL patched: the no-extension form (single-layer DV encodes
+        // signal their profile through the SPS PTL's proprietary
+        // profile_space/idc) and the extension forms.
+        if (!stripDvExtension && ptlIsCleanMain10(profileSpace, tierFlag, profileIdc, compatFlags)) {
+            return SpsRewriteOutcome.NoDvExtension
+        }
+        val out = VpsBitWriter()
+        if (!br.copyBits(0, 10, out)) return SpsRewriteOutcome.Failed("copy-sps")
+        writeMain10GeneralPtl(out, compatFlags)
+        if (stripDvExtension) {
+            if (!br.copyBits(50, extFlagPos, out)) return SpsRewriteOutcome.Failed("copy-sps")
+            out.writeBits(0L, 1) // sps_extension_present_flag = 0
+            out.writeBits(1L, 1) // rbsp_stop_one_bit
+        } else {
+            // Constraint flags, reserved bits, level, sub-layer PTL blocks and
+            // the extension / trailing bits ride along bit-exact.
+            if (!br.copyBits(50, rbsp.size * 8, out)) return SpsRewriteOutcome.Failed("copy-sps")
+        }
+        return SpsRewriteOutcome.Rewritten(addEmulationPrevention(out.finish()))
+    }
+
+    /** Skips scaling_list_data() (H.265 7.3.4); se(v) fields consume the same bits as ue(v). */
+    private fun skipScalingListData(br: VpsBitReader): Boolean {
+        for (sizeId in 0 until 4) {
+            val matrixCount = if (sizeId == 3) 2 else 6
+            for (matrixId in 0 until matrixCount) {
+                val pred = br.readBits(1)
+                if (pred == -1L) return false
+                if (pred == 0L) {
+                    if (br.readUe() == -1L) return false // scaling_list_pred_matrix_id_delta
+                } else {
+                    if (sizeId > 1 && br.readUe() == -1L) return false // scaling_list_dc_coef_minus8 (se)
+                    val coefNum = minOf(64, 1 shl (4 + (sizeId shl 1)))
+                    for (i in 0 until coefNum) {
+                        if (br.readUe() == -1L) return false // scaling_list_delta_coef (se)
+                    }
+                }
+            }
+        }
+        return true
+    }
+
+    /**
+     * Skips one st_ref_pic_set() (H.265 7.3.7), tracking NumDeltaPocs so
+     * inter-predicted sets can be skipped. Returns NumDeltaPocs of the set, or
+     * null on parse failure. In an SPS, stRpsIdx never equals
+     * numShortTermRefPicSets, so delta_idx_minus1 is never signaled.
+     */
+    private fun skipStRefPicSet(
+        br: VpsBitReader,
+        stRpsIdx: Int,
+        numShortTermRefPicSets: Int,
+        numDeltaPocs: LongArray?
+    ): Long? {
+        var interPred = false
+        if (stRpsIdx != 0) {
+            val b = br.readBits(1)
+            if (b == -1L) return null
+            interPred = b == 1L
+        }
+        if (interPred) {
+            if (br.readBits(1) == -1L) return null // delta_rps_sign
+            val absDelta = br.readUe()
+            if (absDelta == -1L) return null // abs_delta_rps_minus1
+            val refIdx = stRpsIdx - (absDelta.toInt() + 1)
+            if (refIdx < 0 || numDeltaPocs == null || refIdx >= numDeltaPocs.size) return null
+            val refNumDelta = numDeltaPocs[refIdx]
+            if (refNumDelta < 0 || refNumDelta > 128) return null
+            for (j in 0 until refNumDelta.toInt()) {
+                val used = br.readBits(1)
+                if (used == -1L) return null
+                if (used == 0L && br.readBits(1) == -1L) return null // use_delta_flag
+            }
+            return refNumDelta
+        }
+        val numNeg = br.readUe()
+        if (numNeg == -1L || numNeg > 64) return null
+        val numPos = br.readUe()
+        if (numPos == -1L || numPos > 64) return null
+        for (i in 0 until numNeg.toInt()) {
+            if (br.readUe() == -1L || br.readBits(1) == -1L) return null
+        }
+        for (i in 0 until numPos.toInt()) {
+            if (br.readUe() == -1L || br.readBits(1) == -1L) return null
+        }
+        return numNeg + numPos
+    }
+
+    /** Skips vui_parameters() (H.265 E.2.1), incl. its hrd_parameters(). */
+    private fun skipVui(br: VpsBitReader, maxSubLayers: Int): Boolean {
+        if (br.readBits(1) == 1L) { // aspect_ratio_info_present_flag
+            val idc = br.readBits(8)
+            if (idc == -1L) return false
+            if (idc == 255L) { // Extended_SAR
+                if (br.readBits(16) == -1L || br.readBits(16) == -1L) return false
+            }
+        }
+        if (br.readBits(1) == 1L) { // overscan_info_present_flag
+            if (br.readBits(1) == -1L) return false
+        }
+        if (br.readBits(1) == 1L) { // video_signal_type_present_flag
+            if (br.readBits(3) == -1L || br.readBits(1) == -1L) return false
+            if (br.readBits(1) == 1L) { // colour_description_present_flag
+                if (br.readBits(8) == -1L || br.readBits(8) == -1L || br.readBits(8) == -1L) return false
+            }
+        }
+        if (br.readBits(1) == 1L) { // chroma_loc_info_present_flag
+            if (br.readUe() == -1L || br.readUe() == -1L) return false
+        }
+        if (br.readBits(1) == -1L) return false // neutral_chroma_indication_flag
+        if (br.readBits(1) == -1L) return false // field_seq_flag
+        if (br.readBits(1) == -1L) return false // frame_field_info_present_flag
+        if (br.readBits(1) == 1L) { // default_display_window_flag
+            for (i in 0 until 4) if (br.readUe() == -1L) return false
+        }
+        if (br.readBits(1) == 1L) { // vui_timing_info_present_flag
+            if (br.readBits(32) == -1L || br.readBits(32) == -1L) return false
+            if (br.readBits(1) == 1L && br.readUe() == -1L) return false // vui_poc_proportional_to_timing_flag
+            if (br.readBits(1) == 1L && !skipHrdParameters(br, true, maxSubLayers)) { // vui_hrd_parameters_present_flag
+                return false
+            }
+        }
+        if (br.readBits(1) == 1L) { // bitstream_restriction_flag
+            if (br.readBits(1) == -1L || br.readBits(1) == -1L || br.readBits(1) == -1L) return false
+            for (i in 0 until 5) if (br.readUe() == -1L) return false
+        }
+        return true
+    }
+
+    /**
+     * Rewrites every VPS/SPS NAL found in codec-private (initialization data)
      * buffers to single-layer HDR10, returning new buffers (or the same list
-     * when nothing changed). Keeps the decoder's parameter set from
-     * advertising Dolby Vision after the strip.
+     * when nothing changed). Handles both framing forms Media3 delivers: the
+     * Annex-B CodecPrivate of Matroska/TS and the hvcC configuration record of
+     * MP4/fMP4 — the latter has no start codes, which is exactly why a naive
+     * Annex-B pass silently left the DV VPS in place for MP4 remuxes.
      */
     fun rewriteInitDataVps(initData: List<ByteArray>): List<ByteArray> {
         var any = false
         val out = ArrayList<ByteArray>(initData.size)
         for (buf in initData) {
-            val rewritten = rewriteVpsInAnnexBBuffer(buf)
+            val rewritten = rewriteCodecConfig(buf)
             if (rewritten != null) {
                 out.add(rewritten)
                 any = true
@@ -829,7 +1234,85 @@ internal object DolbyVisionCompat {
         return if (any) out else initData
     }
 
-    /** Returns a copy of an Annex-B buffer with VPS NALs rewritten, or null if unchanged. */
+    /** Dispatches one codec-private buffer to the hvcC or Annex-B rewrite path. */
+    private fun rewriteCodecConfig(buf: ByteArray): ByteArray? {
+        if (buf.size < 5) return null
+        return if (isHvcCRecord(buf)) {
+            rewriteHvcCRecord(buf)
+        } else {
+            rewriteVpsInAnnexBBuffer(buf)
+        }
+    }
+
+    /** True when the buffer is an hvcC (HEVCDecoderConfigurationRecord) record. */
+    private fun isHvcCRecord(buf: ByteArray): Boolean =
+        buf.size >= 24 && (buf[0].toInt() and 0xFF) == 1
+
+    /**
+     * Rewrites the VPS/SPS NALs inside an hvcC record (ISO/IEC 14496-15
+     * HEVCDecoderConfigurationRecord) and patches the record's general profile
+     * fields to Main10. Returns a new buffer, or null when the record is
+     * malformed / nothing changed. Called only for DV-declared tracks, so the
+     * header patch applies unconditionally once the record parses.
+     */
+    private fun rewriteHvcCRecord(buf: ByteArray): ByteArray? {
+        if (buf.size < 24) return null
+        val numArrays = buf[22].toInt() and 0xFF
+        if (numArrays == 0) return null
+        val out = ByteArrayOutputStream(buf.size + 64)
+        out.write(buf, 0, 23) // configuration record header, patched below
+        var pos = 23
+        var arrays = 0
+        while (arrays < numArrays && pos + 3 <= buf.size) {
+            val arrayHeader = buf[pos].toInt() and 0xFF
+            val nalType = arrayHeader and 0x3F
+            pos++
+            if (pos + 2 > buf.size) return null
+            val numNalus = readLength(buf, pos, 2)
+            pos += 2
+            if (numNalus <= 0) return null
+            out.write(arrayHeader)
+            out.write((numNalus ushr 8) and 0xFF)
+            out.write(numNalus and 0xFF)
+            for (i in 0 until numNalus) {
+                if (pos + 2 > buf.size) return null
+                val nalLen = readLength(buf, pos, 2)
+                pos += 2
+                if (pos + nalLen > buf.size || nalLen < 2) return null
+                var nal = ByteArray(nalLen)
+                System.arraycopy(buf, pos, nal, 0, nalLen)
+                val rewritten = when (nalType) {
+                    NAL_VPS -> when (val res = rewriteVpsToHdr10(nal, 2, nalLen)) {
+                        is VpsRewriteOutcome.Rewritten -> res.rbsp
+                        else -> null
+                    }
+                    NAL_SPS -> when (val res = rewriteSpsToHdr10(nal, 2, nalLen)) {
+                        is SpsRewriteOutcome.Rewritten -> res.rbsp
+                        else -> null
+                    }
+                    else -> null
+                }
+                if (rewritten != null) nal = rewritten
+                out.write((nal.size ushr 8) and 0xFF)
+                out.write(nal.size and 0xFF)
+                out.write(nal, 0, nal.size)
+                pos += nalLen
+            }
+            arrays++
+        }
+        if (arrays != numArrays || pos != buf.size) return null // malformed — keep original
+        val result = out.toByteArray()
+        // Force the configuration record's profile to Main10: profile_space 0,
+        // Main tier, profile_idc 2 (H.265 A.3 — NOT 4, which is Range
+        // Extensions); compatibility flags keep the original bits plus the
+        // Main10 flag (flag[2]); constraint flags and level stay as encoded.
+        result[1] = 0x02 // (0 << 6) | (0 << 5) | 2
+        val compat = (readLength(result, 2, 4) or MAIN10_COMPAT_FLAG.toInt()) and 0xF7FFFFFF // Main10 flag[2] set, Range-Ext flag[4] cleared
+        writeLength(result, 2, compat, 4)
+        return result
+    }
+
+    /** Returns a copy of an Annex-B buffer with VPS/SPS NALs rewritten, or null if unchanged. */
     private fun rewriteVpsInAnnexBBuffer(buf: ByteArray): ByteArray? {
         if (buf.size < 5) return null
         val out = ByteArray(buf.size)
@@ -851,9 +1334,13 @@ internal object DolbyVisionCompat {
             var nalWritten = false
             if (nalEnd - header >= 2) {
                 val nalType = ((buf[header].toInt() and 0xFF) ushr 1) and 0x3F
-                if (nalType == NAL_VPS) {
-                    when (val res = rewriteVpsToHdr10(buf, header + 2, nalEnd)) {
+                when (nalType) {
+                    NAL_VPS -> when (val res = rewriteVpsToHdr10(buf, header + 2, nalEnd)) {
                         is VpsRewriteOutcome.Rewritten -> {
+                            Log.i(
+                                "PLAYER_DV",
+                                "Codec config VPS rewritten to single-layer HDR10 (Main10)"
+                            )
                             System.arraycopy(buf, code, out, write, codeLen)
                             System.arraycopy(buf, header, out, write + codeLen, 2)
                             System.arraycopy(res.rbsp, 0, out, write + codeLen + 2, res.rbsp.size)
@@ -867,6 +1354,26 @@ internal object DolbyVisionCompat {
                         )
                         VpsRewriteOutcome.NoDvExtension -> Unit
                     }
+                    NAL_SPS -> when (val res = rewriteSpsToHdr10(buf, header + 2, nalEnd)) {
+                        is SpsRewriteOutcome.Rewritten -> {
+                            Log.i(
+                                "PLAYER_DV",
+                                "Codec config SPS Dolby Vision extension removed (single-layer HDR10)"
+                            )
+                            System.arraycopy(buf, code, out, write, codeLen)
+                            System.arraycopy(buf, header, out, write + codeLen, 2)
+                            System.arraycopy(res.rbsp, 0, out, write + codeLen + 2, res.rbsp.size)
+                            write += codeLen + 2 + res.rbsp.size
+                            changed = true
+                            nalWritten = true
+                        }
+                        is SpsRewriteOutcome.Failed -> Log.i(
+                            "PLAYER_DV",
+                            "SPS rewrite failed (${res.reason}) — keeping original SPS in codec config"
+                        )
+                        SpsRewriteOutcome.NoDvExtension -> Unit
+                    }
+                    else -> Unit
                 }
             }
             if (!nalWritten) {
@@ -930,6 +1437,22 @@ internal object DolbyVisionCompat {
                             is VpsRewriteOutcome.Failed ->
                                 stats?.vpsRewriteFailedReason = res.reason
                             VpsRewriteOutcome.NoDvExtension -> Unit
+                        }
+                    }
+                    nalType == NAL_SPS -> {
+                        when (val res = rewriteSpsToHdr10(buf, header + 2, nalEnd)) {
+                            is SpsRewriteOutcome.Rewritten -> {
+                                changed = true
+                                stats?.spsRewritten = true
+                                System.arraycopy(buf, code, buf, write, codeLen)
+                                System.arraycopy(buf, header, buf, write + codeLen, 2)
+                                System.arraycopy(res.rbsp, 0, buf, write + codeLen + 2, res.rbsp.size)
+                                write += codeLen + 2 + res.rbsp.size
+                                keep = false
+                            }
+                            is SpsRewriteOutcome.Failed ->
+                                stats?.spsRewriteFailedReason = res.reason
+                            SpsRewriteOutcome.NoDvExtension -> Unit
                         }
                     }
                     nalType == NAL_DV_RPU -> {
@@ -1007,6 +1530,22 @@ internal object DolbyVisionCompat {
                             is VpsRewriteOutcome.Failed ->
                                 stats?.vpsRewriteFailedReason = res.reason
                             VpsRewriteOutcome.NoDvExtension -> Unit
+                        }
+                    }
+                    nalType == NAL_SPS -> {
+                        when (val res = rewriteSpsToHdr10(buf, payload + 2, payload + nal)) {
+                            is SpsRewriteOutcome.Rewritten -> {
+                                changed = true
+                                stats?.spsRewritten = true
+                                writeLength(buf, write, res.rbsp.size + 2, fieldLen)
+                                System.arraycopy(buf, payload, buf, write + fieldLen, 2)
+                                System.arraycopy(res.rbsp, 0, buf, write + fieldLen + 2, res.rbsp.size)
+                                write += fieldLen + 2 + res.rbsp.size
+                                keep = false
+                            }
+                            is SpsRewriteOutcome.Failed ->
+                                stats?.spsRewriteFailedReason = res.reason
+                            SpsRewriteOutcome.NoDvExtension -> Unit
                         }
                     }
                     nalType == NAL_DV_RPU -> {
@@ -1844,6 +2383,22 @@ internal object DolbyVisionCompat {
                             VpsRewriteOutcome.NoDvExtension -> Unit
                         }
                     }
+                    nalType == NAL_SPS -> {
+                        when (val res = rewriteSpsToHdr10(buf, header + 2, nalEnd)) {
+                            is SpsRewriteOutcome.Rewritten -> {
+                                changed = true
+                                stats?.spsRewritten = true
+                                System.arraycopy(buf, code, buf, write, codeLen)
+                                System.arraycopy(buf, header, buf, write + codeLen, 2)
+                                System.arraycopy(res.rbsp, 0, buf, write + codeLen + 2, res.rbsp.size)
+                                write += codeLen + 2 + res.rbsp.size
+                                keep = false
+                            }
+                            is SpsRewriteOutcome.Failed ->
+                                stats?.spsRewriteFailedReason = res.reason
+                            SpsRewriteOutcome.NoDvExtension -> Unit
+                        }
+                    }
                     nalType == NAL_DV_RPU -> {
                         val rewritten = rewriteRpuTo81(buf, header, nalEnd)
                         if (rewritten != null) {
@@ -1926,6 +2481,22 @@ internal object DolbyVisionCompat {
                             is VpsRewriteOutcome.Failed ->
                                 stats?.vpsRewriteFailedReason = res.reason
                             VpsRewriteOutcome.NoDvExtension -> Unit
+                        }
+                    }
+                    nalType == NAL_SPS -> {
+                        when (val res = rewriteSpsToHdr10(buf, payload + 2, payload + nal)) {
+                            is SpsRewriteOutcome.Rewritten -> {
+                                changed = true
+                                stats?.spsRewritten = true
+                                writeLength(buf, write, res.rbsp.size + 2, fieldLen)
+                                System.arraycopy(buf, payload, buf, write + fieldLen, 2)
+                                System.arraycopy(res.rbsp, 0, buf, write + fieldLen + 2, res.rbsp.size)
+                                write += fieldLen + 2 + res.rbsp.size
+                                keep = false
+                            }
+                            is SpsRewriteOutcome.Failed ->
+                                stats?.spsRewriteFailedReason = res.reason
+                            SpsRewriteOutcome.NoDvExtension -> Unit
                         }
                     }
                     nalType == NAL_DV_RPU -> {
