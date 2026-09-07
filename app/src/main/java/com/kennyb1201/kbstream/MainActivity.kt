@@ -1330,9 +1330,10 @@ fun AppRoot() {
                             "${current.parentType}:${current.episodeStreamId}"
                         autoPlayedStreamKeys =
                             (autoPlayedStreamKeys + exitedKey).distinct()
+                        val sourceSwitched = result.data?.getBooleanExtra("source_switched", false) == true
                         if (current.parentType == "channel") {
                             screen = Screen.Guide
-                        } else if (AppPreferences.getAutoSelectStream(context)) {
+                        } else if (AppPreferences.getAutoSelectStream(context) || sourceSwitched) {
                             screen = current.returnTo
                         } else {
                             // Auto-select is off: the user chose a source manually,
