@@ -411,6 +411,26 @@ private fun JSONObject.optNullableString(key: String): String? =
 private fun JSONObject.optNullableInt(key: String): Int? =
     if (has(key) && !isNull(key)) optInt(key) else null
 
+private fun streamNavigationKey(contentType: String, streamId: String): String {
+    val normalizedType = when (contentType.lowercase()) {
+        "tv", "show", "series" -> "series"
+        else -> contentType.lowercase()
+    }
+    return "$normalizedType:$streamId"
+}
+
+// A player can be reopened from a picker after source switching. Never keep a
+// picker in the back chain, and consume one-shot detail targets before showing
+// that detail screen again.
+private fun stableBackDestination(screen: Screen, depth: Int = 0): Screen {
+    if (depth >= MAX_RETURN_DEPTH + 2) return Screen.Home
+    return when (screen) {
+        is Screen.Streams -> stableBackDestination(screen.returnTo, depth + 1)
+        is Screen.Detail -> screen.copy(pendingTarget = null)
+        else -> screen
+    }
+}
+
 private fun restoredStreamTitle(
     displayName: String,
     season: Int?,
@@ -447,7 +467,7 @@ private data class PendingPlay(
     val totalEpisodesInSeason: Int? = null
 ) {
     val streamKey: String
-        get() = "${target.contentType}:${target.streamId}"
+        get() = streamNavigationKey(target.contentType, target.streamId)
 
     fun toPlayerScreen(stream: Stream, allSources: List<Stream>): Screen.Player {
         return Screen.Player(
@@ -678,14 +698,14 @@ fun AppRoot() {
                 if (current.parentType == "channel") {
                     Screen.Guide
                 } else {
-                    current.returnTo
+                    stableBackDestination(current.returnTo)
                 }
 
             is Screen.Streams ->
                 if (current.parentType == "channel") {
                     Screen.Guide
                 } else {
-                    current.returnTo
+                    stableBackDestination(current.returnTo)
                 }
 
             is Screen.Actor ->
@@ -1001,6 +1021,12 @@ fun AppRoot() {
                         ManualSourceSelection.requested.also {
                             ManualSourceSelection.requested = false
                         }
+                    // A pending target is a one-shot Continue Watching/up-next
+                    // request. Do not keep it in the back destination: returning
+                    // to that Detail screen would fire its LaunchedEffect again,
+                    // reopen Streams, and make Back appear to flash without
+                    // leaving the picker.
+                    val stableReturnTo = current.copy(pendingTarget = null)
 
                     if (
                         !manualSourceSelection &&
@@ -1020,13 +1046,13 @@ fun AppRoot() {
                             clearLogoUrl = clearLogoUrl,
                             overview = overview,
                             cast = cast,
-                            returnTo = current
+                            returnTo = stableReturnTo
                         )
                     } else {
                         screen = Screen.Streams(
                             target = target,
                             parentId = parentId,
-                            returnTo = current,
+                            returnTo = stableReturnTo,
                             parentType = parentType,
                             itemPoster = poster,
                             backdropUrl = backdropUrl,
@@ -1131,9 +1157,10 @@ fun AppRoot() {
                 }
             }
 
-            val streamKey =
-                "${current.target.contentType}:" +
-                    current.target.streamId
+            val streamKey = streamNavigationKey(
+                current.target.contentType,
+                current.target.streamId
+            )
 
             StreamsScreen(
                 title = current.target.title,
@@ -1187,7 +1214,7 @@ fun AppRoot() {
                             },
                             startPositionMs =
                                 current.target.resumePositionMs,
-                            returnTo = current.returnTo,
+                            returnTo = stableBackDestination(current.returnTo),
                             sources = allSources,
                             totalEpisodesInSeason =
                                 current.target.totalEpisodesInSeason,
@@ -1247,7 +1274,7 @@ fun AppRoot() {
                         screen = Screen.Streams(
                             target = nextTarget,
                             parentId = current.parentId,
-                            returnTo = current.returnTo,
+                            returnTo = stableBackDestination(current.returnTo),
                             parentType = current.parentType,
                             itemPoster = current.itemPoster,
                             backdropUrl = current.backdropUrl,
@@ -1300,7 +1327,7 @@ fun AppRoot() {
                                 screen = Screen.Streams(
                                     target = nextTarget,
                                     parentId = current.parentId,
-                                    returnTo = current.returnTo,
+                                    returnTo = stableBackDestination(current.returnTo),
                                     parentType = current.parentType,
                                     itemPoster = current.itemPoster,
                                     backdropUrl = current.backdropUrl,
@@ -1326,14 +1353,16 @@ fun AppRoot() {
                     else -> {
                         // Normal BACK exit from player. Mark this target so the
                         // streams screen never re-auto-selects it.
-                        val exitedKey =
-                            "${current.parentType}:${current.episodeStreamId}"
+                        val exitedKey = streamNavigationKey(
+                            current.parentType,
+                            current.episodeStreamId.orEmpty()
+                        )
                         autoPlayedStreamKeys =
                             (autoPlayedStreamKeys + exitedKey).distinct()
                         if (current.parentType == "channel") {
                             screen = Screen.Guide
                         } else if (AppPreferences.getAutoSelectStream(context)) {
-                            screen = current.returnTo
+                            screen = stableBackDestination(current.returnTo)
                         } else {
                             // Auto-select is off: the user chose a source manually,
                             // so return to the picker for that target.
@@ -1355,7 +1384,7 @@ fun AppRoot() {
                                     runtimeMinutes = current.runtimeMinutes
                                 ),
                             parentId = current.parentId,
-                            returnTo = current.returnTo,
+                            returnTo = stableBackDestination(current.returnTo),
                             parentType = current.parentType,
                             itemPoster = current.itemPoster,
                             backdropUrl = current.backdropUrl,
