@@ -313,7 +313,6 @@ class NativePlayerActivity : ComponentActivity() {
     private var showSettingsPanel = false
     private var isPickerShowing = false
     private var pickerMode = PickerMode.SOURCE
-    private var manualSourceSwitched = false
     private enum class PickerMode { SOURCE, AUDIO, SUBTITLE, SPEED }
 
     // Playback state
@@ -2762,7 +2761,7 @@ class NativePlayerActivity : ComponentActivity() {
                     PickerItem(
                         label = stream.displayLabel(),
                         isSelected = stream.url == currentUrl,
-                        onClick = { switchToSource(stream, manual = true); dismissPicker() }
+                        onClick = { switchToSource(stream); dismissPicker() }
                     )
                 }
             }
@@ -3341,9 +3340,10 @@ class NativePlayerActivity : ComponentActivity() {
 
     @Suppress("DEPRECATION")
     override fun onBackPressed() {
-        if (manualSourceSwitched) {
-            setResult(RESULT_OK, Intent().apply { putExtra("source_switched", true) })
-        }
+        // If the loading splash (pulsing clearlogo) is still up, the stream
+        // hasn't started playing yet. Treat Back as an immediate exit request
+        // instead of routing it through the controls/panel handling - a user
+        // stuck on the splash must always be able to leave with one press.
         if (::splashContainer.isInitialized && splashContainer.visibility == View.VISIBLE) {
             super.onBackPressed()
             return
@@ -3413,10 +3413,9 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     // --- Source Switching ---
-    fun switchToSource(stream: Stream, manual: Boolean = false) {
+    fun switchToSource(stream: Stream) {
         val newUrl = stream.url ?: return
         if (newUrl == currentUrl) return
-        if (manual) manualSourceSwitched = true
         carryPositionMs = if (isLiveChannel) 0L else exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
         currentSourceLabel = stream.displayLabel()
         currentUrl = newUrl
