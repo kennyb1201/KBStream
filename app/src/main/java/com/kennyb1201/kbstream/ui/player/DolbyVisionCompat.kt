@@ -103,17 +103,19 @@ internal object DolbyVisionCompat {
      * on any codec-list read failure so callers keep their non-DV fallback
      * behavior.
      */
-    fun supportsNativeDolbyVision(): Boolean = try {
-        val codecList = MediaCodecList(MediaCodecList.REGULAR_CODECS)
-        for (info in codecList.codecInfos) {
-            if (info.isEncoder) continue
-            for (type in info.supportedTypes) {
-                if (type.equals("video/dolby-vision", ignoreCase = true)) return true
+    fun supportsNativeDolbyVision(): Boolean {
+        return try {
+            val codecList = MediaCodecList(MediaCodecList.REGULAR_CODECS)
+            for (info in codecList.codecInfos) {
+                if (info.isEncoder) continue
+                for (type in info.supportedTypes) {
+                    if (type.equals("video/dolby-vision", ignoreCase = true)) return true
+                }
             }
+            false
+        } catch (_: Exception) {
+            false
         }
-        false
-    } catch (_: Exception) {
-        false
     }
 
     /** Generic Main10@L5.1 HEVC identifier describing the stripped base layer. */
@@ -1307,7 +1309,7 @@ internal object DolbyVisionCompat {
         // Extensions); compatibility flags keep the original bits plus the
         // Main10 flag (flag[2]); constraint flags and level stay as encoded.
         result[1] = 0x02 // (0 << 6) | (0 << 5) | 2
-        val compat = (readLength(result, 2, 4) or MAIN10_COMPAT_FLAG.toInt()) and 0xF7FFFFFF // Main10 flag[2] set, Range-Ext flag[4] cleared
+        val compat = (readLength(result, 2, 4) or MAIN10_COMPAT_FLAG.toInt()) and 0xF7FFFFFF.toInt() // Main10 flag[2] set, Range-Ext flag[4] cleared
         writeLength(result, 2, compat, 4)
         return result
     }
