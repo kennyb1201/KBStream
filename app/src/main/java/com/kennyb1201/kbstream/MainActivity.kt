@@ -420,12 +420,14 @@ private fun streamNavigationKey(contentType: String, streamId: String): String {
 }
 
 // A player can be reopened from a picker after source switching. Never keep a
-// picker in the back chain, and consume one-shot detail targets before showing
-// that detail screen again.
+// picker or player in the back chain, and consume one-shot detail targets before
+// showing that detail screen again. The depth guard also protects restored state
+// from malformed/cyclic return chains.
 private fun stableBackDestination(screen: Screen, depth: Int = 0): Screen {
     if (depth >= MAX_RETURN_DEPTH + 2) return Screen.Home
     return when (screen) {
         is Screen.Streams -> stableBackDestination(screen.returnTo, depth + 1)
+        is Screen.Player -> stableBackDestination(screen.returnTo, depth + 1)
         is Screen.Detail -> screen.copy(pendingTarget = null)
         else -> screen
     }
