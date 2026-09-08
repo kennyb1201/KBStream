@@ -60,6 +60,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusable
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -649,6 +650,13 @@ private fun SetupPanel(
     onClear: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val firstFieldFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        awaitFrame()
+        runCatching { firstFieldFocusRequester.requestFocus() }
+    }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -677,7 +685,8 @@ private fun SetupPanel(
             value = playlistUrl,
             label = "Playlist URL",
             onValueChange = onPlaylistUrlChanged,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth(),
+            focusRequester = firstFieldFocusRequester
         )
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -830,10 +839,21 @@ private fun NativeUrlField(
     value: String,
     label: String,
     onValueChange: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    focusRequester: FocusRequester? = null
 ) {
+    var editTextRef by remember { mutableStateOf<EditText?>(null) }
+
     AndroidView(
-        modifier = modifier.height(54.dp),
+        modifier = modifier
+            .focusable(indication = null)
+            .onFocusChanged {
+                if (it.isFocused) {
+                    editTextRef?.requestFocus()
+                }
+            }
+            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+            .height(54.dp),
         factory = { context ->
             EditText(context).apply {
                 hint = label
@@ -854,6 +874,7 @@ private fun NativeUrlField(
                     }
                     override fun afterTextChanged(s: Editable?) = Unit
                 })
+                editTextRef = this
             }
         },
         update = { editText ->
