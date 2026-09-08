@@ -1,13 +1,6 @@
 package com.kennyb1201.kbstream.ui.iptv
 
 import android.content.Context
-import android.content.res.ColorStateList
-import android.graphics.Color as AndroidColor
-import android.text.Editable
-import android.text.InputType
-import android.text.TextWatcher
-import android.view.Gravity
-import android.widget.EditText
 import androidx.compose.material3.Text as Material3Text
 import androidx.tv.material3.Border
 import androidx.tv.material3.Surface
@@ -18,6 +11,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
@@ -30,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -37,7 +32,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
@@ -45,6 +42,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -60,8 +58,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.foundation.focusable
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.graphics.Brush
@@ -73,11 +71,13 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
@@ -552,11 +552,20 @@ Spacer(modifier = Modifier.height(14.dp))
                 }
 
                 if (showSetup && playlist != null) {
+                    // Overlay placement: once the diagnostics block appears
+                    // the panel is taller than the screen allows, so cap its
+                    // height and let the content scroll — otherwise the
+                    // action row at the bottom is unreachable with the
+                    // D-pad. Focus order inside the panel does the rest
+                    // (moveFocus(Down) walks the whole form).
+                    val panelMaxHeight = LocalConfiguration.current.screenHeightDp.dp - 140.dp
                     renderSetupPanel(
                         Modifier
                             .align(Alignment.TopEnd)
                             .padding(top = 104.dp, end = 24.dp)
                             .width(500.dp)
+                            .heightIn(max = panelMaxHeight)
+                            .verticalScroll(rememberScrollState())
                     )
                 }
 
@@ -649,12 +658,19 @@ private fun SetupPanel(
     onManageHidden: () -> Unit,
     onClear: () -> Unit,
     modifier: Modifier = Modifier
-) {
-    val firstFieldFocusRequester = remember { FocusRequester() }
+) {    val firstFieldFocusRequester = remember { FocusRequester() }
+    val panelFocusManager = LocalFocusManager.current
 
     LaunchedEffect(Unit) {
         awaitFrame()
         runCatching { firstFieldFocusRequester.requestFocus() }
+    }
+
+    // When the panel goes away (SETUP toggled, playlist loaded) its fields
+    // must not keep view focus: a still-focused (now invisible) field keeps
+    // consuming D-pad events and the screen appears dead to navigation.
+    DisposableEffect(Unit) {
+        onDispose { panelFocusManager.clearFocus(force = true) }
     }
 
     Column(
@@ -842,47 +858,88 @@ private fun NativeUrlField(
     modifier: Modifier = Modifier,
     focusRequester: FocusRequester? = null
 ) {
-    var editTextRef by remember { mutableStateOf<EditText?>(null) }
+    // Compose BasicTextField instead of the old AndroidView/EditText wrapper:
+    // the EditText kept view focus inside the android widget layer and never
+    // released D-pad events to Compose, so Down/Up did nothing and the rest
+    // of the panel (EPG field, name, action buttons) was unreachable. The
+    // compose field participates in the panel's focus order and still allows
+    // the soft keyboard for text entry.
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    var fieldFocused by remember { mutableStateOf(false) }
 
-    AndroidView(
-        modifier = modifier
-            .focusable()
-            .onFocusChanged {
-                if (it.isFocused) {
-                    editTextRef?.requestFocus()
-                }
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = true,
+        textStyle = TextStyle(color = KBTextHi, fontSize = 16.sp),
+        keyboardOptions = KeyboardOptions(
+            imeAction = ImeAction.Done,
+            keyboardType = KeyboardType.Uri
+        ),
+        keyboardActions = KeyboardActions(
+            onDone = {
+                keyboardController?.hide()
+                focusManager.clearFocus()
             }
-            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .height(54.dp),
-        factory = { context ->
-            EditText(context).apply {
-                hint = label
-                setSingleLine(true)
-                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-                setTextColor(AndroidColor.WHITE)
-                setHintTextColor(AndroidColor.LTGRAY)
-                textSize = 16f
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(18, 0, 18, 0)
-                setShowSoftInputOnFocus(false)
-                backgroundTintList = ColorStateList.valueOf(AndroidColor.rgb(120, 120, 120))
-
-                addTextChangedListener(object : TextWatcher {
-                    override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-                    override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                        onValueChange(s?.toString().orEmpty())
-                    }
-                    override fun afterTextChanged(s: Editable?) = Unit
-                })
-                editTextRef = this
+        ),
+        decorationBox = { innerTextField ->
+            Box(
+                contentAlignment = Alignment.CenterStart,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(54.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(KBSurfaceRaised)
+                    .border(
+                        width = 1.dp,
+                        color = if (fieldFocused) KBAccent else KBSurfaceRaised,
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    .padding(horizontal = 18.dp)
+            ) {
+                if (value.isBlank()) {
+                    Text(
+                        text = label,
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                innerTextField()
             }
         },
-        update = { editText ->
-            if (editText.text.toString() != value) {
-                editText.setText(value)
-                editText.setSelection(editText.text.length)
+        modifier = modifier
+            .onFocusChanged { fieldFocused = it.isFocused }
+            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) {
+                    false
+                } else {
+                    when (event.key) {
+                        // TV D-pad escape, same pattern as the name field and
+                        // the search screen: while the leanback IME is up it
+                        // swallows the D-pad, so moving between fields is
+                        // handled here explicitly.
+                        Key.DirectionDown -> {
+                            val moved = focusManager.moveFocus(FocusDirection.Down)
+                            if (moved) {
+                                keyboardController?.hide()
+                            }
+                            moved
+                        }
+                        Key.DirectionUp -> {
+                            val moved = focusManager.moveFocus(FocusDirection.Up)
+                            if (moved) {
+                                keyboardController?.hide()
+                            }
+                            moved
+                        }
+                        else -> false
+                    }
+                }
             }
-        }
     )
 }
 

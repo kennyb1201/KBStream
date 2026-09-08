@@ -28,6 +28,7 @@ import com.kennyb1201.kbstream.data.tmdb.displayLanguage
 import com.kennyb1201.kbstream.data.tmdb.displayRating
 import com.kennyb1201.kbstream.data.tmdb.displayRuntime
 import com.kennyb1201.kbstream.data.tmdb.displayRuntimeMinutes
+import com.kennyb1201.kbstream.data.tmdb.episodeCountForSeason
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlin.math.round
@@ -2332,33 +2333,71 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
         season++
     }
 
-    // Finale detection helpers: report whether a (season, episode) target is
-    // the last AIRED episode of its season (season finale) and, when that
-    // season is also the last one with aired episodes, the series finale.
-    // Only aired episodes count - an announced-but-unaired finale is just
-    // the next upcoming episode, not a finale you can watch yet.
-    fun seasonFinaleFor(
+    // Finale detection helpers: a season finale is the LAST EPISODE of its
+    // season — not merely the most recently AIRED one. The old "last aired"
+    // rule wrongly tagged mid-air seasons: when the newest aired episode was
+    // 5 of 10 (the rest scheduled with future air dates), episode 5 rendered
+    // as "SEASON FINALE". The season length is the higher of the last
+    // LISTED episode and TMDB's declared episode count (the declared count
+    // guards against a lagging season listing). An unaired last episode
+    // still never renders as a finale — the watchable-target guard below
+    // refuses to tag it.
+    suspend fun seasonFinaleFor(
         season: Int,
         episode: Int
     ): Boolean {
 
-        val lastAiredEpisode =
-            seasonEpisodesBySeason[season]
-                .orEmpty()
-                .filter {
-                    isAiredOrUnknown(
-                        it.airDate
-                    )
-                }
-                .maxOfOrNull {
-                    it.episodeNumber
-                }
+        val episodes =
+            seasonEpisodesBySeason[season].orEmpty()
+
+        if (episodes.isEmpty()) {
+            return false
+        }
+
+        // Short-circuit before any TMDB detail lookup: only the season's
+        // highest listed episode can possibly be the finale.
+        val lastListedEpisode =
+            episodes.maxOfOrNull {
+                it.episodeNumber
+            }
                 ?: return false
 
-        return episode >= lastAiredEpisode
+        if (episode < lastListedEpisode) {
+            return false
+        }
+
+        // The target must BE the last listed episode and must be watchable
+        // (aired, or with no air date on record).
+        val targetEpisode =
+            episodes.firstOrNull {
+                it.episodeNumber == episode
+            }
+                ?: return false
+
+        if (!isAiredOrUnknown(targetEpisode.airDate)) {
+            return false
+        }
+
+        // Declared count guards a lagging listing: TMDB may have created
+        // only the first episodes of a 10-episode season so far, in which
+        // case the last LISTED episode (say 5) must not count as the finale
+        // when the season's declared length is 10.
+        val declaredEpisodeCount =
+            try {
+                showDetailFor(tmdbId)
+                    ?.episodeCountForSeason(season)
+            } catch (_: Exception) {
+                null
+            }
+                ?: 0
+
+        val seasonLength =
+            maxOf(lastListedEpisode, declaredEpisodeCount)
+
+        return episode >= seasonLength
     }
 
-    fun seriesFinaleFor(
+    suspend fun seriesFinaleFor(
         season: Int,
         episode: Int
     ): Boolean {
@@ -2372,7 +2411,7 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
             return false
         }
 
-        val lastAiredSeason =
+        val lastSeasonWithAiredEpisodes =
             seasonEpisodesBySeason
                 .filterValues { episodes ->
                     episodes.any {
@@ -2385,7 +2424,7 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
                 .maxOrNull()
                 ?: return false
 
-        return season >= lastAiredSeason
+        return season >= lastSeasonWithAiredEpisodes
     }
 
     /**
@@ -2393,9 +2432,38 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
      * A season finale of a still-running show (Returning Series, In
      * Production, Planned, or status unknown) must NOT be labelled "Series
      * Finale" — the show may air more seasons. Only Ended/Canceled qualifies.
-     * Cached per show for the lifetime of this resolution pass (the three
-     * finale checks for one target share a single TMDB lookup).
+     * Cached per show for the lifetime of this resolution pass. The detail
+     * itself comes from the shared per-pass [showDetailFor] cache, so the
+     * season- and series-finale checks for one target still share a single
+     * TMDB lookup.
      */
+    val showDetailCache =
+        java.util.concurrent.ConcurrentHashMap<Int, TmdbDetail?>()
+
+    suspend fun showDetailFor(
+        tmdbId: Int
+    ): TmdbDetail? {
+
+        showDetailCache[tmdbId]?.let {
+            return it
+        }
+
+        val detail =
+            try {
+                tmdbLookupSemaphore.withPermit {
+                    tmdbRepository.getDetailByTmdbId(
+                        tmdbId,
+                        "tv"
+                    )
+                }
+            } catch (_: Exception) {
+                null
+            }
+
+        showDetailCache[tmdbId] = detail
+        return detail
+    }
+
     val seriesEndedCache =
         java.util.concurrent.ConcurrentHashMap<Int, Boolean>()
 
@@ -2411,12 +2479,7 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
             try {
 
                 val status =
-                    tmdbLookupSemaphore.withPermit {
-                        tmdbRepository.getDetailByTmdbId(
-                            tmdbId,
-                            "tv"
-                        )
-                    }?.status
+                    showDetailFor(tmdbId)?.status
 
                 status == "Ended" ||
                     status == "Canceled"
