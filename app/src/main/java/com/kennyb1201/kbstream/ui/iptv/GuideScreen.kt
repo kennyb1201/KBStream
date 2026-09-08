@@ -846,7 +846,7 @@ private fun NativeUrlField(
 
     AndroidView(
         modifier = modifier
-            .focusable(indication = null)
+            .focusable()
             .onFocusChanged {
                 if (it.isFocused) {
                     editTextRef?.requestFocus()
