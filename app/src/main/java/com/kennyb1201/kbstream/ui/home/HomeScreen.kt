@@ -1368,9 +1368,9 @@ private fun CompactUpNextCard(
     ?.takeIf { it > 0 }
     ?.let { remaining ->
         Text(text = if (remaining == 1) {
-    "1 episode left"
+    "1 ep. left"
 } else {
-    "$remaining episodes left"
+    "$remaining ep. left"
 },
             color = KBTextHi,
             fontSize = 11.sp,
