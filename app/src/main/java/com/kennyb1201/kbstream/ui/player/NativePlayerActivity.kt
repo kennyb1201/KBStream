@@ -415,8 +415,9 @@ class NativePlayerActivity : ComponentActivity() {
     private var fromActorReturn = false
 
     /// True once playback has actually started during this player session.
-    /// Gates the full splash overlay: it only appears on the very first load,
-    /// never on mid-playback rebuffers or when returning from the actor overlay.
+    /// Gates the full splash overlay: it appears on every fresh source load
+    /// (each switchToSource resets it), but never on mid-playback rebuffers
+    /// or when returning from the actor overlay (fromActorReturn).
     private var hasPlayedOnce = false
     private var historyId = ""
     private var simklScrobbleSent = false
@@ -1695,7 +1696,10 @@ class NativePlayerActivity : ComponentActivity() {
 
     private fun showSplash() {
         splashContainer.visibility = View.VISIBLE
+        // The splash is the only load indicator while it is up — never stack
+        // the spinner or the reconnecting banner on top of it.
         bufferingSpinner.visibility = View.GONE
+        reconnectingContainer.visibility = View.GONE
         // If clear logo is already loaded, start pulse immediately.
         // Otherwise, start it once Coil finishes loading.
         if (splashClearLogo.drawable != null) {
@@ -1722,11 +1726,13 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     private fun updateUIBuffering() {
-        // Full splash overlay (backdrop + pulsing clearlogo) ONLY for the very
-        // first load of a session — including items resuming a saved position.
-        // Never for mid-playback rebuffers (hasPlayedOnce) or when returning
-        // from the actor page (fromActorReturn); those get the small spinner
-        // so the video is never covered once the user has been watching.
+        // Full splash overlay (backdrop + pulsing clearlogo) for every fresh
+        // source load — first launch, auto-select, manual pick, in-player
+        // source switch, auto-advance (each source switch resets the
+        // hasPlayedOnce latch). Only mid-playback rebuffers (hasPlayedOnce
+        // still true) and actor-return sessions (fromActorReturn) get the
+        // small spinner, so the video is never covered once the user is
+        // already watching it.
         if (!hasPlayedOnce && !fromActorReturn) {
             showSplash()
         } else {
@@ -3164,6 +3170,14 @@ class NativePlayerActivity : ComponentActivity() {
         currentAudioUrl = stream.audioUrl
         currentSourceIndex = sources.indexOfFirst { it.url == newUrl }
         retryAttempt = 0; retryExhausted = false; errorMessageStr = null; forceTextureViewFallback = false; languagesAutoSelected = false
+        // A source switch is a fresh load, not a mid-playback rebuffer: reset
+        // the first-play latch so the full splash (backdrop + pulsing
+        // clearlogo) shows during the load instead of the small spinner. The
+        // actor-return gate still wins — those sessions keep the spinner.
+        hasPlayedOnce = false
+        if (!fromActorReturn) {
+            showSplash()
+        }
         dismissPicker()
         recreatePlayer()
     }
