@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.player
 
 import android.opengl.GLES20
 import android.opengl.GLES30
+import android.opengl.GLES31
 import android.util.Log
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -348,7 +349,7 @@ internal object P5ColorShader {
         plane.position(0)
         if (tenBit) {
             GLES30.glTexImage2D(
-                GLES20.GL_TEXTURE_2D, 0, GLES30.GL_R16,
+                GLES20.GL_TEXTURE_2D, 0,                 GLES31.GL_R16,
                 stride / 2, height, 0,
                 GLES30.GL_RED, GLES30.GL_UNSIGNED_SHORT, plane
             )
