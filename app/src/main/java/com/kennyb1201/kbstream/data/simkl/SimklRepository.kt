@@ -135,7 +135,7 @@ class SimklRepository(
         // NOTE: deliberately no logging here - this getter is polled on the
         // UI/main thread several times a second, and logging on every call
         // flooded logcat so heavily it crashed logd and drowned out real
-        // diagnostics (just like the trailer-cobalt lines here).
+        // diagnostics (just like the trailer resolver lines here).
         return !getSavedAccessToken().isNullOrBlank()
     }
 

@@ -32,9 +32,7 @@ object TrailerPlayerLauncher {
      * 1. InnerTube direct player API (runs from the device's own network —
      *    a TV at home is on a residential IP, where YouTube still accepts
      *    anonymous player requests without any po-token infrastructure)
-     * 2. Cobalt proxy (only needed when the device itself sits on a network
-     *    YouTube flags, e.g. a datacenter IP; the proxy solves the pot challenge)
-     * 3. NewPipe extractor (NewPipeManager falls back to Piped itself)
+     * 2. NewPipe extractor (NewPipeManager falls back to Piped itself)
      *
      * Resolved sources are cached for 3 hours.
      */
@@ -74,29 +72,14 @@ object TrailerPlayerLauncher {
         // Primary: direct InnerTube player API. This runs from the device's
         // own network. A TV at home is on a residential IP — the exact kind
         // of network YouTube does NOT flag — so anonymous client requests
-        // work here with no po-token/proxy infrastructure at all. (The entire
-        // po-token wall only applies to flagged datacenter IPs, which is why
-        // the Oracle-hosted cobalt proxy kept failing.)
+        // work here with no po-token/proxy infrastructure at all.
         val innerTubeSource = InnerTubeExtractor.extractPlaybackSource(videoId)
         if (innerTubeSource != null) {
             sourceCache[videoId] = CachedSource(innerTubeSource)
             logResolved("InnerTube", innerTubeSource)
             return Result.success(innerTubeSource)
         }
-        Log.w(TAG, "InnerTube extraction failed; trying cobalt proxy")
-
-        // Secondary: cobalt proxy (handles the po-token / pot challenge for us)
-        if (CobaltTrailerResolver.isConfigured()) {
-            val cobaltSource = CobaltTrailerResolver.resolve(videoId)
-            if (cobaltSource != null) {
-                sourceCache[videoId] = CachedSource(cobaltSource)
-                logResolved("Cobalt", cobaltSource)
-                return Result.success(cobaltSource)
-            }
-            Log.w(TAG, "Cobalt proxy yielded no source; falling back to NewPipe")
-        } else {
-            Log.w(TAG, "Cobalt proxy NOT CONFIGURED (TRAILER_PROXY_URL missing); using NewPipe")
-        }
+        Log.w(TAG, "InnerTube extraction failed; falling back to NewPipe")
 
         // Fallback: NewPipe (with its internal Piped fallback)
         return NewPipeManager

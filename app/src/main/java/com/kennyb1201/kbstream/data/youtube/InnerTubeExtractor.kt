@@ -39,6 +39,16 @@ object InnerTubeExtractor {
             "(KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
 
     private const val PREFERRED_SEPARATE_CLIENT = "android_vr"
+
+    /**
+     * TV playback ceiling for trailers. YouTube serves up to 4K in adaptive
+     * formats; 4K VP9 overwhelms TV hardware decoders (Realtek TCL stutters,
+     * Firestick never buffers enough and gives up). Trailers are hero/inline
+     * content — 1080p is the right tradeoff, and H.264 has far wider hardware
+     * decode coverage than VP9/AV1 on TV SoCs.
+     */
+    private const val MAX_TRAILER_HEIGHT = 1080
+    private const val PREFERRED_VIDEO_MIME = "avc"
     private const val FALLBACK_API_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
 
     private val VIDEO_ID_REGEX = Regex("^[a-zA-Z0-9_-]{11}$")
@@ -334,10 +344,24 @@ object InnerTubeExtractor {
             ?: 0
         val fps = format.optInt("fps", 0)
         val bitrate = format.optDouble("bitrate", format.optDouble("averageBitrate", 0.0))
+        // Codec-aware, height-capped score for video: strongly prefer H.264
+        // (avc1) at or below the TV ceiling, then lower resolutions, then
+        // anything else. Audio keeps the pure-bitrate score.
         val score = if (kind == "audio") {
             bitrate * 1_000_000.0 + format.optDouble("audioSampleRate", 0.0)
         } else {
-            height * 1_000_000_000.0 + fps * 1_000_000.0 + bitrate
+            val isAvc = mimeType.contains(PREFERRED_VIDEO_MIME, ignoreCase = true)
+            val cappedHeight = minOf(height, MAX_TRAILER_HEIGHT)
+            if (isAvc && height <= MAX_TRAILER_HEIGHT) {
+                // Best tier: hardware-friendly codec within the ceiling.
+                4.0e12 + cappedHeight * 1_000_000_000.0 + fps * 1_000_000.0 + bitrate
+            } else if (height <= MAX_TRAILER_HEIGHT) {
+                // Within ceiling but VP9/AV1 - decode may fall back to software.
+                2.0e12 + cappedHeight * 1_000_000_000.0 + fps * 1_000_000.0 + bitrate
+            } else {
+                // Above the ceiling - least desirable for TV playback.
+                bitrate
+            }
         }
         return StreamCandidate(
             client = client.key,
@@ -363,10 +387,18 @@ object InnerTubeExtractor {
     private suspend fun pickBestHls(
         hlsUrls: List<Triple<String, Int, String>>
     ): String? {
+        // Prefer the highest variant at or below the TV ceiling; if every
+        // variant exceeds it (rare), fall back to the lowest available
+        // rather than refusing to play.
         var best: Pair<ManifestVariant, Int>? = null
+        var lowest: Pair<ManifestVariant, Int>? = null
         for ((_, priority, manifestUrl) in hlsUrls) {
             try {
                 val variant = parseHlsManifest(manifestUrl) ?: continue
+                if (lowest == null || variant.height < lowest.first.height) {
+                    lowest = variant to priority
+                }
+                if (variant.height > MAX_TRAILER_HEIGHT) continue
                 if (
                     best == null ||
                     variant.height > best.first.height ||
@@ -378,7 +410,7 @@ object InnerTubeExtractor {
                 Log.w(TAG, "HLS manifest parse failed: ${error.message}")
             }
         }
-        return best?.first?.url
+        return (best ?: lowest)?.first?.url
     }
 
     // ── Watch config (api key + visitor data) ─────────────────────────

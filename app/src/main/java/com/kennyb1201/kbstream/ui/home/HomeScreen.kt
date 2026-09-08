@@ -67,6 +67,7 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -281,7 +282,7 @@ private fun HeroInlineTrailerPlayer(
     val exoPlayer = remember(source) {
 
         // Fire TV suppresses debug logs, so surface what the player actually
-        // receives -- this proves whether the source was cobalt or googlevideo.
+        // receives -- this proves which resolver produced the source.
         Log.w(
             "HOME_HERO",
             "Hero player mounting with source: " + heroSourceOrigin(source)
@@ -326,10 +327,16 @@ private fun HeroInlineTrailerPlayer(
                     }
 
                     is PlayableSource.Adaptive -> {
-                        // This is only a last-resort source. The resolver prefers
-                        // HLS and muxed streams because signed googlevideo video
-                        // URLs can reject ExoPlayer's later range requests.
-                        setMediaItem(MediaItem.fromUri(source.videoUrl))
+                        // Adaptive streams are video-only: the audio URL MUST be
+                        // merged in or the trailer plays silently. Same pattern
+                        // the fullscreen player uses (NativePlayerActivity).
+                        // Both URLs are googlevideo, so the chunked factory
+                        // serves both.
+                        val videoSource = mediaSourceFactory
+                            .createMediaSource(MediaItem.fromUri(source.videoUrl))
+                        val audioSource = mediaSourceFactory
+                            .createMediaSource(MediaItem.fromUri(source.audioUrl))
+                        setMediaSource(MergingMediaSource(videoSource, audioSource))
                     }
                 }
 

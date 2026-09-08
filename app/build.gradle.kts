@@ -25,10 +25,6 @@ val simklClientSecret = localProps.getProperty("SIMKL_CLIENT_SECRET")
     ?: System.getenv("SIMKL_CLIENT_SECRET")
     ?: ""
 
-val trailerProxyUrl = localProps.getProperty("TRAILER_PROXY_URL")
-    ?: System.getenv("TRAILER_PROXY_URL")
-    ?: ""
-
 val sentryDsn = localProps.getProperty("SENTRY_DSN")
     ?: System.getenv("SENTRY_DSN")
     ?: ""
@@ -52,7 +48,6 @@ android {
         buildConfigField("String", "TMDB_API_KEY", "\"$tmdbApiKey\"")
         buildConfigField("String", "SIMKL_CLIENT_ID", "\"$simklClientId\"")
         buildConfigField("String", "SIMKL_CLIENT_SECRET", "\"$simklClientSecret\"")
-        buildConfigField("String", "TRAILER_PROXY_URL", "\"$trailerProxyUrl\"")
         buildConfigField("String", "SENTRY_DSN", "\"$sentryDsn\"")
     }
     buildFeatures {

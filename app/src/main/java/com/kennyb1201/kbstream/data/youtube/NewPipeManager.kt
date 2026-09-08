@@ -163,12 +163,24 @@ object NewPipeManager {
 try {
     val info = getStreamInfo(videoId).getOrThrow()
 
+    // TV ceiling + codec preference, mirroring InnerTubeExtractor: prefer
+    // H.264 (mp4) at or below 1080p for hardware decode; VP9 4K stutters
+    // on TV SoCs and never buffers fast enough on Fire TV sticks.
     val bestVideo = info.videoOnlyStreams
         .filter { stream ->
             val format = stream.format?.name?.lowercase().orEmpty()
             format.contains("mp4") || format.contains("webm")
         }
-        .maxByOrNull { it.height }
+        .filter { it.height <= 1080 }
+        .sortedWith(
+            compareByDescending<org.schabi.newpipe.extractor.stream.VideoStream> { stream ->
+                (stream.format?.name?.lowercase().orEmpty().contains("mp4"))
+            }.thenByDescending { it.height }
+        )
+        .firstOrNull()
+        ?: info.videoOnlyStreams
+            .filter { it.height in 1..1080 }
+            .maxByOrNull { it.height }
 
     val bestAudio = info.audioStreams
         .maxByOrNull { it.averageBitrate }
