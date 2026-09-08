@@ -118,7 +118,7 @@ internal class P5PlaneDecoder(
 
     override fun getName(): String = "P5PlaneDecoder"
 
-    override fun setOutputMode(outputMode: Int) {
+    fun setOutputMode(outputMode: Int) {
         // Buffers are always produced in YUV mode; the renderer's own output
         // mode (Surface vs VideoDecoderOutputBufferRenderer) is what decides
         // whether they get rendered or dropped.

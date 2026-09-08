@@ -71,7 +71,7 @@ internal class P5PlaneVideoRenderer(
         if (format.sampleMimeType != MimeTypes.VIDEO_H265) {
             return RendererCapabilities.create(C.FORMAT_UNSUPPORTED_TYPE)
         }
-        if (format.exoMediaCryptoType != null) {
+        if (format.drmInitData != null) {
             return RendererCapabilities.create(C.FORMAT_UNSUPPORTED_DRM)
         }
         return RendererCapabilities.create(

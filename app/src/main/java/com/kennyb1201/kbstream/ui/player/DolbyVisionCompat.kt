@@ -510,7 +510,7 @@ internal object DolbyVisionCompat {
         profileIdc: Long,
         compatFlags: Long
     ): Boolean = profileSpace == 0L && tierFlag == 0L &&
-        profileIdc == MAIN10_PROFILE_IDC && (compatFlags and MAIN10_COMPAT_FLAG) != 0L
+        profileIdc == MAIN10_PROFILE_IDC && (compatFlags and MAIN10_COMPAT_FLAG.toLong()) != 0L
 
     /**
      * Writes the general profile_tier_level fields of a clean Main10 profile:
@@ -523,7 +523,7 @@ internal object DolbyVisionCompat {
         out.writeBits(0L, 1) // general_tier_flag = 0 (Main)
         out.writeBits(MAIN10_PROFILE_IDC, 5) // general_profile_idc = 2 (Main10)
         out.writeBits(
-            (compatFlags or MAIN10_COMPAT_FLAG) and RANGE_EXT_COMPAT_FLAG.inv(),
+            (compatFlags or MAIN10_COMPAT_FLAG.toLong()) and RANGE_EXT_COMPAT_FLAG.inv(),
             32
         )
     }
@@ -1309,7 +1309,7 @@ internal object DolbyVisionCompat {
         // Extensions); compatibility flags keep the original bits plus the
         // Main10 flag (flag[2]); constraint flags and level stay as encoded.
         result[1] = 0x02 // (0 << 6) | (0 << 5) | 2
-        val compat = (readLength(result, 2, 4) or MAIN10_COMPAT_FLAG) and 0xF7FFFFFF // Main10 flag[2] set, Range-Ext flag[4] cleared
+        val compat = (readLength(result, 2, 4) or MAIN10_COMPAT_FLAG) and 0xF7FFFFFFL.toInt() // Main10 flag[2] set, Range-Ext flag[4] cleared
         writeLength(result, 2, compat, 4)
         return result
     }
