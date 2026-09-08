@@ -751,6 +751,23 @@ class NativePlayerActivity : ComponentActivity() {
                 KeyEvent.KEYCODE_BACK -> {
                     dismissSettingsPanel(); showControls(); true
                 }
+                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
+                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    // Consume directional presses that would escape the panel.
+                    // Edge rows (e.g. Offset −) have no in-panel neighbor in
+                    // some direction; without this clamp the event falls
+                    // through to the root focus search, lands on the video
+                    // surface, and the controls overlay steals focus.
+                    val direction = when (keyCode) {
+                        KeyEvent.KEYCODE_DPAD_LEFT -> View.FOCUS_LEFT
+                        KeyEvent.KEYCODE_DPAD_RIGHT -> View.FOCUS_RIGHT
+                        KeyEvent.KEYCODE_DPAD_UP -> View.FOCUS_UP
+                        else -> View.FOCUS_DOWN
+                    }
+                    val src = settingsContainer.findFocus() ?: settingsContainer
+                    val next = src.focusSearch(direction)
+                    next == null || !isDescendantOf(next, settingsContainer)
+                }
                 else -> false
             }
         }

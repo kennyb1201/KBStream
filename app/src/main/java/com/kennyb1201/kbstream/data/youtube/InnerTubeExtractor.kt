@@ -31,7 +31,11 @@ import java.util.concurrent.atomic.AtomicReference
 object InnerTubeExtractor {
 
     private const val TAG = "InnerTubeExtractor"
-    private const val EXTRACTOR_TIMEOUT_MS = 30_000L
+    // Hard cap per extraction pass. Two passes (initial + fresh-config retry)
+    // can therefore never exceed ~30s total; trailers are background content
+    // and a resolution that drags past this is worse than falling back to the
+    // backdrop quickly.
+    private const val EXTRACTOR_TIMEOUT_MS = 15_000L
     private const val CONFIG_TTL_MS = 3 * 60 * 60 * 1000L // 3 hours
 
     private const val DEFAULT_USER_AGENT =
@@ -293,9 +297,13 @@ object InnerTubeExtractor {
         val bestVideo = pickBest(adaptiveVideo, PREFERRED_SEPARATE_CLIENT)
         val bestAudio = pickBest(adaptiveAudio, PREFERRED_SEPARATE_CLIENT)
 
-        val resolvedVideo = bestVideo?.url?.let { resolveReachableUrl(it) }
+        val resolvedVideo = bestVideo?.let {
+            resolveReachableUrl(it.url, userAgentFor(it.client))
+        }
         val resolvedAudio =
-            if (resolvedVideo != null) bestAudio?.url?.let { resolveReachableUrl(it) } else null
+            if (resolvedVideo != null) bestAudio?.let {
+                resolveReachableUrl(it.url, userAgentFor(it.client))
+            } else null
 
         if (resolvedVideo != null) {
             return if (resolvedAudio != null) {
@@ -312,7 +320,9 @@ object InnerTubeExtractor {
                 .thenBy { it.priority }
         ).firstOrNull()
 
-        val resolvedProgressive = bestProgressive?.url?.let { resolveReachableUrl(it) }
+        val resolvedProgressive = bestProgressive?.let {
+            resolveReachableUrl(it.url, userAgentFor(it.client))
+        }
         if (resolvedProgressive != null) {
             return PlayableSource.Muxed(resolvedProgressive)
         }
@@ -383,6 +393,10 @@ object InnerTubeExtractor {
                 .thenBy { it.priority }
         ).firstOrNull()
     }
+
+    /** UA of the client a candidate URL was signed for (probes must match it). */
+    private fun userAgentFor(clientKey: String): String? =
+        CLIENTS.firstOrNull { it.key == clientKey }?.userAgent
 
     private suspend fun pickBestHls(
         hlsUrls: List<Triple<String, Int, String>>
@@ -611,7 +625,7 @@ object InnerTubeExtractor {
      * Probes googlevideo CDN nodes and returns the first reachable URL.
      * Handles YouTube's `mn` multi-node parameter and 403-prone node fallback.
      */
-    private suspend fun resolveReachableUrl(url: String): String? {
+    private suspend fun resolveReachableUrl(url: String, userAgent: String? = null): String? {
         if (!url.contains("googlevideo.com")) return url
 
         // YouTube signs every googlevideo stream URL (sig/n/lsig params) for a
@@ -621,7 +635,7 @@ object InnerTubeExtractor {
         // we intend to play, byte unchanged, and only use it if it serves bytes.
         // If it 403s, return null so extractInternal falls back to HLS, then
         // the progressive (muxed) stream.
-        return if (isUrlReachable(url)) url else null
+        return if (isUrlReachable(url, userAgent)) url else null
     }
 
     private val probeClient by lazy {
@@ -633,16 +647,20 @@ object InnerTubeExtractor {
             .build()
     }
 
-    private fun isUrlReachable(url: String): Boolean =
+    private fun isUrlReachable(url: String, userAgent: String? = null): Boolean =
         runCatching {
-            // Probe the exact URL unchanged (same client UA Is the player uses),
-            // requesting only the first byte via a Range header so the signature
-            // stays valid for the actual playback request.
+            // Probe the exact URL unchanged, requesting only the first byte via
+            // a Range header so the signature stays valid for the actual
+            // playback request. googlevideo binds signed URLs to the client
+            // User-Agent that requested them, so the probe must carry the SAME
+            // client UA the URL was signed for - probing an android-signed URL
+            // with the android_vr UA (or vice versa) gets a false 403 and a
+            // working stream is thrown away.
             val request = Request.Builder()
                 .url(url)
                 .get()
                 .header("Range", "bytes=0-0")
-                .header("User-Agent", CLIENTS[0].userAgent)
+                .header("User-Agent", userAgent ?: CLIENTS[0].userAgent)
                 .build()
             probeClient.newCall(request).execute().use { response ->
                 response.code == 200 || response.code == 206

@@ -14,6 +14,27 @@ object TrailerPlayerLauncher {
     private val sourceCache =
         java.util.concurrent.ConcurrentHashMap<String, CachedSource>()
 
+    /**
+     * Short-lived failure memory: videos that failed to resolve (region-
+     * blocked, removed, resolver outage) are not retried on every hero
+     * rotation. Without this, a single unavailable trailer re-runs the full
+     * InnerTube → NewPipe → Piped chain (~5s of network churn) every time the
+     * user's cursor passes over its card.
+     */
+    private val resolutionFailures =
+        java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    private const val FAILURE_TTL_MS = 10 * 60 * 1000L // 10 minutes
+
+    /** Drops any cached source for [videoId] so the next resolve fetches a fresh signed URL. */
+    fun invalidate(videoId: String) {
+        sourceCache.remove(videoId)
+    }
+
+    private fun markFailed(videoId: String) {
+        resolutionFailures[videoId] = System.currentTimeMillis()
+    }
+
     private data class CachedSource(
         val source: PlayableSource,
         val cachedAt: Long = System.currentTimeMillis()
@@ -60,6 +81,19 @@ object TrailerPlayerLauncher {
             "Extracted YouTube video ID: $videoId"
         )
 
+        // Fail fast for videos that just failed to resolve — retrying a
+        // region-blocked video through every resolver on each hero rotation
+        // only adds seconds of network churn for a known-dead result.
+        resolutionFailures[videoId]?.let { failedAt ->
+            if (System.currentTimeMillis() - failedAt < FAILURE_TTL_MS) {
+                Log.w(TAG, "Skipping resolution for $videoId (recently failed)")
+                return Result.failure(
+                    IllegalStateException("Trailer $videoId recently failed to resolve")
+                )
+            }
+            resolutionFailures.remove(videoId)
+        }
+
         // Serve from cache if fresh
         sourceCache[videoId]?.let { cached ->
             if (!cached.isStale) {
@@ -76,6 +110,7 @@ object TrailerPlayerLauncher {
         val innerTubeSource = InnerTubeExtractor.extractPlaybackSource(videoId)
         if (innerTubeSource != null) {
             sourceCache[videoId] = CachedSource(innerTubeSource)
+            resolutionFailures.remove(videoId)
             logResolved("InnerTube", innerTubeSource)
             return Result.success(innerTubeSource)
         }
@@ -86,9 +121,11 @@ object TrailerPlayerLauncher {
             .getPlayableUrl(videoId)
             .onSuccess { source ->
                 sourceCache[videoId] = CachedSource(source)
+                resolutionFailures.remove(videoId)
                 logResolved("NewPipe/Piped", source)
             }
             .onFailure { error ->
+                markFailed(videoId)
                 Log.e(
                     TAG,
                     "All trailer resolvers failed (InnerTube + NewPipe/Piped)",

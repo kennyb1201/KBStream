@@ -43,8 +43,18 @@ object NewPipeManager {
      */
     private val pipedInstances = listOf(
     "https://pipedapi.kavin.rocks",
+    "https://pipedapi-libre.kavin.rocks",
+    "https://pipedapi.adminforge.de",
+    "https://pipedapi.reallyaweso.me",
+    "https://api.piped.private.coffee",
+    "https://pipedapi.drgns.space",
+    "https://piped-api.privacy.com.de",
+    "https://piped-api.codespace.cz",
+    "https://pipedapi.ducks.party",
+    "https://pipedapi.darkness.services",
+    "https://pipedapi.orangenet.cc",
     "https://api.piped.yt",
-    "https://piped-api.privacy.com.de"
+    "https://pipedapi.owo.si"
 )
 
     @Synchronized
@@ -239,15 +249,23 @@ try {
 
     /**
      * Queries several Piped API instances until one returns a
-     * usable muxed MP4/WebM stream.
+     * usable muxed MP4/WebM stream. Each instance gets a per-request budget
+     * and the whole loop is hard-capped at [PIPED_TOTAL_TIMEOUT_MS] so a run
+     * of slow/unresponsive instances can't stall trailer resolution for
+     * minutes.
      */
     private suspend fun getPlayableUrlFromPiped(
         videoId: String
     ): Result<PlayableSource> = withContext(Dispatchers.IO) {
 
         var lastError: Throwable? = null
+        val deadline = System.currentTimeMillis() + PIPED_TOTAL_TIMEOUT_MS
 
         for (baseUrl in pipedInstances) {
+            if (System.currentTimeMillis() > deadline) {
+                Log.w(TAG, "Piped fallback budget exhausted; giving up")
+                break
+            }
             try {
                 val endpoint =
                     "${baseUrl.trimEnd('/')}/streams/$videoId"
@@ -433,6 +451,10 @@ try {
                 lastError
             )
         )
+    }
+
+    private companion object {
+        const val PIPED_TOTAL_TIMEOUT_MS = 25_000L
     }
 
     private data class PipedStreamCandidate(

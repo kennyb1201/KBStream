@@ -276,7 +276,8 @@ private fun heroSourceOrigin(source: PlayableSource): String =
 private fun HeroInlineTrailerPlayer(
     source: PlayableSource,
     modifier: Modifier = Modifier,
-    onEnded: () -> Unit = {}
+    onEnded: () -> Unit = {},
+    onFailed: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val exoPlayer = remember(source) {
@@ -399,7 +400,9 @@ private fun HeroInlineTrailerPlayer(
 
                 override fun onPlayerError(error: PlaybackException) {
                     // A failed trailer must never leave a blank hero:
-                    // fall back to the backdrop image immediately.
+                    // fall back to the backdrop image immediately, then
+                    // give the caller one shot at re-resolving a fresh
+                    // signed URL (googlevideo URLs can go stale mid-stream).
                     Log.e(
                         "HOME_HERO",
                         "Inline trailer playback failed: ${error.errorCodeName}",
@@ -407,6 +410,7 @@ private fun HeroInlineTrailerPlayer(
                     )
                     handler.removeCallbacks(watchdog)
                     onEnded()
+                    onFailed()
                 }
             }
 
@@ -532,10 +536,25 @@ private fun HomeHero(
         mutableStateOf<PlayableSource?>(null)
     }
 
-    LaunchedEffect(trailerPlaying, trailerKey) {
+    // One-shot playback-failure retry: googlevideo signed URLs can go stale
+    // mid-stream (403 on a later chunk). Re-resolving fetches a fresh URL —
+    // capped at a single retry per trailer so a genuinely dead video can't
+    // loop resolve → mount → 403 forever.
+    var trailerAttempt by remember(trailerKey) { mutableStateOf(0) }
+
+    LaunchedEffect(trailerPlaying, trailerKey, trailerAttempt) {
         resolvedTrailerSource = null
 
         if (trailerPlaying && !trailerKey.isNullOrBlank()) {
+            if (trailerAttempt > 0) {
+                // Bust the cached source so the retry gets a fresh signed URL.
+                TrailerPlayerLauncher.invalidate(trailerKey)
+                Log.w(
+                    "HOME_HERO",
+                    "Retrying hero trailer after playback failure " +
+                        "(attempt=$trailerAttempt key=$trailerKey)"
+                )
+            }
             Log.w(
                 "HOME_HERO",
                 "Resolving hero trailer key=$trailerKey"
@@ -850,6 +869,17 @@ private fun HomeHero(
                 // player): drop the source so the hero crossfades back
                 // to the backdrop.
                 resolvedTrailerSource = null
+            },
+            onFailed = {
+                // Playback error (e.g. the signed URL went stale and a
+                // chunk 403'd): drop the source and retry resolution once
+                // with a fresh URL. onEnded still fires first, so the
+                // backdrop shows immediately either way.
+                if (trailerAttempt < 1) {
+                    trailerAttempt += 1
+                } else {
+                    resolvedTrailerSource = null
+                }
             }
         )
     } else {
