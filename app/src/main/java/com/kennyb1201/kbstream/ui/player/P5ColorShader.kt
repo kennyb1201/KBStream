@@ -7,6 +7,8 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
 
+private const val GL_R16 = 0x822D
+
 /**
  * OpenGL ES shader utilities for P5 (ICtCp) → display color conversion,
  * sampling **raw planar YUV textures** uploaded from [P5PlaneDecoder] output
@@ -348,7 +350,7 @@ internal object P5ColorShader {
         plane.position(0)
         if (tenBit) {
             GLES30.glTexImage2D(
-                GLES20.GL_TEXTURE_2D, 0, GLES30.GL_R16,
+                GLES20.GL_TEXTURE_2D, 0, GL_R16,
                 stride / 2, height, 0,
                 GLES30.GL_RED, GLES30.GL_UNSIGNED_SHORT, plane
             )

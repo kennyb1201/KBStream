@@ -907,7 +907,7 @@ fun DetailScreen(
                     m.poster,
                     backdropUrl,
                     clearLogoUrl,
-                    m.description,
+                    resolvedTargetEpisode?.overview ?: m.description,
                     tmdbDetail?.credits?.cast.orEmpty()
                 )
             }
