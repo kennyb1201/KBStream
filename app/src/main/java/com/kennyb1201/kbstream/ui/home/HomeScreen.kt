@@ -809,7 +809,7 @@ private fun HomeHero(
             total != null &&
             total > 0
         ) {
-            "$watched of $total episodes watched"
+            "$watched of $total aired episodes watched"
         } else {
             null
         }
