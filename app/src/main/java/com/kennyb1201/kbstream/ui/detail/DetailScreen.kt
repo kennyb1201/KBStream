@@ -3336,8 +3336,27 @@ private fun EpisodeCard(
                 ) {
                     ep.runtimeMinutes?.let {
                         runtime ->
+                        // In-progress episodes show time-left instead of
+                        // total runtime, matching the Home continue-watching
+                        // card's "42m left" / "1h 12m left" formatting.
+                        val runtimeLabel =
+                            if (progressFraction > 0f && progressFraction < 1f) {
+                                val remaining =
+                                    (runtime * (1f - progressFraction))
+                                        .toInt()
+                                        .coerceAtLeast(1)
+                                val hours = remaining / 60
+                                val minutes = remaining % 60
+                                when {
+                                    hours > 0 && minutes > 0 -> "${hours}h ${minutes}m left"
+                                    hours > 0 -> "${hours}h left"
+                                    else -> "${minutes}m left"
+                                }
+                            } else {
+                                "${runtime}m"
+                            }
                         Text(
-                            text = "🕒 ${runtime}m",
+                            text = "🕒 $runtimeLabel",
                             color = KBTextLo,
                             style =
                                 MaterialTheme.typography.bodySmall,

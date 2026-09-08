@@ -2333,6 +2333,21 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
         season++
     }
 
+    // Episode runtime fallback: TMDB often leaves per-episode runtime empty
+    // for TV. Without a runtime the Simkl playback card can't render
+    // time-left from its progress percentage. Fall back to the most common
+    // non-zero runtime across the show's own episode listings (already
+    // fetched above, so this costs nothing).
+    val fallbackEpisodeRuntimeMinutes =
+        seasonEpisodesBySeason.values
+            .asSequence()
+            .flatMap { episodes -> episodes.asSequence() }
+            .mapNotNull { it.runtimeMinutes }
+            .filter { it > 0 }
+            .groupBy { it }
+            .maxByOrNull { it.value.size }
+            ?.key
+
     // Shared per-pass TMDB detail lookup for one show. Declared BEFORE the
     // finale helpers below: local functions can only reference earlier
     // declarations in the same scope, and seasonFinaleFor needs this.
@@ -2575,7 +2590,8 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
                     matchedResumeEpisode.overview,
 
                 runtimeMinutes =
-                    matchedResumeEpisode.runtimeMinutes,
+                    matchedResumeEpisode.runtimeMinutes
+                        ?: fallbackEpisodeRuntimeMinutes,
 
                 episodeThumbnail =
                     matchedResumeEpisode.thumbnail,
@@ -2695,7 +2711,8 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
 
             runtimeMinutes =
                 nextUnwatchedInSeason
-                    .runtimeMinutes,
+                    .runtimeMinutes
+                    ?: fallbackEpisodeRuntimeMinutes,
 
             episodeThumbnail =
                 nextUnwatchedInSeason
@@ -2850,7 +2867,8 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
 
                 runtimeMinutes =
                     firstUnwatchedAired
-                        .runtimeMinutes,
+                        .runtimeMinutes
+                        ?: fallbackEpisodeRuntimeMinutes,
 
                 episodesWatched =
                     episodesWatched,

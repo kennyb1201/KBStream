@@ -20,6 +20,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.async
+import com.kennyb1201.kbstream.data.tmdb.displayRuntimeMinutes
 import com.kennyb1201.kbstream.data.tmdb.list
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -252,7 +253,22 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
 
                 // 1. Await structural and history components first so watched data is guaranteed ready
                 val tmdbDetailResult = tmdbDeferred.await()
-                _resumeInfo.value = resumeDeferred.await().getOrNull()
+                val localResume = resumeDeferred.await().getOrNull()
+
+                // Simkl cloud-session fallback: when local history has no
+                // in-progress position for this title, derive a display-only
+                // resume row from the paused Simkl playback session so Detail
+                // shows RESUME + progress for cloud-tracked progress too.
+                _resumeInfo.value =
+                    if (localResume != null && localResume.positionMs > 0L) {
+                        localResume
+                    } else {
+                        simklPlaybackResumeFor(
+                            id = id,
+                            type = normalizedType,
+                            tmdbId = tmdbDetailResult.getOrNull()?.id
+                        )
+                    }
 
                 val localCompletedEntries = completedDeferred.await().getOrDefault(emptyList())
                 _completedEpisodeIds.value = localCompletedEntries.map { it.id }.toSet()
@@ -519,6 +535,136 @@ for (metaAddon in metaAddons) {
         // season, which is why episodes could show empty until the user
         // manually switched seasons.
         loadEpisodesForSeason(targetSeason)
+    }
+
+    /**
+     * Simkl playback fallback for the Detail screen.
+     *
+     * The resume row above only reflects LOCAL watch history. When progress
+     * lives in a Simkl cloud playback session instead (paused mid-episode on
+     * this or another device), synthesize a display-only history row from it
+     * so the UI lights up RESUME + progress bar + position. Estimated
+     * position = progress% x episode runtime (Simkl exposes only a
+     * percentage). Never written back to the local database.
+     */
+    private suspend fun simklPlaybackResumeFor(
+        id: String,
+        type: String,
+        tmdbId: Int?
+    ): WatchHistoryEntity? {
+
+        if (!simklRepository.isConfigured() || !simklRepository.hasToken()) {
+            return null
+        }
+
+        val sessions = runCatching { simklRepository.getPlaybackItems() }
+            .getOrDefault(emptyList())
+
+        val normalizedType = type.lowercase()
+        val match = sessions.firstOrNull { session ->
+            when (normalizedType) {
+                "movie" -> {
+                    val ids = session.movie?.ids
+                    ids != null && (
+                        ids.imdb?.equals(id, ignoreCase = true) == true ||
+                            (tmdbId != null && ids.tmdb == tmdbId)
+                        )
+                }
+                "series" -> {
+                    val ids = session.show?.ids
+                    val ep = session.episode
+                    if (ids == null || ep == null) {
+                        false
+                    } else {
+                        ep.season != null && ep.episode != null && (
+                            ids.imdb?.equals(id, ignoreCase = true) == true ||
+                                (tmdbId != null && ids.tmdb == tmdbId)
+                            )
+                    }
+                }
+                else -> false
+            }
+        } ?: return null
+
+        val progress = (match.progress ?: return null)
+            .takeIf { it > 0f && it < 100f }
+            ?: return null
+
+        val season: Int?
+        val episode: Int?
+        var episodeTitle: String? = null
+        var name: String
+        var runtimeMinutes: Int? = null
+
+        if (normalizedType == "movie") {
+            season = null
+            episode = null
+            name = match.movie?.title ?: "movie-$id"
+            // Position estimate needs the movie runtime.
+            val movieDetail = tmdbId?.let {
+                runCatching { tmdbRepository.getDetailByTmdbId(it, "movie") }.getOrNull()
+            }
+            runtimeMinutes = movieDetail?.displayRuntimeMinutes()
+        } else {
+            season = match.episode?.season
+            episode = match.episode?.episode
+            episodeTitle = match.episode?.title
+            name = match.show?.title ?: "show-$id"
+            // Position estimate needs an episode runtime; TMDB episode
+            // runtime is often empty for TV, so also try the show-level
+            // episode_run_time list.
+            val detail = tmdbId?.let {
+                runCatching { tmdbRepository.getDetailByTmdbId(it, "tv") }.getOrNull()
+            }
+            runtimeMinutes = detail?.displayRuntimeMinutes()
+        }
+
+        val durationMs = runtimeMinutes?.times(60_000L)?.takeIf { it > 0L } ?: 0L
+        val positionMs = if (durationMs > 0L) {
+            (durationMs * (progress / 100f)).toLong()
+        } else {
+            0L
+        }
+
+        // Synthetic row: display-only. Synthetic rows keep positionMs even
+        // when the runtime estimate is missing (positionMs = 0) ONLY when a
+        // duration exists; otherwise the UI would show a bar with no time.
+        if (positionMs <= 0L && durationMs <= 0L) {
+            return null
+        }
+
+        val syntheticId =
+            if (normalizedType == "movie") "simkl-playback:$id"
+            else "simkl-playback:$id:$season:$episode"
+
+        return WatchHistoryEntity(
+            id = syntheticId,
+            parentId = id,
+            type = normalizedType,
+            name = name,
+            episodeTitle = episodeTitle?.takeIf { it.isNotBlank() },
+            overview = null,
+            clearLogo = null,
+            backdropUrl = null,
+            totalEpisodesInSeason = null,
+            poster = null,
+            streamUrl = null,
+            season = season,
+            episode = episode,
+            // Same "imdbId:season:episode" convention TMDB-resolved
+            // rows use, so the per-episode progress bar binds.
+            episodeStreamId =
+                if (normalizedType == "series" && season != null && episode != null) {
+                    "$id:$season:$episode"
+                } else {
+                    null
+                },
+            positionMs = positionMs,
+            durationMs = durationMs,
+            updatedAt = System.currentTimeMillis(),
+            isCompleted = false,
+            completedAt = null
+        )
     }
 
     fun loadEpisodesForSeason(season: Int) {
