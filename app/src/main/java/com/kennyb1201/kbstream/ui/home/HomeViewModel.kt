@@ -2333,6 +2333,36 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
         season++
     }
 
+    // Shared per-pass TMDB detail lookup for one show. Declared BEFORE the
+    // finale helpers below: local functions can only reference earlier
+    // declarations in the same scope, and seasonFinaleFor needs this.
+    val showDetailCache =
+        java.util.concurrent.ConcurrentHashMap<Int, TmdbDetail?>()
+
+    suspend fun showDetailFor(
+        tmdbId: Int
+    ): TmdbDetail? {
+
+        showDetailCache[tmdbId]?.let {
+            return it
+        }
+
+        val detail =
+            try {
+                tmdbLookupSemaphore.withPermit {
+                    tmdbRepository.getDetailByTmdbId(
+                        tmdbId,
+                        "tv"
+                    )
+                }
+            } catch (_: Exception) {
+                null
+            }
+
+        showDetailCache[tmdbId] = detail
+        return detail
+    }
+
     // Finale detection helpers: a season finale is the LAST EPISODE of its
     // season — not merely the most recently AIRED one. The old "last aired"
     // rule wrongly tagged mid-air seasons: when the newest aired episode was
@@ -2432,38 +2462,8 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
      * A season finale of a still-running show (Returning Series, In
      * Production, Planned, or status unknown) must NOT be labelled "Series
      * Finale" — the show may air more seasons. Only Ended/Canceled qualifies.
-     * Cached per show for the lifetime of this resolution pass. The detail
-     * itself comes from the shared per-pass [showDetailFor] cache, so the
-     * season- and series-finale checks for one target still share a single
-     * TMDB lookup.
+     * Cached per show for the lifetime of this resolution pass.
      */
-    val showDetailCache =
-        java.util.concurrent.ConcurrentHashMap<Int, TmdbDetail?>()
-
-    suspend fun showDetailFor(
-        tmdbId: Int
-    ): TmdbDetail? {
-
-        showDetailCache[tmdbId]?.let {
-            return it
-        }
-
-        val detail =
-            try {
-                tmdbLookupSemaphore.withPermit {
-                    tmdbRepository.getDetailByTmdbId(
-                        tmdbId,
-                        "tv"
-                    )
-                }
-            } catch (_: Exception) {
-                null
-            }
-
-        showDetailCache[tmdbId] = detail
-        return detail
-    }
-
     val seriesEndedCache =
         java.util.concurrent.ConcurrentHashMap<Int, Boolean>()
 
