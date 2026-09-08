@@ -754,21 +754,19 @@ class NativePlayerActivity : ComponentActivity() {
                 else -> false
             }
         }
-        // Global focus listener: if settings panel is open and focus escapes, snap back
-        window.decorView.viewTreeObserver.addOnGlobalFocusChangeListener { _, newFocus ->
-            if (showSettingsPanel && newFocus != null && !isDescendantOf(newFocus, settingsContainer)) {
-                // Focus left the settings panel — snap back to first focusable inside it
-                settingsContainer.post {
-                    val inner = settingsContainer.getChildAt(0) as? android.view.ViewGroup
-                    if (inner != null) {
-                        for (i in 0 until inner.childCount) {
-                            val v = inner.getChildAt(i)
-                            if (v.isFocusable) {
-                                v.requestFocus()
-                                break
-                            }
-                        }
-                    }
+        // Track the last focused view inside the settings panel so a stolen
+        // focus can be restored to WHERE the user was, not to the top.
+        var settingsLastFocus: android.view.View? = null
+        window.decorView.viewTreeObserver.addOnGlobalFocusChangeListener { oldFocus, newFocus ->
+            if (showSettingsPanel) {
+                if (newFocus != null && isDescendantOf(newFocus, settingsContainer)) {
+                    settingsLastFocus = newFocus
+                } else if (newFocus != null) {
+                    // Focus escaped the panel — re-assert synchronously (no
+                    // post()) so we win the race against any pending
+                    // requestFocus() from showControls()/auto-hide, and
+                    // restore the user's actual position inside the panel.
+                    (settingsLastFocus ?: settingsBufferAuto).requestFocus()
                 }
             }
         }
@@ -1135,7 +1133,11 @@ class NativePlayerActivity : ComponentActivity() {
         playerView.isFocusable = true
         playerView.isClickable = true
         playerView.setOnFocusChangeListener { _, hasFocus ->
-            if (hasFocus && controlsVisible) controlsOverlay.requestFocus()
+            // Never yank focus to the overlay while a panel is up — that is
+            // one of the ways the settings panel loses focus.
+            if (hasFocus && controlsVisible && !showSettingsPanel && !isPickerShowing) {
+                controlsOverlay.requestFocus()
+            }
         }
         playerView.isFocusableInTouchMode = true
         playerView.requestFocus()
@@ -2418,7 +2420,10 @@ class NativePlayerActivity : ComponentActivity() {
         endsAtClock.visibility = View.VISIBLE
         clockHandler.removeCallbacks(clockRunnable)
         clockHandler.post(clockRunnable)
-        controlsOverlay.post { btnPlayPause.requestFocus() }
+        // If a panel is open, the panel owns focus — do not steal it.
+        if (!showSettingsPanel && !isPickerShowing) {
+            controlsOverlay.post { btnPlayPause.requestFocus() }
+        }
         scheduleAutoHide()
     }
 
@@ -2490,6 +2495,9 @@ class NativePlayerActivity : ComponentActivity() {
         handler.removeCallbacks(autoHideRunnable)
         // Don't auto-hide when paused — keep overlay visible
         if (exoPlayer?.isPlaying == false) return
+        // Don't auto-hide while a panel is open: hiding the overlay mid-
+        // navigation tears down the panel's focus and drops the user's spot.
+        if (showSettingsPanel || isPickerShowing) return
         handler.postDelayed(autoHideRunnable, CONTROLS_HIDE_DELAY_MS)
     }
 
