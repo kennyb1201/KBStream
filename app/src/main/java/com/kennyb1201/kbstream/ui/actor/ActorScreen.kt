@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
@@ -39,6 +40,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -279,18 +281,43 @@ fun ActorScreen(
                                             }
                                         )
                                         if (bioOverflows) {
+                                            // TV focus affordance: the toggle
+                                            // reads as a small chip that lights
+                                            // up with an accent border + fill
+                                            // when focused, so D-pad users can
+                                            // see when it is selectable.
+                                            var seeMoreFocused by remember { mutableStateOf(false) }
                                             Text(
                                                 text = if (bioExpanded) "View less" else "View more",
-                                                color = KBTextLo,
+                                                color = if (seeMoreFocused) KBAccent else KBTextLo,
                                                 style = MaterialTheme.typography.bodySmall,
                                                 modifier = Modifier
                                                     .padding(top = 8.dp)
-                                                    .focusable()
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .background(
+                                                        if (seeMoreFocused) {
+                                                            KBAccent.copy(alpha = 0.12f)
+                                                        } else {
+                                                            Color.Transparent
+                                                        }
+                                                    )
+                                                    .border(
+                                                        width = 2.dp,
+                                                        color = if (seeMoreFocused) {
+                                                            KBAccent
+                                                        } else {
+                                                            Color.Transparent
+                                                        },
+                                                        shape = RoundedCornerShape(8.dp)
+                                                    )
                                                     .clickable(
                                                         onClick = { bioExpanded = !bioExpanded },
                                                         indication = null,
                                                         interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
                                                     )
+                                                    .focusable()
+                                                    .onFocusChanged { seeMoreFocused = it.isFocused }
+                                                    .padding(horizontal = 10.dp, vertical = 5.dp)
                                             )
                                         }
                                     }
