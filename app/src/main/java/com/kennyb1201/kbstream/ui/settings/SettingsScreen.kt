@@ -72,6 +72,9 @@ fun SettingsScreen(
     var audioDecoder by remember { mutableIntStateOf(AppPreferences.getAudioDecoder(context)) }
     var heroTrailerAutoplay by remember { mutableStateOf(AppPreferences.getHeroTrailerAutoplay(context)) }
     var use24hClock by remember { mutableStateOf(AppPreferences.getUse24HourClock(context)) }
+    var railShowType by remember { mutableStateOf(AppPreferences.getHomeRailShowCatalogType(context)) }
+    var railShowAddon by remember { mutableStateOf(AppPreferences.getHomeRailShowAddonName(context)) }
+    var railHideUpcoming by remember { mutableStateOf(AppPreferences.getHomeRailHideUpcoming(context)) }
     var clearingHistory by remember { mutableStateOf(false) }
     var historyClearedAt by remember { mutableStateOf<Long?>(null) }
     var dvCompatMode by remember { mutableIntStateOf(AppPreferences.getDvCompatMode(context)) }
@@ -374,6 +377,42 @@ fun SettingsScreen(
             onToggle = {
                 use24hClock = it
                 AppPreferences.setUse24HourClock(context, it)
+            }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        ToggleRow(
+            label = "Show Catalog Type on Home Rails",
+            description = "Append Movies / Series / All after the rail name (e.g. \"Trending · Series\"). Applies when you return to Home.",
+            checked = railShowType,
+            onToggle = {
+                railShowType = it
+                AppPreferences.setHomeRailShowCatalogType(context, it)
+            }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        ToggleRow(
+            label = "Show Addon Name on Home Rails",
+            description = "Prefix the rail title with its addon (e.g. \"AIOMetadata · Trending\"). Applies when you return to Home.",
+            checked = railShowAddon,
+            onToggle = {
+                railShowAddon = it
+                AppPreferences.setHomeRailShowAddonName(context, it)
+            }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        ToggleRow(
+            label = "Hide Unreleased Titles",
+            description = "Filter titles whose digital release date is in the future out of Home rails.",
+            checked = railHideUpcoming,
+            onToggle = {
+                railHideUpcoming = it
+                AppPreferences.setHomeRailHideUpcoming(context, it)
             }
         )
 

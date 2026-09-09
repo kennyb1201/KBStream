@@ -91,6 +91,7 @@ import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.tmdb.movieStatusTag
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.ui.components.PosterCard
+import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
@@ -1177,6 +1178,34 @@ continueTimeLeft?.let { label ->
 
                     
 
+/**
+ * Builds the rail header: optional addon name and catalog type around the
+ * formatted catalog name, e.g. "AIOMetadata · Trending · Series".
+ */
+private fun homeRailTitle(
+    catalogName: String,
+    addonName: String,
+    type: String,
+    showType: Boolean,
+    showAddon: Boolean
+): String {
+
+    val parts = buildList {
+
+        if (showAddon && addonName.isNotBlank()) {
+            add(addonName)
+        }
+
+        add(catalogName)
+
+        if (showType && type.isNotBlank()) {
+            add(type.replaceFirstChar { it.uppercase() })
+        }
+    }
+
+    return parts.joinToString(" · ")
+}
+
 @Composable
 private fun SectionTitle(text: String) {
     Text(
@@ -1519,6 +1548,12 @@ fun HomeScreen(
         androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
     val context = LocalContext.current
+    val showRailType by remember {
+        mutableStateOf(AppPreferences.getHomeRailShowCatalogType(context))
+    }
+    val showRailAddon by remember {
+        mutableStateOf(AppPreferences.getHomeRailShowAddonName(context))
+    }
     val rails by viewModel.rails.collectAsStateWithLifecycle()
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
     val upNext by viewModel.upNext.collectAsStateWithLifecycle()
@@ -1615,6 +1650,13 @@ fun HomeScreen(
     ) {
         focusedItem = item
         focusedContinueWatchingItem = upNextItem
+    }
+
+    // Re-apply rail display settings changed in Settings while we were away
+    // (catalog-type / addon-name are read per-composition; the digital
+    // release filter needs a rail rebuild from the warm cache).
+    LaunchedEffect(Unit) {
+        viewModel.onHomeResumed()
     }
 
     LaunchedEffect(showTopBar) {
@@ -2023,15 +2065,13 @@ fun HomeScreen(
                                 )
                             ) {
                                 SectionTitle(
-                                    rail.catalogName
-                                        .replace("_", " ")
-                                        .split(" ")
-                                        .joinToString(" ") {
-                                            it.lowercase()
-                                                .replaceFirstChar { char ->
-                                                    char.uppercase()
-                                                }
-                                        }
+                                    homeRailTitle(
+                                        catalogName = rail.catalogName,
+                                        addonName = rail.addonName,
+                                        type = rail.type,
+                                        showType = showRailType,
+                                        showAddon = showRailAddon
+                                    )
                                 )
 
                                 LazyRow(

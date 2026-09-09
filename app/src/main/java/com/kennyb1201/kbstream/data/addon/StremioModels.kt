@@ -17,7 +17,11 @@ data class MetaPreview(
     val poster: String? = null,
     val background: String? = null,
     val description: String? = null,
-    val logo: String? = null
+    val logo: String? = null,
+    // Stremio catalogs carry release info as a plain string (a year like
+    // "2026" or a full date like "2026-12-25"); used by the Home
+    // digital-release filter.
+    val releaseInfo: String? = null
 )
 
 @JsonClass(generateAdapter = true)

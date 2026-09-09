@@ -21,6 +21,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.watched.WatchStateBus
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
+import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.data.tmdb.director
 import com.kennyb1201.kbstream.data.tmdb.displayCountry
 import com.kennyb1201.kbstream.data.tmdb.displayDescription
@@ -1029,6 +1030,38 @@ Log.d(
             forceRefresh = true
         )
     }
+
+    /**
+     * Called every time the Home screen is (re)entered. If the digital-release
+     * filter toggle changed since the rails were last built, rebuilds them
+     * from the warm catalog cache — no network refetch.
+     */
+    fun onHomeResumed() {
+
+        val current =
+            AppPreferences.getHomeRailHideUpcoming(
+                getApplication()
+            )
+
+        val applied =
+            lastAppliedHideUpcoming
+
+        if (
+            applied != null &&
+            current != applied
+        ) {
+
+            viewModelScope.launch {
+
+                loadRailsInternal(
+                    forceRefresh = true,
+                    clearCatalogCache = false
+                )
+            }
+        }
+    }
+
+    private var lastAppliedHideUpcoming: Boolean? = null
 
     fun refreshWatchedStatusForCurrentRails() {
 
@@ -3463,6 +3496,54 @@ private suspend fun calculateEpisodesRemaining(
         val catalogRawName: String
     )
 
+    /**
+     * Drops titles whose release date (from the catalog's releaseInfo field,
+     * e.g. "2026-12-25T00:00:00.000Z") is in the future. Titles with no or
+     * unparseable release info are always kept — the filter only removes
+     * items we can positively tell are not out yet.
+     */
+    private fun filterUpcoming(
+        metas: List<MetaPreview>
+    ): List<MetaPreview> {
+
+        val today = LocalDate.now()
+
+        return metas.filter { meta ->
+
+            val raw = meta.releaseInfo
+                ?.trim()
+                .orEmpty()
+
+            if (raw.isEmpty()) {
+                return@filter true
+            }
+
+            parseReleaseDate(raw)?.let { date ->
+
+                !date.isAfter(today)
+
+            } ?: run {
+
+                // Bare year (the common catalog shape, e.g. "2026"):
+                // hide only when the year is entirely in the future —
+                // the current year is ambiguous, so keep it. Anything
+                // unparseable is kept too.
+                val year = raw.toIntOrNull()
+
+                year == null || year <= today.year
+            }
+        }
+    }
+
+    private fun parseReleaseDate(raw: String): LocalDate? {
+
+        return runCatching {
+            OffsetDateTime.parse(raw).toLocalDate()
+        }.recoverCatching {
+            LocalDate.parse(raw)
+        }.getOrNull()
+    }
+
     private suspend fun loadRailsInternal(
         forceRefresh: Boolean,
         clearCatalogCache: Boolean = forceRefresh
@@ -3474,6 +3555,14 @@ private suspend fun calculateEpisodesRemaining(
         ) {
             return
         }
+
+        val hideUpcoming =
+            AppPreferences.getHomeRailHideUpcoming(
+                getApplication()
+            )
+
+        lastAppliedHideUpcoming =
+            hideUpcoming
 
         _isLoading.value =
             _rails.value.isEmpty()
@@ -3553,7 +3642,8 @@ private suspend fun calculateEpisodesRemaining(
                                 async {
 
                                     loadCatalogRail(
-                                        pending
+                                        pending,
+                                        hideUpcoming
                                     )
                                 }
                             }
@@ -3613,7 +3703,8 @@ private suspend fun calculateEpisodesRemaining(
     }
 
     private suspend fun loadCatalogRail(
-        pending: PendingCatalogLoad
+        pending: PendingCatalogLoad,
+        hideUpcoming: Boolean
     ): Rail? {
 
         return try {
@@ -3637,6 +3728,19 @@ private suspend fun calculateEpisodesRemaining(
                 return null
             }
 
+            val filtered =
+                if (hideUpcoming) {
+                    filterUpcoming(metas)
+                } else {
+                    metas
+                }
+
+            if (
+                filtered.isEmpty()
+            ) {
+                return null
+            }
+
             Rail(
 
                 addonName =
@@ -3651,7 +3755,7 @@ private suspend fun calculateEpisodesRemaining(
                     pending.catalogType,
 
                 items =
-                    metas,
+                    filtered,
 
                 catalogId =
                     pending.catalogId,

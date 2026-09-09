@@ -39,6 +39,9 @@ object AppPreferences {
     private const val KEY_PREFERRED_SUBTITLE_LANG = "preferred_subtitle_language" // BCP-47 tag or "" for auto
     private const val KEY_HERO_TRAILER_AUTOPLAY = "hero_trailer_autoplay"
     private const val KEY_USE_24H_CLOCK = "use_24h_clock"
+    private const val KEY_SHOW_CATALOG_TYPE = "home_rail_show_catalog_type"
+    private const val KEY_SHOW_ADDON_NAME = "home_rail_show_addon_name"
+    private const val KEY_HIDE_UPCOMING = "home_rail_hide_upcoming"
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -303,5 +306,29 @@ object AppPreferences {
 
     fun setUse24HourClock(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_USE_24H_CLOCK, enabled).apply()
+    }
+
+    // ── Home rail titles: show catalog type ───────────────────────────
+    fun getHomeRailShowCatalogType(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_SHOW_CATALOG_TYPE, false)
+
+    fun setHomeRailShowCatalogType(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_SHOW_CATALOG_TYPE, enabled).apply()
+    }
+
+    // ── Home rail titles: show addon name ─────────────────────────────
+    fun getHomeRailShowAddonName(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_SHOW_ADDON_NAME, false)
+
+    fun setHomeRailShowAddonName(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_SHOW_ADDON_NAME, enabled).apply()
+    }
+
+    // ── Home rails: hide not-yet-released titles (digital filter) ─────
+    fun getHomeRailHideUpcoming(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_HIDE_UPCOMING, false)
+
+    fun setHomeRailHideUpcoming(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_HIDE_UPCOMING, enabled).apply()
     }
 }
