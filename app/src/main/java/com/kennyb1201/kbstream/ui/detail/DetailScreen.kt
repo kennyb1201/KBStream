@@ -1137,7 +1137,14 @@ fun DetailScreen(
 
                         if (tmdbGenres.isNotEmpty()) {
                             LazyRow(
+                                // Start/end insets live INSIDE the row's clip
+                                // bounds so the focused chip's 2dp border +
+                                // glow (which paint outside the chip bounds)
+                                // don't get sliced at the row's edge — same
+                                // treatment as the keyword rail below.
                                 contentPadding = PaddingValues(
+                                    start = 6.dp,
+                                    end = 6.dp,
                                     top = 6.dp,
                                     bottom = 6.dp
                                 ),
