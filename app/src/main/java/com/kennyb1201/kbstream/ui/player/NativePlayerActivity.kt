@@ -449,6 +449,9 @@ class NativePlayerActivity : ComponentActivity() {
     private var pendingNextSeason: Int? = null
     private var pendingNextEpisode: Int? = null
     private var pendingNextEpisodeName: String? = null
+    // Dedupes the overlay's best-effort next-episode-name prefetch so
+    // showControls() doesn't hit TMDB on every auto-hide cycle.
+    private var overlayNextPrefetchKey: String? = null
     private var pendingNextEpisodeRuntime: Int? = null
     private var nextUpCountdownRemaining = 0
     private val nextUpCountdownHandler = Handler(Looper.getMainLooper())
@@ -888,7 +891,14 @@ class NativePlayerActivity : ComponentActivity() {
         // Overlay control buttons
         btnNext.setOnClickListener {
             val target = nextEpisodeTarget() ?: return@setOnClickListener
-            launchNextEpisode(target.first, target.second)
+            // Carry the prefetched name/runtime so the streams screen shows
+            // the real episode title instead of a bare S#E# label.
+            launchNextEpisode(
+                target.first,
+                target.second,
+                pendingNextEpisodeName,
+                pendingNextEpisodeRuntime
+            )
         }
         btnSource.setOnClickListener { showPicker(PickerMode.SOURCE) }
 
@@ -2501,6 +2511,10 @@ class NativePlayerActivity : ComponentActivity() {
             }
         }
         scheduleAutoHide()
+        // Best-effort: resolve the next episode's name so the Next button's
+        // handoff label (and the streams screen it opens) carries the real
+        // episode title, not just S#E#.
+        prefetchNextEpisodeName()
     }
 
     private fun hideControls() {
@@ -2764,6 +2778,33 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     // --- Up Next ---
+    /**
+     * Best-effort TMDB fetch of the next episode's name/runtime so the
+     * overlay's Next button can hand off a real title. Runs once per target;
+     * the up-next panel does its own (matching) fetch when it appears.
+     */
+    private fun prefetchNextEpisodeName() {
+        if (season == null) return // movies have no next episode
+        val target = nextEpisodeTarget() ?: return
+        val key = "${target.first}:${target.second}"
+        if (overlayNextPrefetchKey == key) return
+        overlayNextPrefetchKey = key
+        scope?.launch {
+            val nextEp: com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode? = withContext(Dispatchers.IO) {
+                val repo = TmdbRepository(this@NativePlayerActivity)
+                val tmdbId = resolveParentTmdbId() ?: return@withContext null
+                val episodes = runCatching {
+                    repo.getSeasonEpisodes(tmdbId, target.first, parentId)
+                }.getOrNull()
+                episodes?.firstOrNull { it.episodeNumber == target.second }
+            }
+            if (nextEp != null && overlayNextPrefetchKey == key) {
+                nextEp.name?.takeIf { it.isNotBlank() }?.let { pendingNextEpisodeName = it }
+                nextEp.runtimeMinutes?.takeIf { it > 0 }?.let { pendingNextEpisodeRuntime = it }
+            }
+        }
+    }
+
     private fun nextEpisodeTarget(): Pair<Int, Int>? {
         val s = season ?: return null
         val e = episode ?: return null
