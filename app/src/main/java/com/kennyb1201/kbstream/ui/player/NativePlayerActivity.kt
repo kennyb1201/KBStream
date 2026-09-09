@@ -2,7 +2,6 @@ package com.kennyb1201.kbstream.ui.player
 
 import android.app.PictureInPictureParams
 import android.content.Context
-import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.os.Build
@@ -28,9 +27,11 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
+import android.content.Intent
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.Format
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
@@ -49,6 +50,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
+import androidx.media3.common.util.ForwardingPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -889,17 +891,7 @@ class NativePlayerActivity : ComponentActivity() {
         }
 
         // Overlay control buttons
-        btnNext.setOnClickListener {
-            val target = nextEpisodeTarget() ?: return@setOnClickListener
-            // Carry the prefetched name/runtime so the streams screen shows
-            // the real episode title instead of a bare S#E# label.
-            launchNextEpisode(
-                target.first,
-                target.second,
-                pendingNextEpisodeName,
-                pendingNextEpisodeRuntime
-            )
-        }
+        btnNext.setOnClickListener { advanceToNextEpisode() }
         btnSource.setOnClickListener { showPicker(PickerMode.SOURCE) }
 
         // "Up next" popup buttons
@@ -1229,6 +1221,63 @@ class NativePlayerActivity : ComponentActivity() {
 
 }
 
+    /**
+     * Activity-level fallback for media transport keys. External remote apps
+     * (BT remote buttons, phone remote apps) deliver play/pause/next as
+     * KeyEvent media codes; the PlayerView key listener only sees them when
+     * the video surface holds focus, so handle them here too. Not consumed
+     * when a panel is up so Back-driven dismiss flows stay intact.
+     */
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (isPickerShowing || showSettingsPanel) return super.onKeyDown(keyCode, event)
+        when (keyCode) {
+            KeyEvent.KEYCODE_MEDIA_PLAY -> { exoPlayer?.play(); hideControls(); return true }
+            KeyEvent.KEYCODE_MEDIA_PAUSE -> { exoPlayer?.pause(); showControls(); return true }
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { togglePlayPause(); return true }
+            KeyEvent.KEYCODE_MEDIA_NEXT -> { advanceToNextEpisode(); return true }
+            KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+                val p = exoPlayer ?: return true
+                if (p.currentPosition > 5000) p.seekTo(0) else restartEpisode()
+                return true
+            }
+            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { exoPlayer?.seekForward(); return true }
+            KeyEvent.KEYCODE_MEDIA_REWIND -> { exoPlayer?.seekBack(); return true }
+            KeyEvent.KEYCODE_MEDIA_STOP -> { finish(); return true }
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    /** Shared "jump to the next episode" path for the overlay button and media NEXT. */
+    private fun advanceToNextEpisode() {
+        val target = nextEpisodeTarget() ?: return
+        launchNextEpisode(
+            target.first,
+            target.second,
+            pendingNextEpisodeName,
+            pendingNextEpisodeRuntime
+        )
+    }
+
+    /** Media PREVIOUS at the very start of an episode restarts it instead of seeking to 0. */
+    private fun restartEpisode() {
+        val s = season ?: return
+        val e = episode ?: return
+        if (e <= 1) return
+        launchNextEpisode(s, e - 1)
+    }
+
+    /** Opens the player when a remote app taps the now-playing card. */
+    private fun pendingIntentForSession(): android.app.PendingIntent {
+        val intent = Intent(this, NativePlayerActivity::class.java).apply {
+            putExtras(this@NativePlayerActivity.intent)
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val flags = if (Build.VERSION.SDK_INT >= 23)
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        else android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        return android.app.PendingIntent.getActivity(this, 1001, intent, flags)
+    }
+
     // --- Player Creation ---
     private fun createPlayer() {
         // Fresh attempt at the current URL: reset per-attempt state so the
@@ -1420,6 +1469,22 @@ class NativePlayerActivity : ComponentActivity() {
         val mediaItemBuilder = MediaItem.Builder().setUri(currentUrl)
         if (mimeType != null) mediaItemBuilder.setMimeType(mimeType)
 
+        // Surface now-playing info to system/external media controllers
+        // (Android TV launcher, phone remote apps, BT headset displays).
+        val mdBuilder = MediaMetadata.Builder()
+        val episodeLabel = if (season != null && episode != null) {
+            buildString {
+                append("S").append(season).append("E").append(episode)
+                if (!episodeTitle.isNullOrBlank()) append(" \u2022 ").append(episodeTitle)
+            }
+        } else null
+        mdBuilder.setTitle(if (!episodeLabel.isNullOrBlank()) episodeLabel else itemName)
+            .setArtist(itemName.takeIf { episodeLabel != null })
+            .setAlbumTitle(itemName.takeIf { it.isNotBlank() })
+        itemPoster?.let { mdBuilder.setArtworkUri(Uri.parse(it)) }
+        overview?.let { if (it.isNotBlank()) mdBuilder.setDescription(it) }
+        mediaItemBuilder.setMediaMetadata(mdBuilder.build())
+
         // DRM: set license URL and headers on the MediaItem so ExoPlayer's
         // built-in DRM negotiation handles Widevine playback.
         if (!drmLicenseUrl.isNullOrBlank()) {
@@ -1595,9 +1660,41 @@ class NativePlayerActivity : ComponentActivity() {
             // for "Session ID must be unique" is giving every session a unique id, so a freshly
             // launched player can coexist with a previous one whose session hasn't been released
             // yet (the old synchronous-release approach was racy and still crashed on this path).
+            // Advertise next/previous through a ForwardingPlayer so external
+            // remote apps (and the system) enable their transport buttons;
+            // next jumps to the next episode, previous restarts/rewinds.
+            // `base` is captured explicitly so the overrides never depend on
+            // how ForwardingPlayer exposes its wrapped player.
+            val base = player
+            val sessionPlayer = object : ForwardingPlayer(base) {
+                override fun getAvailableCommands(): Player.Commands =
+                    super.getAvailableCommands().buildUpon()
+                        .add(Player.COMMAND_SEEK_TO_NEXT)
+                        .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                        .add(Player.COMMAND_SEEK_TO_PREVIOUS)
+                        .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+                        .build()
+
+                override fun isCommandAvailable(command: Int): Boolean =
+                    when (command) {
+                        Player.COMMAND_SEEK_TO_NEXT,
+                        Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
+                        Player.COMMAND_SEEK_TO_PREVIOUS,
+                        Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> true
+                        else -> super.isCommandAvailable(command)
+                    }
+
+                override fun seekToNext() { advanceToNextEpisode() }
+                override fun seekToNextMediaItem() { advanceToNextEpisode() }
+                override fun seekToPrevious() {
+                    if (base.currentPosition > 5000) base.seekTo(0) else restartEpisode()
+                }
+                override fun seekToPreviousMediaItem() { seekToPrevious() }
+            }
             mediaSession =
-                MediaSession.Builder(this, player)
+                MediaSession.Builder(this, sessionPlayer)
                     .setId("kbstream-" + System.nanoTime() + "-" + sessionSequence++)
+                    .setSessionActivity(pendingIntentForSession())
                     .build()
 
         // Start position polling
