@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.data.addon.ManifestCatalog
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
@@ -505,7 +506,16 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
                 // AI Search, People, Collections), so probe each catalog
                 // separately and keep one rail per catalog instead of
                 // merging everything into a single undifferentiated rail.
+                // AI/search catalogs (AIOMetadata "AI Search", BingeCat's
+                // search lists, People/Collections searches) are probed
+                // FIRST so they can never be pushed out of the probe cap by
+                // the regular movie/series catalogs, and their results are
+                // exempt from the cross-rail dedup below — overlapping
+                // titles is expected there, and an emptied rail is exactly
+                // the "my AI search rail disappeared" bug.
                 val searchableCatalogs = addon.catalogs
+                    .partition { it.isSearchStyleCatalog() }
+                    .let { (searchStyle, regular) -> searchStyle + regular }
                     .take(MAX_ADDON_CATALOG_PROBES)
 
                 if (searchableCatalogs.isEmpty()) continue
@@ -525,15 +535,24 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
                     }.awaitAll()
                 }
 
-                // A title found by an earlier catalog (e.g. Movies) is not
-                // repeated in later rails (e.g. AI Search) of the same addon.
+                // Regular catalogs: a title found by an earlier catalog (or
+                // already present in the TMDB rails) is not repeated in the
+                // same addon's later regular rails.
                 val seen = mutableSetOf<String>()
                 for ((catalog, hits) in perCatalog) {
                     if (groups.size >= MAX_ADDON_GROUPS) break
+                    val searchStyle = catalog.isSearchStyleCatalog()
                     val items = hits
-                        .filter { seen.add("${it.type}:${it.id}") }
-                        .filter {
-                            "${it.type}:${it.name.lowercase()}" !in tmdbKeys
+                        .asSequence()
+                        .distinctBy { "${it.type}:${it.id}" }
+                        .filter { meta ->
+                            searchStyle ||
+                                "${meta.type}:${meta.name.lowercase()}" !in tmdbKeys
+                        }
+                        .filter { meta ->
+                            // Search-style rails never enter or consult the
+                            // dedup set: they must always render.
+                            searchStyle || seen.add("${meta.type}:${meta.id}")
                         }
                         .map { meta ->
                             SearchTitleResult(
@@ -545,9 +564,11 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
                             )
                         }
                         .take(MAX_ADDON_CATALOG_RESULTS)
+                        .toList()
                     if (items.isEmpty()) continue
                     groups += AddonResultGroup(
-                        addonName = "${addon.customName ?: addon.name} · ${catalog.displayName}",
+                        addonName = "${addon.displayName} - " +
+                            catalog.railLabel(addon.displayName),
                         results = items
                     )
                 }
@@ -574,7 +595,8 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
             if (addonItems.isEmpty()) continue
 
             groups += AddonResultGroup(
-                addonName = addon.customName ?: addon.name,
+                // Standard search mixes movies + series in one rail.
+                addonName = "${addon.displayName} - All",
                 results = addonItems
             )
 
@@ -820,8 +842,41 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         const val MAX_ADDON_RESULTS_PER_ADDON = 40
         const val MAX_ADDON_GROUPS = 10
 
+        /**
+         * True for AIOMetadata "AI Search" / "People Search" /
+         * "Collections Search"-style catalogs (matched on the catalog id or
+         * name containing "search").
+         */
+        fun ManifestCatalog.isSearchStyleCatalog(): Boolean {
+            val hay = "$id $name"
+            return hay.contains("search", ignoreCase = true)
+        }
+
+        /**
+         * Rail label for a catalog: search-style catalogs keep their own
+         * (addon-prefix-stripped) name, e.g. "AI Search"; regular catalogs
+         * get a plural type label ("Movies" / "Series" / "All" / ...).
+         */
+        fun ManifestCatalog.railLabel(addonName: String): String {
+            val raw = customName?.trim()?.takeIf { it.isNotEmpty() } ?: name
+            if (isSearchStyleCatalog()) {
+                return raw.removePrefix(addonName).trim()
+                    .ifEmpty { raw }
+            }
+            return when (type.lowercase()) {
+                "movie" -> "Movies"
+                "series" -> "Series"
+                "all" -> "All"
+                else -> when {
+                    type.contains("person", true) || type.contains("people", true) -> "People"
+                    type.contains("collection", true) -> "Collections"
+                    else -> raw
+                }
+            }
+        }
+
         /** Catalog probes per catalog-only addon when it has no search resource. */
-        const val MAX_ADDON_CATALOG_PROBES = 8
+        const val MAX_ADDON_CATALOG_PROBES = 12
 
         /** Per-rail cap for a catalog-only addon's per-catalog search rail. */
         const val MAX_ADDON_CATALOG_RESULTS = 20

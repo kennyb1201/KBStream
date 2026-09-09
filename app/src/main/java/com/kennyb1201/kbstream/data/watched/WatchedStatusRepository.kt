@@ -811,13 +811,16 @@ class WatchedStatusRepository(
     }
 
     suspend fun clearAllWatchState() {
+        clearLocalWatchState(clearSimklAuth = true)
+    }
 
-        /*
-         * Clear the in-memory, Room, and SIMKL
-         * auth/cache state together. This prevents
-         * markers from a previously linked account
-         * appearing after account changes.
-         */
+    /**
+     * Clear local watch state (memory cache + Room). When [clearSimklAuth]
+     * is true the Simkl link itself is dropped too (account-switch path).
+     * The Settings "Clear Continue Watching" action passes false so scrobble
+     * history on Simkl's side stays untouched and the account stays linked.
+     */
+    suspend fun clearLocalWatchState(clearSimklAuth: Boolean) {
         preloadMutex.withLock {
 
             cacheMutex.withLock {
@@ -844,7 +847,9 @@ class WatchedStatusRepository(
                 )
             }
 
-            simklRepository.clearAuth()
+            if (clearSimklAuth) {
+                simklRepository.clearAuth()
+            }
 
             _watchedStateVersion.value =
                 System.currentTimeMillis()
@@ -852,7 +857,7 @@ class WatchedStatusRepository(
 
         Log.d(
             "WATCHED_REPO",
-            "Cleared local and SIMKL watch state"
+            "Cleared local watch state (simklAuthCleared=$clearSimklAuth)"
         )
     }
 

@@ -332,7 +332,8 @@ fun SearchScreen(
                 addonResultGroups.forEachIndexed { index, group ->
                     item(key = "addons_rail_$index") {
                         SearchRail(
-                            title = "From ${group.addonName} · ${group.results.size}"
+                            // addonName already carries "Name - Type" (Movies/Series/All).
+                            title = group.addonName
                         ) {
                             items(
                                 items = group.results,

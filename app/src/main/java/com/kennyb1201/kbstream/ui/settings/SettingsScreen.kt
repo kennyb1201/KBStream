@@ -24,6 +24,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
+import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -68,6 +70,10 @@ fun SettingsScreen(
     // Fire TV OS doesn't support PiP for third-party apps; hide the toggle there.
     val isFireTv = android.os.Build.MANUFACTURER.equals("Amazon", ignoreCase = true)
     var audioDecoder by remember { mutableIntStateOf(AppPreferences.getAudioDecoder(context)) }
+    var heroTrailerAutoplay by remember { mutableStateOf(AppPreferences.getHeroTrailerAutoplay(context)) }
+    var use24hClock by remember { mutableStateOf(AppPreferences.getUse24HourClock(context)) }
+    var clearingHistory by remember { mutableStateOf(false) }
+    var historyClearedAt by remember { mutableStateOf<Long?>(null) }
     var dvCompatMode by remember { mutableIntStateOf(AppPreferences.getDvCompatMode(context)) }
     var convertP5To81 by remember { mutableStateOf(AppPreferences.getConvertP5To81(context)) }
     var stripHdr10Plus by remember { mutableStateOf(AppPreferences.getStripHdr10Plus(context)) }
@@ -163,6 +169,35 @@ fun SettingsScreen(
                 )
             }
         )
+
+        NavigationRow(
+            label = if (clearingHistory) "Clearing..." else "Clear Continue Watching",
+            description = if (clearingHistory)
+                "Erasing local resume positions and watched markers..."
+            else
+                "Reset all resume positions and watched markers (Simkl link is kept)",
+            onClick = {
+                if (clearingHistory) return@NavigationRow
+                clearingHistory = true
+                backupScope.launch {
+                    runCatching {
+                        WatchHistoryRepository(context).clearAll()
+                        WatchedStatusRepository(context).clearLocalWatchState(clearSimklAuth = false)
+                    }
+                    clearingHistory = false
+                    historyClearedAt = System.currentTimeMillis()
+                }
+            }
+        )
+
+        if (historyClearedAt != null) {
+            Text(
+                text = "Continue watching cleared.",
+                color = KBAccent,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
+            )
+        }
 
         backupStatus?.let { message ->
             Text(
@@ -312,6 +347,33 @@ fun SettingsScreen(
             onToggle = {
                 autoPlayNext = it
                 AppPreferences.setAutoPlayNext(context, it)
+            }
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // ── INTERFACE ─────────────────────────────────────────
+        SectionHeader("INTERFACE")
+
+        ToggleRow(
+            label = "Hero Trailer Autoplay",
+            description = "Auto-play trailers on the Home hero after a short pause. Turn off to keep the static backdrop.",
+            checked = heroTrailerAutoplay,
+            onToggle = {
+                heroTrailerAutoplay = it
+                AppPreferences.setHeroTrailerAutoplay(context, it)
+            }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        ToggleRow(
+            label = "24-Hour Clock",
+            description = "Show the player clock in 24-hour format (off = 12-hour AM/PM).",
+            checked = use24hClock,
+            onToggle = {
+                use24hClock = it
+                AppPreferences.setUse24HourClock(context, it)
             }
         )
 

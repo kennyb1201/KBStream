@@ -1518,6 +1518,7 @@ fun HomeScreen(
     viewModel: HomeViewModel =
         androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
+    val context = LocalContext.current
     val rails by viewModel.rails.collectAsStateWithLifecycle()
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
     val upNext by viewModel.upNext.collectAsStateWithLifecycle()
@@ -1780,7 +1781,10 @@ fun HomeScreen(
                     trailerKey = heroTrailerKey,
                     autoPlayTrailer =
                         heroTrailerReady &&
-                            focusedContinueWatchingItem == null,
+                            focusedContinueWatchingItem == null &&
+                            // Settings > Playback: hero trailer autoplay toggle
+                            com.kennyb1201.kbstream.ui.settings.AppPreferences
+                                .getHeroTrailerAutoplay(context),
                     continueWatchingItem =
                         focusedContinueWatchingItem
                 )

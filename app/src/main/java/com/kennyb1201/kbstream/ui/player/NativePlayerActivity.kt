@@ -2568,13 +2568,18 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     private fun updateClock() {
-        val now = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+        // Honor the Settings > Interface 24-hour toggle; falls back to the
+        // locale default when unchecked.
+        val clockPattern = if (
+            com.kennyb1201.kbstream.ui.settings.AppPreferences.getUse24HourClock(this)
+        ) "HH:mm" else "h:mm a"
+        val now = java.text.SimpleDateFormat(clockPattern, java.util.Locale.getDefault())
             .format(java.util.Date())
         playerClock.text = now
         val durationMs = exoPlayer?.duration ?: 0L
         val positionMs = exoPlayer?.currentPosition ?: 0L
         val remainingMs = (durationMs - positionMs).coerceAtLeast(0L)
-        val endsAt = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+        val endsAt = java.text.SimpleDateFormat(clockPattern, java.util.Locale.getDefault())
             .format(java.util.Date(System.currentTimeMillis() + remainingMs))
         endsAtClock.text = "Ends at $endsAt"
     }

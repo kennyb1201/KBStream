@@ -37,6 +37,8 @@ object AppPreferences {
     private const val KEY_DEFAULT_ASPECT_RATIO = "default_aspect_ratio"     // 0=fit, 1=zoom, 2=fill
     private const val KEY_PREFERRED_AUDIO_LANG = "preferred_audio_language"   // BCP-47 tag or "" for auto
     private const val KEY_PREFERRED_SUBTITLE_LANG = "preferred_subtitle_language" // BCP-47 tag or "" for auto
+    private const val KEY_HERO_TRAILER_AUTOPLAY = "hero_trailer_autoplay"
+    private const val KEY_USE_24H_CLOCK = "use_24h_clock"
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -285,5 +287,21 @@ object AppPreferences {
 
     fun setPreferredSubtitleLanguage(context: Context, lang: String) {
         prefs(context).edit().putString(KEY_PREFERRED_SUBTITLE_LANG, lang).apply()
+    }
+
+    // ── Hero trailer autoplay (Home hero) ─────────────────────────────
+    fun getHeroTrailerAutoplay(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_HERO_TRAILER_AUTOPLAY, true)
+
+    fun setHeroTrailerAutoplay(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_HERO_TRAILER_AUTOPLAY, enabled).apply()
+    }
+
+    // ── 24-hour clock (player overlay clock) ──────────────────────────
+    fun getUse24HourClock(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_USE_24H_CLOCK, false)
+
+    fun setUse24HourClock(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_USE_24H_CLOCK, enabled).apply()
     }
 }
