@@ -22,6 +22,10 @@ import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.watched.WatchStateBus
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
+import com.kennyb1201.kbstream.data.tmdb.alternatePosterPath
+import com.kennyb1201.kbstream.data.tmdb.cardBackdropPath
+import com.kennyb1201.kbstream.data.tmdb.tmdbImageOriginal
 import com.kennyb1201.kbstream.data.tmdb.isAvailableAtHome
 import com.kennyb1201.kbstream.data.tmdb.director
 import com.kennyb1201.kbstream.data.tmdb.displayCountry
@@ -65,7 +69,11 @@ data class Rail(
     val type: String,
     val items: List<MetaPreview>,
     val catalogId: String? = null,
-    val baseUrl: String? = null
+    val baseUrl: String? = null,
+    // Landscape-card artwork per item id ("movie:tmdb:603" style key):
+    // resolved backdrop + clearlogo, filled when the landscape toggle is
+    // on. Poster mode never reads these.
+    val landscapeArt: Map<String, Pair<String?, String?>> = emptyMap()
 )
 
 enum class UpNextBadge {
@@ -229,6 +237,9 @@ class HomeViewModel(
 
     // Caps parallel TMDB release-date lookups for the digital filter.
     private val tmdbFilterSemaphore = Semaphore(permits = 4)
+
+    // Caps parallel TMDB artwork lookups for landscape cards.
+    private val landscapeArtSemaphore = Semaphore(permits = 6)
 
     private val watchedRefreshMutex =
         Mutex()
@@ -529,6 +540,13 @@ Log.d(
                                 ?.let { TmdbRepository.BACKDROP_BASE + it }
                             ?: resolvedAddonMeta?.background?.takeIf { it.isNotBlank() }
                             ?: item.background?.takeIf { it.isNotBlank() }
+                            // Poster fallback for backdrop-less titles:
+                            // prefer an ALTERNATE TMDB poster so the hero
+                            // doesn't display the exact image the focused
+                            // rail card shows.
+                            ?: resolvedTmdbDetail?.alternatePosterPath()
+                                ?.takeIf { it.isNotBlank() }
+                                ?.let { tmdbImageOriginal(it) }
                             ?: resolvedAddonMeta?.poster?.takeIf { it.isNotBlank() }
                             ?: item.poster?.takeIf { it.isNotBlank() }
 
@@ -3549,6 +3567,75 @@ private suspend fun calculateEpisodesRemaining(
     }
 
     /**
+     * Resolves landscape-card artwork (backdrop + clearlogo) for a rail's
+     * items, keyed by "type:id". Prefers the addon's own background/logo
+     * fields, falls back to the shared TMDB detail cache (backdropPath /
+     * bestLogoPath). All TMDB hits land in the same 12h/30d cache the
+     * digital filter and detail screens use, so rails that were filtered
+     * already have warm entries.
+     */
+    private suspend fun resolveLandscapeArt(
+        metas: List<MetaPreview>
+    ): Map<String, Pair<String?, String?>> {
+
+        return coroutineScope {
+
+            metas.map { meta ->
+
+                async {
+
+                    val key = "${meta.type}:${meta.id}"
+
+                    val addonBackdrop =
+                        meta.background?.takeIf { it.isNotBlank() }
+
+                    val addonLogo =
+                        meta.logo?.takeIf { it.isNotBlank() }
+
+                    if (
+                        addonBackdrop != null &&
+                        addonLogo != null
+                    ) {
+                        return@async key to (addonBackdrop to addonLogo)
+                    }
+
+                    val detail =
+                        landscapeArtSemaphore.withPermit {
+
+                            runCatching {
+
+                                tmdbRepository.fetchEnrichedMetaCached(
+                                    imdbId = meta.id,
+                                    type = meta.type
+                                )
+                            }.getOrNull()
+                        }
+
+                    // Card backdrop prefers an alternate image so cards
+                    // don't mirror the hero's primary backdrop.
+                    val tmdbBackdrop =
+                        detail?.cardBackdropPath()
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { TmdbRepository.BACKDROP_BASE + it }
+
+                    val tmdbLogo =
+                        detail?.bestLogoPath()
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { TmdbRepository.LOGO_BASE + it }
+
+                    // Backdrop: TMDB (alternate) wins over the addon's
+                    // background, which is usually the same primary image
+                    // the hero shows. Logo keeps addon-first priority.
+                    key to (
+                        (tmdbBackdrop ?: addonBackdrop) to
+                            (addonLogo ?: tmdbLogo)
+                        )
+                }
+            }.awaitAll().toMap()
+        }
+    }
+
+    /**
      * Stage 2 of the digital-release filter: titles that survived the cheap
      * catalog-date pass get verified against TMDB's release_dates payload
      * (digital type 4/6, physical type 5, theatrical type 2/3). A movie
@@ -3613,6 +3700,11 @@ private suspend fun calculateEpisodesRemaining(
                 getApplication()
             )
 
+        val landscapeCards =
+            AppPreferences.getHomeLandscapeCards(
+                getApplication()
+            )
+
         lastAppliedHideUpcoming =
             hideUpcoming
 
@@ -3635,7 +3727,8 @@ private suspend fun calculateEpisodesRemaining(
 
                 loadPinnedTopTodayRails(
                     pinned,
-                    hideUpcoming
+                    hideUpcoming,
+                    landscapeCards
                 )
 
                 val addonsById =
@@ -3696,7 +3789,8 @@ private suspend fun calculateEpisodesRemaining(
 
                                     loadCatalogRail(
                                         pending,
-                                        hideUpcoming
+                                        hideUpcoming,
+                                        landscapeCards
                                     )
                                 }
                             }
@@ -3757,7 +3851,8 @@ private suspend fun calculateEpisodesRemaining(
 
     private suspend fun loadCatalogRail(
         pending: PendingCatalogLoad,
-        hideUpcoming: Boolean
+        hideUpcoming: Boolean,
+        landscapeCards: Boolean
     ): Rail? {
 
         return try {
@@ -3816,7 +3911,16 @@ private suspend fun calculateEpisodesRemaining(
                     pending.catalogId,
 
                 baseUrl =
-                    pending.baseUrl
+                    pending.baseUrl,
+
+                landscapeArt =
+                    if (landscapeCards) {
+                        resolveLandscapeArt(
+                            filtered
+                        )
+                    } else {
+                        emptyMap()
+                    }
             )
 
         } catch (e: Exception) {
@@ -3878,7 +3982,8 @@ private suspend fun calculateEpisodesRemaining(
 
     private suspend fun loadPinnedTopTodayRails(
         result: MutableList<Rail>,
-        hideUpcoming: Boolean
+        hideUpcoming: Boolean,
+        landscapeCards: Boolean
     ) {
 
         val baseUrl = TOP_TODAY_MANIFEST_URL
@@ -3947,7 +4052,16 @@ private suspend fun calculateEpisodesRemaining(
                                         catalogId,
 
                                     baseUrl =
-                                        baseUrl
+                                        baseUrl,
+
+                                    landscapeArt =
+                                        if (landscapeCards) {
+                                            resolveLandscapeArt(
+                                                filteredMetas
+                                            )
+                                        } else {
+                                            emptyMap()
+                                        }
                                 )
                         }
                     }
