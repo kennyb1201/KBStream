@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -275,6 +276,7 @@ fun DetailScreen(
 
     var userManuallyChangedSeason by remember { mutableStateOf(false) }
     val episodesRowState = rememberLazyListState()
+    val detailListState = rememberLazyListState()
     val seasonFocusRequesters = remember { mutableMapOf<Int, FocusRequester>() }
     val episodeFocusRequesters =
         remember { mutableMapOf<Pair<Int, Int>, FocusRequester>() }
@@ -1012,6 +1014,7 @@ fun DetailScreen(
                             )
                             .focusGroup()
                             .focusRestorer()
+                            .scrollToTopOnFocus(detailListState, scope)
                     ) {
                         KBCard(
                             onClick = {
@@ -1066,11 +1069,13 @@ fun DetailScreen(
                     }
 
                     Column(
-                        modifier = Modifier.padding(
-                            start = 24.dp,
-                            end = 24.dp,
-                            bottom = 6.dp
-                        )
+                        modifier = Modifier
+                            .padding(
+                                start = 24.dp,
+                                end = 24.dp,
+                                bottom = 6.dp
+                            )
+                            .scrollToTopOnFocus(detailListState, scope)
                     ) {
                         val metaLine = remember(
                             m,
@@ -1212,6 +1217,7 @@ fun DetailScreen(
                     }
 
                     LazyColumn(
+                        state = detailListState,
                         modifier = Modifier
                             .weight(1f, fill = true)
                             .fillMaxWidth()
@@ -1236,13 +1242,85 @@ fun DetailScreen(
                                         }
                                         ?: m.description
 
-                                descriptionText?.let {
+                                descriptionText?.let { overview ->
+                                    // Same "View more" treatment as the actor
+                                    // biography: collapsed to 4 lines with a
+                                    // real focusable toggle that only appears
+                                    // when the text actually overflows. States
+                                    // are keyed on the text so they reset when
+                                    // the richer TMDB overview replaces the
+                                    // addon-provided one during load.
+                                    var overviewExpanded by remember(overview) {
+                                        mutableStateOf(false)
+                                    }
+                                    var overviewOverflows by remember(overview) {
+                                        mutableStateOf(false)
+                                    }
                                     Text(
-                                        it,
+                                        overview,
+                                        maxLines = if (overviewExpanded) Int.MAX_VALUE else 4,
+                                        overflow = TextOverflow.Ellipsis,
+                                        onTextLayout = { textLayoutResult ->
+                                            if (!overviewExpanded && textLayoutResult.hasVisualOverflow) {
+                                                overviewOverflows = true
+                                            }
+                                        },
                                         modifier = Modifier.padding(
                                             top = 4.dp
                                         )
                                     )
+                                    if (overviewOverflows) {
+                                        Surface(
+                                            onClick = { overviewExpanded = !overviewExpanded },
+                                            shape = ClickableSurfaceDefaults.shape(
+                                                shape = RoundedCornerShape(8.dp)
+                                            ),
+                                            colors = ClickableSurfaceDefaults.colors(
+                                                containerColor = Color.Transparent,
+                                                contentColor = KBTextLo,
+                                                focusedContainerColor = KBSurfaceRaised,
+                                                focusedContentColor = KBAccent,
+                                                pressedContainerColor = KBSurfaceRaised,
+                                                pressedContentColor = KBAccent
+                                            ),
+                                            scale = ClickableSurfaceDefaults.scale(
+                                                focusedScale = 1.05f
+                                            ),
+                                            border = ClickableSurfaceDefaults.border(
+                                                border = Border(
+                                                    border = BorderStroke(
+                                                        1.dp,
+                                                        KBTextLo.copy(alpha = 0.35f)
+                                                    ),
+                                                    shape = RoundedCornerShape(8.dp)
+                                                ),
+                                                focusedBorder = Border(
+                                                    border = BorderStroke(
+                                                        2.dp,
+                                                        KBAccent
+                                                    ),
+                                                    shape = RoundedCornerShape(8.dp)
+                                                )
+                                            ),
+                                            glow = ClickableSurfaceDefaults.glow(
+                                                focusedGlow = Glow(
+                                                    elevationColor = KBAccent,
+                                                    elevation = 12.dp
+                                                )
+                                            ),
+                                            modifier = Modifier.padding(top = 8.dp)
+                                        ) {
+                                            Text(
+                                                text = if (overviewExpanded) "View less" else "View more",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                fontWeight = FontWeight.Medium,
+                                                modifier = Modifier.padding(
+                                                    horizontal = 10.dp,
+                                                    vertical = 5.dp
+                                                )
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -3719,6 +3797,23 @@ private fun PosterGridCard(
             .height(160.dp)
             .padding(end = 10.dp)
     )
+}
+
+/**
+ * Snap the detail list back to its top when focus returns to the header
+ * region (title/logo, Play/Trailer row) above the LazyColumn. The overview
+ * is the list's first, non-focusable item: walking focus back up used to
+ * keep the old scroll offset, leaving the overview permanently scrolled out
+ * of view. Composable so it can read `detailListState` composition-locally.
+ */
+@Composable
+private fun Modifier.scrollToTopOnFocus(
+    listState: LazyListState,
+    scope: kotlinx.coroutines.CoroutineScope
+): Modifier = this.onFocusChanged { state ->
+    if (state.hasFocus && listState.firstVisibleItemIndex > 0) {
+        scope.launch { listState.animateScrollToItem(0) }
+    }
 }
 
 @Composable
