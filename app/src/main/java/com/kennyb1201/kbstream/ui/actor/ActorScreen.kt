@@ -2,12 +2,10 @@ package com.kennyb1201.kbstream.ui.actor
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusGroup
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.layout.Box
@@ -40,14 +38,18 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.tv.material3.Border
+import androidx.tv.material3.ClickableSurfaceDefaults
+import androidx.tv.material3.Glow
 import androidx.tv.material3.MaterialTheme
+import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
@@ -281,44 +283,67 @@ fun ActorScreen(
                                             }
                                         )
                                         if (bioOverflows) {
-                                            // TV focus affordance: the toggle
-                                            // reads as a small chip that lights
-                                            // up with an accent border + fill
-                                            // when focused, so D-pad users can
-                                            // see when it is selectable.
-                                            var seeMoreFocused by remember { mutableStateOf(false) }
-                                            Text(
-                                                text = if (bioExpanded) "View less" else "View more",
-                                                color = if (seeMoreFocused) KBAccent else KBTextLo,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                modifier = Modifier
-                                                    .padding(top = 8.dp)
-                                                    .clip(RoundedCornerShape(8.dp))
-                                                    .background(
-                                                        if (seeMoreFocused) {
-                                                            KBAccent.copy(alpha = 0.12f)
-                                                        } else {
-                                                            Color.Transparent
-                                                        }
-                                                    )
-                                                    .border(
-                                                        width = 2.dp,
-                                                        color = if (seeMoreFocused) {
+                                            // TV focus affordance: the toggle is
+                                            // a real tv-material Surface using
+                                            // the app-wide focused treatment
+                                            // (raised surface + accent content +
+                                            // scale + accent border + glow) — the
+                                            // same language as KBCard/StudioChip —
+                                            // so it lights up clearly on D-pad
+                                            // focus and pointer hover alike.
+                                            // Earlier hand-rolled focus tracking
+                                            // never fired because onFocusChanged
+                                            // sat behind clickable in the chain.
+                                            Surface(
+                                                onClick = { bioExpanded = !bioExpanded },
+                                                shape = ClickableSurfaceDefaults.shape(
+                                                    shape = RoundedCornerShape(8.dp)
+                                                ),
+                                                colors = ClickableSurfaceDefaults.colors(
+                                                    containerColor = Color.Transparent,
+                                                    contentColor = KBTextLo,
+                                                    focusedContainerColor = KBSurfaceRaised,
+                                                    focusedContentColor = KBAccent,
+                                                    pressedContainerColor = KBSurfaceRaised,
+                                                    pressedContentColor = KBAccent
+                                                ),
+                                                scale = ClickableSurfaceDefaults.scale(
+                                                    focusedScale = 1.05f
+                                                ),
+                                                border = ClickableSurfaceDefaults.border(
+                                                    border = Border(
+                                                        border = BorderStroke(
+                                                            1.dp,
+                                                            KBTextLo.copy(alpha = 0.35f)
+                                                        ),
+                                                        shape = RoundedCornerShape(8.dp)
+                                                    ),
+                                                    focusedBorder = Border(
+                                                        border = BorderStroke(
+                                                            2.dp,
                                                             KBAccent
-                                                        } else {
-                                                            Color.Transparent
-                                                        },
+                                                        ),
                                                         shape = RoundedCornerShape(8.dp)
                                                     )
-                                                    .clickable(
-                                                        onClick = { bioExpanded = !bioExpanded },
-                                                        indication = null,
-                                                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                                                ),
+                                                glow = ClickableSurfaceDefaults.glow(
+                                                    focusedGlow = Glow(
+                                                        elevationColor = KBAccent,
+                                                        elevation = 12.dp
                                                     )
-                                                    .focusable()
-                                                    .onFocusChanged { seeMoreFocused = it.isFocused }
-                                                    .padding(horizontal = 10.dp, vertical = 5.dp)
-                                            )
+                                                ),
+                                                modifier = Modifier.padding(top = 8.dp)
+                                            ) {
+                                                Text(
+                                                    text = if (bioExpanded) "View less" else "View more",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    fontWeight = FontWeight.Medium,
+                                                    modifier = Modifier.padding(
+                                                        horizontal = 10.dp,
+                                                        vertical = 5.dp
+                                                    )
+                                                )
+                                            }
                                         }
                                     }
                                 }
