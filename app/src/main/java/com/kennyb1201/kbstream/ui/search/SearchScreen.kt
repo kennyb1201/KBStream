@@ -23,6 +23,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -35,6 +36,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.app.Activity
+import android.content.Intent
+import android.speech.RecognizerIntent
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.Key
@@ -51,11 +57,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.tv.material3.Border
 import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
+import androidx.tv.material3.Border
+import androidx.tv.material3.ClickableSurfaceDefaults
+import androidx.tv.material3.Glow
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
+import androidx.tv.material3.Surface
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
@@ -513,6 +522,24 @@ private fun SearchHero(
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
 
+    // Voice search: fires the platform speech recognizer (Fire TV / Android TV
+    // remote mic or system voice dialog) and pipes the transcript into the
+    // query field. RESULT_OK with no matches yields an empty list.
+    val voiceLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val spoken = result.data
+            ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            ?.firstOrNull()
+            ?.trim()
+            .orEmpty()
+        if (spoken.isNotEmpty()) {
+            onQueryChanged(spoken)
+            onSubmit()
+            focusManager.clearFocus()
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -615,6 +642,77 @@ private fun SearchHero(
                                 }
                             }
                         }
+                )
+            }
+        }
+
+        // Voice search trigger — same focused Surface treatment as the app's
+        // other focusable chips (raised surface + accent content + border +
+        // glow) so it lights up consistently on D-pad focus.
+        Surface(
+            onClick = {
+                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                    putExtra(
+                        RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                        RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+                    )
+                    putExtra(RecognizerIntent.EXTRA_PROMPT, "Search KBStream")
+                }
+                runCatching { voiceLauncher.launch(intent) }
+                    .onFailure {
+                        // No recognizer installed on this device.
+                        keyboardController?.hide()
+                    }
+            },
+            shape = ClickableSurfaceDefaults.shape(
+                shape = RoundedCornerShape(10.dp)
+            ),
+            colors = ClickableSurfaceDefaults.colors(
+                containerColor = KBSurfaceRaised,
+                contentColor = KBTextLo,
+                focusedContainerColor = KBAccent,
+                focusedContentColor = KBVoid,
+                pressedContainerColor = KBAccent,
+                pressedContentColor = KBVoid
+            ),
+            scale = ClickableSurfaceDefaults.scale(
+                focusedScale = 1.06f
+            ),
+            border = ClickableSurfaceDefaults.border(
+                border = Border(
+                    border = BorderStroke(1.dp, KBTextLo.copy(alpha = 0.35f)),
+                    shape = RoundedCornerShape(10.dp)
+                ),
+                focusedBorder = Border(
+                    border = BorderStroke(2.dp, KBAccent),
+                    shape = RoundedCornerShape(10.dp)
+                )
+            ),
+            glow = ClickableSurfaceDefaults.glow(
+                focusedGlow = Glow(
+                    elevationColor = KBAccent,
+                    elevation = 10.dp
+                )
+            ),
+            modifier = Modifier.padding(top = 10.dp)
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Mic,
+                    contentDescription = "Voice search",
+                    // tv Surface drives tv-material's LocalContentColor, not
+                    // material3's — read it explicitly so the mic follows the
+                    // same KBTextLo -> KBVoid flip as the label on focus.
+                    tint = androidx.tv.material3.LocalContentColor.current,
+                    modifier = Modifier.size(18.dp)
+                )
+                Text(
+                    text = "Voice search",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(start = 7.dp)
                 )
             }
         }
