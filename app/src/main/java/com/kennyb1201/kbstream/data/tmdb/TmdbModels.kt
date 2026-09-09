@@ -541,19 +541,21 @@ private const val MOVIE_DIGITAL_FRESH_WINDOW_DAYS =
  *
  *  - digital/home release (type 4/6) today -> On Digital Today
  *  - digital/home release within the last ~3 weeks -> On Digital
- *  - theatrical release (type 2/3) within the last ~45 days -> In Theaters
- *  - a digital or TV release (type 4/6) that has already happened -> Streaming
+ *  - an older digital/home release -> Streaming
  *  - a physical release (type 5) that has already happened, with no
  *    digital release at all -> On Physical
+ *  - theatrical release (type 2/3) within the last ~45 days -> In Theaters
  *  - an upcoming theatrical date -> Coming Soon
  *  - otherwise plain Released (or the lifecycle status when it is not
  *    released yet: In Production / Post Production / Planned / Canceled /
  *    Rumored)
  *
- * Priority matters: a PVOD title (Moana live-action style) has BOTH a
- * recent theatrical date and a digital date landing while the theatrical
- * window is still nominally open -- the digital date is what other apps
- * show, so it wins over "In Theaters".
+ * Priority rule: any past home availability (digital or physical) outranks
+ * theatrical recency -- the tag answers "where can I watch this now", so a
+ * title on VOD or disc is never "In Theaters" even when its theatrical
+ * date still sits inside the window. That covers PVOD titles (Moana live-
+ * action style: digital date lands mid-theatrical-run) and titles that
+ * went theatrical-straight-to-disc with no digital date listed at all.
  */
 fun TmdbDetail.movieStatusTag(): String? {
 
@@ -601,12 +603,11 @@ fun TmdbDetail.movieStatusTag(): String? {
     val today =
         LocalDate.now()
 
-    // Digital PVOD/VOOD beats the theatrical tag: when a title that is
-    // still "in theaters" releases on digital platforms, that is what other
-    // apps surface ("On Digital Today" / "On Digital"), and it is the
-    // accurate watchability signal. "...Today" is strictly the day the
-    // digital date lands; afterwards it decays through the fresh window to
-    // plain "Streaming".
+    // Home availability beats the theatrical tag: the tag answers "where
+    // can I watch this now", so a title with any home release is never
+    // "In Theaters" regardless of its theatrical date. "...Today" is
+    // strictly the day the digital date lands; afterwards it decays
+    // through the fresh window to plain "Streaming".
     if (homeReleaseDates.any { it == today }) {
         return "On Digital Today"
     }
@@ -618,6 +619,19 @@ fun TmdbDetail.movieStatusTag(): String? {
         return "On Digital"
     }
 
+    if (homeReleaseDates.any { date -> !date.isAfter(today) }) {
+        return "Streaming"
+    }
+
+    // Titles TMDB lists no digital (type 4/6) date for may still be on
+    // disc (type 5 = Physical) -- including ones that went theatrical-
+    // straight-to-disc while the theatrical window was nominally open.
+    // Only reached when no digital release exists at all.
+    if (physicalDates.any { date -> !date.isAfter(today) }) {
+        return "On Physical"
+    }
+
+    // No home release listed anywhere: fall back to theatrical recency.
     if (
         theatricalDates.any { date ->
             !date.isAfter(today) &&
@@ -625,18 +639,6 @@ fun TmdbDetail.movieStatusTag(): String? {
         }
     ) {
         return "In Theaters"
-    }
-
-    if (homeReleaseDates.any { date -> !date.isAfter(today) }) {
-        return "Streaming"
-    }
-
-    // Older titles TMDB lists no digital (type 4/6) date for may still be
-    // available on disc (type 5 = Physical). Only reached when no digital
-    // release exists -- when both exist the digital tag is the more useful
-    // signal for a streaming app.
-    if (physicalDates.any { date -> !date.isAfter(today) }) {
-        return "On Physical"
     }
 
     if (theatricalDates.any { it.isAfter(today) }) {
