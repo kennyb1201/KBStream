@@ -17,6 +17,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbCollectionDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbPersonDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tmdb.TmdbSeasonSummary
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.async
@@ -59,6 +60,15 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
     val meta: StateFlow<Meta?> = _meta.asStateFlow()
 
     private val _tmdbDetail = MutableStateFlow<TmdbDetail?>(null)
+
+    /**
+     * True when [_tmdbDetail] is a synthetic stand-in built from the addon's
+     * Meta.videos list (TVDB/anime titles with no TMDB match) rather than a
+     * real TMDB record. Episodes then come from the addon data instead of
+     * TMDB season endpoints.
+     */
+    private val _isSyntheticDetail = MutableStateFlow(false)
+    val isSyntheticDetail: StateFlow<Boolean> = _isSyntheticDetail
     val tmdbDetail: StateFlow<TmdbDetail?> = _tmdbDetail.asStateFlow()
 
     private val _isLoading = MutableStateFlow(true)
@@ -233,6 +243,7 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
         imdbId = id
         _meta.value = initialMeta
         _tmdbDetail.value = null
+        _isSyntheticDetail.value = false
         _episodes.value = emptyList()
         _episodeError.value = null
         _episodesLoading.value = false
@@ -466,7 +477,48 @@ for (metaAddon in metaAddons) {
         }
     }
 
+    // TVDB / anime fallback: when TMDB has no record for this id (find
+    // returned nothing) but the addon meta carries the Stremio-standard
+    // Meta.videos episode list, synthesize a minimal TmdbDetail stand-in
+    // from it. The existing season/episode pipeline (autoLoadRelevantSeason,
+    // season picker, episode browser, watch markers) then works unchanged
+    // for titles TMDB does not know; loadEpisodesForSeason checks the
+    // synthetic flag and serves addon videos instead of calling TMDB.
+    if (tmdbDetailResult.getOrNull() == null && normalizedType == "series") {
+        val addonVideos = _meta.value?.videos.orEmpty()
+            .filter { it.season != null && it.episode != null }
+        if (addonVideos.isNotEmpty()) {
+            val seasons = addonVideos
+                .mapNotNull { it.season }
+                .distinct()
+                .sorted()
+            _tmdbDetail.value = TmdbDetail(
+                id = -1,
+                name = _meta.value?.name,
+                overview = _meta.value?.description,
+                seasons = seasons.map { seasonNum ->
+                    TmdbSeasonSummary(
+                        seasonNumber = seasonNum,
+                        name = "Season $seasonNum",
+                        episodeCount = addonVideos.count { it.season == seasonNum }
+                    )
+                }
+            )
+            _isSyntheticDetail.value = true
+            Log.e(
+                "KBStream",
+                "detail meta: synthesized seasons from addon videos " +
+                    "id=$id seasons=${seasons.size}"
+            )
+        }
+    }
+
                 tmdbDetailResult.onSuccess { detail ->
+                    if (_isSyntheticDetail.value) {
+                        // A synthetic addon-videos detail is already in place
+                        // (TMDB had no match); never clobber it with a null.
+                        return@onSuccess
+                    }
                     _tmdbDetail.value = detail
                     Log.e(
                         "KBStream",
@@ -488,7 +540,7 @@ for (metaAddon in metaAddons) {
                 // 5. Trigger season selection strictly after history states are fully loaded
                 if (normalizedType == "series") {
                     autoLoadRelevantSeason(
-                        detail = tmdbDetailResult.getOrNull(),
+                        detail = tmdbDetailResult.getOrNull() ?: _tmdbDetail.value,
                         localCompletedEntries = localCompletedEntries,
                         initialSeason = initialSeason
                     )
@@ -680,6 +732,60 @@ for (metaAddon in metaAddons) {
     }
 
     fun loadEpisodesForSeason(season: Int) {
+        // Synthetic (addon-videos) detail: build the episode list from the
+        // Stremio Meta.videos entries instead of a TMDB season endpoint so
+        // TVDB/anime titles without a TMDB match still get a full browser.
+        // streamId uses the same "<parentId>:<s>:<e>" shape TMDB episodes
+        // use, so stream addons and watch-history keys stay compatible.
+        if (_isSyntheticDetail.value) {
+            latestEpisodeSeasonRequest = season
+            _episodes.value = emptyList()
+            _episodeError.value = null
+
+            viewModelScope.launch {
+                _episodesLoading.value = true
+                try {
+                    val videos = _meta.value?.videos.orEmpty()
+                        .filter { it.season == season && it.episode != null }
+                        .sortedBy { it.episode ?: 0 }
+                    val parentId = imdbId
+                    _episodes.value = videos.map { v ->
+                        ResolvedEpisode(
+                            streamId = "$parentId:${season}:${v.episode}",
+                            episodeNumber = v.episode!!,
+                            name = v.title,
+                            overview = v.overview ?: v.description,
+                            thumbnail = v.thumbnail,
+                            runtimeMinutes = null,
+                            airDate = v.released,
+                            voteAverage = null
+                        )
+                    }
+                    _loadedSeason.value = season
+                    val targetEp = _episodes.value.firstOrNull { ep ->
+                        val isWatched = computeEpisodeWatched(
+                            parentId = imdbId,
+                            season = season,
+                            episode = ep.episodeNumber,
+                            episodeStreamId = ep.streamId,
+                            completedIds = _completedEpisodeIds.value,
+                            watchedKeys = _watchedEpisodeKeys.value
+                        )
+                        !isWatched
+                    } ?: _episodes.value.firstOrNull()
+                    _targetEpisode.value = targetEp
+                    _playButtonText.value = targetEp?.let {
+                        "Play S${season}E${it.episodeNumber}"
+                    } ?: "Play"
+                } finally {
+                    if (latestEpisodeSeasonRequest == season) {
+                        _episodesLoading.value = false
+                    }
+                }
+            }
+            return
+        }
+
         val tvId = _tmdbDetail.value?.id
         if (tvId == null) {
             Log.e("KBStream", "episodes skipped: tmdbDetail id is null for imdbId=$imdbId season=$season")
@@ -858,8 +964,10 @@ for (metaAddon in metaAddons) {
                 ?.let {
                     TmdbRepository.POSTER_BASE + it
                 }
+            // Synthetic addon-videos detail carries a -1 sentinel id; it is
+            // not a real TMDB id and must never reach Simkl.
             val showTmdbId =
-                _tmdbDetail.value?.id
+                _tmdbDetail.value?.id?.takeIf { it > 0 }
 
             val now =
                 System.currentTimeMillis()
@@ -978,8 +1086,10 @@ for (metaAddon in metaAddons) {
                 } ?: _tmdbDetail.value?.name
                 ?: _tmdbDetail.value?.title
                 ?: ""
+            // Synthetic addon-videos detail carries a -1 sentinel id; it is
+            // not a real TMDB id and must never reach Simkl.
             val showTmdbId =
-                _tmdbDetail.value?.id
+                _tmdbDetail.value?.id?.takeIf { it > 0 }
 
             // 1. Local: drop every completed row for this season.
             runCatching {
@@ -1127,8 +1237,10 @@ for (metaAddon in metaAddons) {
                 } ?: _tmdbDetail.value?.name
                 ?: _tmdbDetail.value?.title
                 ?: ""
+            // Synthetic addon-videos detail carries a -1 sentinel id; it is
+            // not a real TMDB id and must never reach Simkl.
             val showTmdbId =
-                _tmdbDetail.value?.id
+                _tmdbDetail.value?.id?.takeIf { it > 0 }
 
             // 1. Local: drop the completed row(s) for each targeted episode.
             validEpisodes.forEach { episode ->
