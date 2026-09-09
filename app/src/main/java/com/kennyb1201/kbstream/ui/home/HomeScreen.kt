@@ -931,29 +931,34 @@ private fun HomeHero(
             }
         }
 
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        colorStops = arrayOf(
-                            0f to Color.Transparent,
-                            .45f to Color.Transparent,
-                            .62f to Color.Black.copy(alpha = .04f),
-                            .72f to Color.Black.copy(alpha = .12f),
-                            .82f to Color.Black.copy(alpha = .26f),
-                            .90f to Color.Black.copy(alpha = .45f),
-                            // Ramps the rest of the way to fully opaque
-                            // right at the bottom edge so it matches the
-                            // solid black behind the rails below exactly --
-                            // everything above stays light so most of the
-                            // hero isn't darkened just to blend this seam.
-                            .96f to Color.Black.copy(alpha = .78f),
-                            1f to Color.Black.copy(alpha = 1.00f)
+        // Bottom seam gradient: blends the backdrop into the rails below.
+        // Skipped while an inline trailer is playing — otherwise its fully
+        // opaque bottom edge paints a dark band across the video.
+        if (resolvedTrailerSource == null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            colorStops = arrayOf(
+                                0f to Color.Transparent,
+                                .45f to Color.Transparent,
+                                .62f to Color.Black.copy(alpha = .04f),
+                                .72f to Color.Black.copy(alpha = .12f),
+                                .82f to Color.Black.copy(alpha = .26f),
+                                .90f to Color.Black.copy(alpha = .45f),
+                                // Ramps the rest of the way to fully opaque
+                                // right at the bottom edge so it matches the
+                                // solid black behind the rails below exactly --
+                                // everything above stays light so most of the
+                                // hero isn't darkened just to blend this seam.
+                                .96f to Color.Black.copy(alpha = .78f),
+                                1f to Color.Black.copy(alpha = 1.00f)
+                            )
                         )
                     )
-                )
-        )
+            )
+        }
 
         Column(
             modifier = Modifier

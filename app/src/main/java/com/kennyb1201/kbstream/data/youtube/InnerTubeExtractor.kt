@@ -661,7 +661,9 @@ object InnerTubeExtractor {
     private val probeClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(2, TimeUnit.SECONDS)
-            .readTimeout(2, TimeUnit.SECONDS)
+            // The reachability probe pulls a full 1 MB range (playback-sized),
+            // not just a byte — give the read enough room on slow links.
+            .readTimeout(5, TimeUnit.SECONDS)
             .followRedirects(true)
             .followSslRedirects(true)
             .build()
@@ -669,9 +671,11 @@ object InnerTubeExtractor {
 
     private fun isUrlReachable(url: String, userAgent: String? = null): Boolean =
         runCatching {
-            // Probe the exact URL unchanged, requesting only the first byte via
-            // a Range header so the signature stays valid for the actual
-            // playback request. googlevideo binds signed URLs to the client
+            // Probe the exact URL unchanged with a playback-sized range.
+            // A 1-byte probe (bytes=0-0) passes on URLs googlevideo then 403s
+            // for real ranges, so the probe must request a full 1 MB chunk —
+            // exactly what playback requests — to prove the URL actually
+            // serves data. googlevideo binds signed URLs to the client
             // User-Agent that requested them, so the probe must carry the SAME
             // client UA the URL was signed for - probing an android-signed URL
             // with the android_vr UA (or vice versa) gets a false 403 and a
@@ -679,7 +683,7 @@ object InnerTubeExtractor {
             val request = Request.Builder()
                 .url(url)
                 .get()
-                .header("Range", "bytes=0-0")
+                .header("Range", "bytes=0-1048575")
                 .header("User-Agent", userAgent ?: CLIENTS[0].userAgent)
                 .build()
             probeClient.newCall(request).execute().use { response ->
