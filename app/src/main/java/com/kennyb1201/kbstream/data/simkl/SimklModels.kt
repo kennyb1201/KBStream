@@ -25,6 +25,15 @@ data class SimklActivitiesResponse(
     @Json(name = "all") val all: String?
 )
 
+/**
+ * Library totals for the connect screen: distinct shows and movies with
+ * any watch history on the connected Simkl account.
+ */
+data class SimklWatchedCounts(
+    val series: Int,
+    val movies: Int
+)
+
 @JsonClass(generateAdapter = true)
 data class SimklPlaybackIds(
     @Json(name = "simkl") val simkl: Int?,

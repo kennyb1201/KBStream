@@ -60,6 +60,7 @@ import com.kennyb1201.kbstream.ui.iptv.IptvViewModel
 import com.kennyb1201.kbstream.ui.onboarding.OnboardingPrefs
 import com.kennyb1201.kbstream.ui.onboarding.OnboardingScreen
 import com.kennyb1201.kbstream.ui.player.NativePlayerActivity
+import com.kennyb1201.kbstream.ui.player.NextEpisodeResult
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.player.PlayerCastMember
 import android.content.Intent
@@ -677,6 +678,40 @@ fun AppRoot() {
             )
         }
 
+        // Safety net: if the app was killed while a next-episode handoff was
+        // pending (process death between the player finishing and this
+        // activity's result callback ever running), resurface the next episode
+        // instead of silently landing on Home. The pending Detail.target routes
+        // through the same one-shot Continue Watching autoplay path. Skipped
+        // when a launcher deep link is present - that launch intent wins.
+        if (launcherType.isNullOrBlank() && launcherId.isNullOrBlank()) {
+            NextEpisodeResult.restoreIfDropped(context)?.let { pending ->
+                // PendingNext carries the Stremio stream id ("tt123:S:E"), so
+                // the show id is its double-colon prefix; next episodes only
+                // exist for series.
+                val showId = pending.streamId
+                    .substringBeforeLast(':')
+                    .substringBeforeLast(':')
+                screen = Screen.Detail(
+                    type = "series",
+                    id = showId,
+                    pendingTarget = StreamsTarget(
+                        contentType = "series",
+                        streamId = pending.streamId,
+                        title = pending.title,
+                        // Cosmetic placeholder; DetailScreen loads the real
+                        // display name from the meta source.
+                        displayName = showId,
+                        season = pending.season,
+                        episode = pending.episode,
+                        resumePositionMs = 0L
+                    ),
+                    returnTo = Screen.Home
+                )
+                return@LaunchedEffect
+            }
+        }
+
         val dao = WatchHistoryDatabase.getInstance(context).watchHistoryDao()
         val entries = runCatching { dao.getAll() }.getOrDefault(emptyList())
         TvLauncherPublisher.sync(context, entries)
@@ -1237,8 +1272,16 @@ fun AppRoot() {
             val playerResultLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
                 contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
             ) { result ->
-                // Check shared state first (more reliable than activity results)
-                val next = com.kennyb1201.kbstream.ui.player.NextEpisodeResult.consume()
+                // Check shared state first (more reliable than activity results).
+                // consumePersisted falls back to the SharedPreferences copy the
+                // player wrote before finishing, so the handoff also survives the
+                // OS recreating this activity (and even process death) while the
+                // player was up. Previously a recreate lost the in-memory handoff,
+                // the callback fell through to the normal-exit branch, and the
+                // user was dumped on the restored screen - which felt like
+                // "Next Episode sends me Home". The stale Screen.Player in `screen`
+                // here is scratch data the new navigation overwrites wholesale.
+                val next = NextEpisodeResult.consumePersisted(context)
                 if (next != null) {
                     val nextTarget = StreamsTarget(
                         contentType = current.parentType,

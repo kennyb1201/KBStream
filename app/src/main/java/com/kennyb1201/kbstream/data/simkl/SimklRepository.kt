@@ -1324,6 +1324,42 @@ class SimklRepository(
         )
     }
 
+    /**
+     * Library totals for the connect screen: how many distinct shows and
+     * movies the Simkl account has any watch history for. Shows come from
+     * the cached all-shows library (the same source Continue Watching
+     * resolves against) and movies from the all-items movies endpoint.
+     * Returns null on failure so the UI can simply hide the counters.
+     */
+    suspend fun getWatchedCounts(): SimklWatchedCounts? {
+        val accessToken =
+            runCatching { requireAccessToken() }.getOrNull()
+                ?: return null
+
+        val shows =
+            runCatching {
+                getAllShowItemsCached(
+                    accessToken = accessToken,
+                    forceRefresh = false
+                )
+            }.getOrNull()?.shows?.size
+
+        val movies =
+            runCatching {
+                api.getAllMovieItems(
+                    authorization = bearer(accessToken),
+                    dateFrom = null,
+                    extended = "min"
+                ).body()?.movies?.size
+            }.getOrNull()
+
+        if (shows == null && movies == null) return null
+        return SimklWatchedCounts(
+            series = shows ?: 0,
+            movies = movies ?: 0
+        )
+    }
+
     suspend fun getWatchedBulkImport(
         movieImdbIds: List<String> =
             emptyList(),

@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
+import com.kennyb1201.kbstream.data.simkl.SimklWatchedCounts
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -96,6 +97,10 @@ fun SimklConnectScreen(
                         title = "Account connected",
                         message = "Your Simkl account is connected and ready."
                     )
+
+                    uiState.watchedCounts?.let { counts ->
+                        SimklWatchedCountsRow(counts = counts)
+                    }
 
                     if (uiState.isLoadingWatching) {
                         SimklStatusLine("Fetching continue watching…")
@@ -207,6 +212,55 @@ fun SimklConnectScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
         }
+    }
+}
+
+@Composable
+private fun SimklWatchedCountsRow(counts: SimklWatchedCounts) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        SimklWatchedCountTile(
+            label = "MOVIES WATCHED",
+            value = counts.movies,
+            modifier = Modifier.weight(1f)
+        )
+        SimklWatchedCountTile(
+            label = "SERIES WATCHED",
+            value = counts.series,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+@Composable
+private fun SimklWatchedCountTile(
+    label: String,
+    value: Int,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = modifier
+            .background(KBSurfaceRaised, RoundedCornerShape(14.dp))
+            .padding(horizontal = 14.dp, vertical = 14.dp)
+    ) {
+        Text(
+            text = value.toString(),
+            color = KBAccent,
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+        Text(
+            text = label,
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 4.dp)
+        )
     }
 }
 

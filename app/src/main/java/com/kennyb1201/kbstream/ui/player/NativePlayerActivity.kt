@@ -2861,12 +2861,30 @@ class NativePlayerActivity : ComponentActivity() {
             append("S${targetSeason}E$targetEpisode")
             if (!episodeName.isNullOrBlank()) append(" • $episodeName")
         }
-        NextEpisodeResult.pendingNextEpisode = NextEpisodeResult.PendingNext(
+        val pendingNext = NextEpisodeResult.PendingNext(
             season = targetSeason,
             episode = targetEpisode,
             title = label,
             streamId = nextStreamId(targetSeason, targetEpisode),
             runtimeMinutes = runtimeMinutes
+        )
+        // Persist FIRST: on Fire TV the OS frequently kills the backgrounded
+        // MainActivity during 4K playback, so the result callback later runs
+        // on a RECREATED activity that never received the result intent. The
+        // persisted copy is what lets that callback still route to the next
+        // episode instead of falling through to the Home branch.
+        NextEpisodeResult.persist(this, pendingNext)
+        // Classic result extras too: the primary handoff path when
+        // MainActivity survives and reads them directly.
+        setResult(
+            RESULT_OK,
+            Intent().apply {
+                putExtra("player_result_action", "next_episode")
+                putExtra("next_episode", pendingNext.episode)
+                putExtra("next_season", pendingNext.season)
+                putExtra("next_title", pendingNext.title)
+                putExtra("next_stream_id", pendingNext.streamId)
+            }
         )
         // Release the media session synchronously so it is unregistered from the
         // process-wide session map before the next player activity builds its own

@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.simkl
 
 import com.kennyb1201.kbstream.data.simkl.SimklContinueWatchingItem
+import com.kennyb1201.kbstream.data.simkl.SimklWatchedCounts
 
 data class SimklUiState(
     val isLoading: Boolean = false,
@@ -13,5 +14,6 @@ data class SimklUiState(
     val statusMessage: String? = null,
     val errorMessage: String? = null,
     val isLoadingWatching: Boolean = false,
-    val continueWatching: List<SimklContinueWatchingItem> = emptyList()
+    val continueWatching: List<SimklContinueWatchingItem> = emptyList(),
+    val watchedCounts: SimklWatchedCounts? = null
 )

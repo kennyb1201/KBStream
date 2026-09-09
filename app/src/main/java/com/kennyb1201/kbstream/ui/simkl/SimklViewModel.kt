@@ -36,6 +36,20 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
     init {
         if (repository.hasToken()) {
             loadContinueWatching()
+            loadWatchedCounts()
+        }
+    }
+
+    /**
+     * Library totals (movies / series watched) for the connect screen.
+     * Best-effort: on failure the counters simply stay hidden.
+     */
+    private fun loadWatchedCounts() {
+        viewModelScope.launch {
+            val counts = runCatching { repository.getWatchedCounts() }.getOrNull()
+            counts?.let {
+                _uiState.value = _uiState.value.copy(watchedCounts = it)
+            }
         }
     }
 
@@ -96,6 +110,7 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
                                 errorMessage = null
                             )
                             loadContinueWatching()
+                            loadWatchedCounts()
                             pollJob?.cancel()
                             return@launch
                         } else {
@@ -177,6 +192,7 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
             runCatching { repository.getContinueWatching(forceRefresh = true) }
                 .onSuccess { items ->
                     runCatching { repository.markWatchedActivitySynced() }
+                    loadWatchedCounts()
 
                     _uiState.value = _uiState.value.copy(
                         isConnected = true,
