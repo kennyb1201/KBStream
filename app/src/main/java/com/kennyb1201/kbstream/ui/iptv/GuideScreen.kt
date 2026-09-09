@@ -164,6 +164,12 @@ fun GuideScreen(
     var pendingFocusChannel by remember { mutableStateOf(!savedChannelKey.isNullOrBlank()) }
     var membershipBump by remember { mutableStateOf(0) }
     var digitEntry by remember { mutableStateOf("") }
+    // Set when Up is pressed from the channel list's top row. The
+    // Up-handler can't focus the group chip directly because the chip may
+    // not be composed yet (outside the LazyRow viewport -> no requester);
+    // the pendingGroupChipFocus effect consumes this after the chips row
+    // has snapped to the selected group and the chip exists.
+    var pendingGroupChipFocus by remember { mutableStateOf(false) }
     val channelRowFocusRequesters = remember { mutableMapOf<String, FocusRequester>() }
 
     fun channelKey(item: IptvChannelWithEpg): String =
@@ -288,24 +294,53 @@ LaunchedEffect(groupedChannels) {
     }
 }
 
-// Keep the focused/selected group chip visible: navigating groups from the
-// channel list (left/right) selects a chip that may sit outside the LazyRow's
-// viewport on long group lists. Only scroll when the chip is actually
-// off-screen -- re-aligning on every selection change (e.g. focus simply
-// moving along the chips row) would yank the row even when nothing is hidden.
+// Keep the selected group chip in view on every group change (left/right
+// from the channel list, focus walks along the chips row, restores). When
+// the chip is already fully visible the row is left alone -- so walking
+// the chips themselves slides minimally -- but an off-screen chip snaps
+// in instantly. scrollToItem (not animateScrollToItem): an animated
+// scroll is slow enough that the whole rail visibly flashes past
+// intermediate chips on every group change, and during the animation the
+// target chip is not yet composed, which the Up-from-list focus flow
+// below depends on (an uncomposed chip has no FocusRequester and default
+// spatial focus then lands on whichever chip IS visible, silently
+// switching the group).
 LaunchedEffect(selectedGroup, groups) {
     val chipIndex = groups.indexOf(selectedGroup)
     if (chipIndex < 0) return@LaunchedEffect
 
     val visible = groupRowState.layoutInfo.visibleItemsInfo
-    val isOnScreen = visible.any { it.index == chipIndex }
-    if (!isOnScreen && visible.isNotEmpty()) {
-        val lastVisible = visible.last().index
-        // Scroll toward the chip from whichever side it sits, landing it one
-        // item inside the edge so the neighbor context stays visible.
-        val anchor = if (chipIndex > lastVisible) chipIndex - 1 else chipIndex
-        groupRowState.animateScrollToItem(anchor.coerceIn(0, groups.lastIndex))
+    val chipVisible = visible.any { it.index == chipIndex }
+    if (!chipVisible && visible.isNotEmpty()) {
+        groupRowState.scrollToItem(chipIndex.coerceIn(0, groups.lastIndex))
     }
+}
+
+// Up from the channel list's top row: after the snap effect above has
+// scrolled the selected group's chip into the viewport (making its
+// FocusRequester exist), grab focus on it. Retries across a few frames
+// because scrollToItem + composition of the newly visible chip complete
+// asynchronously. Consumes the flag whether or not it succeeds so a
+// missing chip (group removed mid-flight) can't wedge the row.
+LaunchedEffect(pendingGroupChipFocus) {
+    if (!pendingGroupChipFocus) return@LaunchedEffect
+    val chipIndex = groups.indexOf(selectedGroup)
+    if (chipIndex < 0) {
+        pendingGroupChipFocus = false
+        return@LaunchedEffect
+    }
+
+    var focused = false
+    var attempts = 0
+    while (!focused && attempts < 8) {
+        awaitFrame()
+        val requester = groupChipFocusRequesters[selectedGroup]
+        if (requester != null) {
+            focused = runCatching { requester.requestFocus() }.isSuccess
+        }
+        attempts++
+    }
+    pendingGroupChipFocus = false
 }
 
 LaunchedEffect(channelListState, groupedChannelIds) {
@@ -655,17 +690,16 @@ Spacer(modifier = Modifier.height(14.dp))
         Key.DirectionUp -> {
             // Only override Up on the list's top row -- deeper rows
             // should still move focus to the row above them normally.
-            // The platform's default spatial search has no notion of
-            // "your" group chip, so it was landing wherever was nearest
-            // on screen; anchor it to the chip for selectedGroup instead.
+            // The chip for selectedGroup may not be composed right now (it
+            // sits outside the LazyRow viewport), so its FocusRequester
+            // would be null and default spatial focus would land on
+            // whichever chip IS visible -- silently switching the group.
+            // Instead, queue a pending focus request: the snap effect
+            // below scrolls the chip into view first, and the effect key
+            // fires again once it exists to grab focus for real.
             if (index == 0) {
-                val target = groupChipFocusRequesters[selectedGroup]
-                if (target != null) {
-                    runCatching { target.requestFocus() }
-                    true
-                } else {
-                    false
-                }
+                pendingGroupChipFocus = true
+                true
             } else {
                 false
             }

@@ -33,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -121,15 +122,24 @@ fun SearchScreen(
     val totalCount = results.size + actorResults.size + studioResults.size + collectionResults.size +
         addonResultGroups.sumOf { it.results.size }
 
+    // Full-bleed screen: edge spacing lives in the LazyColumn's
+    // contentPadding, not on the container, so the poster rails can draw
+    // their focused borders + glow all the way to the screen edge without
+    // being clipped by a fixed-inset parent. Rail-level contentPadding
+    // (SEARCH_RAIL_EDGE_PADDING) keeps the same visual margin as before.
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(KBVoid)
-            .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 24.dp),
+            contentPadding = PaddingValues(
+                start = SEARCH_RAIL_EDGE_PADDING,
+                end = SEARCH_RAIL_EDGE_PADDING,
+                top = 16.dp,
+                bottom = 24.dp
+            ),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item(key = "hero") {
@@ -151,7 +161,12 @@ fun SearchScreen(
                     Column {
                         SectionHeader(title = "Recent searches")
                         LazyRow(
-                            contentPadding = PaddingValues(top = 2.dp, bottom = 4.dp),
+                            contentPadding = PaddingValues(
+                                top = 2.dp,
+                                bottom = 4.dp,
+                                start = SEARCH_RAIL_EDGE_PADDING,
+                                end = SEARCH_RAIL_EDGE_PADDING
+                            ),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             items(
@@ -182,7 +197,15 @@ fun SearchScreen(
                         SectionHeader(title = "Trending now")
                         LazyRow(
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            contentPadding = PaddingValues(vertical = 2.dp)
+                            contentPadding = PaddingValues(
+                                vertical = 2.dp,
+                                start = SEARCH_RAIL_EDGE_PADDING,
+                                end = SEARCH_RAIL_EDGE_PADDING
+                            ),
+                            // Posters draw their focused border + glow outside
+                            // their bounds; without this the first/last tile
+                            // clips both when scrolled to the rail's ends.
+                            modifier = Modifier.clipToBounds(false)
                         ) {
                             items(
                                 items = trendingResults,
@@ -256,7 +279,12 @@ fun SearchScreen(
                         SectionHeader(title = "Titles")
                         LazyRow(
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            contentPadding = PaddingValues(vertical = 2.dp)
+                            contentPadding = PaddingValues(
+                                vertical = 2.dp,
+                                start = SEARCH_RAIL_EDGE_PADDING,
+                                end = SEARCH_RAIL_EDGE_PADDING
+                            ),
+                            modifier = Modifier.clipToBounds(false)
                         ) {
                             items(
                                 items = results,
@@ -628,6 +656,12 @@ private fun SectionHeader(title: String) {
     )
 }
 
+// Edge inset shared by the search screen's column and every rail's
+// contentPadding. Living in contentPadding (rather than a parent modifier
+// padding) keeps the ends of each rail inside the LazyRow's clip bounds so
+// focused poster borders + glow never get cut off at the first/last item.
+private val SEARCH_RAIL_EDGE_PADDING = 20.dp
+
 @Composable
 private fun SearchRail(
     title: String,
@@ -637,7 +671,13 @@ private fun SearchRail(
         SectionHeader(title = title)
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
-            contentPadding = PaddingValues(vertical = 2.dp)
+            contentPadding = PaddingValues(
+                vertical = 2.dp,
+                start = SEARCH_RAIL_EDGE_PADDING,
+                end = SEARCH_RAIL_EDGE_PADDING
+            ),
+            // Same anti-clip treatment as the poster rails above.
+            modifier = Modifier.clipToBounds(false)
         ) {
             content()
         }
