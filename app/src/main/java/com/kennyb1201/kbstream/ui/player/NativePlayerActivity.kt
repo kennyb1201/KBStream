@@ -1183,6 +1183,12 @@ class NativePlayerActivity : ComponentActivity() {
                     if (errorContainer.visibility == View.VISIBLE) {
                         focusErrorButtons()
                         true
+                    } else if (btnSkipIntro.visibility == View.VISIBLE && !controlsVisible) {
+                        // A skip prompt (intro/recap/outro) is up and the
+                        // overlay is hidden: OK activates the skip directly
+                        // instead of popping the controls overlay over it.
+                        btnSkipIntro.performClick()
+                        true
                     } else {
                         if (!controlsVisible) showControls() else hideControls()
                         true
