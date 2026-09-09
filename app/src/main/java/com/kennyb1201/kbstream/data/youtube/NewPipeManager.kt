@@ -453,9 +453,7 @@ try {
         )
     }
 
-    private companion object {
-        const val PIPED_TOTAL_TIMEOUT_MS = 25_000L
-    }
+    private const val PIPED_TOTAL_TIMEOUT_MS = 25_000L
 
     private data class PipedStreamCandidate(
         val url: String,
