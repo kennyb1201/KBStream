@@ -13,7 +13,13 @@ import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
@@ -29,6 +35,7 @@ data class TagRailPage(
     val items: List<StudioItem>,
     val hasMore: Boolean
 )
+
 
 data class ResolvedEpisode(
     val streamId: String,
@@ -54,6 +61,11 @@ class TmdbRepository(context: Context) {
         .create(TmdbApiService::class.java)
 
     private val apiKey = BuildConfig.TMDB_API_KEY
+    private val appContext = context.applicationContext
+
+    // Caps parallel TMDB availability lookups for the digital-release filter.
+    private val availabilitySemaphore = Semaphore(permits = 6)
+
     private val minVoteCount = 50
     private val today: String
         get() = LocalDate.now().toString()
@@ -327,8 +339,15 @@ class TmdbRepository(context: Context) {
      */
     suspend fun searchMovies(query: String): List<TmdbSearchTitleResult> {
         if (apiKey.isBlank()) return emptyList()
-        return runCatching { api.searchMovie(query, apiKey).results }
-            .getOrDefault(emptyList())
+        val results =
+            runCatching { api.searchMovie(query, apiKey).results }
+                .getOrDefault(emptyList())
+
+        if (!isDigitalFilterEnabled()) return results
+
+        return filterByHomeAvailability(results) {
+            it.id to "movie"
+        }
     }
 
     suspend fun searchTv(query: String): List<TmdbSearchTitleResult> {
@@ -359,8 +378,20 @@ class TmdbRepository(context: Context) {
             .getOrDefault(emptyList())
 
         val merged = movies.map { "movie" to it } + tv.map { "series" to it }
+
+        val filtered =
+            if (isDigitalFilterEnabled()) {
+                filterByHomeAvailability(merged) {
+                    it.second.id to it.first
+                }
+            } else {
+                merged
+            }
+
+        // Cache the unfiltered list: trending is shared across screens, and
+        // each consumer re-checks the toggle cheaply.
         trendingCache = now to merged
-        return merged
+        return filtered
     }
 
     suspend fun getMovieGenres(): List<TmdbGenre> {
@@ -416,7 +447,21 @@ class TmdbRepository(context: Context) {
 
     suspend fun getCollection(collectionId: Int): TmdbCollectionDetail? {
         if (apiKey.isBlank()) return null
-        return runCatching { api.getCollection(collectionId, apiKey) }.getOrNull()
+
+        val detail =
+            runCatching { api.getCollection(collectionId, apiKey) }.getOrNull()
+                ?: return null
+
+        if (!isDigitalFilterEnabled()) {
+            return detail
+        }
+
+        val filteredParts =
+            filterByHomeAvailability(detail.parts) {
+                it.id to "movie"
+            }
+
+        return detail.copy(parts = filteredParts)
     }
 
     suspend fun getSeasonEpisodes(
@@ -639,6 +684,62 @@ class TmdbRepository(context: Context) {
         )
     }
 
+    /**
+     * True when the Home digital-release filter is enabled in Settings.
+     */
+    fun isDigitalFilterEnabled(): Boolean =
+        AppPreferences.getHomeRailHideUpcoming(appContext)
+
+    /**
+     * App-wide availability filter (Home digital-release toggle). Given
+     * items keyed by TMDB id + media type, drops movies the shared TMDB
+     * cache says are not available at home yet (theatrical-only window,
+     * unreleased lifecycle status, or only future dates). Series always
+     * pass, unknown verdicts always pass, and id lookup failures keep
+     * the item — the filter only hides what it can positively tell.
+     * Verdicts reuse fetchEnrichedMetaCached (12h memory / 30d disk),
+     * throttled by a semaphore.
+     */
+    suspend fun <T> filterByHomeAvailability(
+        items: List<T>,
+        key: (T) -> Pair<Int, String>
+    ): List<T> {
+
+        if (items.isEmpty()) return items
+
+        return coroutineScope {
+
+            items.map { item ->
+
+                async {
+
+                    val (tmdbId, mediaType) = key(item)
+
+                    if (!mediaType.equals("movie", ignoreCase = true)) {
+                        return@async item
+                    }
+
+                    val verdict = availabilitySemaphore.withPermit {
+
+                        runCatching {
+
+                            fetchEnrichedMetaCached(
+                                imdbId = "tmdb:$tmdbId",
+                                type = "movie"
+                            )?.isAvailableAtHome()
+
+                        }.getOrNull()
+                    }
+
+                    when (verdict) {
+                        false -> null
+                        else -> item
+                    }
+                }
+            }.awaitAll().filterNotNull()
+        }
+    }
+
     suspend fun getGenreRailPage(genreId: Int, title: String, page: Int): TagRailPage {
         if (apiKey.isBlank()) return TagRailPage(emptyList(), false)
 
@@ -712,8 +813,19 @@ class TmdbRepository(context: Context) {
             else -> emptyList()
         }
 
+        val distinct = results.distinctBy { it.item.id }
+
+        val filtered =
+            if (isDigitalFilterEnabled()) {
+                filterByHomeAvailability(distinct) {
+                    it.item.id to it.mediaType
+                }
+            } else {
+                distinct
+            }
+
         return TagRailPage(
-            items = results.distinctBy { it.item.id },
+            items = filtered,
             hasMore = results.isNotEmpty()
         )
     }
@@ -791,8 +903,19 @@ class TmdbRepository(context: Context) {
             else -> emptyList()
         }
 
+        val distinct = results.distinctBy { it.item.id }
+
+        val filtered =
+            if (isDigitalFilterEnabled()) {
+                filterByHomeAvailability(distinct) {
+                    it.item.id to it.mediaType
+                }
+            } else {
+                distinct
+            }
+
         return TagRailPage(
-            items = results.distinctBy { it.item.id },
+            items = filtered,
             hasMore = results.isNotEmpty()
         )
     }
@@ -837,8 +960,19 @@ class TmdbRepository(context: Context) {
             else -> emptyList()
         }
 
+        val distinct = results.distinctBy { it.item.id }
+
+        val filtered =
+            if (isDigitalFilterEnabled()) {
+                filterByHomeAvailability(distinct) {
+                    it.item.id to it.mediaType
+                }
+            } else {
+                distinct
+            }
+
         return TagRailPage(
-            items = results.distinctBy { it.item.id },
+            items = filtered,
             hasMore = results.isNotEmpty()
         )
     }
@@ -916,8 +1050,19 @@ class TmdbRepository(context: Context) {
             else -> emptyList()
         }
 
+        val distinct = results.distinctBy { it.item.id }
+
+        val filtered =
+            if (isDigitalFilterEnabled()) {
+                filterByHomeAvailability(distinct) {
+                    it.item.id to it.mediaType
+                }
+            } else {
+                distinct
+            }
+
         return TagRailPage(
-            items = results.distinctBy { it.item.id },
+            items = filtered,
             hasMore = results.isNotEmpty()
         )
     }

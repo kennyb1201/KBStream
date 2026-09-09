@@ -3634,7 +3634,8 @@ private suspend fun calculateEpisodesRemaining(
                     mutableListOf<Rail>()
 
                 loadPinnedTopTodayRails(
-                    pinned
+                    pinned,
+                    hideUpcoming
                 )
 
                 val addonsById =
@@ -3876,7 +3877,8 @@ private suspend fun calculateEpisodesRemaining(
     }
 
     private suspend fun loadPinnedTopTodayRails(
-        result: MutableList<Rail>
+        result: MutableList<Rail>,
+        hideUpcoming: Boolean
     ) {
 
         val baseUrl = TOP_TODAY_MANIFEST_URL
@@ -3911,29 +3913,43 @@ private suspend fun calculateEpisodesRemaining(
                         metas.isNotEmpty()
                     ) {
 
-                        result +=
-                            Rail(
+                        // App-wide digital-release filter applies to the
+                        // pinned rails too (same toggle as addon rails).
+                        val filteredMetas =
+                            if (hideUpcoming) {
+                                applyDigitalAvailabilityFilter(metas)
+                            } else {
+                                metas
+                            }
 
-                                addonName =
-                                    TOP_TODAY_ADDON_NAME,
+                        if (
+                            filteredMetas.isNotEmpty()
+                        ) {
 
-                                catalogName =
-                                    formatCatalogName(
-                                        catalogName
-                                    ),
+                            result +=
+                                Rail(
 
-                                type =
-                                    type,
+                                    addonName =
+                                        TOP_TODAY_ADDON_NAME,
 
-                                items =
-                                    metas,
+                                    catalogName =
+                                        formatCatalogName(
+                                            catalogName
+                                        ),
 
-                                catalogId =
-                                    catalogId,
+                                    type =
+                                        type,
 
-                                baseUrl =
-                                    baseUrl
-                            )
+                                    items =
+                                        filteredMetas,
+
+                                    catalogId =
+                                        catalogId,
+
+                                    baseUrl =
+                                        baseUrl
+                                )
+                        }
                     }
 
                 } catch (e: Exception) {

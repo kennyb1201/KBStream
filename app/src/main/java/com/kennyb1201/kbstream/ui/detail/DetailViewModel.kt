@@ -525,7 +525,35 @@ for (metaAddon in metaAddons) {
                         // (TMDB had no match); never clobber it with a null.
                         return@onSuccess
                     }
-                    _tmdbDetail.value = detail
+
+                    // App-wide digital-release filter: trim "More Like This"
+                    // when the Settings toggle is on. Recs inherit this
+                    // screen's media type; movies not yet available at home
+                    // are dropped via the shared availability check.
+                    val shownDetail =
+                        if (
+                            detail != null &&
+                            tmdbRepository.isDigitalFilterEnabled()
+                        ) {
+                            val recs =
+                                detail.recommendations?.results.orEmpty()
+
+                            if (recs.isEmpty()) {
+                                detail
+                            } else {
+                                detail.copy(
+                                    recommendations = detail.recommendations?.copy(
+                                        results = tmdbRepository.filterByHomeAvailability(
+                                            recs
+                                        ) { it.id to normalizedType }
+                                    )
+                                )
+                            }
+                        } else {
+                            detail
+                        }
+
+                    _tmdbDetail.value = shownDetail
                     Log.e(
                         "KBStream",
                         "tmdbDetail populated type=$normalizedType id=${detail?.id} " +
