@@ -3793,8 +3793,11 @@ private fun PosterGridCard(
         onClick = onClick,
         onLongClick = onLongClick,
         modifier = modifier
-            .width(110.dp)
-            .height(160.dp)
+            // Match the regular home-rail poster size (124x180) so the
+            // "More Like This" and collection rows don't look shrunken
+            // next to the rails everywhere else in the app.
+            .width(124.dp)
+            .height(180.dp)
             .padding(end = 10.dp)
     )
 }
