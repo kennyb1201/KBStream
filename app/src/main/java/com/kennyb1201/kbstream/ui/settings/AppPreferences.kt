@@ -42,6 +42,7 @@ object AppPreferences {
     private const val KEY_SHOW_CATALOG_TYPE = "home_rail_show_catalog_type"
     private const val KEY_SHOW_ADDON_NAME = "home_rail_show_addon_name"
     private const val KEY_HIDE_UPCOMING = "home_rail_hide_upcoming"
+    private const val KEY_LANDSCAPE_CARDS = "home_landscape_cards"
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -330,5 +331,13 @@ object AppPreferences {
 
     fun setHomeRailHideUpcoming(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_HIDE_UPCOMING, enabled).apply()
+    }
+
+    // ── Home rails: landscape backdrop cards instead of posters ───────
+    fun getHomeLandscapeCards(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_LANDSCAPE_CARDS, false)
+
+    fun setHomeLandscapeCards(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_LANDSCAPE_CARDS, enabled).apply()
     }
 }

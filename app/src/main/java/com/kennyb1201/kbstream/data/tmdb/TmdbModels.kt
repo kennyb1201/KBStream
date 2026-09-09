@@ -762,6 +762,40 @@ fun TmdbDetail.bestLogoPath(): String? =
         ?.mapNotNull { it.filePath }
         ?.firstOrNull()
 
+/**
+ * Backdrop for rail/landscape cards: the first images.backdrops entry that
+ * differs from the primary backdropPath, falling back to the primary when
+ * the title only has one backdrop. Keeps cards visually distinct from the
+ * Home hero, which always shows the primary backdrop.
+ */
+fun TmdbDetail.cardBackdropPath(): String? {
+
+    val primary = backdropPath?.takeIf { it.isNotBlank() }
+
+    return images?.backdrops
+        ?.asSequence()
+        ?.mapNotNull { it.filePath?.takeIf(String::isNotBlank) }
+        ?.firstOrNull { it != primary }
+        ?: primary
+}
+
+/**
+ * Poster for the Home hero's fallback (titles with no backdrop): the first
+ * images.posters entry that differs from the primary posterPath, falling
+ * back to the primary when only one exists. Prevents the hero from
+ * displaying the exact poster the focused rail card shows.
+ */
+fun TmdbDetail.alternatePosterPath(): String? {
+
+    val primary = posterPath?.takeIf { it.isNotBlank() }
+
+    return images?.posters
+        ?.asSequence()
+        ?.mapNotNull { it.filePath?.takeIf(String::isNotBlank) }
+        ?.firstOrNull { it != primary }
+        ?: primary
+}
+
 fun tmdbImageOriginal(path: String?): String? =
     path?.takeIf { it.isNotBlank() }
         ?.let { "https://image.tmdb.org/t/p/original$it" }

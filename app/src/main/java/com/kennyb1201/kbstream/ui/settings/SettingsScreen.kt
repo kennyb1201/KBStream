@@ -75,6 +75,7 @@ fun SettingsScreen(
     var railShowType by remember { mutableStateOf(AppPreferences.getHomeRailShowCatalogType(context)) }
     var railShowAddon by remember { mutableStateOf(AppPreferences.getHomeRailShowAddonName(context)) }
     var railHideUpcoming by remember { mutableStateOf(AppPreferences.getHomeRailHideUpcoming(context)) }
+    var landscapeCards by remember { mutableStateOf(AppPreferences.getHomeLandscapeCards(context)) }
     var clearingHistory by remember { mutableStateOf(false) }
     var historyClearedAt by remember { mutableStateOf<Long?>(null) }
     var dvCompatMode by remember { mutableIntStateOf(AppPreferences.getDvCompatMode(context)) }
@@ -413,6 +414,18 @@ fun SettingsScreen(
             onToggle = {
                 railHideUpcoming = it
                 AppPreferences.setHomeRailHideUpcoming(context, it)
+            }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        ToggleRow(
+            label = "Landscape Cards on Home Rails",
+            description = "Show 16:9 backdrop cards with a small clearlogo instead of posters. Applies when you return to Home.",
+            checked = landscapeCards,
+            onToggle = {
+                landscapeCards = it
+                AppPreferences.setHomeLandscapeCards(context, it)
             }
         )
 

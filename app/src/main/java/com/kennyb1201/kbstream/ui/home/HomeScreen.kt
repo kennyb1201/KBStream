@@ -90,6 +90,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.tmdb.movieStatusTag
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
+import com.kennyb1201.kbstream.ui.components.LandscapeCard
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
@@ -105,6 +106,8 @@ import kotlinx.coroutines.delay
 
 private val HomePosterWidth = 124.dp
 private val HomePosterHeight = 180.dp
+private val HomeLandscapeWidth = 210.dp
+private val HomeLandscapeHeight = 118.dp
 private val HomeRailGap = 12.dp
 private val ContinueWatchingCardWidth = 260.dp
 private val ContinueWatchingCardImageHeight = 146.dp
@@ -1554,6 +1557,9 @@ fun HomeScreen(
     val showRailAddon by remember {
         mutableStateOf(AppPreferences.getHomeRailShowAddonName(context))
     }
+    val landscapeCards by remember {
+        mutableStateOf(AppPreferences.getHomeLandscapeCards(context))
+    }
     val rails by viewModel.rails.collectAsStateWithLifecycle()
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
     val upNext by viewModel.upNext.collectAsStateWithLifecycle()
@@ -2105,11 +2111,25 @@ fun HomeScreen(
                                             railIndex == 0 &&
                                                 firstRailNeedsUpHook
 
+                                        val cardWidth =
+                                            if (landscapeCards) {
+                                                HomeLandscapeWidth
+                                            } else {
+                                                HomePosterWidth
+                                            }
+
+                                        val cardHeight =
+                                            if (landscapeCards) {
+                                                HomeLandscapeHeight
+                                            } else {
+                                                HomePosterHeight
+                                            }
+
                                         val posterModifier = Modifier
                                             .offset(y = (-3).dp)
                                             .focusRequester(requester)
-                                            .width(HomePosterWidth)
-                                            .height(HomePosterHeight)
+                                            .width(cardWidth)
+                                            .height(cardHeight)
                                             .onFocusChanged { focusState ->
                                                 if (focusState.isFocused) {
                                                     lastFocusedItemKey = "${meta.type}:${meta.id}"
@@ -2136,9 +2156,9 @@ fun HomeScreen(
 
                                         Box(
                                             modifier = Modifier
-                                                .width(HomePosterWidth)
+                                                .width(cardWidth)
                                                 .height(
-                                                    HomePosterHeight +
+                                                    cardHeight +
                                                         PosterFocusHeadroom
                                                 )
                                                 .padding(
@@ -2146,33 +2166,63 @@ fun HomeScreen(
                                                 ),
                                             contentAlignment = Alignment.Center
                                         ) {
-                                            PosterCard(
-                                                posterUrl = meta.poster,
-                                                contentDescription = meta.name,
-                                                isWatched = watched,
-                                                onClick = {
-                                                    selectHero(meta)
-                                                    onItemClick(meta)
-                                                },
-                                                onLongClick = {
-                                                    lastPosterFocusRequester =
-                                                        requester
-                                                    posterMenu =
-                                                        PosterMenuTarget(
-                                                            meta
+                                            val art =
+                                                rail.landscapeArt[
+                                                    "${meta.type}:${meta.id}"
+                                                ]
+
+                                            if (landscapeCards) {
+                                                LandscapeCard(
+                                                    backdropUrl = art?.first
+                                                        ?: meta.background,
+                                                    logoUrl = art?.second
+                                                        ?: meta.logo,
+                                                    fallbackTitle = meta.name,
+                                                    contentDescription = meta.name,
+                                                    isWatched = watched,
+                                                    onClick = {
+                                                        selectHero(meta)
+                                                        onItemClick(meta)
+                                                    },
+                                                    onLongClick = {
+                                                        lastPosterFocusRequester =
+                                                            requester
+                                                        posterMenu =
+                                                            PosterMenuTarget(
+                                                                meta
+                                                            )
+                                                    },
+                                                    modifier = posterModifier
+                                                )
+                                            } else {
+                                                PosterCard(
+                                                    posterUrl = meta.poster,
+                                                    contentDescription = meta.name,
+                                                    isWatched = watched,
+                                                    onClick = {
+                                                        selectHero(meta)
+                                                        onItemClick(meta)
+                                                    },
+                                                    onLongClick = {
+                                                        lastPosterFocusRequester =
+                                                            requester
+                                                        posterMenu =
+                                                            PosterMenuTarget(
+                                                                meta
+                                                            )
+                                                    },
+                                                    modifier = posterModifier,
+                                                    onPosterError = { throwable ->
+                                                        Log.e(
+                                                            "HOME_UI",
+                                                            "Catalog poster load failed, " +
+                                                                "title=${meta.name}, " +
+                                                                "poster=${meta.poster}",
+                                                            throwable
                                                         )
-                                                },
-                                                modifier = posterModifier,
-                                                onPosterError = { throwable ->
-                                                    Log.e(
-                                                        "HOME_UI",
-                                                        "Catalog poster load failed, " +
-                                                            "title=${meta.name}, " +
-                                                            "poster=${meta.poster}",
-                                                        throwable
-                                                    )
-                                                }
-                                            )
+                                                    }
+                                                )
+                                            }
                                         }
                                     }
                                 }
