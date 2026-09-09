@@ -667,6 +667,66 @@ fun TmdbDetail.movieStatusTag(): String? {
     }
 }
 
+/**
+ * Tri-state at-home availability for the Home digital-release filter:
+ *  - true  -> a digital (type 4/6) or physical (type 5) release has
+ *             already happened — watchable somewhere at home
+ *  - false -> positively NOT available at home yet: sitting inside the
+ *             theatrical window with no home date, has only future
+ *             release dates, or carries an unreleased lifecycle status
+ *             (In Production / Post Production / Planned / Rumored)
+ *  - null  -> unknown (no release-dates payload and no status); callers
+ *             keep the title when unknown — the filter only hides what
+ *             it can positively tell.
+ */
+fun TmdbDetail.isAvailableAtHome(today: LocalDate = LocalDate.now()): Boolean? {
+
+    val parsedDates =
+        releaseDates?.results.orEmpty().flatMap { country ->
+            country.releaseDates.mapNotNull { entry ->
+                parseReleaseDate(entry.releaseDate)?.let { date ->
+                    MovieReleaseDateRef(type = entry.type, date = date)
+                }
+            }
+        }
+
+    val digitalPast =
+        parsedDates.any {
+            (it.type == 4 || it.type == 6) && !it.date.isAfter(today)
+        }
+
+    val physicalPast =
+        parsedDates.any { it.type == 5 && !it.date.isAfter(today) }
+
+    if (digitalPast || physicalPast) {
+        return true
+    }
+
+    when (status?.trim()?.lowercase()) {
+        "in production", "post production", "planned", "rumored" -> return false
+    }
+
+    val theatricalRecent =
+        parsedDates.any {
+            (it.type == 2 || it.type == 3) &&
+                !it.date.isAfter(today) &&
+                it.date >= today.minusDays(MOVIE_THEATRICAL_WINDOW_DAYS)
+        }
+
+    if (theatricalRecent) {
+        return false
+    }
+
+    if (parsedDates.any { it.date.isAfter(today) }) {
+        return false
+    }
+
+    // Old theatrical title with no digital/physical record (a data gap,
+    // assume it surfaced on VOD long ago) or a title with no release
+    // info at all — not enough signal to hide.
+    return if (parsedDates.isEmpty() && status.isNullOrBlank()) null else true
+}
+
 private data class MovieReleaseDateRef(
     val type: Int?,
     val date: LocalDate

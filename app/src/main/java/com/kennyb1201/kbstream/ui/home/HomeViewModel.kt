@@ -22,6 +22,7 @@ import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.watched.WatchStateBus
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.data.tmdb.isAvailableAtHome
 import com.kennyb1201.kbstream.data.tmdb.director
 import com.kennyb1201.kbstream.data.tmdb.displayCountry
 import com.kennyb1201.kbstream.data.tmdb.displayDescription
@@ -225,6 +226,9 @@ class HomeViewModel(
         Semaphore(
             MAX_CONCURRENT_CATALOG_REQUESTS
         )
+
+    // Caps parallel TMDB release-date lookups for the digital filter.
+    private val tmdbFilterSemaphore = Semaphore(permits = 4)
 
     private val watchedRefreshMutex =
         Mutex()
@@ -3544,6 +3548,54 @@ private suspend fun calculateEpisodesRemaining(
         }.getOrNull()
     }
 
+    /**
+     * Stage 2 of the digital-release filter: titles that survived the cheap
+     * catalog-date pass get verified against TMDB's release_dates payload
+     * (digital type 4/6, physical type 5, theatrical type 2/3). A movie
+     * still inside its theatrical window with no home release — or one
+     * that hasn't released at all — is dropped. Series always pass (they
+     * are episodically available), and unknown results keep the title.
+     * Lookups go through the repository's 12h/30d cache and are throttled
+     * so a cold first load doesn't stampede TMDB.
+     */
+    private suspend fun applyDigitalAvailabilityFilter(
+        metas: List<MetaPreview>
+    ): List<MetaPreview> {
+
+        return coroutineScope {
+
+            metas.map { meta ->
+
+                async {
+
+                    if (
+                        !meta.type.equals("movie", ignoreCase = true)
+                    ) {
+                        return@async meta
+                    }
+
+                    val detail =
+                        tmdbFilterSemaphore.withPermit {
+
+                            tmdbRepository.fetchEnrichedMetaCached(
+                                imdbId = meta.id,
+                                type = "movie"
+                            )
+                        }
+
+                    when (detail?.isAvailableAtHome()) {
+
+                        // Positively not at home yet -> filtered out.
+                        false -> null
+
+                        // Available, or unknown -> keep.
+                        else -> meta
+                    }
+                }
+            }.awaitAll().filterNotNull()
+        }
+    }
+
     private suspend fun loadRailsInternal(
         forceRefresh: Boolean,
         clearCatalogCache: Boolean = forceRefresh
@@ -3730,7 +3782,9 @@ private suspend fun calculateEpisodesRemaining(
 
             val filtered =
                 if (hideUpcoming) {
-                    filterUpcoming(metas)
+                    applyDigitalAvailabilityFilter(
+                        filterUpcoming(metas)
+                    )
                 } else {
                     metas
                 }
