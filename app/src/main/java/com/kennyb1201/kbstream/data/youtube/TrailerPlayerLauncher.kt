@@ -10,7 +10,7 @@ object TrailerPlayerLauncher {
 
     private const val TAG = "TrailerLauncher"
 
-    /** 3-hour cache of resolved playback sources per video ID. */
+    /** Cache of resolved playback sources per video ID (expire-based TTL). */
     private val sourceCache =
         java.util.concurrent.ConcurrentHashMap<String, CachedSource>()
 
@@ -39,11 +39,37 @@ object TrailerPlayerLauncher {
         val source: PlayableSource,
         val cachedAt: Long = System.currentTimeMillis()
     ) {
+        /**
+         * Staleness is driven by the URL's own `expire` param, not a fixed
+         * cache age. googlevideo signed URLs historically live ~6h while
+         * the param advertises; keeping a URL past its expire is what 403s
+         * mid-rotation. Fallback: 6h (well under the historical URL life).
+         */
         val isStale: Boolean
-            get() = System.currentTimeMillis() - cachedAt > CACHE_TTL_MS
+            get() {
+                val expiresAt = expiresAtOf(source)
+                    ?: return fallbackStale(cachedAt)
+                return System.currentTimeMillis() >= expiresAt
+            }
     }
 
-    private const val CACHE_TTL_MS = 3 * 60 * 60 * 1000L // 3 hours
+    /** Earliest `expire` claim across the source's URL(s), or null if absent/unparseable. */
+    private fun expiresAtOf(source: PlayableSource): Long? {
+        val urls = when (source) {
+            is PlayableSource.Muxed -> listOf(source.url)
+            is PlayableSource.Adaptive -> listOf(source.videoUrl, source.audioUrl)
+        }
+        return urls.mapNotNull { url ->
+            runCatching {
+                Uri.parse(url).getQueryParameter("expire")?.toLongOrNull()?.times(1000L)
+            }.getOrNull()
+        }.minOrNull()
+    }
+
+    private const val CACHE_TTL_MS = 6 * 60 * 60 * 1000L // 6 hours
+
+    private fun fallbackStale(cachedAt: Long): Boolean =
+        System.currentTimeMillis() - cachedAt > CACHE_TTL_MS
 
     /**
      * Resolves a YouTube URL/ID down to a playable stream source
@@ -55,7 +81,8 @@ object TrailerPlayerLauncher {
      *    anonymous player requests without any po-token infrastructure)
      * 2. NewPipe extractor (NewPipeManager falls back to Piped itself)
      *
-     * Resolved sources are cached for 3 hours.
+     * Cached sources go stale when the signed URL's own `expire` param
+     * passes (fallback: 6h) — never later than the URL can actually serve.
      */
     suspend fun resolvePlayableUrl(
         trailerUrlOrId: String
@@ -141,6 +168,7 @@ object TrailerPlayerLauncher {
                     TAG,
                     "Trailer resolved via $resolver: host=" +
                         originHost(source.url) +
+                        " ua=" + (source.userAgent ?: "default") +
                         " url=" +
                         source.url.take(120)
                 )
@@ -153,6 +181,7 @@ object TrailerPlayerLauncher {
                         originHost(source.videoUrl) +
                         " audioHost=" +
                         originHost(source.audioUrl) +
+                        " ua=" + (source.userAgent ?: "default") +
                         " video=" +
                         source.videoUrl.take(120)
                 )
@@ -211,6 +240,13 @@ object TrailerPlayerLauncher {
                             source.audioUrl
                         )
                     }
+                }
+
+                // googlevideo only serves a signed URL to the UA of the
+                // client it was signed for. The fullscreen player applies
+                // "stream_headers" over its own default UA.
+                source.userAgent?.let { ua ->
+                    putExtra("stream_headers", "User-Agent: $ua")
                 }
 
                 putExtra(

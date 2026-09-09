@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicReference
  *
  * Talks straight to YouTube's InnerTube `youtubei/v1/player` endpoint — the
  * same API the official YouTube apps use — with a 3-client fallback chain
- * (android_vr -> android -> ios). It caches the watch-page config
+ * (android -> ios -> android_vr). It caches the watch-page config
  * (INNERTUBE_API_KEY + VISITOR_DATA) for 3 hours and resolves progressive,
  * adaptive (video+audio) or HLS manifests. This is far more reliable than
  * NewPipe/Piped because there is no third-party extractor to break and no
@@ -42,7 +42,14 @@ object InnerTubeExtractor {
         "Mozilla/5.0 (Linux; Android 12; Android TV) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
 
-    private const val PREFERRED_SEPARATE_CLIENT = "android_vr"
+    /**
+     * Preferred client for adaptive video/audio picks. android_vr used to be
+     * first but its sessions have started returning LOGIN_REQUIRED at higher
+     * rates; android/ios remain the reliable anonymous clients. Every source
+     * this extractor returns carries its client's UA so playback requests
+     * match the signature.
+     */
+    private const val PREFERRED_SEPARATE_CLIENT = "android"
 
     /**
      * TV playback ceiling for trailers. YouTube serves up to 4K in adaptive
@@ -103,26 +110,9 @@ object InnerTubeExtractor {
     )
 
     private val CLIENTS = listOf(
-        YouTubeClient(
-            key = "android_vr",
-            id = "28",
-            version = "1.56.21",
-            userAgent = "com.google.android.apps.youtube.vr.oculus/1.56.21 " +
-                "(Linux; U; Android 12; en_US; Quest 3; Build/SQ3A.220605.009.A1) gzip",
-            context = JSONObject().apply {
-                put("clientName", "ANDROID_VR")
-                put("clientVersion", "1.56.21")
-                put("deviceMake", "Oculus")
-                put("deviceModel", "Quest 3")
-                put("osName", "Android")
-                put("osVersion", "12")
-                put("platform", "MOBILE")
-                put("androidSdkVersion", 32)
-                put("hl", "en")
-                put("gl", "US")
-            },
-            priority = 0
-        ),
+        // android first: the most reliable anonymous client. android_vr is
+        // LAST — its sessions have been returning LOGIN_REQUIRED (its URLs
+        // also can't play without the exact VR UA at playback time).
         YouTubeClient(
             key = "android",
             id = "3",
@@ -138,7 +128,7 @@ object InnerTubeExtractor {
                 put("hl", "en")
                 put("gl", "US")
             },
-            priority = 1
+            priority = 0
         ),
         YouTubeClient(
             key = "ios",
@@ -152,6 +142,26 @@ object InnerTubeExtractor {
                 put("osName", "iPhone")
                 put("osVersion", "17.4.0.21E219")
                 put("platform", "MOBILE")
+                put("hl", "en")
+                put("gl", "US")
+            },
+            priority = 1
+        ),
+        YouTubeClient(
+            key = "android_vr",
+            id = "28",
+            version = "1.56.21",
+            userAgent = "com.google.android.apps.youtube.vr.oculus/1.56.21 " +
+                "(Linux; U; Android 12; en_US; Quest 3; Build/SQ3A.220605.009.A1) gzip",
+            context = JSONObject().apply {
+                put("clientName", "ANDROID_VR")
+                put("clientVersion", "1.56.21")
+                put("deviceMake", "Oculus")
+                put("deviceModel", "Quest 3")
+                put("osName", "Android")
+                put("osVersion", "12")
+                put("platform", "MOBILE")
+                put("androidSdkVersion", 32)
                 put("hl", "en")
                 put("gl", "US")
             },
@@ -287,10 +297,15 @@ object InnerTubeExtractor {
 
         // Prefer HLS first. Media3 handles manifest segments, refreshes and
         // seeking without reopening googlevideo URLs at arbitrary byte offsets.
+        // HLS manifests are signed for the client that received them, so the
+        // manifest fetch (and its segment fetches) must carry that client's UA.
         val bestHls = pickBestHls(hlsUrls)
         if (bestHls != null) {
-            Log.d(TAG, "Using HLS trailer manifest")
-            return PlayableSource.Muxed(bestHls)
+            Log.d(TAG, "Using HLS trailer manifest (client=${bestHls.first})")
+            return PlayableSource.Muxed(
+                bestHls.third,
+                userAgent = userAgentFor(bestHls.first)
+            )
         }
 
         // Prefer adaptive video + audio (best quality) only when HLS is absent.
@@ -306,10 +321,11 @@ object InnerTubeExtractor {
             } else null
 
         if (resolvedVideo != null) {
+            val clientUa = bestVideo?.let { userAgentFor(it.client) }
             return if (resolvedAudio != null) {
-                PlayableSource.Adaptive(resolvedVideo, resolvedAudio)
+                PlayableSource.Adaptive(resolvedVideo, resolvedAudio, userAgent = clientUa)
             } else {
-                PlayableSource.Muxed(resolvedVideo)
+                PlayableSource.Muxed(resolvedVideo, userAgent = clientUa)
             }
         }
 
@@ -324,7 +340,10 @@ object InnerTubeExtractor {
             resolveReachableUrl(it.url, userAgentFor(it.client))
         }
         if (resolvedProgressive != null) {
-            return PlayableSource.Muxed(resolvedProgressive)
+            return PlayableSource.Muxed(
+                resolvedProgressive,
+                userAgent = userAgentFor(bestProgressive.client)
+            )
         }
 
         return null
@@ -400,17 +419,18 @@ object InnerTubeExtractor {
 
     private suspend fun pickBestHls(
         hlsUrls: List<Triple<String, Int, String>>
-    ): String? {
+    ): Triple<String, Int, String>? {
         // Prefer the highest variant at or below the TV ceiling; if every
         // variant exceeds it (rare), fall back to the lowest available
         // rather than refusing to play.
-        var best: Pair<ManifestVariant, Int>? = null
-        var lowest: Pair<ManifestVariant, Int>? = null
-        for ((_, priority, manifestUrl) in hlsUrls) {
+        var best: Pair<ManifestVariant, Triple<String, Int, String>>? = null
+        var lowest: Pair<ManifestVariant, Triple<String, Int, String>>? = null
+        for (entry in hlsUrls) {
+            val manifestUrl = entry.third
             try {
                 val variant = parseHlsManifest(manifestUrl) ?: continue
                 if (lowest == null || variant.height < lowest.first.height) {
-                    lowest = variant to priority
+                    lowest = variant to entry
                 }
                 if (variant.height > MAX_TRAILER_HEIGHT) continue
                 if (
@@ -418,13 +438,13 @@ object InnerTubeExtractor {
                     variant.height > best.first.height ||
                     (variant.height == best.first.height && variant.bandwidth > best.first.bandwidth)
                 ) {
-                    best = variant to priority
+                    best = variant to entry
                 }
             } catch (error: Exception) {
                 Log.w(TAG, "HLS manifest parse failed: ${error.message}")
             }
         }
-        return (best ?: lowest)?.first?.url
+        return (best ?: lowest)?.second
     }
 
     // ── Watch config (api key + visitor data) ─────────────────────────

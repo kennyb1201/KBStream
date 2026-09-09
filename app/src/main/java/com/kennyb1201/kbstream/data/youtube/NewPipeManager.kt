@@ -11,8 +11,18 @@ import org.schabi.newpipe.extractor.stream.StreamInfo
 import java.util.concurrent.TimeUnit
 
 sealed class PlayableSource {
-    data class Muxed(val url: String) : PlayableSource()
-    data class Adaptive(val videoUrl: String, val audioUrl: String) : PlayableSource()
+    /**
+     * [userAgent] is the YouTube client User-Agent the URL was signed for
+     * (googlevideo rejects signed URLs requested with a different client's
+     * UA). Null for resolvers that don't need a specific UA (NewPipe/Piped,
+     * whose players fall back to a sensible UA ladder).
+     */
+    data class Muxed(val url: String, val userAgent: String? = null) : PlayableSource()
+    data class Adaptive(
+        val videoUrl: String,
+        val audioUrl: String,
+        val userAgent: String? = null
+    ) : PlayableSource()
 }
 
 object NewPipeManager {

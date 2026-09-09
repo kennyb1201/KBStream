@@ -33,7 +33,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -198,14 +197,11 @@ fun SearchScreen(
                         LazyRow(
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                             contentPadding = PaddingValues(
-                                vertical = 2.dp,
+                                top = 2.dp,
+                                bottom = 2.dp,
                                 start = SEARCH_RAIL_EDGE_PADDING,
                                 end = SEARCH_RAIL_EDGE_PADDING
-                            ),
-                            // Posters draw their focused border + glow outside
-                            // their bounds; without this the first/last tile
-                            // clips both when scrolled to the rail's ends.
-                            modifier = Modifier.clipToBounds(false)
+                            )
                         ) {
                             items(
                                 items = trendingResults,
@@ -280,11 +276,11 @@ fun SearchScreen(
                         LazyRow(
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                             contentPadding = PaddingValues(
-                                vertical = 2.dp,
+                                top = 2.dp,
+                                bottom = 2.dp,
                                 start = SEARCH_RAIL_EDGE_PADDING,
                                 end = SEARCH_RAIL_EDGE_PADDING
-                            ),
-                            modifier = Modifier.clipToBounds(false)
+                            )
                         ) {
                             items(
                                 items = results,
@@ -672,12 +668,11 @@ private fun SearchRail(
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             contentPadding = PaddingValues(
-                vertical = 2.dp,
+                top = 2.dp,
+                bottom = 2.dp,
                 start = SEARCH_RAIL_EDGE_PADDING,
                 end = SEARCH_RAIL_EDGE_PADDING
-            ),
-            // Same anti-clip treatment as the poster rails above.
-            modifier = Modifier.clipToBounds(false)
+            )
         ) {
             content()
         }

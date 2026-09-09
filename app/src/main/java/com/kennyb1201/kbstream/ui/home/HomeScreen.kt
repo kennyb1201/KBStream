@@ -294,10 +294,17 @@ private fun HeroInlineTrailerPlayer(
         // range requests. YoutubeChunkedDataSourceFactory handles that for
         // googlevideo hosts (1 MB chunks via OkHttp, ratebypass fallbacks)
         // and passes every other host straight through - the same stack the
-        // full player uses for HLS and progressive playback.
+        // full player uses for HLS and progressive playback. The resolved
+        // source carries the UA of the client that signed its URL, so the
+        // factory leads with it instead of the legacy hardcoded one.
         val mediaSourceFactory =
             DefaultMediaSourceFactory(
-                YoutubeChunkedDataSourceFactory(),
+                YoutubeChunkedDataSourceFactory(
+                    userAgentHint = when (source) {
+                        is PlayableSource.Muxed -> source.userAgent
+                        is PlayableSource.Adaptive -> source.userAgent
+                    }
+                ),
                 DefaultExtractorsFactory()
             )
 

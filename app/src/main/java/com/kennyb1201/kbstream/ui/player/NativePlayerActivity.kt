@@ -1229,6 +1229,7 @@ class NativePlayerActivity : ComponentActivity() {
 
         val agent = streamHeaders["User-Agent"] ?: streamHeaders["user-agent"]
             ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+
         // Some addon hosts / CDNs need more than the default 20 s connect
         // timeout, especially during peak hours or on first-byte waits.
         // Give every playback attempt a slightly more generous ceiling so
@@ -1242,10 +1243,38 @@ class NativePlayerActivity : ComponentActivity() {
         val httpFactory = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(okHttpClient)
             .setUserAgent(agent)
 
+        // Trailer playback from TrailerPlayerLauncher hands us googlevideo
+        // signed URLs. Those 403 on open-ended/unbounded requests unless the
+        // request carries the signing client's User-Agent and uses bounded
+        // ranges — YoutubeChunkedDataSourceFactory implements both (with a
+        // UA fallback ladder), so it wraps googlevideo streams instead of the
+        // plain OkHttp source. Everything else keeps the addon stack.
+        val isGooglevideoStream =
+            currentUrl.contains("googlevideo.com") ||
+                currentAudioUrl?.contains("googlevideo.com") == true
+        val httpOrYoutubeFactory: androidx.media3.datasource.DataSource.Factory =
+            if (isGooglevideoStream) {
+                Log.i(
+                    "PLAYER_DV",
+                    "googlevideo stream detected; using YouTube chunked source"
+                )
+                com.kennyb1201.kbstream.data.youtube.YoutubeChunkedDataSourceFactory(
+                    userAgentHint = agent.takeUnless { it.startsWith("Mozilla") }
+                )
+            } else {
+                httpFactory
+            }
+
         val extraHeaders = streamHeaders
             .filterKeys { !it.equals("User-Agent", ignoreCase = true) }
             .filterValues { it.isNotBlank() }
         if (extraHeaders.isNotEmpty()) httpFactory.setDefaultRequestProperties(extraHeaders)
+        // Non-UA headers (e.g. Referer for addon hosts) must also reach
+        // googlevideo streams served through the chunked YouTube source.
+        if (extraHeaders.isNotEmpty()) {
+            com.kennyb1201.kbstream.data.youtube.YoutubeChunkedDataSourceFactory
+                .defaultRequestProperties = extraHeaders
+        }
 
         // Dolby Vision handling (Settings → Playback): the "P7 → 8.1" mode
         // (Auto) rewrites declared/sniffed dual-layer Profile 7 (Blu-ray
@@ -1358,13 +1387,13 @@ class NativePlayerActivity : ComponentActivity() {
                     nativeDvSupported = nativeDvSupported
                 )
             }
-        val mediaSourceFactory = DefaultMediaSourceFactory(httpFactory, extractorsFactory)
+        val mediaSourceFactory = DefaultMediaSourceFactory(httpOrYoutubeFactory, extractorsFactory)
         // DefaultMediaSourceFactory selects HLS/DASH by URI or MIME type and
         // otherwise falls back to progressive extraction. Build that fallback
         // explicitly so direct stream endpoints (which commonly have no file
         // extension) cannot skip the custom DV extractor.
         val progressiveMediaSourceFactory =
-            ProgressiveMediaSource.Factory(httpFactory, extractorsFactory)
+            ProgressiveMediaSource.Factory(httpOrYoutubeFactory, extractorsFactory)
         Log.i(
             "PLAYER_DV",
             "Compat extractor configured=${extractorsFactory.javaClass.simpleName} " +
@@ -1452,7 +1481,7 @@ class NativePlayerActivity : ComponentActivity() {
                     } else {
                         progressiveMediaSourceFactory.createMediaSource(initialMediaItem)
                     }
-                    val audioSource = ProgressiveMediaSource.Factory(httpFactory)
+                    val audioSource = ProgressiveMediaSource.Factory(httpOrYoutubeFactory)
                         .createMediaSource(MediaItem.fromUri(audioUrl))
                     setMediaSource(MergingMediaSource(videoSource, audioSource))
                 } else if (isManifest) {

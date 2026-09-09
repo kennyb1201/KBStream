@@ -12,7 +12,7 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
 import okhttp3.OkHttpClient
 
 /**
- * DataSource.Factory that downloads YouTube googlevideo streams in ~10 MB
+ * DataSource.Factory that downloads YouTube googlevideo streams in ~1 MB
  * chunks by reopening a fresh connection per chunk. YouTube throttles (and
  * kills) connections that try to pull a whole adaptive stream in one shot,
  * but honours bounded range requests.
@@ -36,7 +36,8 @@ import okhttp3.OkHttpClient
  */
 @UnstableApi
 class YoutubeChunkedDataSourceFactory(
-    private val chunkSizeBytes: Long = CHUNK_SIZE
+    private val chunkSizeBytes: Long = CHUNK_SIZE,
+    private val userAgentHint: String? = null
 ) : DataSource.Factory {
 
     companion object {
@@ -51,10 +52,34 @@ class YoutubeChunkedDataSourceFactory(
          */
         private const val CHUNK_SIZE = 1L * 1024 * 1024
 
-        /** Must match the android_vr client UA used to request the stream. */
-        private const val YOUTUBE_USER_AGENT =
+        /**
+         * googlevideo only serves a signed URL to requests carrying the
+         * User-Agent of the YouTube client the URL was signed FOR. Sources
+         * resolved by InnerTubeExtractor carry their client's UA via
+         * [userAgentHint]; when absent (e.g. NewPipe/Piped sources), every
+         * known client UA is tried in order until one is accepted.
+         */
+        val KNOWN_CLIENT_USER_AGENTS = listOf(
+            // android client (InnerTubeExtractor's preferred client)
+            "com.google.android.youtube/20.10.35 (Linux; U; Android 14; en_US) gzip",
+            // ios client
+            "com.google.ios.youtube/20.10.1 (iPhone16,2; U; CPU iOS 17_4 like Mac OS X)",
+            // android_vr client (legacy default; still valid for its own URLs)
             "com.google.android.apps.youtube.vr.oculus/1.56.21 " +
                 "(Linux; U; Android 12; en_US; Quest 3; Build/SQ3A.220605.009.A1) gzip"
+        )
+
+        /** Legacy UA constant kept for callers that don't pass a hint. */
+        private val YOUTUBE_USER_AGENT = KNOWN_CLIENT_USER_AGENTS[2]
+
+        /**
+         * Extra headers (Referer etc.) every chunked googlevideo request
+         * should carry. Assign directly from embedders that also apply
+         * headers to their main HTTP factory (assignable — not a private
+         * set — so no JVM signature clash with the property setter).
+         */
+        @Volatile
+        var defaultRequestProperties: Map<String, String> = emptyMap()
     }
 
     override fun createDataSource(): DataSource {
@@ -72,16 +97,31 @@ class YoutubeChunkedDataSourceFactory(
                 .followSslRedirects(true)
                 .build()
         )
-            .setUserAgent(YOUTUBE_USER_AGENT)
+            .setUserAgent(userAgentHint ?: YOUTUBE_USER_AGENT)
             .createDataSource()
-        return YoutubeChunkedDataSource(upstream, chunkSizeBytes)
+        return YoutubeChunkedDataSource(
+            upstream,
+            chunkSizeBytes,
+            buildList {
+                if (!userAgentHint.isNullOrBlank()) add(userAgentHint)
+                addAll(KNOWN_CLIENT_USER_AGENTS)
+            }.distinct()
+        )
     }
 
     private class YoutubeChunkedDataSource(
         private val upstream: HttpDataSource,
-        private val chunkSize: Long
+        private val chunkSize: Long,
+        /**
+         * User-Agent candidates, best-first: the signing client's UA (from the
+         * resolved source) followed by every known client UA. googlevideo
+         * rejects a signed URL requested with the wrong client's UA, so the
+         * ladder advances only when every mode 403s with the current one.
+         */
+        private val userAgentCandidates: List<String>
     ) : DataSource {
 
+        private var activeUaIndex = 0
         private var isYouTubeStream = false
         private var useRateByPass = true
         private var chunkedRange = true
@@ -123,6 +163,10 @@ class YoutubeChunkedDataSourceFactory(
             // googlevideo only honours Range requests that start at byte 0.
             // Always request from 0 and skip the prefix we already delivered
             // in read().
+            //
+            // The chunk request carries the ACTIVE client User-Agent. DataSpec
+            // headers override the OkHttpDataSource factory default, which is
+            // what lets us switch UAs at runtime when googlevideo 403s.
             return spec.buildUpon()
                 .setUri(uri)
                 .setPosition(0)
@@ -133,8 +177,19 @@ class YoutubeChunkedDataSourceFactory(
                         C.LENGTH_UNSET.toLong()
                     }
                 )
+                .setHttpRequestHeaders(activeRequestHeaders())
                 .build()
         }
+
+        private val activeUserAgent: String
+            get() = userAgentCandidates[activeUaIndex]
+
+        /** Merges factory defaults under the per-request UA (UA wins). */
+        private fun activeRequestHeaders(): Map<String, String> =
+            buildMap {
+                putAll(YoutubeChunkedDataSourceFactory.defaultRequestProperties)
+                put("User-Agent", activeUserAgent)
+            }
 
         private fun openNextChunk(): Long {
             val spec = originalDataSpec ?: throw IllegalStateException("No DataSpec")
@@ -154,35 +209,61 @@ class YoutubeChunkedDataSourceFactory(
             // try clean-bounded first (offset 0 case), then clean open-ended,
             // then ratebypass variants as a last resort (mutating the URL can
             // corrupt the signature).
-            val attempts = buildList {
+            val baseAttempts = buildList {
                 add(false to chunkedRange)
                 if (chunkedRange) add(false to false)
                 add(true to chunkedRange)
                 if (chunkedRange) add(true to false)
             }.distinct()
 
+            val initialUaIndex = activeUaIndex
             var last403: HttpDataSource.InvalidResponseCodeException? = null
-            for ((rb, bounded) in attempts) {
-                try {
-                    upstream.open(buildChunkSpec(spec, rb, bounded))
-                    useRateByPass = rb
-                    chunkedRange = bounded
-                    return if (totalContentLength != C.LENGTH_UNSET.toLong()) {
-                        totalContentLength
-                    } else {
-                        C.LENGTH_UNSET.toLong()
-                    }
-                } catch (e: HttpDataSource.InvalidResponseCodeException) {
-                    if (e.responseCode == 403) {
-                        last403 = e
-                        Log.w(
-                            TAG,
-                            "googlevideo 403 (ratebypass=$rb bounded=$bounded); trying next mode"
-                        )
-                        continue
-                    }
-                    throw e
+            for (uaAttempt in activeUaIndex until userAgentCandidates.size) {
+                activeUaIndex = uaAttempt
+                if (uaAttempt > 0) {
+                    Log.w(
+                        TAG,
+                        "Trying User-Agent ${uaAttempt + 1}/${userAgentCandidates.size} " +
+                            "for googlevideo stream"
+                    )
                 }
+                // Each new User-Agent candidate sweeps ALL four modes (a fresh
+                // UA has proven nothing yet, so the remembered open-ended
+                // shortcut must not narrow its ladder).
+                for ((rb, bounded) in if (uaAttempt == initialUaIndex) {
+                    baseAttempts
+                } else {
+                    listOf(
+                        false to true,
+                        false to false,
+                        true to true,
+                        true to false
+                    )
+                }) {
+                    try {
+                        upstream.open(buildChunkSpec(spec, rb, bounded))
+                        useRateByPass = rb
+                        chunkedRange = bounded
+                        return if (totalContentLength != C.LENGTH_UNSET.toLong()) {
+                            totalContentLength
+                        } else {
+                            C.LENGTH_UNSET.toLong()
+                        }
+                    } catch (e: HttpDataSource.InvalidResponseCodeException) {
+                        if (e.responseCode == 403) {
+                            last403 = e
+                            Log.w(
+                                TAG,
+                                "googlevideo 403 (ratebypass=$rb bounded=$bounded); trying next mode"
+                            )
+                            continue
+                        }
+                        throw e
+                    }
+                }
+                // Every mode 403'd with this UA. A signed URL only plays with
+                // the UA of the client that requested it, so fall through to
+                // the next candidate and rerun the mode ladder.
             }
 
             // Every mode 403'd with the media3 stack. Run a raw-OkHttp bisection
@@ -218,7 +299,7 @@ class YoutubeChunkedDataSourceFactory(
                 )
                 for ((label, range) in probes) {
                     val rb = okhttp3.Request.Builder().url(url).get()
-                    rb.header("User-Agent", YOUTUBE_USER_AGENT)
+                    rb.header("User-Agent", activeUserAgent)
                     if (range != null) rb.header("Range", range)
                     client.newCall(rb.build()).execute().use { resp ->
                         val body = resp.peekBody(400).string().take(400)
