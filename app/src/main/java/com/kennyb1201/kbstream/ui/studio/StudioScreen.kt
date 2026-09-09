@@ -107,21 +107,23 @@ fun StudioScreen(
     // whole display and edge spacing lives in the LazyColumn's
     // contentPadding, so focused poster borders + glow draw to the screen
     // edge without being clipped by a fixed-inset parent.
+    // The header is PINNED above the scrolling rails: when focus lands on
+    // the first poster, the LazyColumn only scrolls its own items, so the
+    // title/logo can never be pushed up under the top screen edge and
+    // clipped.
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(KBVoid)
     ) {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(
-                start = 20.dp,
-                end = 20.dp,
-                top = 24.dp,
-                bottom = 24.dp
-            )
-        ) {
-            item(key = "header") {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier.padding(
+                    start = 28.dp,
+                    end = 28.dp,
+                    top = 28.dp
+                )
+            ) {
                 StudioHeader(
                     name = name,
                     logoUrl = logoUrl,
@@ -129,7 +131,16 @@ fun StudioScreen(
                 )
             }
 
-            when {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(
+                    start = 20.dp,
+                    end = 20.dp,
+                    top = 8.dp,
+                    bottom = 24.dp
+                )
+            ) {
+                when {
                 isLoading -> {
                     item(key = "loading") {
                         CircularProgressIndicator(color = KBAccent, strokeWidth = 3.dp)
@@ -172,6 +183,7 @@ fun StudioScreen(
                     Box(modifier = Modifier.height(24.dp))
                 }
             }
+        }
         }
     }
 

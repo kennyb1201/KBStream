@@ -1,11 +1,17 @@
 package com.kennyb1201.kbstream.ui.tag
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -22,13 +28,26 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
+import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.crossfade
+import coil3.request.size
 import com.kennyb1201.kbstream.data.tmdb.StudioItem
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
@@ -91,29 +110,42 @@ fun TagScreen(
     // whole display and edge spacing lives in the LazyColumn's
     // contentPadding, so focused poster borders + glow draw to the screen
     // edge without being clipped by a fixed-inset parent.
+    // The title is PINNED above the scrolling rails: when focus lands on
+    // the first poster, the LazyColumn only scrolls its own items, so the
+    // title can never be pushed up under the top screen edge and clipped.
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(KBVoid)
     ) {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(
-                start = 20.dp,
-                end = 20.dp,
-                top = 24.dp,
-                bottom = 24.dp
-            )
-        ) {
-            item(key = "header") {
-                Text(
-                    text = name,
-                    style = MaterialTheme.typography.displayLarge,
-                    modifier = Modifier.padding(bottom = 16.dp)
-                )
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Top titles in this genre/keyword, for the header's poster fan.
+            val headerPosters = remember(sections) {
+                sections.asSequence()
+                    .flatMap { it.items.asSequence() }
+                    .mapNotNull { it.item.posterPath }
+                    .distinct()
+                    .take(3)
+                    .toList()
+                    .map { "${TmdbRepository.POSTER_BASE}$it" }
             }
 
-            when {
+            TagHeader(
+                name = name,
+                isKeyword = isKeyword,
+                posterUrls = headerPosters
+            )
+
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(
+                    start = 20.dp,
+                    end = 20.dp,
+                    top = 8.dp,
+                    bottom = 24.dp
+                )
+            ) {
+                when {
                 isLoading -> {
                     item(key = "loading") {
                         CircularProgressIndicator(color = KBAccent, strokeWidth = 3.dp)
@@ -156,6 +188,7 @@ fun TagScreen(
                     Box(modifier = Modifier.height(24.dp))
                 }
             }
+        }
         }
     }
 
@@ -231,6 +264,83 @@ fun TagScreen(
                     dismissRailMenu()
                 }
             )
+        }
+    }
+}
+
+/**
+ * Pinned header for genre/keyword screens: gradient-accented title with a
+ * Genre/Keyword eyebrow, plus a tilted "fan" of up to three posters from
+ * the category's top titles — a clearlogo-style visual anchor built from
+ * data already in hand (TMDB doesn't publish clearlogos for genres).
+ */
+@Composable
+private fun TagHeader(
+    name: String,
+    isKeyword: Boolean,
+    posterUrls: List<String>
+) {
+    val accent = KBAccent
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 28.dp, end = 28.dp, top = 28.dp, bottom = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = if (isKeyword) "KEYWORD" else "GENRE",
+                style = MaterialTheme.typography.labelLarge,
+                color = accent,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+            Text(
+                text = name,
+                style = MaterialTheme.typography.displayLarge,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.background(
+                    Brush.horizontalGradient(
+                        listOf(
+                            accent.copy(alpha = 0.35f),
+                            Color.Transparent
+                        )
+                    )
+                )
+            )
+        }
+
+        if (posterUrls.isNotEmpty()) {
+            // Staggered poster fan: back cards peek out behind the front one.
+            Row {
+                val rotations = listOf(-8f, 4f, 0f)
+                posterUrls.take(3).forEachIndexed { index, url ->
+                    val context = LocalContext.current
+                    AsyncImage(
+                        model = ImageRequest.Builder(context)
+                            .data(url)
+                            .size(200, 300)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .zIndex((posterUrls.size - index).toFloat())
+                            .offset(x = (-14 * index).dp)
+                            .rotate(rotations[index])
+                            .clip(RoundedCornerShape(8.dp))
+                            .border(
+                                1.dp,
+                                Color.White.copy(alpha = 0.25f),
+                                RoundedCornerShape(8.dp)
+                            )
+                            .width(if (index == 2) 92.dp else 74.dp)
+                            .height(if (index == 2) 138.dp else 111.dp)
+                    )
+                }
+            }
         }
     }
 }
