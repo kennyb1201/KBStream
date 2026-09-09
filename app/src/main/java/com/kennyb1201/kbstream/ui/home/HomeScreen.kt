@@ -115,8 +115,8 @@ private const val HeroTrailerDwellMs = 4_000L
 
 private val HomeHeroHeight = 300.dp
 
-private val RailTopContentPadding = 14.dp
-private val RailBottomContentPadding = 24.dp
+private val RailTopContentPadding = 4.dp
+private val RailBottomContentPadding = 12.dp
 
 private val RailHorizontalStartPadding = 12.dp
 private val RailSectionGap = 20.dp
@@ -970,9 +970,10 @@ private fun HomeHero(
                 .fillMaxWidth(0.4f)
                 .padding(
                     start = 32.dp,
-                    end = 20.dp
+                    end = 20.dp,
+                    bottom = 16.dp
                 ),
-            verticalArrangement = Arrangement.Center
+            verticalArrangement = Arrangement.Bottom
         ) {
             if (!clearLogo.isNullOrBlank()) {                    HeroClearLogo(
                         url = clearLogo,
@@ -1217,7 +1218,7 @@ private fun SectionTitle(text: String) {
         style = MaterialTheme.typography.titleMedium,
         modifier = Modifier.padding(
             top = 4.dp,
-            bottom = 6.dp
+            bottom = 2.dp
         )
     )
 }
