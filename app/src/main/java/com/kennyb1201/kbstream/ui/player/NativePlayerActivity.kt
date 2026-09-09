@@ -1220,6 +1220,7 @@ class NativePlayerActivity : ComponentActivity() {
                 KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
                     if (errorContainer.visibility == View.VISIBLE) {
                         focusErrorButtons()
+                        true
                     } else if (controlsVisible || btnSkipIntro.visibility == View.VISIBLE) {
                         // Overlay (or skip prompt) is up: normal focus
                         // navigation — open it and park focus appropriately.
@@ -1229,6 +1230,7 @@ class NativePlayerActivity : ComponentActivity() {
                         } else {
                             controlsOverlay.requestFocus()
                         }
+                        true
                     } else if (event.action == KeyEvent.ACTION_DOWN) {
                         // Netflix-style direct scrub while the overlay is
                         // hidden: quick press = 10s jump, hold = accelerated
