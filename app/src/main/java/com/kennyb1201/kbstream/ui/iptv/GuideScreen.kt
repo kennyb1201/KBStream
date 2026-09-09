@@ -576,7 +576,10 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                         if (groups.isNotEmpty()) {
                             LazyRow(
     state = groupRowState,
-    contentPadding = PaddingValues(end = 8.dp),
+    // Start padding keeps the first chip (and any chip the auto-reveal
+    // snaps to the left edge) from sitting flush where its focused
+    // border/glow clips.
+    contentPadding = PaddingValues(start = 8.dp, end = 8.dp),
     horizontalArrangement = Arrangement.spacedBy(8.dp),
     modifier = Modifier
         .focusGroup()
@@ -626,7 +629,11 @@ Spacer(modifier = Modifier.height(14.dp))
                             Row(modifier = Modifier.fillMaxSize()) {
                                 LazyColumn(
                                     state = channelListState,
-                                    contentPadding = PaddingValues(bottom = 20.dp),
+                                    // Top inset gives the first row's focused
+                                    // border + glow room above the viewport
+                                    // edge (LazyColumn clips children to its
+                                    // bounds); bottom mirrors the old inset.
+                                    contentPadding = PaddingValues(top = 8.dp, bottom = 20.dp),
                                     verticalArrangement = Arrangement.spacedBy(8.dp),
                                     modifier = Modifier
                                         .width(348.dp)
@@ -1392,7 +1399,11 @@ private fun ChannelRowCard(
     KBCard(
     onClick = onClick,
     onLongClick = onLongClick,
+    // Horizontal inset keeps the focused border + glow from clipping
+    // against the channel list's viewport edges (LazyColumn clips
+    // children to its bounds; the glow paints outside the card bounds).
     modifier = modifier
+        .padding(horizontal = 4.dp)
         .graphicsLayer {
             scaleX = scale
             scaleY = scale
