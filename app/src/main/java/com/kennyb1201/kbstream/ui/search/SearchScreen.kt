@@ -145,6 +145,7 @@ fun SearchScreen(
                 SearchHero(
                     query = query,
                     onQueryChanged = viewModel::onQueryChanged,
+                    onSubmit = { viewModel.commitSearch() },
                     totalCount = totalCount,
                     catalogCount = results.size,
                     actorCount = actorResults.size,
@@ -499,6 +500,7 @@ private fun watchedTile(
 private fun SearchHero(
     query: String,
     onQueryChanged: (String) -> Unit,
+    onSubmit: () -> Unit,
     totalCount: Int,
     catalogCount: Int,
     actorCount: Int,
@@ -564,6 +566,9 @@ private fun SearchHero(
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(
                         onDone = {
+                            // IME-action path: leanback keyboards whose
+                            // checkmark dispatches ImeAction.Done land here.
+                            onSubmit()
                             keyboardController?.hide()
                             focusManager.clearFocus()
                         }
@@ -577,6 +582,10 @@ private fun SearchHero(
                         // moves focus out of the field (down into the results,
                         // up back to the tab bar) so search results are always
                         // reachable with the remote.
+                        // Enter (checkmark) is ALSO handled here: many TV
+                        // IMEs deliver it as a raw KEYCODE_ENTER key event
+                        // instead of an IME action, in which case onDone
+                        // above never fires.
                         .onPreviewKeyEvent { event ->
                             if (event.type != KeyEventType.KeyDown) {
                                 false
@@ -595,6 +604,12 @@ private fun SearchHero(
                                             keyboardController?.hide()
                                         }
                                         moved
+                                    }
+                                    Key.Enter, Key.NumPadEnter -> {
+                                        onSubmit()
+                                        keyboardController?.hide()
+                                        focusManager.clearFocus()
+                                        true
                                     }
                                     else -> false
                                 }

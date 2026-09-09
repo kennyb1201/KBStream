@@ -155,6 +155,12 @@ fun AddonsScreen(
         }
     }
 
+    // Right from an add-on list card must land on the detail panel's first
+    // action button (UP), never the top-bar REFRESH ALL: with a tall detail
+    // panel the spatial search used to find the top bar as "nearest right".
+    val firstActionFocusRequester = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -294,6 +300,18 @@ fun AddonsScreen(
                                         addon = addon,
                                         health = health[addon.id],
                                         selected = addon.id == selectedId,
+                                        onRight = {
+                                            // Deterministic Right: straight to the
+                                            // detail panel's first action button.
+                                            runCatching {
+                                                firstActionFocusRequester.requestFocus()
+                                            }.onFailure {
+                                                // Panel not composed (shouldn't happen
+                                                // with a selected addon) — fall back to
+                                                // normal spatial navigation.
+                                                focusManager.moveFocus(FocusDirection.Right)
+                                            }
+                                        },
                                         onClick = {
                                             selectedId = addon.id
                                             renameText = addon.customName ?: addon.name
@@ -353,7 +371,8 @@ fun AddonsScreen(
                                         CatalogMoveAction.BOTTOM ->
                                             viewModel.moveCatalogToBottom(selectedAddon.id, catalogId)
                                     }
-                                }
+                                },
+                                firstActionFocusRequester = firstActionFocusRequester
                             )
                         }
                     }
@@ -513,7 +532,8 @@ private fun AddonListCard(
     addon: InstalledAddon,
     selected: Boolean,
     onClick: () -> Unit,
-    health: AddonsViewModel.AddonHealth? = null
+    health: AddonsViewModel.AddonHealth? = null,
+    onRight: (() -> Unit)? = null
 ) {
     Surface(
         onClick = onClick,
@@ -543,7 +563,28 @@ private fun AddonListCard(
         glow = ClickableSurfaceDefaults.glow(
             focusedGlow = Glow(elevationColor = KBAccent, elevation = 6.dp)
         ),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (onRight != null) {
+                    Modifier.onPreviewKeyEvent { event ->
+                        val handler = onRight
+                        if (handler != null &&
+                            event.type == KeyEventType.KeyDown &&
+                            event.key == Key.DirectionRight
+                        ) {
+                            // Deterministic Right → detail panel's action buttons,
+                            // never spatial-drifts to REFRESH ALL.
+                            handler()
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                } else {
+                    Modifier
+                }
+            )
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -644,14 +685,21 @@ private fun AddonDetails(
     onRefresh: () -> Unit,
     onRemove: () -> Unit,
     onToggleCatalog: (catalogId: String, showOnHome: Boolean) -> Unit,
-    onMoveCatalog: (catalogId: String, action: CatalogMoveAction) -> Unit
+    onMoveCatalog: (catalogId: String, action: CatalogMoveAction) -> Unit,
+    firstActionFocusRequester: FocusRequester? = null
 ) {
     val catalogScrollState = rememberScrollState()
 
+    // One scrollable column for the whole panel: with a big description or
+    // a long TYPES line the fixed layout pushed the action buttons past the
+    // panel's bottom edge and clipped them. verticalScroll + focusable
+    // children means Compose scrolls the focused button into view — actions
+    // are always reachable no matter how much info the add-on carries.
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(18.dp)
+            .verticalScroll(catalogScrollState)
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -753,7 +801,15 @@ private fun AddonDetails(
                 label = "UP",
                 icon = Icons.Filled.ArrowUpward,
                 onClick = onMoveUp,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier
+                    .weight(1f)
+                    .then(
+                        if (firstActionFocusRequester != null) {
+                            Modifier.focusRequester(firstActionFocusRequester)
+                        } else {
+                            Modifier
+                        }
+                    )
             )
             SmallAction(
                 label = "DOWN",
@@ -813,13 +869,8 @@ private fun AddonDetails(
                 modifier = Modifier.padding(bottom = 6.dp)
             )
 
-            // Only the catalog list scrolls; header + actions stay put.
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .verticalScroll(catalogScrollState)
-            ) {
+            // Scrolls with the panel now — see the verticalScroll note above.
+            Column(modifier = Modifier.fillMaxWidth()) {
                 val sortedCatalogs =
                     addon.catalogs.sortedBy { it.order }
 

@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.studio
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,6 +45,7 @@ import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
+import com.kennyb1201.kbstream.ui.theme.KBVoid
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 
@@ -94,61 +96,77 @@ fun StudioScreen(
         }
     }
 
+    // Full-bleed screen (matches SearchScreen): the background fills the
+    // whole display and edge spacing lives in the LazyColumn's
+    // contentPadding, so focused poster borders + glow draw to the screen
+    // edge without being clipped by a fixed-inset parent.
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .padding(24.dp)
+            .background(KBVoid)
     ) {
-        Column {
-            StudioHeader(
-                name = name,
-                logoUrl = logoUrl,
-                info = companyInfo
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                start = 20.dp,
+                end = 20.dp,
+                top = 24.dp,
+                bottom = 24.dp
             )
+        ) {
+            item(key = "header") {
+                StudioHeader(
+                    name = name,
+                    logoUrl = logoUrl,
+                    info = companyInfo
+                )
+            }
 
             when {
                 isLoading -> {
-                    CircularProgressIndicator(color = KBAccent, strokeWidth = 3.dp)
+                    item(key = "loading") {
+                        CircularProgressIndicator(color = KBAccent, strokeWidth = 3.dp)
+                    }
                 }
 
                 sections.isEmpty() -> {
-                    Text("Nothing found for $name")
+                    item(key = "empty") {
+                        Text("Nothing found for $name")
+                    }
                 }
 
                 else -> {
-                    LazyColumn(modifier = Modifier.fillMaxSize()) {
-                        items(
-                            items = sections,
-                            key = { section: StudioSection -> section.title }
-                        ) { section ->
-                            val pagingState = pagingStates[section.title] ?: StudioRailPagingState()
+                    items(
+                        items = sections,
+                        key = { section: StudioSection -> section.title }
+                    ) { section ->
+                    val pagingState = pagingStates[section.title] ?: StudioRailPagingState()
 
-                            StudioRailRow(
-                                section = section,
-                                watchedKeys = watchedKeys,
-                                resolvedIds = resolvedIds,
-                                onNavigateDetail = onNavigateDetail,
-                                onLoadMore = { viewModel.loadMoreSection(section.title) },
-                                hasMore = pagingState.hasMore,
-                                isLoadingMore = pagingState.isLoadingMore,
-                                isFirstSection = section == sections.firstOrNull(),
-                                firstItemFocusRequester = firstItemFocusRequester,
-                                viewModel = viewModel,
-                                onOpenPosterMenu = { item, requester ->
-                                    lastRailFocusRequester =
-                                        requester
-                                    menuItem = item
-                                }
-                            )
+                    StudioRailRow(
+                        section = section,
+                        watchedKeys = watchedKeys,
+                        resolvedIds = resolvedIds,
+                        onNavigateDetail = onNavigateDetail,
+                        onLoadMore = { viewModel.loadMoreSection(section.title) },
+                        hasMore = pagingState.hasMore,
+                        isLoadingMore = pagingState.isLoadingMore,
+                        isFirstSection = section == sections.firstOrNull(),
+                        firstItemFocusRequester = firstItemFocusRequester,
+                        viewModel = viewModel,
+                        onOpenPosterMenu = { item, requester ->
+                            lastRailFocusRequester =
+                                requester
+                            menuItem = item
                         }
+                    )
+                }
 
-                        item(key = "bottom_spacer") {
-                            Box(modifier = Modifier.height(24.dp))
-                        }
-                    }
+                item(key = "bottom_spacer") {
+                    Box(modifier = Modifier.height(24.dp))
                 }
             }
         }
+    }
 
         // Long-press context menu for rail posters (movies/series).
         menuItem?.let { studioItem ->
