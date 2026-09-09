@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.studio
 
+import android.graphics.Bitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Box
@@ -29,13 +30,19 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.allowHardware
 import com.kennyb1201.kbstream.data.tmdb.StudioItem
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TmdbCompanyDetail
@@ -303,12 +310,12 @@ private fun StudioHeader(
 
 /**
  * Brand logo rendered for a dark surface. Sample the decoded artwork's
- * luminance; when it is a dark mark (black/gray logo drawn for light
- * backgrounds — the TMDB company/network default), recolor it white via
- * SrcIn tint, which preserves the alpha and turns the mark into a white
- * silhouette — the look Nuvio/Coral TV interfaces use. Light/colored logos
- * pass through unchanged (the Netflix N, Disney castle, etc. stay colored).
- * Public so the detail screen's studio/network chips share the same logic.
+ * pixels; when the mark is dark and essentially colorless (black/gray logos
+ * drawn for light backgrounds — the TMDB company/network default), recolor
+ * it white via a SrcIn tint, which preserves the alpha and turns the mark
+ * into a white silhouette. Light or strongly colored logos pass through
+ * unchanged (the Netflix N, NBC peacock, etc. stay colored).
+ * Public so other screens can share the same logic.
  */
 @Composable
 fun BrandLogo(
@@ -316,12 +323,74 @@ fun BrandLogo(
     name: String,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    var tintWhite by remember(url) { mutableStateOf(false) }
+
+    val request = remember(url) {
+        ImageRequest.Builder(context)
+            .data(url)
+            // Force a software bitmap so pixels can be sampled for luminance.
+            .allowHardware(false)
+            .build()
+    }
+
     AsyncImage(
-        model = url,
+        model = request,
         contentDescription = name,
         contentScale = ContentScale.Fit,
+        colorFilter = if (tintWhite) {
+            ColorFilter.tint(Color.White, BlendMode.SrcIn)
+        } else {
+            null
+        },
+        onSuccess = { state ->
+            tintWhite = isDarkMonochromeMark(state.result.image)
+        },
+        onError = { tintWhite = false },
         modifier = modifier
     )
+}
+
+/**
+ * True when the decoded mark is dark and essentially colorless — the
+ * signature of a logo designed for a light background.
+ */
+private fun isDarkMonochromeMark(image: coil3.Image): Boolean {
+    return try {
+        val src = (image as? coil3.BitmapImage)?.bitmap ?: return false
+        val small = if (src.width <= 48 && src.height <= 48) {
+            src
+        } else {
+            Bitmap.createScaledBitmap(src, 48, 48, true)
+        }
+        val pixels = IntArray(small.width * small.height)
+        small.getPixels(pixels, 0, small.width, 0, 0, small.width, small.height)
+        var count = 0
+        var lumTotal = 0f
+        var satTotal = 0f
+        for (pixel in pixels) {
+            val alpha = (pixel ushr 24) and 0xFF
+            if (alpha < 64) continue // transparent padding
+            val r = (pixel shr 16) and 0xFF
+            val g = (pixel shr 8) and 0xFF
+            val b = pixel and 0xFF
+            lumTotal += (0.299f * r + 0.587f * g + 0.114f * b) / 255f
+            val max = maxOf(r, g, b)
+            val min = minOf(r, g, b)
+            satTotal += (max - min) / 255f
+            count++
+        }
+        if (count == 0) {
+            false
+        } else {
+            val avgLum = lumTotal / count
+            val avgSat = satTotal / count
+            avgLum < 0.55f && avgSat < 0.28f
+        }
+    } catch (_: Exception) {
+        // Undecodable/protected bitmap — leave the logo untouched.
+        false
+    }
 }
 
 @Composable
