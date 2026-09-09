@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Focused state for the accent buttons (skip intro/recap, change source):
+     same accent fill plus a bright focus border so D-pad users can see the
+     button is selected. Matches the pill_chip_focused_bg convention. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/kb_accent" />
+            <stroke android:width="2dp" android:color="@color/kb_text_hi" />
+            <corners android:radius="8dp" />
+        </shape>
+    </item>
+</layer-list>

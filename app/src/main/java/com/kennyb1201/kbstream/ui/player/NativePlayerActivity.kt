@@ -848,8 +848,17 @@ class NativePlayerActivity : ComponentActivity() {
         btnPlayPause.setOnClickListener { togglePlayPause() }
 
         // Skip intro
-        btnSkipIntro.setOnFocusChangeListener { _, focused ->
+        btnSkipIntro.setOnFocusChangeListener { v, focused ->
             if (focused) removeAutoHide() else scheduleAutoHide()
+            // Visible focus ring: without this the focused and unfocused
+            // buttons look identical and a D-pad user can't tell when
+            // pressing OK will actually trigger the skip.
+            v.setBackgroundResource(
+                if (focused) R.drawable.button_accent_bg_focused
+                else R.drawable.button_accent_bg
+            )
+            v.scaleX = if (focused) 1.06f else 1f
+            v.scaleY = if (focused) 1.06f else 1f
         }
         btnSkipIntro.setOnClickListener {
             val stamp = activeIntroStamp ?: return@setOnClickListener
@@ -1182,12 +1191,18 @@ class NativePlayerActivity : ComponentActivity() {
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
                     if (errorContainer.visibility == View.VISIBLE) {
                         focusErrorButtons()
-                        true
                     } else {
                         showControls()
-                        controlsOverlay.requestFocus()
-                        true
+                        // A visible skip prompt beats the overlay: send the
+                        // first D-pad press straight to the button so it can
+                        // actually be reached and confirmed with OK.
+                        if (btnSkipIntro.visibility == View.VISIBLE) {
+                            btnSkipIntro.requestFocus()
+                        } else {
+                            controlsOverlay.requestFocus()
+                        }
                     }
+                    true
                 }
                 KeyEvent.KEYCODE_BACK -> {
                     if (isPickerShowing || showSettingsPanel) { dismissAllPanels(); true } else false
@@ -2439,7 +2454,16 @@ class NativePlayerActivity : ComponentActivity() {
         clockHandler.post(clockRunnable)
         // If a panel is open, the panel owns focus — do not steal it.
         if (!showSettingsPanel && !isPickerShowing) {
-            controlsOverlay.post { btnPlayPause.requestFocus() }
+            controlsOverlay.post {
+                // While a skip prompt is up it is the primary target —
+                // park focus there (Netflix-style) instead of play/pause
+                // so the button is always one OK press away.
+                if (btnSkipIntro.visibility == View.VISIBLE) {
+                    btnSkipIntro.requestFocus()
+                } else {
+                    btnPlayPause.requestFocus()
+                }
+            }
         }
         scheduleAutoHide()
     }
@@ -2932,17 +2956,28 @@ class NativePlayerActivity : ComponentActivity() {
                 return
             }
             val posMs = player.currentPosition
-            val matching = introDbStamps.firstOrNull { stamp ->
-                posMs >= stamp.startMs && posMs < stamp.endMs &&
-                    stamp.endMs > stamp.startMs && stamp.endMs - stamp.startMs <= 10 * 60 * 1000L
-            }
+            // Only offer a skip while the video is ACTUALLY playing. Stamps
+            // that start at 0 (recaps especially) would otherwise match
+            // during the loading splash, when currentPosition is still 0 --
+            // the prompt must never appear before the first frame renders.
+            val matching = if (player.isPlaying && player.playbackState == Player.STATE_READY) {
+                introDbStamps.firstOrNull { stamp ->
+                    posMs >= stamp.startMs && posMs < stamp.endMs &&
+                        stamp.endMs > stamp.startMs && stamp.endMs - stamp.startMs <= 10 * 60 * 1000L
+                }
+            } else null
             if (matching != activeIntroStamp) {
                 activeIntroStamp = matching
                 if (matching != null) {
                     btnSkipIntro.text = matching.type.buttonLabel
                     btnSkipIntro.visibility = View.VISIBLE
                 } else {
+                    val wasFocused = btnSkipIntro.isFocused
                     btnSkipIntro.visibility = View.GONE
+                    // If focus was parked on the button when it hid (e.g.
+                    // the user paused mid-intro), pull it back to the
+                    // surface so no ghost focus target remains.
+                    if (wasFocused) playerView.requestFocus()
                 }
             }
             handler.postDelayed(this, 750L)
