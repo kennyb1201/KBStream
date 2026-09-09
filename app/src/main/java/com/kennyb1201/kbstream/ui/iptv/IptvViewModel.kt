@@ -24,6 +24,8 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class IptvViewModel(application: Application) : AndroidViewModel(application) {
@@ -156,7 +158,47 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+        startGuideClockRefresh()
         restoreCachedPlaylist()
+    }
+
+    /**
+     * Keeps NOW/NEXT/Upcoming from going stale while the guide is open. The
+     * lineup flow computes nowUtcMillis and the query window once per run and
+     * only re-runs when playlist/EPG/tick/channel-batch changes -- left alone,
+     * a channel whose query ran at 10:00 keeps claiming the 10:00 programme
+     * is "on now" well past its end. Re-queuing the already-loaded channel
+     * ids through _pendingGuideChannelIds makes the flow re-run on the same
+     * channels with a fresh clock, and mergeGuideItems() only touches channels
+     * whose now/next actually changed, so unchanged schedules cause no churn.
+     *
+     * Periodic while the VM is alive (subscribers stop within STOP_TIMEOUT_MS
+     * of leaving the guide, and the VM dies with it) plus one shot on start
+     * so returning to the guide after a while shows current programmes
+     * immediately instead of the last session's snapshot.
+     */
+    private fun startGuideClockRefresh() {
+        viewModelScope.launch {
+            // First pass: catch up after returning to the screen. Small delay
+            // so the initial pipeline (restore + initial window request) gets
+            // going first and this rides along after it.
+            delay(GUIDE_CLOCK_FIRST_REFRESH_MS)
+            bumpGuideClock()
+
+            while (isActive) {
+                delay(GUIDE_CLOCK_REFRESH_INTERVAL_MS)
+                bumpGuideClock()
+            }
+        }
+    }
+
+    private fun bumpGuideClock() {
+        val queued = _guideChannelIds.value
+        if (queued.isEmpty()) return
+        // Re-issue the currently loaded channel set as a fresh batch. Even if
+        // the set is unchanged, this re-runs the lineup query with a new
+        // nowUtcMillis/window; mergeGuideItems() diffs per channel.
+        _pendingGuideChannelIds.value = queued
     }
 
     fun onPlaylistUrlChanged(value: String) {
@@ -546,5 +588,10 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
         const val GUIDE_FUTURE_WINDOW_MS = 8 * 60 * 60 * 1000L
         const val PLAYLIST_REFRESH_MS = 6 * 60 * 60 * 1000L
         const val EPG_REFRESH_MS = 12 * 60 * 60 * 1000L
+
+        // First catch-up refresh after the guide pipeline starts, and the
+        // recurring cadence for recomputing now/next with a fresh clock.
+        const val GUIDE_CLOCK_FIRST_REFRESH_MS = 15_000L
+        const val GUIDE_CLOCK_REFRESH_INTERVAL_MS = 2 * 60 * 1000L
     }
 }
