@@ -11,6 +11,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.focusProperties
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
@@ -85,6 +86,7 @@ import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbCastMember
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
+import com.kennyb1201.kbstream.data.omdb.OmdbRatings
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
 import com.kennyb1201.kbstream.data.tmdb.bestReleaseDate
@@ -281,6 +283,7 @@ fun DetailScreen(
     }
 
     val meta by viewModel.meta.collectAsState()
+    val omdbRatings by viewModel.omdbRatings.collectAsState()
     val tmdbDetail by viewModel.tmdbDetail.collectAsState()
     // TMDB clearlogo first (more reliable); add-on logo (fanart.tv etc.) as
     // fallback when TMDB has nothing for this title.
@@ -2118,7 +2121,7 @@ fun DetailScreen(
                             tmdbDetail?.reviews?.results
                                 .orEmpty()
 
-                        if (reviews.isNotEmpty()) {
+                        if (reviews.isNotEmpty() || omdbRatings?.hasAny == true) {
                             item(key = "reviewsheader") {
                                 Text(
                                     "REVIEWS",
@@ -2131,6 +2134,48 @@ fun DetailScreen(
                                         bottom = 7.dp
                                     )
                                 )
+                            }
+
+                            if (omdbRatings?.hasAny == true) {
+                                item(key = "criticratingsrow") {
+                                    Row(
+                                        modifier = Modifier
+                                            .padding(start = 24.dp, top = 10.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        listOf(
+                                            "IMDb" to omdbRatings?.imdb,
+                                            "RT" to omdbRatings?.rottenTomatoes,
+                                            "MC" to omdbRatings?.metacritic
+                                        ).forEach { (label, value) ->
+                                            if (value != null) {
+                                                KBCard(
+                                                    onClick = {},
+                                                    modifier = Modifier
+                                                        .width(150.dp)
+                                                        .focusProperties { canFocus = false }
+                                                ) {
+                                                    Column(
+                                                        modifier = Modifier
+                                                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = label,
+                                                            color = KBTextLo,
+                                                            style = MaterialTheme.typography.labelSmall
+                                                        )
+                                                        Text(
+                                                            text = value,
+                                                            color = KBAccent,
+                                                            style = MaterialTheme.typography.titleMedium,
+                                                            fontWeight = FontWeight.SemiBold
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
 
                             item(key = "reviewsrow") {
@@ -3694,13 +3739,29 @@ private fun ReviewCard(
         Column(
             modifier = Modifier.padding(11.dp)
         ) {
-            Text(
-                text = review.author,
-                style =
-                    MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = review.author,
+                    style =
+                        MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                review.authorDetails?.rating?.let { rating ->
+                    Text(
+                        text = "\u2605 %.1f".format(rating),
+                        color = KBAccent,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
+                }
+            }
 
             Text(
                 text = review.content,

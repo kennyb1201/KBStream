@@ -17,6 +17,8 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbCollectionDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbPersonDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.omdb.OmdbClient
+import com.kennyb1201.kbstream.data.omdb.OmdbRatings
 import com.kennyb1201.kbstream.data.tmdb.TmdbSeasonSummary
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
@@ -106,6 +108,9 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _collection = MutableStateFlow<TmdbCollectionDetail?>(null)
     val collection: StateFlow<TmdbCollectionDetail?> = _collection.asStateFlow()
+
+    private val _omdbRatings = MutableStateFlow<OmdbRatings?>(null)
+    val omdbRatings: StateFlow<OmdbRatings?> = _omdbRatings.asStateFlow()
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
@@ -249,6 +254,7 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
         _episodesLoading.value = false
         latestEpisodeSeasonRequest = initialSeason
         _collection.value = null
+        _omdbRatings.value = null
         _simklSeriesWatched.value = false
         _resolvedPosterIds.value = emptyMap()
         _targetEpisode.value = null
@@ -535,6 +541,7 @@ for (metaAddon in metaAddons) {
                             .onSuccess { collection -> _collection.value = collection }
                     }
                     refreshPosterWatchedStatus(normalizedType)
+                    fetchOmdbRatings(normalizedType)
                 }
 
                 // 5. Trigger season selection strictly after history states are fully loaded
@@ -553,6 +560,31 @@ for (metaAddon in metaAddons) {
                 _isLoading.value = false
                 Log.e("KBStream", "detail load finished type=$type id=$id")
             }
+        }
+    }
+
+    /**
+     * OMDb ratings (IMDb / Rotten Tomatoes / Metacritic). Key comes from the
+     * OMDb_API_KEY BuildConfig field; blank key = feature silently off.
+     * IMDb id: addon meta ids are already tt-id based for movies/series; for
+     * TMDB-only ids fall back to the external_ids lookup.
+     */
+    private fun omdbApiKey(): String = runCatching {
+        com.kennyb1201.kbstream.BuildConfig.OMDB_API_KEY
+    }.getOrDefault("")
+
+    private fun fetchOmdbRatings(normalizedType: String) {
+        if (omdbApiKey().isBlank()) return
+        viewModelScope.launch {
+            val meta = _meta.value
+            val rawId = meta?.id ?: imdbId
+            val resolved = rawId.takeIf { it.startsWith("tt") }
+                ?: tmdbRepository.resolveImdbId(
+                    _tmdbDetail.value?.id?.takeIf { it > 0 } ?: return@launch,
+                    normalizedType
+                ).orEmpty()
+            if (!resolved.startsWith("tt")) return@launch
+            _omdbRatings.value = OmdbClient.fetchRatings(resolved, omdbApiKey())
         }
     }
 

@@ -29,6 +29,10 @@ val sentryDsn = localProps.getProperty("SENTRY_DSN")
     ?: System.getenv("SENTRY_DSN")
     ?: ""
 
+val omdbApiKey = localProps.getProperty("OMDB_API_KEY")
+    ?: System.getenv("OMDB_API_KEY")
+    ?: ""
+
 val releaseStoreFile = System.getenv("KBSTREAM_STORE_FILE")
 val releaseStorePassword = System.getenv("KBSTREAM_STORE_PASSWORD")
 val releaseKeyAlias = System.getenv("KBSTREAM_KEY_ALIAS")
@@ -49,6 +53,7 @@ android {
         buildConfigField("String", "SIMKL_CLIENT_ID", "\"$simklClientId\"")
         buildConfigField("String", "SIMKL_CLIENT_SECRET", "\"$simklClientSecret\"")
         buildConfigField("String", "SENTRY_DSN", "\"$sentryDsn\"")
+        buildConfigField("String", "OMDB_API_KEY", "\"$omdbApiKey\"")
     }
     buildFeatures {
         compose = true
