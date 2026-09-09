@@ -43,6 +43,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -208,6 +209,15 @@ fun GuideScreen(
 
     var showSetup by remember { mutableStateOf(playlist == null) }
     var showHiddenManager by remember { mutableStateOf(false) }
+    val groupRowState = rememberLazyListState()
+
+    // The setup overlay lives on top of the guide, so Back must close the
+    // overlay and stay here. Without this handler Back falls through to
+    // MainActivity, which exits the guide to Home entirely.
+    val dismissSetup = {
+        showSetup = false
+    }
+    BackHandler(enabled = showSetup && playlist != null, onBack = dismissSetup)
 
 LaunchedEffect(defaultPlaylistUrl, defaultEpgUrl, defaultPlaylistName) {
     if (
@@ -233,6 +243,26 @@ LaunchedEffect(groupedChannels) {
 
     if (!currentStillExists) {
         selectedChannelId = groupedChannels.firstOrNull()?.channel?.id
+    }
+}
+
+// Keep the focused/selected group chip visible: navigating groups from the
+// channel list (left/right) selects a chip that may sit outside the LazyRow's
+// viewport on long group lists. Only scroll when the chip is actually
+// off-screen -- re-aligning on every selection change (e.g. focus simply
+// moving along the chips row) would yank the row even when nothing is hidden.
+LaunchedEffect(selectedGroup, groups) {
+    val chipIndex = groups.indexOf(selectedGroup)
+    if (chipIndex < 0) return@LaunchedEffect
+
+    val visible = groupRowState.layoutInfo.visibleItemsInfo
+    val isOnScreen = visible.any { it.index == chipIndex }
+    if (!isOnScreen && visible.isNotEmpty()) {
+        val lastVisible = visible.last().index
+        // Scroll toward the chip from whichever side it sits, landing it one
+        // item inside the edge so the neighbor context stays visible.
+        val anchor = if (chipIndex > lastVisible) chipIndex - 1 else chipIndex
+        groupRowState.animateScrollToItem(anchor.coerceIn(0, groups.lastIndex))
     }
 }
 
@@ -399,6 +429,7 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                     } else {
                         if (groups.isNotEmpty()) {
                             LazyRow(
+    state = groupRowState,
     contentPadding = PaddingValues(end = 8.dp),
     horizontalArrangement = Arrangement.spacedBy(8.dp),
     modifier = Modifier
