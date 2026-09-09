@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.iptv
 
 import android.content.Context
+import android.view.KeyEvent
 import androidx.compose.material3.Text as Material3Text
 import androidx.tv.material3.Border
 import androidx.tv.material3.Surface
@@ -48,6 +49,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -152,6 +154,18 @@ fun GuideScreen(
     
     var moveFocusToChannelList by remember { mutableStateOf(false) }
 
+    // Last-viewed persistence: reopening the guide drops you back on the
+    // group/channel you were on instead of "All" + top of the list. The
+    // pending* fields are consumed once by the membership effect below the
+    // moment the restored channel's list content first exists.
+    val savedGroup = guidePreferences.getString("last_group", null)
+    val savedChannelKey = guidePreferences.getString("last_channel", null)
+    var pendingChannelKey by remember { mutableStateOf<String?>(savedChannelKey) }
+    var pendingFocusChannel by remember { mutableStateOf(!savedChannelKey.isNullOrBlank()) }
+    var membershipBump by remember { mutableStateOf(0) }
+    var digitEntry by remember { mutableStateOf("") }
+    val channelRowFocusRequesters = remember { mutableMapOf<String, FocusRequester>() }
+
     fun channelKey(item: IptvChannelWithEpg): String =
         item.channel.id.ifBlank { item.channel.streamUrl }
     fun favoriteKey(item: IptvChannelWithEpg): String = channelKey(item)
@@ -179,7 +193,7 @@ fun GuideScreen(
             addAll(seenGroups)
         }
     }
-    var selectedGroup by remember { mutableStateOf("All") }
+    var selectedGroup by remember { mutableStateOf(savedGroup?.takeIf { it.isNotBlank() } ?: "All") }
     val groupedChannels = remember(unhiddenChannels, selectedGroup, favorites) {
         when (selectedGroup) {
             "All" -> unhiddenChannels
@@ -206,6 +220,34 @@ fun GuideScreen(
         item.channel.id == selectedChannelId
     }.takeIf { it >= 0 } ?: if (groupedChannels.isNotEmpty()) 0 else -1
     val selectedChannel = groupedChannels.getOrNull(selectedChannelIndex)
+
+    // If the restored/selected group no longer exists (playlist changed or
+    // the group got hidden since last visit) fall back to "All" instead of
+    // leaving an empty guide.
+    LaunchedEffect(groups) {
+        if (groups.isNotEmpty() && selectedGroup !in groups) selectedGroup = "All"
+    }
+
+    LaunchedEffect(selectedGroup) {
+        guidePreferences.edit().putString("last_group", selectedGroup).apply()
+    }
+
+    LaunchedEffect(selectedChannelId) {
+        val item = groupedChannels.firstOrNull { it.channel.id == selectedChannelId }
+        if (item != null) {
+            guidePreferences.edit().putString("last_channel", channelKey(item)).apply()
+        }
+    }
+
+    fun resolveChannelNumber(entry: String) {
+        if (entry.isBlank()) return
+        val target = unhiddenChannels.firstOrNull { it.channel.tvgChno?.trim() == entry } ?: return
+        pendingChannelKey = channelKey(target)
+        pendingFocusChannel = true
+        val targetGroup = target.channel.groupTitle?.trim().orEmpty().ifBlank { "All" }
+        if (targetGroup != selectedGroup) selectedGroup = targetGroup
+        membershipBump += 1
+    }
 
     var showSetup by remember { mutableStateOf(playlist == null) }
     var showHiddenManager by remember { mutableStateOf(false) }
@@ -309,10 +351,44 @@ LaunchedEffect(channelListState, groupedChannelIds) {
   val groupedChannelMembership = remember(groupedChannels) {
     selectedGroup + "|" + groupedChannels.joinToString("|") { it.channel.id }
   }
-  LaunchedEffect(groupedChannelMembership) {
-    selectedChannelId = groupedChannels.firstOrNull()?.channel?.id
-    channelListState.scrollToItem(0)
-}
+  LaunchedEffect(groupedChannelMembership, membershipBump) {
+    if (groupedChannels.isEmpty()) return@LaunchedEffect
+
+    // A pending channel key (restore-on-open or channel-number jump) wins
+    // over the default "select first row" reset.
+    val pending = pendingChannelKey
+    pendingChannelKey = null
+    val wasPendingFocus = pendingFocusChannel
+    pendingFocusChannel = false
+
+    val target = pending?.let { key ->
+        groupedChannels.firstOrNull { channelKey(it) == key }
+    }
+    val targetId = target?.channel?.id
+        ?: groupedChannels.firstOrNull()?.channel?.id
+    selectedChannelId = targetId
+
+    val targetIndex = groupedChannels.indexOfFirst { it.channel.id == targetId }
+    channelListState.scrollToItem(if (targetIndex > 0) targetIndex else 0)
+
+    if (target != null && wasPendingFocus) {
+        val rowRequester = channelRowFocusRequesters[channelKey(target)]
+        if (rowRequester != null) {
+            var focused = false
+            var attempts = 0
+            while (!focused && attempts < 6) {
+                awaitFrame()
+                focused = runCatching { rowRequester.requestFocus() }
+                    .getOrDefault(false)
+                attempts++
+            }
+        }
+    } else if (pending != null && target == null) {
+        // Saved channel vanished (playlist changed) -- make sure something
+        // is focused instead of leaving the screen focusless.
+        runCatching { allTabFocusRequester.requestFocus() }
+    }
+  }
 
   LaunchedEffect(moveFocusToChannelList, groupedChannels) {
     if (moveFocusToChannelList && groupedChannels.isNotEmpty()) {
@@ -340,14 +416,27 @@ LaunchedEffect(channelListState, groupedChannelIds) {
     }
 }
 
+  // Channel-number entry: digits accumulate in digitEntry and resolve after
+  // a short pause (classic TV remote behavior -- more digits can follow).
+  LaunchedEffect(digitEntry) {
+    if (digitEntry.isBlank()) return@LaunchedEffect
+    delay(1200)
+    resolveChannelNumber(digitEntry)
+    digitEntry = ""
+  }
+
   // Nothing has real D-pad focus on first entry (the "All" tab is only
   // *visually* selected via selectedGroup's default value), so the very
   // first key press falls through to the platform's default focus
   // resolution instead of landing on the tabs row -- claim it explicitly
   // once so Down from the tabs row is deterministic from the start.
+  // When restoring the last-viewed channel, the row focus (in the
+  // membership effect above) takes over instead of the "All" chip.
   LaunchedEffect(Unit) {
     awaitFrame()
-    runCatching { allTabFocusRequester.requestFocus() }
+    if (!pendingFocusChannel) {
+        runCatching { allTabFocusRequester.requestFocus() }
+    }
 }
 
     // Both the inline (no-playlist) and overlay (showSetup) placements of the
@@ -384,6 +473,28 @@ LaunchedEffect(channelListState, groupedChannelIds) {
         modifier = modifier
             .fillMaxSize()
             .background(KBVoid)
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+
+                // Channel-number entry only when the guide owns the stage:
+                // never while the setup form, hidden-items manager, or
+                // channel menu is up, so digits keep reaching those controls.
+                val digitsAllowed = playlist != null && !showSetup &&
+                    menuItem == null && !showHiddenManager
+                if (!digitsAllowed) return@onPreviewKeyEvent false
+
+                val code = event.nativeKeyEvent.keyCode
+                val digit = when (code) {
+                    in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 ->
+                        code - KeyEvent.KEYCODE_0
+                    in KeyEvent.KEYCODE_NUMPAD_0..KeyEvent.KEYCODE_NUMPAD_9 ->
+                        code - KeyEvent.KEYCODE_NUMPAD_0
+                    else -> return@onPreviewKeyEvent false
+                }
+                if (digitEntry.length >= 4) return@onPreviewKeyEvent true
+                digitEntry += digit.toString()
+                true
+            }
     ) {
         Box(
             modifier = Modifier
@@ -455,6 +566,13 @@ LaunchedEffect(channelListState, groupedChannelIds) {
             selected = group == selectedGroup,
             onClick = { selectedGroup = group },
             onFocus = { if (!moveFocusToChannelList) selectedGroup = group },
+            onLongClick = {
+                // Quick-hide straight from the chips row (same storage the
+                // hidden-items manager uses). If the current group hides
+                // itself, the groups fallback effect returns to "All".
+                hiddenGroups = hiddenGroups + group
+                saveSet("hidden_groups", hiddenGroups)
+            },
             modifier = Modifier
                 .focusRequester(chipFocusRequester)
                 .let { base ->
@@ -484,6 +602,12 @@ Spacer(modifier = Modifier.height(14.dp))
     key = { _, item -> channelKey(item) }
 ) { index, rawItem ->
                                         val item = withFavoriteFlag(rawItem)
+                                        val rowFocusRequester =
+                                            remember(item.channel.id) {
+                                                FocusRequester().also {
+                                                    channelRowFocusRequesters[channelKey(item)] = it
+                                                }
+                                            }
 
                                         ChannelRowCard(
                                             item = item,
@@ -505,11 +629,14 @@ Spacer(modifier = Modifier.height(14.dp))
     // deterministically -- attaching it via selectedChannelIndex instead
     // raced against that same reset (selectedChannelId hadn't caught up
     // yet), leaving the requester's target detached at the moment
-    // requestFocus() fired.
+    // requestFocus() fired. rowFocusRequester is the per-row handle the
+    // restore / channel-number-jump flows use to land D-pad focus exactly.
     if (index == 0) {
-        Modifier.focusRequester(firstChannelFocusRequester)
-    } else {
         Modifier
+            .focusRequester(rowFocusRequester)
+            .focusRequester(firstChannelFocusRequester)
+    } else {
+        Modifier.focusRequester(rowFocusRequester)
     }
 ).onPreviewKeyEvent { event ->
     if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
@@ -570,11 +697,38 @@ Spacer(modifier = Modifier.height(14.dp))
                                             GuideDetailPanel(item = detailItem)
                                         }
                                     } else {
-                                        CenterMessage(
-                                            title = "No channel selected",
-                                            message = "Choose a channel from the list to view program details.",
+                                        Column(
+                                            horizontalAlignment = Alignment.CenterHorizontally,
                                             modifier = Modifier.fillMaxSize()
-                                        )
+                                        ) {
+                                            CenterMessage(
+                                                title = if (groupedChannels.isEmpty()) {
+                                                    "No channels in \"$selectedGroup\""
+                                                } else {
+                                                    "No channel selected"
+                                                },
+                                                message = if (groupedChannels.isEmpty()) {
+                                                    "This view has nothing to show right now."
+                                                } else {
+                                                    "Choose a channel from the list to view program details."
+                                                },
+                                                modifier = Modifier.weight(1f).fillMaxWidth()
+                                            )
+                                            if (groupedChannels.isEmpty()) {
+                                                KBCard(onClick = { selectedGroup = "All" }) {
+                                                    Text(
+                                                        text = "SHOW ALL CHANNELS",
+                                                        color = KBTextHi,
+                                                        style = MaterialTheme.typography.titleSmall,
+                                                        modifier = Modifier.padding(
+                                                            horizontal = 16.dp,
+                                                            vertical = 11.dp
+                                                        )
+                                                    )
+                                                }
+                                                Spacer(modifier = Modifier.height(24.dp))
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -653,6 +807,43 @@ Spacer(modifier = Modifier.height(14.dp))
     saveSet("hidden_groups", hiddenGroups)
 }
                     )
+                }
+
+                if (digitEntry.isNotEmpty()) {
+                    val digitMatch = unhiddenChannels.firstOrNull {
+                        it.channel.tvgChno?.trim() == digitEntry
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        colors = SurfaceDefaults.colors(
+                            containerColor = KBSurfaceRaised.copy(alpha = 0.97f),
+                            contentColor = KBTextHi
+                        ),
+                        border = Border(
+                            border = BorderStroke(1.dp, KBAccent.copy(alpha = 0.55f)),
+                            shape = RoundedCornerShape(12.dp)
+                        ),
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(24.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                            Text(
+                                text = "CH $digitEntry",
+                                color = KBAccent,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = digitMatch?.channel?.displayName ?: "Enter channel number",
+                                color = KBTextLo,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+                    }
                 }
 
                 if ((error != null || guideError != null) && playlist != null && !showSetup) {
@@ -1104,10 +1295,12 @@ private fun GroupChip(
     selected: Boolean,
     onClick: () -> Unit,
     onFocus: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ){
     KBCard(
     onClick = onClick,
+    onLongClick = onLongClick,
     modifier = modifier.onFocusChanged {
         if (it.isFocused) onFocus()
     }
@@ -1315,6 +1508,8 @@ private fun GuideDetailPanel(
     item: IptvChannelWithEpg,
     modifier: Modifier = Modifier
 ) {
+    val nowMillis = rememberNowMillis()
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -1357,7 +1552,7 @@ private fun GuideDetailPanel(
             }
         }
         Spacer(modifier = Modifier.height(12.dp))
-        NowNextPanel(item = item)
+        NowNextPanel(item = item, nowMillis = nowMillis)
         Spacer(modifier = Modifier.height(14.dp))
         Text(
             text = "UPCOMING",
@@ -1416,6 +1611,14 @@ private fun GuideDetailPanel(
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f)
                             )
+
+                            Text(
+                                text = formatStartsInLabel(program.startUtcMillis - nowMillis),
+                                color = KBTextLo,
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                modifier = Modifier.padding(start = 10.dp)
+                            )
                         }
                     }
                 }
@@ -1427,8 +1630,16 @@ private fun GuideDetailPanel(
 @Composable
 private fun NowNextPanel(
     item: IptvChannelWithEpg,
+    nowMillis: Long,
     modifier: Modifier = Modifier
 ) {
+    val nowProgram = item.now
+    val nowProgress: Float? = nowProgram?.let { program ->
+        val duration = (program.endUtcMillis - program.startUtcMillis).coerceAtLeast(1L)
+        val fraction = (nowMillis - program.startUtcMillis).toFloat() / duration
+        fraction.takeIf { it >= 0f && it <= 1f }
+    }
+
     Row(
         modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -1437,6 +1648,8 @@ private fun NowNextPanel(
             label = "NOW",
             title = item.now?.title ?: "Nothing airing right now",
             time = item.now?.let { formatTimeRange(it.startUtcMillis, it.endUtcMillis) },
+            badge = nowProgram?.let { formatRemainingLabel(it.endUtcMillis - nowMillis) },
+            progress = nowProgress,
             description = item.now?.description,
             modifier = Modifier.weight(1f)
         )
@@ -1445,6 +1658,7 @@ private fun NowNextPanel(
             label = "NEXT",
             title = item.next?.title ?: "No next program listed",
             time = item.next?.let { formatTimeRange(it.startUtcMillis, it.endUtcMillis) },
+            badge = item.next?.let { formatStartsInLabel(it.startUtcMillis - nowMillis) },
             description = item.next?.description,
             modifier = Modifier.weight(1f)
         )
@@ -1456,6 +1670,8 @@ private fun ProgramCard(
     label: String,
     title: String,
     time: String?,
+    badge: String? = null,
+    progress: Float? = null,
     description: String?,
     modifier: Modifier = Modifier
 ) {
@@ -1490,11 +1706,32 @@ private fun ProgramCard(
 
             if (!time.isNullOrBlank()) {
                 Text(
-                    text = time,
+                    text = if (badge.isNullOrBlank()) time else "$time  •  $badge",
                     color = KBTextLo,
                     style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 3.dp)
                 )
+            }
+
+            progress?.let { fraction ->
+                Box(
+                    modifier = Modifier
+                        .padding(top = 8.dp)
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(KBVoid.copy(alpha = 0.55f))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(fraction.coerceIn(0.02f, 1f))
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(KBAccent)
+                    )
+                }
             }
 
             description?.takeIf { it.isNotBlank() }?.let {
@@ -1578,6 +1815,43 @@ private fun InlineErrorChip(
         )
     }
 }
+
+@Composable
+private fun rememberNowMillis(): Long {
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+
+    // 30s cadence: guide progress / remaining labels don't need sub-minute
+    // precision, and a slow tick keeps recomposition cost negligible.
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(30_000)
+            now = System.currentTimeMillis()
+        }
+    }
+
+    return now
+}
+
+private fun formatRemainingLabel(msUntilEnd: Long): String? {
+    if (msUntilEnd <= 0L) return null
+    val totalMinutes = ((msUntilEnd + 59_999L) / 60_000L).toInt()
+    val hours = totalMinutes / 60
+    val minutes = totalMinutes % 60
+    return when {
+        hours > 0 && minutes > 0 -> "$hours hr $minutes min left"
+        hours > 0 -> "$hours hr left"
+        else -> "$minutes min left"
+    }
+}
+
+private fun formatStartsInLabel(msUntilStart: Long): String =
+    when {
+        msUntilStart <= 0L -> "starting"
+        msUntilStart < 60_000L -> "in <1 min"
+        msUntilStart < 3_600_000L -> "in ${msUntilStart / 60_000L} min"
+        msUntilStart < 86_400_000L -> "in ${msUntilStart / 3_600_000L} hr"
+        else -> "in ${msUntilStart / 86_400_000L} d"
+    }
 
 @Composable
 private fun rememberCurrentTimeLabel(): String {
