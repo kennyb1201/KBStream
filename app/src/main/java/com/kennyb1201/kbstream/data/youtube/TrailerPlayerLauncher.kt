@@ -215,6 +215,12 @@ object TrailerPlayerLauncher {
                     return
                 }
 
+        // Signing client's User-Agent (null for NewPipe/Piped sources).
+        val sourceUserAgent = when (source) {
+            is PlayableSource.Muxed -> source.userAgent
+            is PlayableSource.Adaptive -> source.userAgent
+        }
+
         val intent =
             Intent(
                 context,
@@ -245,7 +251,7 @@ object TrailerPlayerLauncher {
                 // googlevideo only serves a signed URL to the UA of the
                 // client it was signed for. The fullscreen player applies
                 // "stream_headers" over its own default UA.
-                source.userAgent?.let { ua ->
+                sourceUserAgent?.let { ua ->
                     putExtra("stream_headers", "User-Agent: $ua")
                 }
 
