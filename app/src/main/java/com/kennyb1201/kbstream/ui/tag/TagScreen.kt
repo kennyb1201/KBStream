@@ -47,7 +47,7 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
-import coil3.request.size
+import coil3.size.Size
 import com.kennyb1201.kbstream.data.tmdb.StudioItem
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
@@ -321,7 +321,7 @@ private fun TagHeader(
                     AsyncImage(
                         model = ImageRequest.Builder(context)
                             .data(url)
-                            .size(200, 300)
+                            .size(Size(200, 300))
                             .crossfade(true)
                             .build(),
                         contentDescription = null,
