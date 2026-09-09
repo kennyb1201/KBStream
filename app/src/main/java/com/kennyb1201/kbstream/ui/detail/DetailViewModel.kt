@@ -135,8 +135,17 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
     fun posterLookupKey(tmdbId: Int, mediaType: String): String = "${mediaType.lowercase()}::$tmdbId"
 
     private fun normalizeMediaType(type: String): String = when (type.lowercase()) {
-        "tv", "show" -> "series"
-        else -> type.lowercase()
+        "tv", "show" ->
+            "series"
+        // Anime catalogs emit type "anime" (and movies "anime.movie"); TMDB
+        // and most meta addons serve them under series/movie, so normalize
+        // before building meta/episode endpoints. Ids are unaffected.
+        "anime", "anime.series" ->
+            "series"
+        "anime.movie" ->
+            "movie"
+        else ->
+            type.lowercase()
     }
 
     // Hot reactive check to observe if the current item is marked watched in real-time
@@ -300,9 +309,12 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
                 // 4. Handle Meta addon loading asynchronously in background
                 val addons = addonsDeferred.await()
 
-val metaAddons = addons.filter { addon ->
-    addon.resources.any { it.equals("meta", ignoreCase = true) }
-}
+// Probe order: addons whose manifest idPrefixes match this id first
+// (a TVDB addon for "tvdb:...", a Cinemeta-style IMDB addon for "tt..."),
+// then legacy manifests that declare no prefixes, then declared-but-
+// non-matching addons as a last resort. Prevents an IMDB-only addon from
+// winning the probe race for TVDB-sourced titles and vice versa.
+val metaAddons = addonManager.orderMetaAddonsForId(addons, id, normalizedType)
 
 Log.e(
     "KBStream",

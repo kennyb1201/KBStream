@@ -311,6 +311,10 @@ fun DetailScreen(
 
     val normalizedType = when (type.lowercase()) {
         "tv", "show" -> "series"
+        // Anime catalogs emit type "anime"; TMDB serves those shows under
+        // series, so the season/episode UI must treat anime as series.
+        "anime", "anime.series" -> "series"
+        "anime.movie" -> "movie"
         else -> type.lowercase()
     }
 

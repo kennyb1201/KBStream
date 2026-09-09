@@ -151,6 +151,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                     version = manifest.version,
                     description = manifest.description,
                     types = manifest.types,
+                    idPrefixes = manifest.idPrefixes,
                     logo = manifest.logo ?: manifest.icon
                 )
 

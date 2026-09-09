@@ -3936,9 +3936,14 @@ private suspend fun calculateEpisodesRemaining(
     id: String,
     type: String
 ): Meta? {
+    // Same ordering as DetailViewModel: idPrefix-declaring addons that match
+    // the id first, then legacy accept-all addons, then the rest.
     val candidates =
-        addonManager.installedAddons.value
-            .filter { "meta" in it.resources }
+        addonManager.orderMetaAddonsForId(
+            addons = addonManager.installedAddons.value,
+            rawId = id,
+            type = type
+        )
 
     for (addon in candidates) {
         val baseUrl =

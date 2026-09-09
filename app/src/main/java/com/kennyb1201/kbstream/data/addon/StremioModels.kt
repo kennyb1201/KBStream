@@ -141,7 +141,16 @@ data class AddonManifest(
     val types: List<String> = emptyList(),
     val catalogs: List<ManifestCatalog> = emptyList(),
     val logo: String? = null,
-    val icon: String? = null
+    val icon: String? = null,
+
+    /**
+     * Stremio-standard id-prefix declaration (e.g. ["tt"] for IMDB-only
+     * addons, ["tvdb"] for TVDB-sourced ones). Present on manifests that
+     * declare it; null on older/legacy manifests, which are treated as
+     * accept-all by the meta probe ordering.
+     */
+    @Json(name = "idPrefixes")
+    val idPrefixes: List<String>? = null
 )
 
 /**
@@ -222,7 +231,16 @@ data class InstalledAddon(
     /**
      * Addon logo/icon URL from the manifest, used for the tile artwork.
      */
-    val logo: String? = null
+    val logo: String? = null,
+
+    /**
+     * Id prefixes this addon's meta resource accepts (from the manifest's
+     * idPrefixes declaration), or null when the manifest declares none.
+     * Used to order meta probes: prefix-matching addons are asked first so
+     * e.g. a TVDB-sourced title resolves from a TVDB addon rather than an
+     * IMDB-only one that happens to answer first.
+     */
+    val idPrefixes: List<String>? = null
 ) {
     val displayName: String
         get() = customName

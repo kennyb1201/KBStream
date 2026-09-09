@@ -49,6 +49,52 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
     val installedAddons: StateFlow<List<InstalledAddon>> =
         _installedAddons.asStateFlow()
 
+    /**
+     * Orders meta addon candidates for a given raw id so probes hit the most
+     * likely source first:
+     *
+     *  1. addons whose manifest declares a matching idPrefix (e.g. a TVDB
+     *     addon for "tvdb:12345", Cinemeta for "tt1234567"),
+     *  2. addons whose manifest declares NO idPrefixes (legacy accept-all),
+     *  3. addons whose declared prefixes don't match the id (unlikely to
+     *     resolve, asked last only as a safety net).
+     *
+     * This keeps TVDB-sourced titles (and anime addons that emit anime ids)
+     * resolving from the right addon without breaking legacy manifests that
+     * never declared prefixes. Additive: null prefixes keep the old order.
+     */
+    fun orderMetaAddonsForId(
+        addons: List<InstalledAddon>,
+        rawId: String,
+        type: String
+    ): List<InstalledAddon> {
+        val normalizedType = when (type.lowercase().trim()) {
+            "tv", "show" -> "series"
+            else -> type.lowercase().trim()
+        }
+        val idLower = rawId.trim().lowercase()
+        val candidates = addons.filter { addon ->
+            "meta" in addon.resources &&
+                (addon.types.isEmpty() ||
+                    normalizedType in addon.types.map { t ->
+                        when (t.lowercase().trim()) {
+                            "tv", "show" -> "series"
+                            else -> t.lowercase().trim()
+                        }
+                    })
+        }
+        val (matching, rest) = candidates.partition { addon ->
+            val prefixes = addon.idPrefixes.orEmpty()
+            prefixes.isNotEmpty() && prefixes.any { prefix ->
+                idLower.startsWith(prefix.trim().lowercase())
+            }
+        }
+        val (legacy, mismatched) = rest.partition { addon ->
+            addon.idPrefixes.isNullOrEmpty()
+        }
+        return matching + legacy + mismatched
+    }
+
     private val addonScope =
         CoroutineScope(
             Dispatchers.Default + SupervisorJob()
@@ -594,6 +640,9 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
 
                 types =
                     manifest.types,
+
+                idPrefixes =
+                    manifest.idPrefixes,
 
                 logo =
                     manifest.logo
