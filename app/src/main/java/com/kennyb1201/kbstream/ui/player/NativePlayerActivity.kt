@@ -1170,7 +1170,12 @@ class NativePlayerActivity : ComponentActivity() {
         playerView.isFocusableInTouchMode = true
         playerView.requestFocus()
         playerView.setOnKeyListener { _, keyCode, event ->
-            if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+            // Scrub-release must get through: when the overlay is hidden,
+            // LEFT/RIGHT end their hold on ACTION_UP (see the branch below).
+            val scrubRelease = !controlsVisible &&
+                (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) &&
+                event.action != KeyEvent.ACTION_DOWN
+            if (event.action != KeyEvent.ACTION_DOWN && !scrubRelease) return@setOnKeyListener false
             when (keyCode) {
                 KeyEvent.KEYCODE_MEDIA_PAUSE -> {
                     exoPlayer?.pause(); showControls(); true
@@ -1196,7 +1201,7 @@ class NativePlayerActivity : ComponentActivity() {
                         true
                     }
                 }
-                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
                     if (errorContainer.visibility == View.VISIBLE) {
                         focusErrorButtons()
                     } else {
@@ -1211,6 +1216,44 @@ class NativePlayerActivity : ComponentActivity() {
                         }
                     }
                     true
+                }
+                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    if (errorContainer.visibility == View.VISIBLE) {
+                        focusErrorButtons()
+                    } else if (controlsVisible || btnSkipIntro.visibility == View.VISIBLE) {
+                        // Overlay (or skip prompt) is up: normal focus
+                        // navigation — open it and park focus appropriately.
+                        showControls()
+                        if (btnSkipIntro.visibility == View.VISIBLE) {
+                            btnSkipIntro.requestFocus()
+                        } else {
+                            controlsOverlay.requestFocus()
+                        }
+                    } else if (event.action == KeyEvent.ACTION_DOWN) {
+                        // Netflix-style direct scrub while the overlay is
+                        // hidden: quick press = 10s jump, hold = accelerated
+                        // scrubbing. UP/DOWN or OK still open the overlay.
+                        val hasDuration = exoPlayer?.duration?.takeIf { it > 0 } != null
+                        if (!hasDuration) return@setOnKeyListener false
+                        if (event.repeatCount == 0 && scrubDirection == 0) {
+                            scrubDirection = if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1
+                            stepSeekBy(10_000L * scrubDirection)
+                            showScrubHint()
+                            scrubHandler.removeCallbacks(scrubHoldStarter)
+                            scrubHandler.postDelayed(scrubHoldStarter, 400L)
+                        } else if (scrubDirection != 0) {
+                            showScrubHint()
+                        }
+                        true
+                    } else {
+                        // ACTION_UP / ACTION_CANCEL: stop scrubbing, fade hint
+                        val wasScrubbing = scrubDirection != 0
+                        scrubDirection = 0
+                        scrubHandler.removeCallbacks(scrubHoldStarter)
+                        scrubHandler.removeCallbacks(scrubRunnable)
+                        if (wasScrubbing) scheduleScrubHintHide()
+                        wasScrubbing
+                    }
                 }
                 KeyEvent.KEYCODE_BACK -> {
                     if (isPickerShowing || showSettingsPanel) { dismissAllPanels(); true } else false
@@ -1276,6 +1319,68 @@ class NativePlayerActivity : ComponentActivity() {
             android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
         else android.app.PendingIntent.FLAG_UPDATE_CURRENT
         return android.app.PendingIntent.getActivity(this, 1001, intent, flags)
+    }
+
+    // --- Overlay-less surface scrubbing (LEFT/RIGHT with controls hidden) ---
+    private var surfaceScrubHint: TextView? = null
+    private val scrubHintHandler = Handler(Looper.getMainLooper())
+    private val scrubHintHider = Runnable { surfaceScrubHint?.visibility = View.GONE }
+
+    private fun ensureScrubHint(): TextView {
+        surfaceScrubHint?.let { return it }
+        val density = resources.displayMetrics.density
+        val tv = TextView(this).apply {
+            textSize = 15f
+            setTextColor(android.graphics.Color.WHITE)
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(0xCC14181E.toInt())
+                cornerRadius = 24f * density
+            }
+            setPadding((18f * density).toInt(), (8f * density).toInt(), (18f * density).toInt(), (8f * density).toInt())
+            visibility = View.GONE
+            elevation = 12f * density
+        }
+        val content = findViewById<ViewGroup>(android.R.id.content)
+        content.addView(
+            tv,
+            android.widget.FrameLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+                android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL
+            ).apply { bottomMargin = (56f * density).toInt() }
+        )
+        surfaceScrubHint = tv
+        return tv
+    }
+
+    /** Shows the "+10s / position" bubble while surface scrubbing is active. */
+    private fun showScrubHint() {
+        if (scrubDirection == 0) return
+        val tv = ensureScrubHint()
+        val player = exoPlayer
+        val pos = player?.currentPosition ?: 0L
+        val dur = player?.duration?.takeIf { it > 0 }
+        tv.text = buildString {
+            append(if (scrubDirection > 0) "\u25B6\u25B6  " else "\u25C0\u25C0  ")
+            append(formatMillis(pos))
+            if (dur != null) append(" / ").append(formatMillis(dur))
+        }
+        tv.visibility = View.VISIBLE
+        scrubHintHandler.removeCallbacks(scrubHintHider)
+    }
+
+    private fun scheduleScrubHintHide() {
+        scrubHintHandler.removeCallbacks(scrubHintHider)
+        scrubHintHandler.postDelayed(scrubHintHider, 700L)
+    }
+
+    /** Full stop: cancel scrub timers and hide the hint immediately. */
+    private fun stopSurfaceScrub() {
+        scrubDirection = 0
+        scrubHandler.removeCallbacks(scrubHoldStarter)
+        scrubHandler.removeCallbacks(scrubRunnable)
+        scrubHintHandler.removeCallbacks(scrubHintHider)
+        surfaceScrubHint?.visibility = View.GONE
     }
 
     // --- Player Creation ---
@@ -2585,6 +2690,8 @@ class NativePlayerActivity : ComponentActivity() {
 
     // --- Controls Visibility ---
     private fun showControls() {
+        stopSurfaceScrub()
+
         controlsVisible = true
         controlsOverlay.visibility = View.VISIBLE
         seekbarRow.visibility = View.VISIBLE
@@ -2618,6 +2725,9 @@ class NativePlayerActivity : ComponentActivity() {
         // Stop any active scrubbing
         scrubDirection = 0
         scrubHandler.removeCallbacks(scrubRunnable)
+        scrubHandler.removeCallbacks(scrubHoldStarter)
+        scrubHintHandler.removeCallbacks(scrubHintHider)
+        surfaceScrubHint?.visibility = View.GONE
 
         controlsVisible = false
         controlsOverlay.visibility = View.GONE
@@ -3391,6 +3501,7 @@ class NativePlayerActivity : ComponentActivity() {
         super.onDestroy()
         p5VideoGlesView.release()
         handler.removeCallbacksAndMessages(null)
+        scrubHintHandler.removeCallbacksAndMessages(null)
         nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
         scope?.cancel()
         exoPlayer?.release()
