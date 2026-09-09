@@ -18,6 +18,8 @@ import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -478,23 +480,79 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         val addons = addonManager.getInstalledAddons()
 
         for (addon in addons) {
-            if (!addon.resources.contains("search")) continue
-
             val baseUrl =
                 addon.manifestUrl.removeSuffix("/manifest.json")
 
             val collected = mutableListOf<MetaPreview>()
 
-            try {
-                collected += repository.search(
-                    baseUrl,
-                    "*",
-                    query
-                )
-            } catch (_: Exception) {
-            }
+            if (addon.resources.contains("search")) {
+                // Standard search resource (Cinemeta, ...): one grouped rail
+                // per addon via the /search endpoint.
+                try {
+                    collected += repository.search(
+                        baseUrl,
+                        "*",
+                        query
+                    )
+                } catch (_: Exception) {
+                }
+                if (collected.isEmpty()) continue
+            } else {
+                // Catalog-only addons (AIOMetadata, BingeCat, ...) implement
+                // search through the catalog endpoint's `search=` extra — the
+                // same endpoint the Discover rails use. AIOMetadata exposes
+                // every enabled search as its own catalog (Movies, Series,
+                // AI Search, People, Collections), so probe each catalog
+                // separately and keep one rail per catalog instead of
+                // merging everything into a single undifferentiated rail.
+                val searchableCatalogs = addon.catalogs
+                    .take(MAX_ADDON_CATALOG_PROBES)
 
-            if (collected.isEmpty()) continue
+                if (searchableCatalogs.isEmpty()) continue
+
+                val perCatalog = coroutineScope {
+                    searchableCatalogs.map { catalog ->
+                        async {
+                            catalog to runCatching {
+                                repository.searchCatalog(
+                                    baseUrl,
+                                    catalog.type,
+                                    catalog.id,
+                                    query
+                                )
+                            }.getOrDefault(emptyList())
+                        }
+                    }.awaitAll()
+                }
+
+                // A title found by an earlier catalog (e.g. Movies) is not
+                // repeated in later rails (e.g. AI Search) of the same addon.
+                val seen = mutableSetOf<String>()
+                for ((catalog, hits) in perCatalog) {
+                    if (groups.size >= MAX_ADDON_GROUPS) break
+                    val items = hits
+                        .filter { seen.add("${it.type}:${it.id}") }
+                        .filter {
+                            "${it.type}:${it.name.lowercase()}" !in tmdbKeys
+                        }
+                        .map { meta ->
+                            SearchTitleResult(
+                                id = meta.id,
+                                type = meta.type,
+                                name = meta.name,
+                                poster = meta.poster,
+                                meta = meta
+                            )
+                        }
+                        .take(MAX_ADDON_CATALOG_RESULTS)
+                    if (items.isEmpty()) continue
+                    groups += AddonResultGroup(
+                        addonName = "${addon.customName ?: addon.name} · ${catalog.displayName}",
+                        results = items
+                    )
+                }
+                continue
+            }
 
             val addonItems =
                 collected
@@ -760,7 +818,13 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         const val MAX_COLLECTION_RESULTS = 8
 
         const val MAX_ADDON_RESULTS_PER_ADDON = 40
-        const val MAX_ADDON_GROUPS = 6
+        const val MAX_ADDON_GROUPS = 10
+
+        /** Catalog probes per catalog-only addon when it has no search resource. */
+        const val MAX_ADDON_CATALOG_PROBES = 8
+
+        /** Per-rail cap for a catalog-only addon's per-catalog search rail. */
+        const val MAX_ADDON_CATALOG_RESULTS = 20
         const val MAX_TRENDING_RESULTS = 20
         const val SEARCH_DEBOUNCE_MS = 300L
     }
