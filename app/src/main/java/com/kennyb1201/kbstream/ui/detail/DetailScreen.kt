@@ -11,7 +11,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusGroup
-import androidx.compose.foundation.focusProperties
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
@@ -47,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -2149,28 +2149,26 @@ fun DetailScreen(
                                             "MC" to omdbRatings?.metacritic
                                         ).forEach { (label, value) ->
                                             if (value != null) {
-                                                KBCard(
-                                                    onClick = {},
+                                                // Pure status chip: a Box can never
+                                                // receive focus, so D-pad navigation
+                                                // skips straight past it.
+                                                Column(
                                                     modifier = Modifier
-                                                        .width(150.dp)
-                                                        .focusProperties { canFocus = false }
+                                                        .clip(RoundedCornerShape(10.dp))
+                                                        .background(KBSurfaceRaised)
+                                                        .padding(horizontal = 14.dp, vertical = 10.dp)
                                                 ) {
-                                                    Column(
-                                                        modifier = Modifier
-                                                            .padding(horizontal = 14.dp, vertical = 10.dp)
-                                                    ) {
-                                                        Text(
-                                                            text = label,
-                                                            color = KBTextLo,
-                                                            style = MaterialTheme.typography.labelSmall
-                                                        )
-                                                        Text(
-                                                            text = value,
-                                                            color = KBAccent,
-                                                            style = MaterialTheme.typography.titleMedium,
-                                                            fontWeight = FontWeight.SemiBold
-                                                        )
-                                                    }
+                                                    Text(
+                                                        text = label,
+                                                        color = KBTextLo,
+                                                        style = MaterialTheme.typography.labelSmall
+                                                    )
+                                                    Text(
+                                                        text = value,
+                                                        color = KBAccent,
+                                                        style = MaterialTheme.typography.titleMedium,
+                                                        fontWeight = FontWeight.SemiBold
+                                                    )
                                                 }
                                             }
                                         }
