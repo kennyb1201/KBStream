@@ -243,7 +243,7 @@ class AddonSubtitleController(
         // we attached a moment ago (idempotency across setPlayer calls) or
         // the user loaded an external subtitle file, which must not be
         // clobbered by addon tracks.
-        if (currentMediaItem.subtitleConfigurations.isNotEmpty()) {
+        if (currentMediaItem.localConfiguration?.subtitleConfigurations?.isNotEmpty() == true) {
             attachedPlayer = player
             return
         }
@@ -264,7 +264,7 @@ class AddonSubtitleController(
                 // Re-check on the main thread: the media item can change
                 // while we download (source switch / external file pick).
                 val liveItem = player.currentMediaItem ?: return@withContext
-                if (liveItem.subtitleConfigurations.isNotEmpty()) return@withContext
+                if (liveItem.localConfiguration?.subtitleConfigurations?.isNotEmpty() == true) return@withContext
                 player.setMediaItem(
                     liveItem.buildUpon()
                         .setSubtitleConfigurations(configs)
