@@ -1689,9 +1689,24 @@ fun HomeScreen(
         // cards peeking under the hero. Item layout: 0 = hero spacer,
         // 1 = Continue Watching (only when present), 2 = first rail — so the
         // snap only applies when CW exists.
+        hideContinueWatchingSliver()
+    }
+
+    /**
+     * The Continue Watching row sits between the hero and the catalog
+     * rails. When the viewport rests between item boundaries, the bottom
+     * few pixels of the CW cards peek out right under the hero — very
+     * visible against the dark background. Whenever the user is on a
+     * catalog rail (not the CW row itself), snap the list so the CW row is
+     * fully above the viewport. Called from [selectHero] (focus moved onto
+     * a rail) and from a snapshot effect that also covers the case where
+     * the CW row appears/changes after focus is already on a rail — a
+     * single focus event cannot catch that.
+     */
+    fun hideContinueWatchingSliver() {
+        if (upNext.isEmpty()) return
         val cwIndex = railListState.firstVisibleItemIndex
         if (
-            upNext.isNotEmpty() &&
             cwIndex <= 1 && // hero spacer (+ CW row) still at/near the top
             railListState.firstVisibleItemScrollOffset > 0
         ) {
@@ -1715,6 +1730,22 @@ fun HomeScreen(
     // release filter needs a rail rebuild from the warm cache).
     LaunchedEffect(Unit) {
         viewModel.onHomeResumed()
+    }
+
+    // Continuous Continue Watching sliver guard: the CW row can appear or
+    // change after focus already sits on a catalog rail (instant snapshot
+    // landing, Simkl merge, rail rebuild) with no focus event firing, so
+    // re-run the snap whenever the data or scroll position changes. Skipped
+    // while the user is actually on the CW row so their own view of it is
+    // never scrolled away.
+    LaunchedEffect(
+        upNext,
+        railListState.firstVisibleItemIndex,
+        railListState.firstVisibleItemScrollOffset
+    ) {
+        if (focusedContinueWatchingItem == null) {
+            hideContinueWatchingSliver()
+        }
     }
 
     LaunchedEffect(showTopBar) {
