@@ -243,21 +243,33 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * Enable/disable a catalog on the KBStream home screen (id-only,
      * used by the add-on details pane).
+     *
+     * Delegates to the (type, id) overload for every matching type variant
+     * of this catalog id, so both entry points share ONE write path. The
+     * old standalone implementation matched by id alone — silently flipping
+     * the same catalog id of every type (AIOStreams lists top_rated as both
+     * movie and series) — and skipped refresh(), leaving the catalog
+     * manager's state stale so the two screens visibly disagreed.
      */
     fun setCatalogShowOnHome(
         addonId: String,
         catalogId: String,
         showOnHome: Boolean
     ) {
-        updateAddonCatalogs(addonId) { catalogs ->
-            catalogs.map {
-                if (it.id == catalogId) {
-                    it.copy(showOnHome = showOnHome)
-                } else {
-                    it
-                }
+        val addon = _addons.value.firstOrNull { it.id == addonId }
+            ?: return
+
+        addon.catalogs
+            .filter { it.id == catalogId }
+            .distinctBy { it.type.trim().lowercase() }
+            .forEach { catalog ->
+                setCatalogShowOnHome(
+                    addonId = addonId,
+                    catalogType = catalog.type,
+                    catalogId = catalogId,
+                    showOnHome = showOnHome
+                )
             }
-        }
 
         _status.value = "Catalog setting saved"
     }
