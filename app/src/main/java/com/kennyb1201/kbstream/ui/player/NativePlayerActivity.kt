@@ -28,6 +28,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import android.content.Intent
+import android.util.TypedValue
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.Format
@@ -38,6 +39,8 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
+import androidx.media3.common.CueGroup
+import androidx.media3.common.text.Cue
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.media3.exoplayer.DefaultLoadControl
@@ -155,7 +158,7 @@ private class SplitModeRenderersFactory(
 class NativePlayerActivity : ComponentActivity() {
 
     // Views
-    private lateinit var playerView: PlayerView
+    private lateinit var playerView: KBPlayerView
     private lateinit var p5VideoGlesView: P5VideoGlesView
     // Whether P5 color correction via GLES is currently active
     private lateinit var liveBadge: TextView
@@ -233,6 +236,9 @@ class NativePlayerActivity : ComponentActivity() {
 
     // State
     private val handler = Handler(Looper.getMainLooper())
+    // Discovers Stremio-addon subtitles and merges them into the player as
+    // sidecar text tracks (see AddonSubtitleController).
+    private lateinit var addonSubtitleController: AddonSubtitleController
     private var controlsVisible = false
 
     // Hold-to-scrub acceleration
@@ -287,6 +293,12 @@ class NativePlayerActivity : ComponentActivity() {
     private var subtitleOffsetMs = 0
     private var subtitleSize = 1
     private var subtitleBackground = 0
+    private lateinit var subtitleText: TextView
+    private var subtitleCueHandler: SubtitleCueHandler? = null
+    // Parsed cues of the user-loaded external subtitle file. When present
+    // with a negative offset, rendering switches to position-driven mode
+    // (SubtitleCueHandler.updateFromPosition) so subs can appear early.
+    private var externalSubtitleCues: List<SubtitleFileParser.TimedCue> = emptyList()
 
     // Stream health
     private var streamWidth = 0
@@ -491,6 +503,7 @@ class NativePlayerActivity : ComponentActivity() {
                 // playback session can still use the granted URI permission.
             }
             externalSubtitleUri = uri
+            loadExternalSubtitleCues(uri)
             carryPositionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
             recreatePlayer()
     }
@@ -510,6 +523,12 @@ class NativePlayerActivity : ComponentActivity() {
 
         setContentView(R.layout.activity_player)
         bindViews()
+        addonSubtitleController = AddonSubtitleController(this) {
+            // Separate-audio sessions cannot be rebuilt via setMediaItem
+            // without losing the merged audio track, so addon subtitle
+            // tracks are skipped there (embedded subs still work).
+            !currentAudioUrl.isNullOrBlank()
+        }
         playerView.post {
             if (playerView is android.view.SurfaceView) {
                 playerView.visibility = android.view.View.INVISIBLE
@@ -577,10 +596,25 @@ class NativePlayerActivity : ComponentActivity() {
         resizeModeIndex = AppPreferences.getDefaultAspectRatio(this)
         enableTunneling = AppPreferences.getEnableTunneling(this)
         bufferMode = AppPreferences.getDefaultBufferMode(this)
+        subtitleSize = AppPreferences.getDefaultSubtitleSize(this)
+        subtitleBackground = AppPreferences.getDefaultSubtitleBackground(this)
         autoPlayNext = AppPreferences.getAutoPlayNext(this)
         preferredAudioLang = AppPreferences.getPreferredAudioLanguage(this)
         preferredSubtitleLang = AppPreferences.getPreferredSubtitleLanguage(this)
         totalEpisodesInSeason = intent.getIntExtra("total_episodes_in_season", -1).takeIf { it > 0 }
+
+        // Discover addon subtitles (Stremio "subtitles" resource) and merge
+        // them as sidecar text tracks once the player attaches. Skipping is
+        // automatic for live channels and when no video id is available.
+        if (!isLiveChannel) {
+            addonSubtitleController.bind(
+                view = playerView,
+                parentId = parentId,
+                parentType = parentType,
+                season = season,
+                episode = episode
+            )
+        }
 
         // Keep the currently selected stream available even when the caller did not
         // provide a complete source list.
@@ -711,6 +745,7 @@ class NativePlayerActivity : ComponentActivity() {
 
     private fun bindViews() {
         playerView = findViewById(R.id.player_view)
+        subtitleText = findViewById(R.id.custom_subtitle_text)
         p5VideoGlesView = findViewById(R.id.p5_video_gles_view)
         liveBadge = findViewById(R.id.live_badge)
         bufferingSpinner = findViewById(R.id.buffering_spinner)
@@ -1045,10 +1080,12 @@ class NativePlayerActivity : ComponentActivity() {
         btnOffsetMinus.setOnClickListener {
             subtitleOffsetMs = (subtitleOffsetMs - 500).coerceAtLeast(-5000)
             subtitleOffsetValue.text = "${subtitleOffsetMs}ms"
+            subtitleCueHandler?.cancelPending()
         }
         btnOffsetPlus.setOnClickListener {
             subtitleOffsetMs = (subtitleOffsetMs + 500).coerceAtMost(5000)
             subtitleOffsetValue.text = "${subtitleOffsetMs}ms"
+            subtitleCueHandler?.cancelPending()
     }
 
 }
@@ -1071,8 +1108,7 @@ class NativePlayerActivity : ComponentActivity() {
      */
     private fun switchPlayerViewSurface(wantTexture: Boolean) {
         val currentIsTexture = try {
-            val f = playerView.javaClass.getDeclaredField("surfaceView")
-            f.isAccessible = true
+            val f = findPlayerViewSurfaceField()
             (f.get(playerView) as? android.view.View) is android.view.TextureView
         } catch (e: Exception) {
             Log.w("PLAYER_VIDEO", "Could not read PlayerView surface type", e)
@@ -1087,9 +1123,7 @@ class NativePlayerActivity : ComponentActivity() {
             val attached = playerView.player
             playerView.player = null
 
-            val clazz = playerView.javaClass
-            val surfaceField = clazz.getDeclaredField("surfaceView")
-            surfaceField.isAccessible = true
+            val surfaceField = findPlayerViewSurfaceField()
             val oldSurface = surfaceField.get(playerView) as? android.view.View
             val contentFrame = findPlayerViewContentFrame()
             if (contentFrame == null) {
@@ -1141,6 +1175,25 @@ class NativePlayerActivity : ComponentActivity() {
         } catch (e: Exception) {
             Log.w("PLAYER_VIDEO", "Surface switch failed", e)
         }
+    }
+
+    /**
+     * Locates PlayerView's private "surfaceView" field, walking up the class
+     * hierarchy so it still resolves when playerView is a PlayerView
+     * subclass (KBPlayerView declares no fields of its own).
+     */
+    private fun findPlayerViewSurfaceField(): java.lang.reflect.Field {
+        var clazz: Class<*>? = playerView.javaClass
+        while (clazz != null) {
+            try {
+                val f = clazz.getDeclaredField("surfaceView")
+                f.isAccessible = true
+                return f
+            } catch (_: NoSuchFieldException) {
+                clazz = clazz.superclass
+            }
+        }
+        throw NoSuchFieldException("surfaceView")
     }
 
     private fun findPlayerViewContentFrame(): android.view.ViewGroup? {
@@ -1723,6 +1776,12 @@ class NativePlayerActivity : ComponentActivity() {
 
             player.addListener(createPlayerListener())
             player.addAnalyticsListener(createAnalyticsListener())
+            // Subtitles render through SubtitleCueHandler (below) so the
+            // size / background / offset controls actually work; empty and
+            // hide Media3's built-in SubtitleView, which cannot be styled.
+            playerView.subtitleView?.setCues(null)
+            playerView.subtitleView?.visibility = View.GONE
+            subtitleCueHandler = SubtitleCueHandler().also { player.addListener(it) }
             armStartupWatchdog()
 
             playbackEndedHandled = false
@@ -1814,6 +1873,8 @@ class NativePlayerActivity : ComponentActivity() {
         // Disarm any outstanding stall/black-video timers tied to the old
         // player instance; fresh ones are armed when the new session is ready.
         stallWatchdogToken++
+        subtitleCueHandler?.cancelPending()
+        subtitleCueHandler = null
         exoPlayer?.release()
         exoPlayer = null
         createPlayer()
@@ -1855,6 +1916,7 @@ class NativePlayerActivity : ComponentActivity() {
                     retryExhausted = false
                     errorMessageStr = null
                     autoSelectPreferredLanguages()
+                    subtitleCueHandler?.updateFromPosition()
                     armBlackVideoWatchdog()
                     armStallWatchdog()
                 }
@@ -2766,14 +2828,142 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     private fun applySubtitleStyle() {
-        val view = playerView.findViewById<View>(androidx.media3.ui.R.id.exo_subtitle)
-        if (view is TextView) {
-            val sizes = listOf(0.8f, 1f, 1.3f)
-            view.textSize = 14 * sizes[subtitleSize]
+        // Cues are rendered by SubtitleCueHandler; re-rendering applies the
+        // new size/background to whatever is on screen now.
+        subtitleCueHandler?.refreshStyle()
+    }
+
+    /**
+     * Renders text cues into [subtitleText] instead of Media3's built-in
+     * SubtitleView. That view cannot take the pill background (its
+     * exo_subtitle child is a SubtitleView container, not a TextView, so the
+     * old reflection approach always no-op'd), and Media3 has no
+     * subtitle-delay API at all — so cues are intercepted here: size and
+     * background come from the player/global settings, and a positive offset
+     * delays each cue block's appearance. A negative offset shows cues
+     * immediately (text cannot appear in the past).
+     */
+    private inner class SubtitleCueHandler : Player.Listener {
+        private var currentCues: List<Cue> = emptyList()
+        private val delayedShow = Runnable { renderText(currentCueText()) }
+        private val positionTick = Runnable { updateFromPosition() }
+
+        /**
+         * True when an external subtitle file is loaded AND the offset is
+         * negative: the pipeline only ever emits cues at their authored
+         * time, so "show earlier" needs this handler to drive rendering
+         * from the playback position instead.
+         */
+        private val positionDriven: Boolean
+            get() = externalSubtitleCues.isNotEmpty() && subtitleOffsetMs < 0
+
+        override fun onCues(cueGroup: CueGroup) {
+            if (positionDriven) {
+                // Position-driven mode: suppress pipeline rendering entirely.
+                handler.removeCallbacks(delayedShow)
+                currentCues = emptyList()
+                renderText("")
+                updateFromPosition()
+                return
+            }
+            currentCues = cueGroup.cues
+            handler.removeCallbacks(delayedShow)
+            if (subtitleOffsetMs <= 0) {
+                renderText(currentCueText())
+            } else {
+                handler.postDelayed(delayedShow, subtitleOffsetMs.toLong())
+            }
+        }
+
+        /** Drops pending work, clears the text, and re-syncs position mode. */
+        fun cancelPending() {
+            handler.removeCallbacks(delayedShow)
+            handler.removeCallbacks(positionTick)
+            currentCues = emptyList()
+            renderText("")
+            if (positionDriven) updateFromPosition()
+        }
+
+        /** Re-renders with the new size/background (offset unchanged). */
+        fun refreshStyle() {
+            if (positionDriven) {
+                updateFromPosition()
+                return
+            }
+            handler.removeCallbacks(delayedShow)
+            renderText(currentCueText())
+        }
+
+        /**
+         * Position-driven rendering: shows the cue covering
+         * (position + offset) and re-checks at every 500 ms tick, so seeks
+         * and offset changes re-sync quickly while cue boundaries stay
+         * visually exact.
+         */
+        fun updateFromPosition() {
+            handler.removeCallbacks(positionTick)
+            if (!positionDriven) return
+            val player = exoPlayer ?: return
+            val pos = player.currentPosition + subtitleOffsetMs.toLong()
+            val cue = externalSubtitleCues.firstOrNull { pos >= it.startMs && pos < it.endMs }
+            renderText(cue?.text.orEmpty())
+            val nextBoundary = cue?.endMs
+                ?: externalSubtitleCues.firstOrNull { it.startMs > pos }?.startMs
+                ?: (pos + 500L)
+            val delay = (nextBoundary - pos).coerceIn(1L, 500L)
+            handler.postDelayed(positionTick, delay)
+        }
+
+        private fun currentCueText(): String =
+            currentCues.mapNotNull { it.text }.joinToString("\n").trim()
+
+        private fun renderText(text: String) {
+            if (text.isEmpty()) {
+                subtitleText.visibility = View.GONE
+                subtitleText.background = null
+                return
+            }
+            subtitleText.text = text
+            val sizes = listOf(11f, 14f, 18f)
+            subtitleText.setTextSize(TypedValue.COMPLEX_UNIT_SP, sizes[subtitleSize])
             when (subtitleBackground) {
-                1 -> { view.setBackgroundColor(0x80000000.toInt()); view.setPadding(16, 4, 16, 4) }
-                2 -> { view.setBackgroundColor(0xE5000000.toInt()); view.setPadding(16, 4, 16, 4) }
-                else -> { view.setBackgroundColor(0); view.setPadding(0, 0, 0, 0) }
+                1 -> {
+                    subtitleText.setBackgroundColor(0x80000000.toInt())
+                    subtitleText.setPadding(16, 4, 16, 4)
+                }
+                2 -> {
+                    subtitleText.setBackgroundColor(0xE5000000.toInt())
+                    subtitleText.setPadding(16, 4, 16, 4)
+                }
+                else -> {
+                    subtitleText.background = null
+                    subtitleText.setPadding(0, 0, 0, 0)
+                }
+            }
+            subtitleText.visibility = View.VISIBLE
+        }
+    }
+
+    /**
+     * Reads and parses the picked external subtitle file (SRT / WebVTT)
+     * into [externalSubtitleCues] off the main thread. Parsing locally is
+     * what makes a true negative offset possible: Media3 has no
+     * subtitle-delay API and only emits cues at their authored time, but
+     * with the file in hand the handler can render any cue on demand.
+     */
+    private fun loadExternalSubtitleCues(uri: Uri) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val parsed = runCatching {
+                contentResolver.openInputStream(uri)
+                    ?.bufferedReader(Charsets.UTF_8)
+                    ?.use { it.readText() }
+            }.getOrNull()?.let { SubtitleFileParser.parse(it) } ?: emptyList()
+            launch(Dispatchers.Main) {
+                externalSubtitleCues = parsed
+                if (!parsed.isEmpty()) {
+                    Log.i(TAG, "External subtitles parsed: ${parsed.size} cues")
+                }
+                subtitleCueHandler?.updateFromPosition()
             }
         }
     }
@@ -3498,6 +3688,8 @@ class NativePlayerActivity : ComponentActivity() {
         scope?.cancel()
         saveProgress(reason = "stop")
         scrobbleSimkl("stop")
+        subtitleCueHandler?.cancelPending()
+        subtitleCueHandler = null
         exoPlayer?.release()
         exoPlayer = null
         mediaSession?.release()
@@ -3511,6 +3703,8 @@ class NativePlayerActivity : ComponentActivity() {
         scrubHintHandler.removeCallbacksAndMessages(null)
         nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
         scope?.cancel()
+        subtitleCueHandler?.cancelPending()
+        subtitleCueHandler = null
         exoPlayer?.release()
         exoPlayer = null
         mediaSession?.release()

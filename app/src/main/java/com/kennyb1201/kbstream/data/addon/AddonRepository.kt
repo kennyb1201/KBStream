@@ -266,6 +266,30 @@ class AddonRepository {
         }
     }
 
+    /**
+     * Fetches subtitle offers from one addon's "subtitles" resource
+     * (`/subtitles/{type}/{videoId}.json` per the Stremio spec).
+     *
+     * Deliberately uncached and unpaged: the list is small, addons generate
+     * it per video, and the player only calls it when the subtitle picker
+     * opens. A failed addon just yields an empty list — the picker merges
+     * results across addons, so one dead addon must not sink the rest.
+     */
+    suspend fun getSubtitles(
+        baseUrl: String,
+        type: String,
+        videoId: String
+    ): List<SubtitleEntry> {
+        val base =
+            normalizeBaseUrl(
+                baseUrl
+            )
+
+        return api.getSubtitles(
+            "$base/subtitles/$type/$videoId.json"
+        ).subtitles
+    }
+
     suspend fun searchCatalog(
         baseUrl: String,
         type: String,

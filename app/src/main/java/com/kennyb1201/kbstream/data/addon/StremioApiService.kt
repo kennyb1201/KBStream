@@ -22,6 +22,11 @@ interface StremioApiService {
     ): StreamResponse
 
     @GET
+    suspend fun getSubtitles(
+        @Url url: String
+    ): SubtitlesResponse
+
+    @GET
     @Headers("Cache-Control: no-cache")
     suspend fun getManifest(
         @Url url: String

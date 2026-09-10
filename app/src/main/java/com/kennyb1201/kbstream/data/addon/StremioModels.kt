@@ -103,6 +103,28 @@ data class StreamResponse(
 )
 
 /**
+ * One subtitle offer from an addon's "subtitles" resource.
+ *
+ * Per the Stremio spec, `id` is required and `url` points at a plain
+ * SRT/VTT file. Addons in the wild occasionally skip `id`, so only `url`
+ * is treated as mandatory here — an entry without a URL is unplayable.
+ */
+@JsonClass(generateAdapter = true)
+data class SubtitleEntry(
+    val id: String? = null,
+    val url: String,
+    val lang: String? = null,
+
+    /** Human-friendly label, e.g. "English" or "English - OpenSubtitles". */
+    val label: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class SubtitlesResponse(
+    val subtitles: List<SubtitleEntry> = emptyList()
+)
+
+/**
  * A catalog exactly as it appears in an addon manifest.
  *
  * showOnHome and order are KBStream-local settings.
