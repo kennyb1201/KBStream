@@ -41,6 +41,8 @@ object AppPreferences {
     private const val KEY_USE_24H_CLOCK = "use_24h_clock"
     private const val KEY_SHOW_CATALOG_TYPE = "home_rail_show_catalog_type"
     private const val KEY_SHOW_ADDON_NAME = "home_rail_show_addon_name"
+    private const val KEY_SEARCH_SHOW_CATALOG_TYPE = "search_rail_show_catalog_type"
+    private const val KEY_SEARCH_SHOW_ADDON_NAME = "search_rail_show_addon_name"
     private const val KEY_HIDE_UPCOMING = "home_rail_hide_upcoming"
     private const val KEY_LANDSCAPE_CARDS = "home_landscape_cards"
     private fun prefs(context: Context): SharedPreferences =
@@ -323,6 +325,25 @@ object AppPreferences {
 
     fun setHomeRailShowAddonName(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_SHOW_ADDON_NAME, enabled).apply()
+    }
+
+    // ── Search rails (add-on search only): show catalog type ──────────
+    // Governs the addon search rails on the Search screen (AIOMetadata,
+    // Cinemeta, ...) — NOT the built-in TMDB results, which never carry a
+    // catalog type. Mirrors the home-rail toggle.
+    fun getSearchRailShowCatalogType(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_SEARCH_SHOW_CATALOG_TYPE, false)
+
+    fun setSearchRailShowCatalogType(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_SEARCH_SHOW_CATALOG_TYPE, enabled).apply()
+    }
+
+    // ── Search rails (add-on search only): show addon name ────────────
+    fun getSearchRailShowAddonName(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_SEARCH_SHOW_ADDON_NAME, false)
+
+    fun setSearchRailShowAddonName(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_SEARCH_SHOW_ADDON_NAME, enabled).apply()
     }
 
     // ── Home rails: hide not-yet-released titles (digital filter) ─────

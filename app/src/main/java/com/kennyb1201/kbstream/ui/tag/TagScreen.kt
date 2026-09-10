@@ -125,7 +125,7 @@ fun TagScreen(
                     .flatMap { it.items.asSequence() }
                     .mapNotNull { it.item.posterPath }
                     .distinct()
-                    .take(3)
+                    .take(5)
                     .toList()
                     .map { "${TmdbRepository.POSTER_BASE}$it" }
             }
@@ -139,8 +139,6 @@ fun TagScreen(
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(
-                    start = 20.dp,
-                    end = 20.dp,
                     top = 8.dp,
                     bottom = 24.dp
                 )
@@ -313,10 +311,16 @@ private fun TagHeader(
         }
 
         if (posterUrls.isNotEmpty()) {
-            // Staggered poster fan: back cards peek out behind the front one.
+            // Staggered poster fan: back cards peek out behind the front
+            // one. Five cards from the category's top titles, tapering in
+            // size toward the edges with alternating tilt; the front card
+            // stays the largest.
             Row {
-                val rotations = listOf(-8f, 4f, 0f)
-                posterUrls.take(3).forEachIndexed { index, url ->
+                val rotations = listOf(-10f, -5f, 3f, 7f, -3f)
+                val widths = listOf(66.dp, 76.dp, 96.dp, 76.dp, 66.dp)
+                val heights = listOf(99.dp, 114.dp, 144.dp, 114.dp, 99.dp)
+                val frontIndex = posterUrls.size / 2
+                posterUrls.take(5).forEachIndexed { index, url ->
                     val context = LocalContext.current
                     AsyncImage(
                         model = ImageRequest.Builder(context)
@@ -328,7 +332,7 @@ private fun TagHeader(
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
                             .zIndex((posterUrls.size - index).toFloat())
-                            .offset(x = (-14 * index).dp)
+                            .offset(x = (-12 * index).dp)
                             .rotate(rotations[index])
                             .clip(RoundedCornerShape(8.dp))
                             .border(
@@ -336,8 +340,8 @@ private fun TagHeader(
                                 Color.White.copy(alpha = 0.25f),
                                 RoundedCornerShape(8.dp)
                             )
-                            .width(if (index == 2) 92.dp else 74.dp)
-                            .height(if (index == 2) 138.dp else 111.dp)
+                            .width(widths[index])
+                            .height(heights[index])
                     )
                 }
             }
@@ -379,7 +383,10 @@ private fun TagRailRow(
 
         LazyRow(
             state = rowState,
-            contentPadding = PaddingValues(end = 8.dp),
+            contentPadding = PaddingValues(
+                start = 20.dp,
+                end = 20.dp
+            ),
             modifier = Modifier.focusGroup()
         ) {
             items(

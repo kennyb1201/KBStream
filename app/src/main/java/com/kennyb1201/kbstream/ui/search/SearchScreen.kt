@@ -48,6 +48,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
@@ -66,6 +67,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import androidx.tv.material3.Surface
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
@@ -98,6 +100,17 @@ fun SearchScreen(
     val recentSearches by viewModel.recentSearches.collectAsStateWithLifecycle()
     val trendingResults by viewModel.trendingResults.collectAsStateWithLifecycle()
     val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
+
+    // Add-on search rail title toggles (addon name / catalog type). These
+    // apply ONLY to the addon search rails below — the built-in TMDB
+    // "Titles" row has no addon or catalog type to show.
+    val context = LocalContext.current
+    val showRailType by remember {
+        mutableStateOf(AppPreferences.getSearchRailShowCatalogType(context))
+    }
+    val showRailAddon by remember {
+        mutableStateOf(AppPreferences.getSearchRailShowAddonName(context))
+    }
 
     // Long-press context menu for title tiles (trending/search/add-on rails).
     var menuResult by remember {
@@ -332,8 +345,13 @@ fun SearchScreen(
                 addonResultGroups.forEachIndexed { index, group ->
                     item(key = "addons_rail_$index") {
                         SearchRail(
-                            // addonName already carries "Name - Type" (Movies/Series/All).
-                            title = group.addonName
+                            title = searchRailTitle(
+                                addonName = group.addonName,
+                                railLabel = group.railLabel,
+                                type = group.catalogType,
+                                showType = showRailType,
+                                showAddon = showRailAddon
+                            )
                         ) {
                             items(
                                 items = group.results,
@@ -483,6 +501,37 @@ fun SearchScreen(
             )
         }
     }
+}
+
+/**
+ * Builds an add-on search rail header: optional addon name and catalog type
+ * around the catalog label, e.g. "AIOMetadata · Trending · Series". Mirrors
+ * HomeScreen.homeRailTitle. `type` is null for mixed rails (e.g. a standard
+ * search endpoint that returns movies + series in one rail).
+ */
+private fun searchRailTitle(
+    addonName: String,
+    railLabel: String,
+    type: String?,
+    showType: Boolean,
+    showAddon: Boolean
+): String {
+    val parts = buildList {
+        if (showAddon && addonName.isNotBlank()) {
+            add(addonName)
+        }
+        add(railLabel)
+        if (showType && !type.isNullOrBlank()) {
+            val cap = type.replaceFirstChar { it.uppercase() }
+            // Skip when the rail label already conveys the type — regular
+            // catalogs get type-derived labels ("Movies" / "Series" / "All"),
+            // so appending again would render "Movies · Movie".
+            if (railLabel.lowercase() !in setOf("movie", "movies", "series", "all", cap.lowercase())) {
+                add(cap)
+            }
+        }
+    }
+    return parts.joinToString(" · ")
 }
 
 /**

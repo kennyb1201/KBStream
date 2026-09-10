@@ -50,8 +50,17 @@ data class SearchTitleResult(
  * grouped so the search screen can show them as a labelled source rail.
  */
 data class AddonResultGroup(
+    // Display name of the add-on (e.g. "AIOMetadata"). Rendered as the
+    // rail-title prefix only when "Show Addon Name on Search Rails" is on.
     val addonName: String,
-    val results: List<SearchTitleResult>
+    // Rail label for the catalog that produced these hits (e.g. "Movies",
+    // "Series", "AI Search") — the search-catalog name, without any type.
+    val railLabel: String,
+    val results: List<SearchTitleResult>,
+    // Catalog type ("movie" / "series" / "all" / ...) so the screen can
+    // honor the "Show Catalog Type on Search Rails" toggle at render time.
+    // Null for mixed rails that have no single type.
+    val catalogType: String? = null
 )
 
 class SearchViewModel(application: Application) : AndroidViewModel(application) {
@@ -567,9 +576,10 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
                         .toList()
                     if (items.isEmpty()) continue
                     groups += AddonResultGroup(
-                        addonName = "${addon.displayName} - " +
-                            catalog.railLabel(addon.displayName),
-                        results = items
+                        addonName = addon.displayName,
+                        railLabel = catalog.railLabel(addon.displayName),
+                        results = items,
+                        catalogType = catalog.type
                     )
                 }
                 continue
@@ -596,8 +606,10 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
 
             groups += AddonResultGroup(
                 // Standard search mixes movies + series in one rail.
-                addonName = "${addon.displayName} - All",
-                results = addonItems
+                addonName = addon.displayName,
+                railLabel = "All",
+                results = addonItems,
+                catalogType = null
             )
 
             if (groups.size >= MAX_ADDON_GROUPS) break

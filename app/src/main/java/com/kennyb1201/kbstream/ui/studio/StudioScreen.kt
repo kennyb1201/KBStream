@@ -134,8 +134,6 @@ fun StudioScreen(
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(
-                    start = 20.dp,
-                    end = 20.dp,
                     top = 8.dp,
                     bottom = 24.dp
                 )
@@ -439,7 +437,10 @@ private fun StudioRailRow(
 
         LazyRow(
             state = rowState,
-            contentPadding = PaddingValues(end = 8.dp),
+            contentPadding = PaddingValues(
+                start = 20.dp,
+                end = 20.dp
+            ),
             modifier = Modifier.focusGroup()
         ) {
             items(

@@ -74,6 +74,8 @@ fun SettingsScreen(
     var use24hClock by remember { mutableStateOf(AppPreferences.getUse24HourClock(context)) }
     var railShowType by remember { mutableStateOf(AppPreferences.getHomeRailShowCatalogType(context)) }
     var railShowAddon by remember { mutableStateOf(AppPreferences.getHomeRailShowAddonName(context)) }
+    var searchRailShowType by remember { mutableStateOf(AppPreferences.getSearchRailShowCatalogType(context)) }
+    var searchRailShowAddon by remember { mutableStateOf(AppPreferences.getSearchRailShowAddonName(context)) }
     var railHideUpcoming by remember { mutableStateOf(AppPreferences.getHomeRailHideUpcoming(context)) }
     var landscapeCards by remember { mutableStateOf(AppPreferences.getHomeLandscapeCards(context)) }
     var clearingHistory by remember { mutableStateOf(false) }
@@ -402,6 +404,30 @@ fun SettingsScreen(
             onToggle = {
                 railShowAddon = it
                 AppPreferences.setHomeRailShowAddonName(context, it)
+            }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        ToggleRow(
+            label = "Show Catalog Type on Search Rails",
+            description = "Append Movies / Series / All after add-on search rail names (e.g. \"AIOMetadata · AI Search · Movie\"). Add-on search only.",
+            checked = searchRailShowType,
+            onToggle = {
+                searchRailShowType = it
+                AppPreferences.setSearchRailShowCatalogType(context, it)
+            }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        ToggleRow(
+            label = "Show Addon Name on Search Rails",
+            description = "Prefix add-on search rail titles with their addon (e.g. \"AIOMetadata · Movies\"). Add-on search only.",
+            checked = searchRailShowAddon,
+            onToggle = {
+                searchRailShowAddon = it
+                AppPreferences.setSearchRailShowAddonName(context, it)
             }
         )
 
