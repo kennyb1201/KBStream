@@ -95,40 +95,51 @@ fun CollectionScreen(
             .fillMaxSize()
             .background(KBVoid)
     ) {
+        // Full-bleed screen (matches SearchScreen): horizontal edge spacing
+        // lives in the header/panel padding and the rail's contentPadding,
+        // NOT on this container. A fixed-inset parent would clip the rail
+        // items at the inset edge, chopping the focused poster's 1.03 scale
+        // + accent glow on the first/last tile.
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 24.dp, vertical = 20.dp),
+                .padding(vertical = 20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // Fixed header: never scrolls with the content.
-            CollectionHeader(
-                name = detail?.name ?: collectionName,
-                overview = detail?.overview,
-                posterUrl = detail?.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" },
-                partCount = detail?.parts?.size
-            )
+            // Fixed header: never scrolls with the content. Own horizontal
+            // padding keeps its inset now that the container is full-bleed.
+            Box(Modifier.padding(horizontal = 24.dp)) {
+                CollectionHeader(
+                    name = detail?.name ?: collectionName,
+                    overview = detail?.overview,
+                    posterUrl = detail?.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" },
+                    partCount = detail?.parts?.size
+                )
+            }
 
             when {
                 isLoading -> {
                     CollectionMessagePanel(
                         title = "Loading collection...",
                         body = "Fetching movies in this collection.",
-                        showSpinner = true
+                        showSpinner = true,
+                        modifier = Modifier.padding(horizontal = 24.dp)
                     )
                 }
 
                 detail == null -> {
                     CollectionMessagePanel(
                         title = "Collection unavailable",
-                        body = "We couldn't load this collection right now."
+                        body = "We couldn't load this collection right now.",
+                        modifier = Modifier.padding(horizontal = 24.dp)
                     )
                 }
 
                 detail.parts.isEmpty() -> {
                     CollectionMessagePanel(
                         title = "No movies found",
-                        body = "This collection does not currently list any titles."
+                        body = "This collection does not currently list any titles.",
+                        modifier = Modifier.padding(horizontal = 24.dp)
                     )
                 }
 
@@ -137,7 +148,15 @@ fun CollectionScreen(
                     // title/year captions — 2-5 titles fill one screen.
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        contentPadding = PaddingValues(top = 2.dp, bottom = 4.dp)
+                        // 24dp edge insets (matching the header) keep the focused
+                        // poster's 1.03 scale + glow from clipping on the first
+                        // and last tiles.
+                        contentPadding = PaddingValues(
+                            top = 2.dp,
+                            bottom = 4.dp,
+                            start = 24.dp,
+                            end = 24.dp
+                        )
                     ) {
                         items(
                             items = detail.parts.sortedBy { it.releaseDate ?: "9999-99-99" },
@@ -359,10 +378,11 @@ private fun CollectionPosterTile(
 private fun CollectionMessagePanel(
     title: String,
     body: String,
-    showSpinner: Boolean = false
+    showSpinner: Boolean = false,
+    modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .background(KBSurface, RoundedCornerShape(16.dp))
             .border(1.dp, KBTextLo.copy(alpha = 0.25f), RoundedCornerShape(16.dp))
