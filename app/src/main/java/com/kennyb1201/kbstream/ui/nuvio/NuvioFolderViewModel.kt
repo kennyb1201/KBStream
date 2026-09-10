@@ -333,7 +333,7 @@ class NuvioFolderViewModel(application: Application) : AndroidViewModel(applicat
             watchedStatusRepository.preload(
                 resolvedPairs.mapNotNull { (key, imdbId) ->
                     val type = missing.firstOrNull { it.first == key }?.second
-                    imdbId?.let { it to type }
+                    if (imdbId != null && type != null) imdbId to type else null
                 }.distinct()
             )
         } catch (e: Exception) {

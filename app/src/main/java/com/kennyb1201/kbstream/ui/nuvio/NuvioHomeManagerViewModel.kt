@@ -220,7 +220,7 @@ class NuvioHomeManagerViewModel(application: Application) : AndroidViewModel(app
     fun removeProfileUrl(url: String) {
         val context = getApplication<Application>()
         NuvioProfilePrefs.removeProfileUrl(context, url)
-        repository.evict(url)
+        viewModelScope.launch { repository.evict(url) }
         _state.value = _state.value.copy(statusMessage = "Collection source removed")
         reload()
     }

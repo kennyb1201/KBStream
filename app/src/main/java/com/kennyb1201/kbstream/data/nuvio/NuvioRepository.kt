@@ -159,7 +159,7 @@ class NuvioRepository(private val context: Context) {
     }
 
     /** Remove a URL's caches after it is deleted in Settings. */
-    fun evict(url: String) {
+    suspend fun evict(url: String) {
         cacheMutex.withLock { memoryCache.remove(url) }
         runCatching {
             File(context.filesDir, CACHE_DIR).apply { mkdirs() }

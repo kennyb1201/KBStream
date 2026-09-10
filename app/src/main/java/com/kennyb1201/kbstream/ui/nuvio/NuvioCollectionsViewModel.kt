@@ -118,7 +118,7 @@ class NuvioCollectionsViewModel(application: Application) : AndroidViewModel(app
 
     fun removeProfileUrl(url: String) {
         NuvioProfilePrefs.removeProfileUrl(getApplication(), url)
-        repository.evict(url)
+        viewModelScope.launch { repository.evict(url) }
         _profileUrls.value = NuvioProfilePrefs.getProfileUrls(getApplication())
         load()
     }

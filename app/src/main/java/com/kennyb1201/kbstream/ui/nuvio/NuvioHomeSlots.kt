@@ -45,14 +45,6 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
  */
 object NuvioHomeSlots {
 
-    /** One Home entry: either an addon catalog rail or an imported collection. */
-    sealed class HomeEntry {
-        // sourceIndex preserves the original rails position so two rails that
-        // ever share addon/catalog/type still get unique LazyColumn keys.
-        data class AddonRail(val rail: Rail, val sourceIndex: Int) : HomeEntry()
-        data class Collection(val collection: NuvioCollectionProfile) : HomeEntry()
-    }
-
     fun buildMergedEntries(
         rails: List<Rail>,
         state: NuvioHomeViewModel.UiState
@@ -126,6 +118,14 @@ object NuvioHomeSlots {
 
     private fun key(collection: NuvioCollectionProfile): String =
         NuvioHomeOrderPrefs.collectionKey(collection.id, collection.title)
+}
+
+/** One Home entry: either an addon catalog rail or an imported collection. */
+sealed class HomeEntry {
+    // sourceIndex preserves the original rails position so two rails that
+    // ever share addon/catalog/type still get unique LazyColumn keys.
+    data class AddonRail(val rail: Rail, val sourceIndex: Int) : HomeEntry()
+    data class Collection(val collection: NuvioCollectionProfile) : HomeEntry()
 }
 
 private val CollectionTileWidth = 210.dp

@@ -1586,6 +1586,31 @@ fun HomeScreen(
     val heroLogoUrl by viewModel.heroLogoUrl.collectAsStateWithLifecycle()
     val heroTrailerKey by viewModel.heroTrailerKey.collectAsStateWithLifecycle()
 
+    // Nuvio collections interleaved with addon rails (merged order from the
+    // Collections manager: pin / reorder / hide). Computed in composable
+    // context — the LazyColumn builder lambda below is LazyListScope, not
+    // composable, so it must receive only finished values.
+    val nuvioState by nuvioViewModel.state.collectAsStateWithLifecycle()
+    val mergedEntries = remember(rails, nuvioState) {
+        com.kennyb1201.kbstream.ui.nuvio.NuvioHomeSlots
+            .buildMergedEntries(rails, nuvioState)
+    }
+    // The up-onto-topbar hook belongs to the first rail in DISPLAY order,
+    // which a pinned collection can push away from rails[0].
+    val firstDisplayedRailSourceIndex =
+        mergedEntries
+            .indexOfFirst {
+                it is com.kennyb1201.kbstream.ui.nuvio.HomeEntry.AddonRail
+            }
+            .takeIf { it >= 0 }
+            ?.let { index ->
+                (
+                    mergedEntries[index] as
+                        com.kennyb1201.kbstream.ui.nuvio.HomeEntry.AddonRail
+                    ).sourceIndex
+            }
+            ?: -1
+
     var showTopBar by remember {
         mutableStateOf(false)
     }
@@ -2169,35 +2194,9 @@ fun HomeScreen(
 
                     else -> {
                         // Nuvio collections interleave with addon rails:
-                        // the merged entry order comes from the Collections
-                        // manager (pin / reorder / hide); unarranged
-                        // collections sit after the addon rails.
-                        val nuvioState by nuvioViewModel.state.collectAsStateWithLifecycle()
-                        val mergedEntries = remember(rails, nuvioState) {
-                            com.kennyb1201.kbstream.ui.nuvio
-                                .NuvioHomeSlots
-                                .buildMergedEntries(rails, nuvioState)
-                        }
-
-                        // The up-onto-topbar hook belongs to the first rail
-                        // in DISPLAY order, which a pinned collection can
-                        // push away from rails[0].
-                        val firstDisplayedRailSourceIndex =
-                            mergedEntries
-                                .indexOfFirst {
-                                    it is com.kennyb1201.kbstream.ui.nuvio
-                                        .HomeEntry.AddonRail
-                                }
-                                .takeIf { it >= 0 }
-                                ?.let { index ->
-                                    (
-                                        mergedEntries[index] as
-                                            com.kennyb1201.kbstream.ui.nuvio
-                                                .HomeEntry.AddonRail
-                                        ).sourceIndex
-                                }
-                                ?: -1
-
+                        // the merged order was computed above in composable
+                        // context (pin / reorder / hide from the manager;
+                        // unarranged collections sit after the addon rails).
                         itemsIndexed(
                             items = mergedEntries,
                             key = { _, entry ->

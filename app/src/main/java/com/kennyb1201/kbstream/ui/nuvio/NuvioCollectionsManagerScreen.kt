@@ -47,6 +47,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.data.nuvio.NuvioHomeOrderPrefs
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
