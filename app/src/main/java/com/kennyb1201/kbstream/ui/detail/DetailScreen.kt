@@ -2314,6 +2314,10 @@ fun DetailScreen(
 
                             item(key = "collectionrow") {
                                 LazyRow(
+                                    // Poster rails need an explicit gap: without
+                                    // one the 124dp tiles sit flush and captions
+                                    // run into the neighboring poster.
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                                     contentPadding =
                                         PaddingValues(
                                             start = 24.dp,
@@ -2422,6 +2426,10 @@ fun DetailScreen(
 
                             item(key = "recsrow") {
                                 LazyRow(
+                                    // Poster rails need an explicit gap: without
+                                    // one the 124dp tiles sit flush and captions
+                                    // run into the neighboring poster.
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                                     contentPadding =
                                         PaddingValues(
                                             start = 24.dp,
