@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.kennyb1201.kbstream.data.tmdb.displayDescription
 import androidx.compose.material3.CircularProgressIndicator
@@ -33,6 +34,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -105,6 +107,7 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
 import com.kennyb1201.kbstream.data.youtube.YoutubeChunkedDataSourceFactory
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private val HomePosterWidth = 124.dp
 private val HomePosterHeight = 180.dp
@@ -1607,6 +1610,12 @@ fun HomeScreen(
         mutableStateOf<UpNextItem?>(null)
     }
 
+    // Scroll position of the rails LazyColumn; read/written by selectHero so
+    // the Continue Watching row can be cleared out of the viewport on rail
+    // focus (see below).
+    val railListState = rememberLazyListState()
+    val homeScope = rememberCoroutineScope()
+
     var heroTrailerReady by remember {
         mutableStateOf(false)
     }
@@ -1652,6 +1661,24 @@ fun HomeScreen(
     ) {
         focusedItem = item
         focusedContinueWatchingItem = null
+
+        // Focusing a catalog rail while the Continue Watching row is still
+        // partially visible: scroll just far enough that the CW row is fully
+        // above the viewport. One D-pad notch only guarantees the newly
+        // focused item is on screen, which used to leave a sliver of the CW
+        // cards peeking under the hero. Item layout: 0 = hero spacer,
+        // 1 = Continue Watching (only when present), 2 = first rail — so the
+        // snap only applies when CW exists.
+        val cwIndex = railListState.firstVisibleItemIndex
+        if (
+            upNext.isNotEmpty() &&
+            cwIndex <= 1 && // hero spacer (+ CW row) still at/near the top
+            railListState.firstVisibleItemScrollOffset > 0
+        ) {
+            homeScope.launch {
+                railListState.animateScrollToItem(index = 2)
+            }
+        }
     }
 
     fun selectContinueWatchingHero(
@@ -1857,6 +1884,7 @@ fun HomeScreen(
             }
 
             LazyColumn(
+                state = railListState,
                 modifier = Modifier.weight(1f),
                 contentPadding = PaddingValues(
                     top = 0.dp,
