@@ -540,7 +540,7 @@ fun SettingsScreen(
 
         ToggleRow(
             label = "Poster Titles",
-            description = "Show the title under posters on Search, Collections, Actor credits, Studios, Tags, and Detail rows.",
+            description = "Show the title under posters on every screen except Home rails.",
             checked = captionTitle,
             onToggle = {
                 captionTitle = it
@@ -552,7 +552,7 @@ fun SettingsScreen(
 
         ToggleRow(
             label = "Poster Years",
-            description = "Show the release year under posters (where the screen has it).",
+            description = "Show the release year under posters on every screen except Home rails (where the screen has it).",
             checked = captionYear,
             onToggle = {
                 captionYear = it
@@ -564,7 +564,7 @@ fun SettingsScreen(
 
         ToggleRow(
             label = "Poster Star Ratings",
-            description = "Show the TMDB star rating under posters (Search and Actor credits).",
+            description = "Show the star rating under posters on every screen except Home rails (where the screen has it).",
             checked = captionRating,
             onToggle = {
                 captionRating = it

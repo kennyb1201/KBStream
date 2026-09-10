@@ -3797,7 +3797,10 @@ private fun PosterGridCard(
     captionYear: String? = null,
     captionRating: Double? = null
 ) {
-    Column {
+    // The Column must be pinned to the poster width: a LazyRow measures
+    // children with unbounded width, so an unconstrained caption would let
+    // single-line titles run wide and overlap the next tile.
+    Column(modifier = Modifier.width(124.dp)) {
         PosterCard(
             posterUrl = remember(posterPath) {
                 posterPath?.let {
@@ -3820,7 +3823,9 @@ private fun PosterGridCard(
             title = contentDescription,
             year = captionYear,
             rating = captionRating,
-            modifier = Modifier.padding(top = 5.dp)
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 5.dp)
         )
     }
 }

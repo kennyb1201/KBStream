@@ -349,6 +349,7 @@ private fun CollectionPosterTile(
         PosterCaptions(
             title = part.title ?: part.name,
             year = part.releaseDate?.take(4),
+            rating = part.voteAverage,
             modifier = Modifier.padding(top = 5.dp)
         )
     }

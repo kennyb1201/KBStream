@@ -569,6 +569,9 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
                                 type = meta.type,
                                 name = meta.name,
                                 poster = meta.poster,
+                                year = meta.releaseInfo?.take(4)?.toIntOrNull(),
+                                rating = meta.imdbRating?.toDoubleOrNull()
+                                    ?.takeIf { it > 0.0 },
                                 meta = meta
                             )
                         }
@@ -597,6 +600,9 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
                             type = meta.type,
                             name = meta.name,
                             poster = meta.poster,
+                            year = meta.releaseInfo?.take(4)?.toIntOrNull(),
+                            rating = meta.imdbRating?.toDoubleOrNull()
+                                ?.takeIf { it > 0.0 },
                             meta = meta
                         )
                     }
