@@ -1683,23 +1683,6 @@ fun HomeScreen(
         lastPosterFocusRequester?.requestFocus()
     }
 
-    fun selectHero(
-        item: MetaPreview
-    ) {
-        userAdjustedFocus = true
-        focusedItem = item
-        focusedContinueWatchingItem = null
-
-        // Focusing a catalog rail while the Continue Watching row is still
-        // partially visible: scroll just far enough that the CW row is fully
-        // above the viewport. One D-pad notch only guarantees the newly
-        // focused item is on screen, which used to leave a sliver of the CW
-        // cards peeking under the hero. Item layout: 0 = hero spacer,
-        // 1 = Continue Watching (only when present), 2 = first rail — so the
-        // snap only applies when CW exists.
-        hideContinueWatchingSliver()
-    }
-
     /**
      * The Continue Watching row sits between the hero and the catalog
      * rails. When the viewport rests between item boundaries, the bottom
@@ -1722,6 +1705,23 @@ fun HomeScreen(
                 railListState.animateScrollToItem(index = 2)
             }
         }
+    }
+
+    fun selectHero(
+        item: MetaPreview
+    ) {
+        userAdjustedFocus = true
+        focusedItem = item
+        focusedContinueWatchingItem = null
+
+        // Focusing a catalog rail while the Continue Watching row is still
+        // partially visible: scroll just far enough that the CW row is fully
+        // above the viewport. One D-pad notch only guarantees the newly
+        // focused item is on screen, which used to leave a sliver of the CW
+        // cards peeking under the hero. Item layout: 0 = hero spacer,
+        // 1 = Continue Watching (only when present), 2 = first rail — so the
+        // snap only applies when CW exists.
+        hideContinueWatchingSliver()
     }
 
     fun selectContinueWatchingHero(
