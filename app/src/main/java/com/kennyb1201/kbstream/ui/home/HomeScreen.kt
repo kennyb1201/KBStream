@@ -52,6 +52,8 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -519,7 +521,8 @@ private fun HomeHero(
     heroLogoUrl: String?,
     trailerKey: String?,
     autoPlayTrailer: Boolean,
-    continueWatchingItem: UpNextItem? = null
+    continueWatchingItem: UpNextItem? = null,
+    heroHeight: Dp = HomeHeroHeight
 ) {
     val context = LocalContext.current
     val title = meta?.name ?: preview.name
@@ -848,7 +851,7 @@ private fun HomeHero(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(HomeHeroHeight)
+            .height(heroHeight)
             .background(Color.Black)
     ) {
         Row(
@@ -1821,8 +1824,22 @@ fun HomeScreen(
             modifier = Modifier.fillMaxSize()
         ) {
             focusedItem?.let {
+                // Nuvio-style proportional hero: give the rails a fixed
+                // fraction of the real screen height, and the hero whatever
+                // remains (minus one row title + breathing room). Scales to
+                // any TV density, unlike the old fixed 300.dp which pushed
+                // the first rail's posters off the bottom on shorter
+                // panels.
+                val configuration = LocalConfiguration.current
+                val screenHeight = configuration.screenHeightDp.dp
+                val railsFraction = 0.52f
+                val heroComputedHeight =
+                    (screenHeight * (1f - railsFraction))
+                        .coerceAtMost(HomeHeroHeight)
+
                 HomeHero(
                     preview = it,
+                    heroHeight = heroComputedHeight,
                     meta = heroMeta,
                     tmdbDetail = heroTmdbDetail,
                     heroBackdropUrl = heroBackdropUrl,
