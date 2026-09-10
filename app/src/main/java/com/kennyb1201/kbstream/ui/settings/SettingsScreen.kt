@@ -76,6 +76,9 @@ fun SettingsScreen(
     var railShowAddon by remember { mutableStateOf(AppPreferences.getHomeRailShowAddonName(context)) }
     var searchRailShowType by remember { mutableStateOf(AppPreferences.getSearchRailShowCatalogType(context)) }
     var searchRailShowAddon by remember { mutableStateOf(AppPreferences.getSearchRailShowAddonName(context)) }
+    var captionTitle by remember { mutableStateOf(AppPreferences.getPosterCaptionTitle(context)) }
+    var captionYear by remember { mutableStateOf(AppPreferences.getPosterCaptionYear(context)) }
+    var captionRating by remember { mutableStateOf(AppPreferences.getPosterCaptionRating(context)) }
     var railHideUpcoming by remember { mutableStateOf(AppPreferences.getHomeRailHideUpcoming(context)) }
     var landscapeCards by remember { mutableStateOf(AppPreferences.getHomeLandscapeCards(context)) }
     var clearingHistory by remember { mutableStateOf(false) }
@@ -428,6 +431,42 @@ fun SettingsScreen(
             onToggle = {
                 searchRailShowAddon = it
                 AppPreferences.setSearchRailShowAddonName(context, it)
+            }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        ToggleRow(
+            label = "Poster Titles",
+            description = "Show the title under posters on Search, Collections, Actor credits, Studios, Tags, and Detail rows.",
+            checked = captionTitle,
+            onToggle = {
+                captionTitle = it
+                AppPreferences.setPosterCaptionTitle(context, it)
+            }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        ToggleRow(
+            label = "Poster Years",
+            description = "Show the release year under posters (where the screen has it).",
+            checked = captionYear,
+            onToggle = {
+                captionYear = it
+                AppPreferences.setPosterCaptionYear(context, it)
+            }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        ToggleRow(
+            label = "Poster Star Ratings",
+            description = "Show the TMDB star rating under posters (Search and Actor credits).",
+            checked = captionRating,
+            onToggle = {
+                captionRating = it
+                AppPreferences.setPosterCaptionRating(context, it)
             }
         )
 

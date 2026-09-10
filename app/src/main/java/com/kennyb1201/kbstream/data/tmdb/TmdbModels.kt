@@ -98,7 +98,11 @@ data class TmdbRecommendationItem(
     val id: Int,
     val title: String? = null,
     val name: String? = null,
-    @Json(name = "poster_path") val posterPath: String? = null
+    @Json(name = "poster_path") val posterPath: String? = null,
+    // Year + rating for Detail screen poster captions (TMDB sends both).
+    @Json(name = "release_date") val releaseDate: String? = null,
+    @Json(name = "first_air_date") val firstAirDate: String? = null,
+    @Json(name = "vote_average") val voteAverage: Double? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -336,7 +340,12 @@ data class TmdbDiscoverItem(
     val id: Int,
     val title: String? = null,
     val name: String? = null,
-    @Json(name = "poster_path") val posterPath: String? = null
+    @Json(name = "poster_path") val posterPath: String? = null,
+    // Parsed so studio/tag rails can caption posters with year + rating
+    // (TMDB sends both on every discover response).
+    @Json(name = "release_date") val releaseDate: String? = null,
+    @Json(name = "first_air_date") val firstAirDate: String? = null,
+    @Json(name = "vote_average") val voteAverage: Double? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -374,7 +383,10 @@ data class TmdbCollectionPart(
     val title: String? = null,
     val name: String? = null,
     @Json(name = "poster_path") val posterPath: String? = null,
-    @Json(name = "release_date") val releaseDate: String? = null
+    @Json(name = "release_date") val releaseDate: String? = null,
+    // Collection parts are always movies; TMDB sends vote_average here too,
+    // parsed so the collection rail can caption ratings.
+    @Json(name = "vote_average") val voteAverage: Double? = null
 )
 
 @JsonClass(generateAdapter = true)

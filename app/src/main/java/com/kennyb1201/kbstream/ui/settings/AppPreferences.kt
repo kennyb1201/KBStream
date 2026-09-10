@@ -43,6 +43,9 @@ object AppPreferences {
     private const val KEY_SHOW_ADDON_NAME = "home_rail_show_addon_name"
     private const val KEY_SEARCH_SHOW_CATALOG_TYPE = "search_rail_show_catalog_type"
     private const val KEY_SEARCH_SHOW_ADDON_NAME = "search_rail_show_addon_name"
+    private const val KEY_POSTER_CAPTION_TITLE = "poster_caption_title"
+    private const val KEY_POSTER_CAPTION_YEAR = "poster_caption_year"
+    private const val KEY_POSTER_CAPTION_RATING = "poster_caption_rating"
     private const val KEY_HIDE_UPCOMING = "home_rail_hide_upcoming"
     private const val KEY_LANDSCAPE_CARDS = "home_landscape_cards"
     private fun prefs(context: Context): SharedPreferences =
@@ -344,6 +347,31 @@ object AppPreferences {
 
     fun setSearchRailShowAddonName(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_SEARCH_SHOW_ADDON_NAME, enabled).apply()
+    }
+
+    // ── Poster captions (all screens except Home rails) ───────────────
+    // Each screen shows only what its data source provides: search tiles
+    // honor all three, collection tiles honor title/year, etc. Home rails
+    // are poster-only and unaffected.
+    fun getPosterCaptionTitle(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_POSTER_CAPTION_TITLE, true)
+
+    fun setPosterCaptionTitle(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_POSTER_CAPTION_TITLE, enabled).apply()
+    }
+
+    fun getPosterCaptionYear(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_POSTER_CAPTION_YEAR, true)
+
+    fun setPosterCaptionYear(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_POSTER_CAPTION_YEAR, enabled).apply()
+    }
+
+    fun getPosterCaptionRating(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_POSTER_CAPTION_RATING, true)
+
+    fun setPosterCaptionRating(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_POSTER_CAPTION_RATING, enabled).apply()
     }
 
     // ── Home rails: hide not-yet-released titles (digital filter) ─────

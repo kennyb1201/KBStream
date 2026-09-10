@@ -70,6 +70,7 @@ import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
+import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
@@ -902,32 +903,12 @@ private fun TitlePosterTile(
                 .height(186.dp)
         )
 
-        Text(
-            text = result.name,
-            style = MaterialTheme.typography.bodySmall,
-            color = KBTextHi,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+        PosterCaptions(
+            title = result.name,
+            year = result.year?.toString(),
+            rating = result.rating,
             modifier = Modifier.padding(top = 5.dp)
         )
-
-        val caption = buildString {
-            result.year?.let { append(it) }
-            result.rating?.let {
-                if (isNotEmpty()) append("  ·  ")
-                append("★ ${String.format("%.1f", it)}")
-            }
-        }
-
-        if (caption.isNotBlank()) {
-            Text(
-                text = caption,
-                style = MaterialTheme.typography.bodySmall,
-                color = KBTextLo,
-                maxLines = 1,
-                modifier = Modifier.padding(top = 2.dp)
-            )
-        }
     }
 }
 

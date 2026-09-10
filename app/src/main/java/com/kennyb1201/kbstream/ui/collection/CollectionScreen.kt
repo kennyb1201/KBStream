@@ -36,6 +36,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.tmdb.TmdbCollectionPart
+import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
@@ -345,26 +346,11 @@ private fun CollectionPosterTile(
                 .height(186.dp)
         )
 
-        Text(
-            text = part.title ?: part.name ?: "Untitled",
-            style = MaterialTheme.typography.bodySmall,
-            color = KBTextHi,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+        PosterCaptions(
+            title = part.title ?: part.name,
+            year = part.releaseDate?.take(4),
             modifier = Modifier.padding(top = 5.dp)
         )
-
-        part.releaseDate
-            ?.takeIf { it.isNotBlank() }
-            ?.let { releaseDate ->
-                Text(
-                    text = releaseDate.take(4),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = KBTextLo,
-                    maxLines = 1,
-                    modifier = Modifier.padding(top = 2.dp)
-                )
-            }
     }
 }
 

@@ -51,6 +51,7 @@ import coil3.size.Size
 import com.kennyb1201.kbstream.data.tmdb.StudioItem
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
@@ -422,35 +423,48 @@ private fun TagRailRow(
                 val isFirstItem =
                     isFirstSection && studioItem == section.items.firstOrNull()
 
-                PosterCard(
-                    posterUrl = studioItem.item.posterPath
-                        ?.let { "${TmdbRepository.POSTER_BASE}$it" },
-                    contentDescription = studioItem.item.title
-                        ?: studioItem.item.name,
-                    isWatched = watched,
-                    onClick = {
-                        viewModel.resolveAndNavigate(
-                            tmdbId = studioItem.item.id,
-                            mediaType = rawMediaType,
-                            onNavigateDetail = onNavigateDetail
-                        )
-                    },
-                    onLongClick = {
-                        onOpenPosterMenu(studioItem, requester)
-                    },
-                    modifier = Modifier
-                        .width(140.dp)
-                        .height(210.dp)
-                        .padding(end = 12.dp)
-                        .focusRequester(requester)
-                        .then(
-                            if (isFirstItem) {
-                                Modifier.focusRequester(firstItemFocusRequester)
-                            } else {
-                                Modifier
-                            }
-                        )
-                )
+                Column(
+                    modifier = Modifier.padding(end = 12.dp)
+                ) {
+                    PosterCard(
+                        posterUrl = studioItem.item.posterPath
+                            ?.let { "${TmdbRepository.POSTER_BASE}$it" },
+                        contentDescription = studioItem.item.title
+                            ?: studioItem.item.name,
+                        isWatched = watched,
+                        onClick = {
+                            viewModel.resolveAndNavigate(
+                                tmdbId = studioItem.item.id,
+                                mediaType = rawMediaType,
+                                onNavigateDetail = onNavigateDetail
+                            )
+                        },
+                        onLongClick = {
+                            onOpenPosterMenu(studioItem, requester)
+                        },
+                        modifier = Modifier
+                            .width(140.dp)
+                            .height(210.dp)
+                            .focusRequester(requester)
+                            .then(
+                                if (isFirstItem) {
+                                    Modifier.focusRequester(firstItemFocusRequester)
+                                } else {
+                                    Modifier
+                                }
+                            )
+                    )
+
+                    PosterCaptions(
+                        title = studioItem.item.title ?: studioItem.item.name,
+                        year = (studioItem.item.releaseDate
+                            ?: studioItem.item.firstAirDate)?.take(4),
+                        rating = studioItem.item.voteAverage,
+                        modifier = Modifier
+                            .width(140.dp)
+                            .padding(top = 5.dp)
+                    )
+                }
             }
         }
     }

@@ -100,6 +100,7 @@ import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.tmdb.tmdbImageOriginal
 import com.kennyb1201.kbstream.data.tmdb.writers
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
@@ -2341,6 +2342,10 @@ fun DetailScreen(
                                                 part.posterPath,
                                             contentDescription =
                                                 part.title ?: "",
+                                            captionYear =
+                                                part.releaseDate?.take(4),
+                                            captionRating =
+                                                part.voteAverage,
                                             isWatched =
                                                 resolvedPosterIds[
                                                     viewModel
@@ -2447,6 +2452,11 @@ fun DetailScreen(
                                                 rec.title
                                                     ?: rec.name
                                                     ?: "",
+                                            captionYear =
+                                                (rec.releaseDate
+                                                    ?: rec.firstAirDate)?.take(4),
+                                            captionRating =
+                                                rec.voteAverage,
                                             isWatched =
                                                 resolvedPosterIds[
                                                     viewModel
@@ -3780,26 +3790,36 @@ private fun PosterGridCard(
     isWatched: Boolean,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    captionYear: String? = null,
+    captionRating: Double? = null
 ) {
-    PosterCard(
-        posterUrl = remember(posterPath) {
-            posterPath?.let {
-                TmdbRepository.POSTER_BASE + it
-            }
-        },
-        contentDescription = contentDescription,
-        isWatched = isWatched,
-        onClick = onClick,
-        onLongClick = onLongClick,
-        modifier = modifier
-            // Match the regular home-rail poster size (124x180) so the
-            // "More Like This" and collection rows don't look shrunken
-            // next to the rails everywhere else in the app.
-            .width(124.dp)
-            .height(180.dp)
-            .padding(end = 10.dp)
-    )
+    Column {
+        PosterCard(
+            posterUrl = remember(posterPath) {
+                posterPath?.let {
+                    TmdbRepository.POSTER_BASE + it
+                }
+            },
+            contentDescription = contentDescription,
+            isWatched = isWatched,
+            onClick = onClick,
+            onLongClick = onLongClick,
+            modifier = modifier
+                // Match the regular home-rail poster size (124x180) so the
+                // "More Like This" and collection rows don't look shrunken
+                // next to the rails everywhere else in the app.
+                .width(124.dp)
+                .height(180.dp)
+        )
+
+        PosterCaptions(
+            title = contentDescription,
+            year = captionYear,
+            rating = captionRating,
+            modifier = Modifier.padding(top = 5.dp)
+        )
+    }
 }
 
 /**

@@ -57,6 +57,7 @@ import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.tmdb.TmdbPersonCredit
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.metaLine
+import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
@@ -551,22 +552,34 @@ private fun ActorCreditCard(
     onLongClick: (() -> Unit)? = null,
     focusRequester: FocusRequester? = null
 ) {
-    PosterCard(
-        posterUrl = remember(credit.posterPath) { credit.posterPath?.let { TmdbRepository.POSTER_BASE + it } },
-        contentDescription = credit.title ?: credit.name ?: "",
-        isWatched = isWatched,
-        onClick = onClick,
-        onLongClick = onLongClick,
+    Column(
         modifier = Modifier
             .width(124.dp)
-            .height(180.dp)
             .padding(end = 12.dp)
-            .then(
-                if (focusRequester != null) {
-                    Modifier.focusRequester(focusRequester)
-                } else {
-                    Modifier
-                }
-            )
-    )
+    ) {
+        PosterCard(
+            posterUrl = remember(credit.posterPath) { credit.posterPath?.let { TmdbRepository.POSTER_BASE + it } },
+            contentDescription = credit.title ?: credit.name ?: "",
+            isWatched = isWatched,
+            onClick = onClick,
+            onLongClick = onLongClick,
+            modifier = Modifier
+                .width(124.dp)
+                .height(180.dp)
+                .then(
+                    if (focusRequester != null) {
+                        Modifier.focusRequester(focusRequester)
+                    } else {
+                        Modifier
+                    }
+                )
+        )
+
+        PosterCaptions(
+            title = credit.title ?: credit.name,
+            year = (credit.releaseDate ?: credit.firstAirDate)?.take(4),
+            rating = credit.voteAverage,
+            modifier = Modifier.padding(top = 5.dp)
+        )
+    }
 }
