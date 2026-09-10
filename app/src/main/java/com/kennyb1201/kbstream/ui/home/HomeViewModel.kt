@@ -3575,7 +3575,8 @@ private suspend fun calculateEpisodesRemaining(
      * already have warm entries.
      */
     private suspend fun resolveLandscapeArt(
-        metas: List<MetaPreview>
+        metas: List<MetaPreview>,
+        tmdbOnly: Boolean = false
     ): Map<String, Pair<String?, String?>> {
 
         return coroutineScope {
@@ -3587,10 +3588,18 @@ private suspend fun calculateEpisodesRemaining(
                     val key = "${meta.type}:${meta.id}"
 
                     val addonBackdrop =
-                        meta.background?.takeIf { it.isNotBlank() }
+                        if (tmdbOnly) {
+                            null
+                        } else {
+                            meta.background?.takeIf { it.isNotBlank() }
+                        }
 
                     val addonLogo =
-                        meta.logo?.takeIf { it.isNotBlank() }
+                        if (tmdbOnly) {
+                            null
+                        } else {
+                            meta.logo?.takeIf { it.isNotBlank() }
+                        }
 
                     if (
                         addonBackdrop != null &&
@@ -3623,13 +3632,29 @@ private suspend fun calculateEpisodesRemaining(
                             ?.takeIf { it.isNotBlank() }
                             ?.let { TmdbRepository.LOGO_BASE + it }
 
-                    // Backdrop: TMDB (alternate) wins over the addon's
-                    // background, which is usually the same primary image
-                    // the hero shows. Logo keeps addon-first priority.
-                    key to (
-                        (tmdbBackdrop ?: addonBackdrop) to
-                            (addonLogo ?: tmdbLogo)
-                        )
+                    if (tmdbOnly) {
+                        // Pinned Top Today rails: the addon's backgrounds
+                        // carry burned-in promo text ("Just Added" badges,
+                        // title cards), so they are never usable as card
+                        // art. TMDB or nothing — when TMDB has no images,
+                        // blank markers make the card render its clean
+                        // title-only treatment (LandscapeCard treats blank
+                        // like missing; HomeScreen's ?: addon fallback can
+                        // never fire because the map entry exists).
+                        key to (
+                            (tmdbBackdrop ?: "") to
+                                (tmdbLogo ?: "")
+                            )
+                    } else {
+                        // Backdrop: TMDB (alternate) wins over the addon's
+                        // background, which is usually the same primary
+                        // image the hero shows. Logo keeps addon-first
+                        // priority.
+                        key to (
+                            (tmdbBackdrop ?: addonBackdrop) to
+                                (addonLogo ?: tmdbLogo)
+                            )
+                    }
                 }
             }.awaitAll().toMap()
         }
@@ -4057,7 +4082,8 @@ private suspend fun calculateEpisodesRemaining(
                                     landscapeArt =
                                         if (landscapeCards) {
                                             resolveLandscapeArt(
-                                                filteredMetas
+                                                filteredMetas,
+                                                tmdbOnly = true
                                             )
                                         } else {
                                             emptyMap()
