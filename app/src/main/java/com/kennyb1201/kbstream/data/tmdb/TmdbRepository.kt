@@ -464,6 +464,23 @@ class TmdbRepository(context: Context) {
         return detail.copy(parts = filteredParts)
     }
 
+    /**
+     * One page of user reviews for a title via the standalone paginated
+     * endpoint. The detail payload only bundles page 1; the Detail screen
+     * uses this to pull in pages 2..N for review-heavy titles. Fails soft
+     * (empty list) — reviews are supplementary.
+     */
+    suspend fun getReviews(tmdbId: Int, type: String, page: Int): List<TmdbReview> {
+        if (apiKey.isBlank() || page < 1) return emptyList()
+        return runCatching {
+            if (normalizeType(type) == "series") {
+                api.getTvReviews(tmdbId, apiKey, page)
+            } else {
+                api.getMovieReviews(tmdbId, apiKey, page)
+            }.results
+        }.getOrDefault(emptyList())
+    }
+
     suspend fun getSeasonEpisodes(
         tvId: Int,
         season: Int,

@@ -40,6 +40,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import android.app.Activity
 import android.content.Intent
 import android.speech.RecognizerIntent
+import android.provider.Settings
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.Key
@@ -567,6 +568,7 @@ private fun SearchHero(
     addonCount: Int,
     isLoading: Boolean
 ) {
+    val context = LocalContext.current
     var searchFocused by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -587,6 +589,53 @@ private fun SearchHero(
             onSubmit()
             focusManager.clearFocus()
         }
+    }
+
+    // Builds the voice-search intent targeted at the device's DEFAULT
+    // speech recognizer (the one chosen under Settings > Language & input >
+    // Voice input), instead of firing a bare ACTION_RECOGNIZE_SPEECH that
+    // opens the "complete action using" chooser. Picking the wrong chooser
+    // entry there (e.g. the Google app rather than the voice recognition
+    // service) used to swallow the session: green mic and listening sounds,
+    // but no transcript ever returned to KBStream.
+    fun buildVoiceIntent(context: android.content.Context): Intent {
+        val base = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+            )
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "Search KBStream")
+        }
+
+        // Settings.Secure "voice_recognition_service" is the ComponentName
+        // ("pkg/cls") of the system's current default RecognitionService.
+        // Its package hosts the recognizer activity too, so scoping the
+        // intent to that package routes the session straight to it — no
+        // chooser, no wrong-handler dead end. If anything is unreadable or
+        // uninstalled, fall back to the bare intent (chooser) so voice
+        // search still works, just the old way.
+        val defaultRecognizerPackage = runCatching {
+            Settings.Secure.getString(
+                context.contentResolver,
+                "voice_recognition_service"
+            )
+        }.getOrNull()
+            ?.substringBefore("/")
+            ?.takeIf { it.isNotBlank() && it != "null" }
+            ?: return base
+
+        val scoped = Intent(base).apply {
+            setPackage(defaultRecognizerPackage)
+        }
+        // If the default recognizer package can't resolve the activity
+        // (uninstalled/changed), fall back to the chooser-style intent.
+        val resolves = runCatching {
+            context.packageManager.queryIntentActivities(scoped, 0)
+        }.getOrDefault(emptyList())
+        if (resolves.isEmpty()) {
+            return base
+        }
+        return scoped
     }
 
     Column(
@@ -700,14 +749,7 @@ private fun SearchHero(
         // glow) so it lights up consistently on D-pad focus.
         Surface(
             onClick = {
-                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                    putExtra(
-                        RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                        RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-                    )
-                    putExtra(RecognizerIntent.EXTRA_PROMPT, "Search KBStream")
-                }
-                runCatching { voiceLauncher.launch(intent) }
+                runCatching { voiceLauncher.launch(buildVoiceIntent(context)) }
                     .onFailure {
                         // No recognizer installed on this device.
                         keyboardController?.hide()

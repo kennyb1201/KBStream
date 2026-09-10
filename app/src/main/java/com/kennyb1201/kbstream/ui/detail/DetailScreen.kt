@@ -287,6 +287,7 @@ fun DetailScreen(
 
     val meta by viewModel.meta.collectAsState()
     val omdbRatings by viewModel.omdbRatings.collectAsState()
+    val allReviews by viewModel.allReviews.collectAsState()
     val tmdbDetail by viewModel.tmdbDetail.collectAsState()
     // TMDB clearlogo first (more reliable); add-on logo (fanart.tv etc.) as
     // fallback when TMDB has nothing for this title.
@@ -2196,9 +2197,11 @@ fun DetailScreen(
                             }
                         }
 
-                        val reviews =
-                            tmdbDetail?.reviews?.results
-                                .orEmpty()
+                        // Bundled page-1 reviews plus extra pages fetched in
+                        // the background (allReviews) - more reviews appear as
+                        // the additional pages land.
+                        val reviews = allReviews
+                            .ifEmpty { tmdbDetail?.reviews?.results.orEmpty() }
 
                         if (reviews.isNotEmpty() || omdbRatings?.hasAny == true) {
                             item(key = "reviewsheader") {
@@ -2272,7 +2275,7 @@ fun DetailScreen(
                                         .focusRestorer()
                                 ) {
                                     items(
-                                        reviews.take(10),
+                                        reviews.take(30),
                                         key = { it.id }
                                     ) { review ->
                                         ReviewCard(

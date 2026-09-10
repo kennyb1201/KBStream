@@ -29,7 +29,14 @@ import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.border
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -90,6 +97,8 @@ fun SettingsScreen(
     var preferredAudioLang by remember { mutableStateOf(AppPreferences.getPreferredAudioLanguage(context)) }
     var preferredSubtitleLang by remember { mutableStateOf(AppPreferences.getPreferredSubtitleLanguage(context)) }
     var backupStatus by remember { mutableStateOf<String?>(null) }
+    var omdbKeyInput by remember { mutableStateOf(AppPreferences.getOmdbApiKey(context)) }
+    var omdbKeySaved by remember { mutableStateOf(false) }
 
     val backupScope = rememberCoroutineScope()
 
@@ -154,6 +163,99 @@ fun SettingsScreen(
             description = "Connect your Simkl account for scrobbling",
             onClick = onOpenSimkl
         )
+
+        // OMDb API key: free key from omdbapi.com enables the critic
+        // ratings row (Rotten Tomatoes / Metacritic / IMDb) on detail pages.
+        KBCard(
+            onClick = { },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(KBSurfaceRaised, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                Text(
+                    text = "OMDb API Key",
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    text = "Free key from omdbapi.com — enables Rotten Tomatoes " +
+                        "and Metacritic ratings on detail pages.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+
+                var omdbFieldFocused by remember { mutableStateOf(false) }
+                BasicTextField(
+                    value = omdbKeyInput,
+                    onValueChange = {
+                        omdbKeyInput = it.trim()
+                        omdbKeySaved = false
+                    },
+                    singleLine = true,
+                    textStyle = TextStyle(
+                        color = KBTextHi,
+                        fontSize = MaterialTheme.typography.bodyMedium.fontSize
+                    ),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(
+                        onDone = {
+                            AppPreferences.setOmdbApiKey(context, omdbKeyInput)
+                            omdbKeySaved = omdbKeyInput.isNotBlank()
+                        }
+                    ),
+                    cursorBrush = SolidColor(KBAccent),
+                    decorationBox = { innerTextField ->
+                        Box(
+                            modifier = Modifier
+                                .padding(top = 6.dp)
+                                .fillMaxWidth()
+                                .background(KBSurface, RoundedCornerShape(8.dp))
+                                .border(
+                                    if (omdbFieldFocused) 2.dp else 1.dp,
+                                    if (omdbFieldFocused) KBAccent
+                                    else KBTextLo.copy(alpha = 0.25f),
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .padding(horizontal = 10.dp, vertical = 8.dp)
+                        ) {
+                            if (omdbKeyInput.isBlank()) {
+                                Text(
+                                    text = "Paste key (e.g. a1b2c3d4)",
+                                    color = KBTextLo.copy(alpha = 0.7f),
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                            innerTextField()
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onFocusChanged {
+                            omdbFieldFocused = it.isFocused
+                            // Save on focus loss too — remote users often
+                            // just navigate away after pasting.
+                            if (!it.isFocused) {
+                                AppPreferences.setOmdbApiKey(context, omdbKeyInput)
+                                omdbKeySaved = omdbKeyInput.isNotBlank()
+                            }
+                        }
+                )
+
+                if (omdbKeySaved) {
+                    Text(
+                        text = "Saved — ratings appear the next time you open a title.",
+                        color = KBAccent,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 5.dp)
+                    )
+                }
+            }
+        }
 
         Spacer(modifier = Modifier.height(12.dp))
 

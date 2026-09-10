@@ -149,7 +149,12 @@ data class TmdbReview(
 
 @JsonClass(generateAdapter = true)
 data class TmdbReviews(
-    val results: List<TmdbReview> = emptyList()
+    val results: List<TmdbReview> = emptyList(),
+    // Pagination info for the standalone reviews endpoint — the detail
+    // payload only ever bundles page 1, so fetching pages 2..totalPages
+    // yields every remaining user review for popular titles.
+    val page: Int? = null,
+    @Json(name = "total_pages") val totalPages: Int? = null
 )
 
 @JsonClass(generateAdapter = true)

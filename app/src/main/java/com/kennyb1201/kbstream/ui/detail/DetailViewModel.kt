@@ -17,6 +17,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbCollectionDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbPersonDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tmdb.TmdbReview
 import com.kennyb1201.kbstream.data.omdb.OmdbClient
 import com.kennyb1201.kbstream.data.omdb.OmdbRatings
 import com.kennyb1201.kbstream.data.tmdb.TmdbSeasonSummary
@@ -62,6 +63,12 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
     val meta: StateFlow<Meta?> = _meta.asStateFlow()
 
     private val _tmdbDetail = MutableStateFlow<TmdbDetail?>(null)
+
+    // Full review list = the page bundled with the detail payload plus every
+    // additional page from the standalone paginated reviews endpoint. Kept
+    // separate so the UI can render page 1 immediately while the rest loads.
+    private val _allReviews = MutableStateFlow<List<TmdbReview>>(emptyList())
+    val allReviews: StateFlow<List<TmdbReview>> = _allReviews.asStateFlow()
 
     /**
      * True when [_tmdbDetail] is a synthetic stand-in built from the addon's
@@ -255,6 +262,7 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
         latestEpisodeSeasonRequest = initialSeason
         _collection.value = null
         _omdbRatings.value = null
+        _allReviews.value = emptyList()
         _simklSeriesWatched.value = false
         _resolvedPosterIds.value = emptyMap()
         _targetEpisode.value = null
@@ -570,6 +578,7 @@ for (metaAddon in metaAddons) {
                     }
                     refreshPosterWatchedStatus(normalizedType)
                     fetchOmdbRatings(normalizedType)
+                    fetchExtraReviews(normalizedType)
                 }
 
                 // 5. Trigger season selection strictly after history states are fully loaded
@@ -593,16 +602,32 @@ for (metaAddon in metaAddons) {
 
     /**
      * OMDb ratings (IMDb / Rotten Tomatoes / Metacritic). Key comes from the
-     * OMDb_API_KEY BuildConfig field; blank key = feature silently off.
+     * Settings screen (stored in prefs) first, falling back to the
+     * OMDb_API_KEY BuildConfig field; blank in both = feature silently off.
      * IMDb id: addon meta ids are already tt-id based for movies/series; for
      * TMDB-only ids fall back to the external_ids lookup.
      */
-    private fun omdbApiKey(): String = runCatching {
-        com.kennyb1201.kbstream.BuildConfig.OMDB_API_KEY
-    }.getOrDefault("")
+    private fun omdbApiKey(): String {
+        val fromPrefs = runCatching {
+            com.kennyb1201.kbstream.ui.settings.AppPreferences
+                .getOmdbApiKey(getApplication())
+        }.getOrDefault("")
+        if (fromPrefs.isNotBlank()) return fromPrefs
+
+        return runCatching {
+            com.kennyb1201.kbstream.BuildConfig.OMDB_API_KEY
+        }.getOrDefault("")
+    }
 
     private fun fetchOmdbRatings(normalizedType: String) {
-        if (omdbApiKey().isBlank()) return
+        val key = omdbApiKey()
+        if (key.isBlank()) {
+            Log.i(
+                "KBStream",
+                "OMDb ratings skipped: no API key (add one in Settings or OMDb_API_KEY build field)"
+            )
+            return
+        }
         viewModelScope.launch {
             val meta = _meta.value
             val rawId = meta?.id ?: imdbId
@@ -612,7 +637,44 @@ for (metaAddon in metaAddons) {
                     normalizedType
                 ).orEmpty()
             if (!resolved.startsWith("tt")) return@launch
-            _omdbRatings.value = OmdbClient.fetchRatings(resolved, omdbApiKey())
+            _omdbRatings.value = OmdbClient.fetchRatings(resolved, key)
+        }
+    }
+
+    /**
+     * Reviews beyond the first page. TMDB's detail payload bundles only page
+     * 1 of reviews (often just a handful); the standalone endpoint paginates
+     * the full list. Fetch pages 2..N (bounded) in the background and merge,
+     * de-duped, after the bundled page so the UI paints immediately.
+     */
+    private fun fetchExtraReviews(normalizedType: String) {
+        val detail = _tmdbDetail.value ?: return
+        val tmdbId = detail.id.takeIf { it > 0 } ?: return
+        val bundled = detail.reviews?.results.orEmpty()
+
+        viewModelScope.launch {
+            // Probe page 2 for the total; short-circuit when the title only
+            // has one page (the common case).
+            val second = tmdbRepository.getReviews(tmdbId, normalizedType, 2)
+            if (second.isEmpty()) {
+                _allReviews.value = bundled
+                return@launch
+            }
+
+            val extras = mutableListOf<TmdbReview>()
+            extras += second
+
+            // Conservative page cap: enough for very review-heavy titles
+            // (20/page -> up to ~120 more reviews) without hammering the API.
+            val maxPage = 7
+            (3..maxPage).forEach { page ->
+                val pageResults = tmdbRepository.getReviews(tmdbId, normalizedType, page)
+                if (pageResults.isEmpty()) return@forEach
+                extras += pageResults
+            }
+
+            _allReviews.value = (bundled + extras)
+                .distinctBy { it.id }
         }
     }
 

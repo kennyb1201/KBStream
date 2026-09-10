@@ -46,6 +46,7 @@ object AppPreferences {
     private const val KEY_POSTER_CAPTION_TITLE = "poster_caption_title"
     private const val KEY_POSTER_CAPTION_YEAR = "poster_caption_year"
     private const val KEY_POSTER_CAPTION_RATING = "poster_caption_rating"
+    private const val KEY_OMDB_API_KEY = "omdb_api_key"
     private const val KEY_HIDE_UPCOMING = "home_rail_hide_upcoming"
     private const val KEY_LANDSCAPE_CARDS = "home_landscape_cards"
     private fun prefs(context: Context): SharedPreferences =
@@ -372,6 +373,17 @@ object AppPreferences {
 
     fun setPosterCaptionRating(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_POSTER_CAPTION_RATING, enabled).apply()
+    }
+
+    // ── OMDb API key (critic ratings: RT / Metacritic / IMDb) ─────────
+    // Stored here so the user can paste a free key from omdbapi.com without
+    // rebuilding. The build-time BuildConfig key (local.properties / env)
+    // takes precedence when present.
+    fun getOmdbApiKey(context: Context): String =
+        prefs(context).getString(KEY_OMDB_API_KEY, "")?.trim().orEmpty()
+
+    fun setOmdbApiKey(context: Context, key: String) {
+        prefs(context).edit().putString(KEY_OMDB_API_KEY, key.trim()).apply()
     }
 
     // ── Home rails: hide not-yet-released titles (digital filter) ─────

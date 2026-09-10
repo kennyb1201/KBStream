@@ -26,6 +26,20 @@ interface TmdbApiService {
         @Query("append_to_response") append: String = "content_ratings,credits,videos,recommendations,reviews,keywords,images,awards"
     ): TmdbDetail
 
+    @GET("movie/{id}/reviews")
+    suspend fun getMovieReviews(
+        @Path("id") id: Int,
+        @Query("api_key") apiKey: String,
+        @Query("page") page: Int
+    ): TmdbReviews
+
+    @GET("tv/{id}/reviews")
+    suspend fun getTvReviews(
+        @Path("id") id: Int,
+        @Query("api_key") apiKey: String,
+        @Query("page") page: Int
+    ): TmdbReviews
+
     @GET("movie/{id}/external_ids")
     suspend fun getMovieExternalIds(
         @Path("id") id: Int,
