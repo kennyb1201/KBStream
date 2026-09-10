@@ -409,7 +409,7 @@ fun SettingsScreen(
 
         ToggleRow(
             label = "Hide Unreleased Titles",
-            description = "Filter titles whose digital release date is in the future out of Home rails.",
+            description = "Hides movies that are still in theaters or not yet digitally released, across all screens.",
             checked = railHideUpcoming,
             onToggle = {
                 railHideUpcoming = it
@@ -421,7 +421,7 @@ fun SettingsScreen(
 
         ToggleRow(
             label = "Landscape Cards on Home Rails",
-            description = "Show 16:9 backdrop cards with a small clearlogo instead of posters. Applies when you return to Home.",
+            description = "Show 16:9 backdrop cards with a small clearlogo instead of posters.",
             checked = landscapeCards,
             onToggle = {
                 landscapeCards = it
