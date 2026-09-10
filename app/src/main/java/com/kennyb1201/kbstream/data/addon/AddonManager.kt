@@ -559,6 +559,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         val existingByKey =
             existingCatalogs.associateBy {
                 catalogKey(
+                    manifest.id,
                     it.type,
                     it.id
                 )
@@ -572,6 +573,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
             getCatalogConfigurations()
                 .mapIndexed { index, configuration ->
                     catalogKey(
+                        configuration.addonId,
                         configuration.catalog.type,
                         configuration.catalog.id
                     ) to index
@@ -588,6 +590,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
 
                 val key =
                     catalogKey(
+                        manifest.id,
                         manifestCatalog.type,
                         manifestCatalog.id
                     )
@@ -762,14 +765,16 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         addons: List<InstalledAddon>
     ): List<InstalledAddon> {
 
+        // Sort GLOBALLY by order (stable sort keeps addon-grouped relative
+        // order for ties/legacy states). Sorting per-addon here would clamp
+        // globally-moved catalogs back to their own addon's group — which is
+        // exactly why "move to bottom" previously stopped at the addon
+        // boundary instead of the end of the list.
         val orderedCatalogs =
             addons
                 .flatMapIndexed { addonIndex, addon ->
 
                     addon.catalogs
-                        .sortedBy {
-                            it.order
-                        }
                         .map { catalog ->
 
                             Triple(
@@ -779,39 +784,25 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                             )
                         }
                 }
+                .sortedBy {
+                    it.third.order
+                }
 
         return addons.map { addon ->
             addon.copy(
                 catalogs =
                     orderedCatalogs
+                        .withIndex()
                         .filter {
-                            it.second == addon.id
+                            it.value.second == addon.id
                         }
-                        .mapIndexed { _, triple ->
+                        .map { numbered ->
 
-                            triple.third
-                        }
-            )
-        }.let { rebuilt ->
-
-            var globalIndex = 0
-
-            rebuilt.map { addon ->
-
-                val catalogs =
-                    addon.catalogs
-                        .map { catalog ->
-
-                            catalog.copy(
-                                order =
-                                    globalIndex++
+                            numbered.value.third.copy(
+                                order = numbered.index
                             )
                         }
-
-                addon.copy(
-                    catalogs = catalogs
-                )
-            }
+            )
         }
     }
 
@@ -829,6 +820,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
             .mapIndexed { index, configuration ->
 
                 catalogKey(
+                    configuration.addonId,
                     configuration.catalog.type,
                     configuration.catalog.id
                 ) to index
@@ -846,6 +838,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
 
                             val key =
                                 catalogKey(
+                                    addon.id,
                                     catalog.type,
                                     catalog.id
                                 )
@@ -863,11 +856,12 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
 }
 
     private fun catalogKey(
+        addonId: String,
         type: String,
         id: String
     ): String {
 
-        return "${type.lowercase()}::$id"
+        return "${addonId}::${type.lowercase()}::$id"
     }
 
     private fun defaultAddons():

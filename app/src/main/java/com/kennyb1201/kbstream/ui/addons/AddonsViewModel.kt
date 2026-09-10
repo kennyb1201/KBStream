@@ -508,13 +508,32 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         addonId: String,
         catalogs: List<ManifestCatalog>
     ) {
+        // Renumber the edited addon's catalogs in GLOBAL slot space, not
+        // 0..n-1: per-addon renumbering would collapse this addon's block to
+        // the front of the global order on every per-addon edit (hide/show,
+        // rename, intra-addon move), stomping cross-addon arrangements made
+        // in the catalog manager. Keeping the addon's other catalogs at their
+        // current global offsets and spacing the edited set between them
+        // preserves everything else exactly.
+        val currentAddon = _addons.value.firstOrNull { it.id == addonId }
+        val previousGlobalOrders = currentAddon
+            ?.catalogs
+            ?.map { "${it.type.trim().lowercase()}::${it.id.trim().lowercase()}" to it.order }
+            ?.toMap()
+            .orEmpty()
+        val previousMax = previousGlobalOrders.values.maxOrNull() ?: -1
+
         val updated = _addons.value.map { addon ->
             if (addon.id == addonId) {
                 addon.copy(
                     catalogs = catalogs
                         .sortedBy { it.order }
                         .mapIndexed { index, catalog ->
-                            catalog.copy(order = index)
+                            val key = "${catalog.type.trim().lowercase()}::${catalog.id.trim().lowercase()}"
+                            val previous = previousGlobalOrders[key]
+                            catalog.copy(
+                                order = previous ?: (previousMax + 1 + index)
+                            )
                         }
                 )
             } else {
