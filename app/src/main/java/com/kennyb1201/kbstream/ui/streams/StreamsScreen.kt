@@ -42,6 +42,7 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.StreamBadgeRow
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -360,6 +361,11 @@ private fun StreamCard(
                 )
                 .padding(horizontal = 18.dp, vertical = 15.dp)
         ) {
+            StreamBadgeRow(
+                badges = stream.badges,
+                modifier = Modifier.padding(bottom = if (stream.badges.isEmpty()) 0.dp else 6.dp)
+            )
+
             stream.name
                 ?.takeIf { it.isNotBlank() }
                 ?.let { name ->

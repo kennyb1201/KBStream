@@ -60,6 +60,8 @@ import androidx.media3.ui.PlayerView
 import androidx.media3.exoplayer.video.VideoRendererEventListener
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.data.badges.StreamBadge
+import com.kennyb1201.kbstream.ui.player.PickerAdapter.Companion.bindBadgeRow
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
@@ -182,6 +184,7 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var episodeLabel: TextView
     private lateinit var episodeTitleView: TextView
     private lateinit var sourceLabel: TextView
+    private lateinit var badgeRow: LinearLayout
     private lateinit var streamHealth: TextView
     private lateinit var overviewText: TextView
     private lateinit var seekbarRow: LinearLayout
@@ -287,6 +290,7 @@ class NativePlayerActivity : ComponentActivity() {
     private var currentUrl = ""
     private var currentAudioUrl: String? = null
     private var currentSourceLabel = "Source 1"
+    private var currentBadges: List<StreamBadge> = emptyList()
     private var carryPositionMs = 0L
     private var playbackSpeed = 1f
     private var resizeModeIndex = 0
@@ -635,7 +639,8 @@ class NativePlayerActivity : ComponentActivity() {
                         url = obj.optString("url", null),
                         audioUrl = obj.optString("audioUrl", null),
                         infoHash = obj.optString("infoHash", null),
-                        fileIdx = obj.optInt("fileIdx", -1).takeIf { it >= 0 }
+                        fileIdx = obj.optInt("fileIdx", -1).takeIf { it >= 0 },
+                        badges = parseStreamBadges(obj.optJSONArray("badges"))
                     )
                 }.filter { !it.url.isNullOrBlank() }
                 if (sources.none { it.url == currentUrl }) {
@@ -726,7 +731,10 @@ class NativePlayerActivity : ComponentActivity() {
             else -> parentId
         }
 
-        currentSourceLabel = sources.firstOrNull { it.url == currentUrl }?.displayLabel()
+        sources.firstOrNull { it.url == currentUrl }?.let { first ->
+            currentSourceLabel = first.displayLabel()
+            currentBadges = first.badges
+        }
             ?: sources.firstOrNull()?.displayLabel()
             ?: "Current source"
         currentSourceIndex = sources.indexOfFirst { it.url == currentUrl }
@@ -768,6 +776,7 @@ class NativePlayerActivity : ComponentActivity() {
         episodeLabel = findViewById(R.id.episode_label)
         episodeTitleView = findViewById(R.id.episode_title)
         sourceLabel = findViewById(R.id.source_label)
+        badgeRow = findViewById(R.id.badge_row)
         streamHealth = findViewById(R.id.stream_health)
         overviewText = findViewById(R.id.overview_text)
         seekbarRow = findViewById(R.id.seekbar_row)
@@ -877,6 +886,7 @@ class NativePlayerActivity : ComponentActivity() {
         liveBadge.visibility = if (isLiveChannel) View.VISIBLE else View.GONE
         btnSource.visibility = View.VISIBLE
         sourceLabel.text = "Source: $currentSourceLabel"
+        renderSourceBadges()
 
         // Populate header info
         updateHeaderInfo()
@@ -2517,6 +2527,7 @@ class NativePlayerActivity : ComponentActivity() {
         }
         sourceLabel.visibility = View.VISIBLE
         sourceLabel.text = "Source: $currentSourceLabel"
+        renderSourceBadges()
     }
 
     private fun updateStreamHealthDisplay() {
@@ -2646,8 +2657,14 @@ class NativePlayerActivity : ComponentActivity() {
         endsAtClock.text = "Ends at $endsAt"
     }
 
+    /** Renders the current source's badge chips under the source label. */
+    private fun renderSourceBadges() {
+        PickerAdapter.bindBadgeRow(badgeRow, currentBadges)
+    }
+
     private fun updateControlsInfo() {
         sourceLabel.text = "Source: $currentSourceLabel"
+        renderSourceBadges()
         btnPlayPause.setImageResource(
             if (exoPlayer?.isPlaying == true) R.drawable.ic_player_pause else R.drawable.ic_player_play
         )
@@ -3014,6 +3031,7 @@ class NativePlayerActivity : ComponentActivity() {
                     PickerItem(
                         label = stream.displayLabel(),
                         isSelected = stream.url == currentUrl,
+                        badges = stream.badges,
                         onClick = { switchToSource(stream); dismissPicker() }
                     )
                 }
@@ -3729,6 +3747,7 @@ class NativePlayerActivity : ComponentActivity() {
         if (newUrl == currentUrl) return
         carryPositionMs = if (isLiveChannel) 0L else exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
         currentSourceLabel = stream.displayLabel()
+        currentBadges = stream.badges
         currentUrl = newUrl
         currentAudioUrl = stream.audioUrl
         currentSourceIndex = sources.indexOfFirst { it.url == newUrl }
@@ -3845,6 +3864,25 @@ private fun Stream.displayLabel(): String = listOfNotNull(
 ).distinct().joinToString(" • ").ifBlank {
     url?.substringAfterLast('/').orEmpty().substringBefore('?').takeIf { it.isNotBlank() }
         ?: "Current source"
+}
+
+/** Badge chips for one stream, from the sources_json payload. */
+private fun parseStreamBadges(array: org.json.JSONArray?): List<StreamBadge> {
+    if (array == null || array.length() == 0) return emptyList()
+    return (0 until array.length()).mapNotNull { i ->
+        val obj = array.optJSONObject(i) ?: return@mapNotNull null
+        val name = obj.optString("name", "")
+        val imageURL = obj.optString("imageURL", "")
+        if (name.isBlank() && imageURL.isBlank()) return@mapNotNull null
+        StreamBadge(
+            name = name,
+            imageURL = imageURL,
+            tagColor = obj.optString("tagColor", ""),
+            tagStyle = obj.optString("tagStyle", ""),
+            textColor = obj.optString("textColor", ""),
+            borderColor = obj.optString("borderColor", "")
+        )
+    }
 }
 
 private fun resolveSubtitleMimeType(uri: Uri): String {

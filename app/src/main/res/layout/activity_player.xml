@@ -332,6 +332,16 @@
                 android:textColor="@color/kb_text_hi"
                 android:textSize="12sp" />
 
+            <!-- Nuvio-compatible stream badge chips for the current source -->
+            <LinearLayout
+                android:id="@+id/badge_row"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="4dp"
+                android:visibility="gone" />
+
             <!-- Overview text -->
             <TextView
                 android:id="@+id/overview_text"

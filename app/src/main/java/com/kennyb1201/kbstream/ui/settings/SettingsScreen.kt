@@ -47,6 +47,7 @@ import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.backup.BackupManager
+import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -74,6 +75,7 @@ fun SettingsScreen(
     var subtitleBg by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleBackground(context)) }
     var autoPlayNext by remember { mutableStateOf(AppPreferences.getAutoPlayNext(context)) }
     var autoSelectStream by remember { mutableStateOf(AppPreferences.getAutoSelectStream(context)) }
+    var useStreamRanker by remember { mutableStateOf(AppPreferences.getUseStreamRanker(context)) }
     var enableTunneling by remember { mutableStateOf(AppPreferences.getEnableTunneling(context)) }
     var enablePip by remember { mutableStateOf(AppPreferences.getEnablePip(context)) }
     // Fire TV OS doesn't support PiP for third-party apps; hide the toggle there.
@@ -81,6 +83,7 @@ fun SettingsScreen(
     var audioDecoder by remember { mutableIntStateOf(AppPreferences.getAudioDecoder(context)) }
     var heroTrailerAutoplay by remember { mutableStateOf(AppPreferences.getHeroTrailerAutoplay(context)) }
     var use24hClock by remember { mutableStateOf(AppPreferences.getUse24HourClock(context)) }
+    var badgePackInput by remember { mutableStateOf(StreamBadgeEngine.getPackUrl(context)) }
     var railShowType by remember { mutableStateOf(AppPreferences.getHomeRailShowCatalogType(context)) }
     var railShowAddon by remember { mutableStateOf(AppPreferences.getHomeRailShowAddonName(context)) }
     var searchRailShowType by remember { mutableStateOf(AppPreferences.getSearchRailShowCatalogType(context)) }
@@ -258,6 +261,147 @@ fun SettingsScreen(
                     Text(
                         text = "Saved — ratings appear the next time you open a title.",
                         color = KBAccent,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 5.dp)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // ── STREAM BADGES (Nuvio-compatible packs) ────────────────
+        KBCard(
+            onClick = { },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                Text(
+                    text = "Stream Badges",
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    text = "Import a Nuvio-compatible badge pack JSON — matched " +
+                        "badges show on sources and in the player overlay.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+
+                var badgeFieldFocused by remember { mutableStateOf(false) }
+                var badgeStatus by remember { mutableStateOf<String?>(null) }
+                var badgeImporting by remember { mutableStateOf(false) }
+                val scope = rememberCoroutineScope()
+
+                BasicTextField(
+                    value = badgePackInput,
+                    onValueChange = {
+                        badgePackInput = it.trim()
+                        badgeStatus = null
+                    },
+                    singleLine = true,
+                    textStyle = TextStyle(
+                        color = KBTextHi,
+                        fontSize = MaterialTheme.typography.bodyMedium.fontSize
+                    ),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(
+                        onDone = {
+                            if (badgePackInput.isNotBlank() && !badgeImporting) {
+                                badgeImporting = true
+                                scope.launch {
+                                    badgeStatus = StreamBadgeEngine
+                                        .importFromUrl(context, badgePackInput)
+                                        ?: "Badge pack imported"
+                                    badgeImporting = false
+                                }
+                            }
+                        }
+                    ),
+                    cursorBrush = SolidColor(KBAccent),
+                    decorationBox = { innerTextField ->
+                        Box(
+                            modifier = Modifier
+                                .padding(top = 6.dp)
+                                .fillMaxWidth()
+                                .background(KBSurface, RoundedCornerShape(8.dp))
+                                .border(
+                                    if (badgeFieldFocused) 2.dp else 1.dp,
+                                    if (badgeFieldFocused) KBAccent
+                                    else KBTextLo.copy(alpha = 0.25f),
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .padding(horizontal = 10.dp, vertical = 8.dp)
+                        ) {
+                            if (badgePackInput.isBlank()) {
+                                Text(
+                                    text = "https://…/stream-badges.json",
+                                    color = KBTextLo.copy(alpha = 0.7f),
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                            innerTextField()
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onFocusChanged { badgeFieldFocused = it.isFocused }
+                )
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(top = 8.dp)
+                ) {
+                    KBCard(
+                        onClick = {
+                            if (badgePackInput.isNotBlank() && !badgeImporting) {
+                                badgeImporting = true
+                                scope.launch {
+                                    badgeStatus = StreamBadgeEngine
+                                        .importFromUrl(context, badgePackInput)
+                                        ?: "Badge pack imported"
+                                    badgeImporting = false
+                                }
+                            }
+                        },
+                        modifier = Modifier
+                            .background(KBSurfaceRaised, RoundedCornerShape(6.dp))
+                    ) {
+                        Text(
+                            text = if (badgeImporting) "Importing…" else "Import",
+                            color = KBTextHi,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                        )
+                    }
+                    if (StreamBadgeEngine.hasPack(context)) {
+                        KBCard(
+                            onClick = {
+                                StreamBadgeEngine.clearPack(context)
+                                badgeStatus = "Badge pack removed"
+                            },
+                            modifier = Modifier
+                                .padding(start = 8.dp)
+                                .background(KBSurfaceRaised, RoundedCornerShape(6.dp))
+                        ) {
+                            Text(
+                                text = "Remove",
+                                color = KBTextLo,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+                }
+
+                badgeStatus?.let {
+                    Text(
+                        text = it,
+                        color = if (it.startsWith("Badge pack imported")) KBAccent else KBTextLo,
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(top = 5.dp)
                     )
@@ -454,6 +598,18 @@ fun SettingsScreen(
             onToggle = {
                 autoSelectStream = it
                 AppPreferences.setAutoSelectStream(context, it)
+            }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        ToggleRow(
+            label = "Stream Ranker",
+            description = "Reorder sources by quality and reliability. Off keeps the order addons return them in",
+            checked = useStreamRanker,
+            onToggle = {
+                useStreamRanker = it
+                AppPreferences.setUseStreamRanker(context, it)
             }
         )
 

@@ -7,6 +7,8 @@ import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
+import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -146,15 +148,19 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             }
         }
 
-        val rankedStreams = StreamRanker.rank(allStreams)
-        val rankedMsg = "ranked total = ${rankedStreams.size}"
-        val topMsg = "top stream = ${rankedStreams.firstOrNull()?.name ?: "none"}"
+        val useRanker = AppPreferences.getUseStreamRanker(getApplication())
+        val preppedStreams = if (useRanker) StreamRanker.rank(allStreams) else allStreams
+        // Nuvio-compatible badge packs: attach matched badge chips before
+        // the list reaches the UI.
+        val withBadges = StreamBadgeEngine.apply(preppedStreams, getApplication())
+        val rankedMsg = if (useRanker) "ranked total = ${withBadges.size}" else "unranked total = ${withBadges.size}"
+        val topMsg = "top stream = ${withBadges.firstOrNull()?.name ?: "none"}"
 
         Log.e(TAG, rankedMsg)
         Log.e(TAG, topMsg)
         debugLines.add(rankedMsg)
         debugLines.add(topMsg)
 
-        return rankedStreams
+        return withBadges
     }
 }

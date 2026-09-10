@@ -87,7 +87,11 @@ data class Stream(
     val fileIdx: Int? = null,
 
     @Json(name = "drm")
-    val drm: StreamDrm? = null
+    val drm: StreamDrm? = null,
+
+    // Resolved badge chips (Nuvio-compatible badge packs); never arrives
+    // from addon JSON — attached client-side by StreamBadgeEngine.
+    val badges: List<com.kennyb1201.kbstream.data.badges.StreamBadge> = emptyList()
 )
 
 @JsonClass(generateAdapter = true)

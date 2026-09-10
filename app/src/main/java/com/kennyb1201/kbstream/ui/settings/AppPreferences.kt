@@ -23,6 +23,7 @@ object AppPreferences {
     private const val KEY_DEFAULT_SUBTITLE_BG = "default_subtitle_bg"       // 0=none, 1=semi, 2=solid
     private const val KEY_AUTO_PLAY_NEXT = "auto_play_next"
     private const val KEY_AUTO_SELECT_STREAM = "auto_select_stream"
+    private const val KEY_USE_STREAM_RANKER = "use_stream_ranker"
     private const val KEY_FORCE_SOFTWARE_DECODER = "force_software_decoder"
     private const val KEY_ENABLE_TUNNELING = "enable_tunneling"
     private const val KEY_ENABLE_PIP = "enable_pip"
@@ -90,6 +91,14 @@ object AppPreferences {
 
     fun setAutoSelectStream(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_AUTO_SELECT_STREAM, enabled).apply()
+    }
+
+    // ── Stream ranker on/off (off = keep addon-provided order) ──────
+    fun getUseStreamRanker(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_USE_STREAM_RANKER, true)
+
+    fun setUseStreamRanker(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_USE_STREAM_RANKER, enabled).apply()
     }
 
     // ── Tunneled playback ────────────────────────────────────────────

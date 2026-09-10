@@ -1549,6 +1549,22 @@ fun AppRoot() {
                             put("audioUrl", stream.audioUrl)
                             put("infoHash", stream.infoHash)
                             put("fileIdx", stream.fileIdx)
+                            if (stream.badges.isNotEmpty()) {
+                                val badgesArray = JSONArray()
+                                stream.badges.forEach { badge ->
+                                    badgesArray.put(
+                                        JSONObject().apply {
+                                            put("name", badge.name)
+                                            put("imageURL", badge.imageURL)
+                                            put("tagColor", badge.tagColor)
+                                            put("tagStyle", badge.tagStyle)
+                                            put("textColor", badge.textColor)
+                                            put("borderColor", badge.borderColor)
+                                        }
+                                    )
+                                }
+                                put("badges", badgesArray)
+                            }
                         }
                         sourcesArray.put(obj)
                     }
