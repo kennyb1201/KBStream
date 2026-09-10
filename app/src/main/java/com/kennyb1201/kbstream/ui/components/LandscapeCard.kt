@@ -27,6 +27,7 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
+import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 
 /**
