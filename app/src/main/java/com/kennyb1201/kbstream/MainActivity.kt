@@ -66,6 +66,8 @@ import com.kennyb1201.kbstream.ui.player.PlayerCastMember
 import android.content.Intent
 import org.json.JSONArray
 import org.json.JSONObject
+import com.kennyb1201.kbstream.ui.nuvio.NuvioCollectionsManagerScreen
+import com.kennyb1201.kbstream.ui.nuvio.NuvioFolderScreen
 import com.kennyb1201.kbstream.ui.settings.SettingsScreen
 import com.kennyb1201.kbstream.ui.search.SearchScreen
 import com.kennyb1201.kbstream.ui.simkl.SimklConnectScreen
@@ -128,6 +130,15 @@ sealed class Screen {
         val name: String,
         val returnTo: Screen = Home
     ) : Screen()
+
+    /** One imported Nuvio collection folder (its own layout mode). */
+    data class NuvioFolder(
+        val folderId: String,
+        val returnTo: Screen = Home
+    ) : Screen()
+
+    /** Collections manager: import profiles + arrange home rails. */
+    object NuvioManager : Screen()
 
     data class Streams(
         val target: StreamsTarget,
@@ -243,6 +254,13 @@ private fun encodeScreen(
                 put("returnTo", encodeScreen(screen.returnTo, depth + 1))
             }
         }
+        is Screen.NuvioFolder -> {
+            put("folderId", screen.folderId)
+            if (depth < MAX_RETURN_DEPTH) {
+                put("returnTo", encodeScreen(screen.returnTo, depth + 1))
+            }
+        }
+        is Screen.NuvioManager -> Unit // plain object carries no payload
         is Screen.Streams -> {
             put("target", encodeTarget(screen.target))
             put("parentId", screen.parentId)
@@ -318,6 +336,11 @@ private fun decodeScreen(
                 name = json.optString("name"),
                 returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
             )
+            "nuvioFolder" -> Screen.NuvioFolder(
+                folderId = json.optString("folderId"),
+                returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
+            )
+            "nuvioManager" -> Screen.NuvioManager
             "streams" -> {
                 val target = json.optJSONObject("target")
                     ?.let { decodeTarget(it) }
@@ -402,6 +425,8 @@ private fun Screen.typeName(): String = when (this) {
     is Screen.Studio -> "studio"
     is Screen.Tag -> "tag"
     is Screen.Collection -> "collection"
+    is Screen.NuvioFolder -> "nuvioFolder"
+    is Screen.NuvioManager -> "nuvioManager"
     is Screen.Streams -> "streams"
     is Screen.Player -> "player"
 }
@@ -757,6 +782,12 @@ fun AppRoot() {
             is Screen.Collection ->
                 current.returnTo
 
+            is Screen.NuvioFolder ->
+                current.returnTo
+
+            is Screen.NuvioManager ->
+                Screen.Settings
+
             else ->
                 Screen.Home
         }
@@ -859,6 +890,13 @@ fun AppRoot() {
 
                 onOpenSettings = {
                     screen = Screen.Settings
+                },
+
+                onOpenNuvioFolder = { folderId ->
+                    screen = Screen.NuvioFolder(
+                        folderId = folderId,
+                        returnTo = Screen.Home
+                    )
                 }
             )
         }
@@ -867,7 +905,31 @@ fun AppRoot() {
             SettingsScreen(
                 onBack = { screen = Screen.Home },
                 onOpenAddons = { screen = Screen.Addons },
-                onOpenSimkl = { screen = Screen.Simkl }
+                onOpenSimkl = { screen = Screen.Simkl },
+                onOpenNuvioManager = { screen = Screen.NuvioManager }
+            )
+        }
+
+        is Screen.NuvioManager -> {
+            NuvioCollectionsManagerScreen(
+                onBack = { screen = Screen.Settings }
+            )
+        }
+
+        is Screen.NuvioFolder -> {
+            NuvioFolderScreen(
+                folderId = current.folderId,
+                onBack = { screen = stableBackDestination(current.returnTo) },
+                onItemClick = { type, imdbId, poster, backdrop, title ->
+                    screen = Screen.Detail(
+                        type = type,
+                        id = imdbId,
+                        itemPoster = poster,
+                        itemBackdrop = backdrop,
+                        itemOverview = null,
+                        returnTo = current
+                    )
+                }
             )
         }
 

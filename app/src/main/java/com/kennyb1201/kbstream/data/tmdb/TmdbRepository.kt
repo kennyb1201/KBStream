@@ -464,6 +464,89 @@ class TmdbRepository(context: Context) {
         return detail.copy(parts = filteredParts)
     }
 
+    // ------------------------------------------------------------------
+    // Nuvio collections: raw TMDB source loaders (discover / list /
+    // collection / company / network). A null return means the request
+    // failed; an empty list means the query legitimately has no results.
+    // ------------------------------------------------------------------
+
+    /** Generic /discover with the full Nuvio filter-builder parameter set. */
+    suspend fun discoverNuvio(
+        mediaType: String,
+        page: Int = 1,
+        sortBy: String? = null,
+        filters: com.kennyb1201.kbstream.data.nuvio.NuvioFilters? = null
+    ): List<TmdbDiscoverItem>? {
+        if (apiKey.isBlank()) return null
+        val isTv = mediaType.lowercase() == "tv"
+        val yearRange = filters?.yearRange()
+        return runCatching {
+            if (isTv) {
+                api.discoverTvGeneric(
+                    apiKey = apiKey,
+                    page = page,
+                    sortBy = sortBy,
+                    withGenres = filters?.withGenres,
+                    withoutGenres = filters?.withoutGenres,
+                    withKeywords = filters?.withKeywords,
+                    withoutKeywords = filters?.withoutKeywords,
+                    withCompanies = filters?.withCompanies,
+                    withoutCompanies = filters?.withoutCompanies,
+                    withNetworks = filters?.withNetworks,
+                    withWatchProviders = filters?.withWatchProviders,
+                    withoutWatchProviders = filters?.withoutWatchProviders,
+                    watchRegion = filters?.watchRegion,
+                    withOriginalLanguage = filters?.withOriginalLanguage,
+                    withOriginCountry = filters?.withOriginCountry,
+                    voteCountGte = filters?.voteCountGte,
+                    voteAverageGte = filters?.voteAverageGte,
+                    voteAverageLte = filters?.voteAverageLte,
+                    firstAirDateGte = yearRange?.first,
+                    firstAirDateLte = yearRange?.second
+                )
+            } else {
+                api.discoverMovieGeneric(
+                    apiKey = apiKey,
+                    page = page,
+                    sortBy = sortBy,
+                    withGenres = filters?.withGenres,
+                    withoutGenres = filters?.withoutGenres,
+                    withKeywords = filters?.withKeywords,
+                    withoutKeywords = filters?.withoutKeywords,
+                    withCompanies = filters?.withCompanies,
+                    withoutCompanies = filters?.withoutCompanies,
+                    withNetworks = filters?.withNetworks,
+                    withWatchProviders = filters?.withWatchProviders,
+                    withoutWatchProviders = filters?.withoutWatchProviders,
+                    watchRegion = filters?.watchRegion,
+                    withOriginalLanguage = filters?.withOriginalLanguage,
+                    withOriginCountry = filters?.withOriginCountry,
+                    voteCountGte = filters?.voteCountGte,
+                    voteAverageGte = filters?.voteAverageGte,
+                    voteAverageLte = filters?.voteAverageLte,
+                    primaryReleaseDateGte = yearRange?.first,
+                    primaryReleaseDateLte = yearRange?.second
+                )
+            }.results
+        }.getOrNull()
+    }
+
+    /** TMDB "LIST" source: items of a hosted TMDB list id. */
+    suspend fun getNuvioListItems(listId: Int, page: Int = 1): List<TmdbDiscoverItem>? {
+        if (apiKey.isBlank()) return null
+        return runCatching {
+            api.getListItems(listId, apiKey, page).results
+        }.getOrNull()
+    }
+
+    /** TMDB "COLLECTION" source: the collection's parts. */
+    suspend fun getNuvioCollectionItems(collectionId: Int): List<TmdbCollectionPart>? {
+        if (apiKey.isBlank()) return null
+        return runCatching {
+            getCollection(collectionId)?.parts
+        }.getOrNull()
+    }
+
     /**
      * One page of user reviews for a title via the standalone paginated
      * endpoint. The detail payload only bundles page 1; the Detail screen

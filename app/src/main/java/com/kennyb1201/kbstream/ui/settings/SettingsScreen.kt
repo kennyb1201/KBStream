@@ -63,7 +63,8 @@ import kotlinx.coroutines.launch
 fun SettingsScreen(
     onBack: () -> Unit,
     onOpenAddons: () -> Unit = {},
-    onOpenSimkl: () -> Unit = {}
+    onOpenSimkl: () -> Unit = {},
+    onOpenNuvioManager: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val focusRequester = remember { FocusRequester() }
@@ -163,6 +164,12 @@ fun SettingsScreen(
             label = "Simkl",
             description = "Connect your Simkl account for scrobbling",
             onClick = onOpenSimkl
+        )
+
+        NavigationRow(
+            label = "Collections",
+            description = "Import Nuvio collections and arrange home rails",
+            onClick = onOpenNuvioManager
         )
 
         // OMDb API key: free key from omdbapi.com enables the critic

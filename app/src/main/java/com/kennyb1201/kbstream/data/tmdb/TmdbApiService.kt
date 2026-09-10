@@ -219,6 +219,69 @@ suspend fun searchCollection(
         @Query("api_key") apiKey: String
     ): TmdbGenreListResponse
 
+    // ---- Nuvio collections: generic discover with the full filter set ----
+
+    @GET("discover/movie")
+    suspend fun discoverMovieGeneric(
+        @Query("api_key") apiKey: String,
+        @Query("page") page: Int = 1,
+        @Query("sort_by") sortBy: String? = null,
+        @Query("with_genres") withGenres: String? = null,
+        @Query("without_genres") withoutGenres: String? = null,
+        @Query("with_keywords") withKeywords: String? = null,
+        @Query("without_keywords") withoutKeywords: String? = null,
+        @Query("with_companies") withCompanies: String? = null,
+        @Query("without_companies") withoutCompanies: String? = null,
+        @Query("with_networks") withNetworks: String? = null,
+        @Query("with_watch_providers") withWatchProviders: String? = null,
+        @Query("without_watch_providers") withoutWatchProviders: String? = null,
+        @Query("watch_region") watchRegion: String? = null,
+        @Query("with_original_language") withOriginalLanguage: String? = null,
+        @Query("with_origin_country") withOriginCountry: String? = null,
+        @Query("vote_count.gte") voteCountGte: Int? = null,
+        @Query("vote_average.gte") voteAverageGte: Int? = null,
+        @Query("vote_average.lte") voteAverageLte: Int? = null,
+        @Query("primary_release_date.gte") primaryReleaseDateGte: String? = null,
+        @Query("primary_release_date.lte") primaryReleaseDateLte: String? = null,
+        @Query("first_air_date.gte") firstAirDateGte: String? = null,
+        @Query("first_air_date.lte") firstAirDateLte: String? = null
+    ): TmdbDiscoverResponse
+
+    // TV twin of the generic discover: TV date filters (first_air_date.*)
+    // only exist on /discover/tv, so Nuvio TV sources must hit that endpoint.
+    @GET("discover/tv")
+    suspend fun discoverTvGeneric(
+        @Query("api_key") apiKey: String,
+        @Query("page") page: Int = 1,
+        @Query("sort_by") sortBy: String? = null,
+        @Query("with_genres") withGenres: String? = null,
+        @Query("without_genres") withoutGenres: String? = null,
+        @Query("with_keywords") withKeywords: String? = null,
+        @Query("without_keywords") withoutKeywords: String? = null,
+        @Query("with_companies") withCompanies: String? = null,
+        @Query("without_companies") withoutCompanies: String? = null,
+        @Query("with_networks") withNetworks: String? = null,
+        @Query("with_watch_providers") withWatchProviders: String? = null,
+        @Query("without_watch_providers") withoutWatchProviders: String? = null,
+        @Query("watch_region") watchRegion: String? = null,
+        @Query("with_original_language") withOriginalLanguage: String? = null,
+        @Query("with_origin_country") withOriginCountry: String? = null,
+        @Query("vote_count.gte") voteCountGte: Int? = null,
+        @Query("vote_average.gte") voteAverageGte: Int? = null,
+        @Query("vote_average.lte") voteAverageLte: Int? = null,
+        @Query("first_air_date.gte") firstAirDateGte: String? = null,
+        @Query("first_air_date.lte") firstAirDateLte: String? = null
+    ): TmdbDiscoverResponse
+
+    // Nuvio "LIST" sources point at a TMDB list id (/list/{id} items).
+    @GET("list/{id}")
+    suspend fun getListItems(
+        @Path("id") id: Int,
+        @Query("api_key") apiKey: String,
+        @Query("page") page: Int = 1,
+        @Query("sort_by") sortBy: String? = null
+    ): TmdbListDetailResponse
+
     // ---- Studio / network screen support ----
 
     @GET("company/{id}/images")

@@ -346,6 +346,9 @@ data class TmdbDiscoverItem(
     val title: String? = null,
     val name: String? = null,
     @Json(name = "poster_path") val posterPath: String? = null,
+    // Available on discover responses; used by Nuvio folder rails for the
+    // FOLLOW_LAYOUT hero fallback when the folder ships no hero art.
+    @Json(name = "backdrop_path") val backdropPath: String? = null,
     // Parsed so studio/tag rails can caption posters with year + rating
     // (TMDB sends both on every discover response).
     @Json(name = "release_date") val releaseDate: String? = null,
@@ -355,6 +358,17 @@ data class TmdbDiscoverItem(
 
 @JsonClass(generateAdapter = true)
 data class TmdbDiscoverResponse(
+    val results: List<TmdbDiscoverItem> = emptyList()
+)
+
+/**
+ * Response for /list/{id}: the item payload has the same shape as a
+ * discover response (Nuvio "LIST" sources point at TMDB list ids).
+ */
+@JsonClass(generateAdapter = true)
+data class TmdbListDetailResponse(
+    val id: Int? = null,
+    val name: String? = null,
     val results: List<TmdbDiscoverItem> = emptyList()
 )
 

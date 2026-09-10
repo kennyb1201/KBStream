@@ -96,6 +96,7 @@ import com.kennyb1201.kbstream.data.tmdb.movieStatusTag
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.ui.components.LandscapeCard
 import com.kennyb1201.kbstream.ui.components.PosterCard
+import com.kennyb1201.kbstream.ui.nuvio.NuvioHomeCollectionRail
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
@@ -1554,10 +1555,17 @@ fun HomeScreen(
     onSearch: () -> Unit = {},
     onOpenGuide: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
+    onOpenNuvioFolder: (String) -> Unit = {},
     viewModel: HomeViewModel =
         androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
     val context = LocalContext.current
+
+    // Nuvio collections (imported from a profile URL) interleaved with the
+    // addon rails below; arrangement (pin/reorder/hide) from the manager.
+    val nuvioViewModel: com.kennyb1201.kbstream.ui.nuvio.NuvioHomeViewModel =
+        androidx.lifecycle.viewmodel.compose.viewModel()
+
     val showRailType by remember {
         mutableStateOf(AppPreferences.getHomeRailShowCatalogType(context))
     }
@@ -1730,6 +1738,9 @@ fun HomeScreen(
     // release filter needs a rail rebuild from the warm cache).
     LaunchedEffect(Unit) {
         viewModel.onHomeResumed()
+        // Pick up Collections-manager edits (import / pin / reorder / hide)
+        // made while we were away.
+        nuvioViewModel.load()
     }
 
     // Continuous Continue Watching sliver guard: the CW row can appear or
@@ -2157,27 +2168,68 @@ fun HomeScreen(
                     }
 
                     else -> {
-                        itemsIndexed(
-                            items = rails,
-                            // Index prefix guarantees uniqueness even if two
-                            // rails ever share addon/catalog/type.
-                            key = { railIndex, rail ->
-                                "$railIndex|" +
-                                    "${rail.addonName}:" +
-                                    "${rail.catalogName}:" +
-                                    "${rail.type}"
-                            }
-                        ) { railIndex, rail ->
+                        // Nuvio collections interleave with addon rails:
+                        // the merged entry order comes from the Collections
+                        // manager (pin / reorder / hide); unarranged
+                        // collections sit after the addon rails.
+                        val nuvioState by nuvioViewModel.state.collectAsStateWithLifecycle()
+                        val mergedEntries = remember(rails, nuvioState) {
+                            com.kennyb1201.kbstream.ui.nuvio
+                                .NuvioHomeSlots
+                                .buildMergedEntries(rails, nuvioState)
+                        }
 
-                            Column(
-                                modifier = Modifier.padding(
-                                    start = TvSafeAreaHorizontal,
-                                    top = 0.dp,
-                                    bottom = 8.dp
-                                )
-                            ) {
-                                SectionTitle(
-                                    homeRailTitle(
+                        // The up-onto-topbar hook belongs to the first rail
+                        // in DISPLAY order, which a pinned collection can
+                        // push away from rails[0].
+                        val firstDisplayedRailSourceIndex =
+                            mergedEntries
+                                .indexOfFirst {
+                                    it is com.kennyb1201.kbstream.ui.nuvio
+                                        .HomeEntry.AddonRail
+                                }
+                                .takeIf { it >= 0 }
+                                ?.let { index ->
+                                    (
+                                        mergedEntries[index] as
+                                            com.kennyb1201.kbstream.ui.nuvio
+                                                .HomeEntry.AddonRail
+                                        ).sourceIndex
+                                }
+                                ?: -1
+
+                        itemsIndexed(
+                            items = mergedEntries,
+                            key = { _, entry ->
+                                when (entry) {
+                                    is com.kennyb1201.kbstream.ui.nuvio.HomeEntry.AddonRail ->
+                                        "rail|" + entry.sourceIndex + "|" +
+                                            entry.rail.addonName + ":" +
+                                            entry.rail.catalogName + ":" + entry.rail.type
+                                    is com.kennyb1201.kbstream.ui.nuvio.HomeEntry.Collection ->
+                                        "nuvio|" + (entry.collection.id ?: entry.collection.title)
+                                }
+                            }
+                        ) { _, entry ->
+                            when (val e = entry) {
+                                is com.kennyb1201.kbstream.ui.nuvio.HomeEntry.Collection ->
+                                    NuvioHomeCollectionRail(
+                                        collection = e.collection,
+                                        onOpenFolder = onOpenNuvioFolder
+                                    )
+                                is com.kennyb1201.kbstream.ui.nuvio.HomeEntry.AddonRail -> {
+                                    val rail = e.rail
+                                    val railIndex = e.sourceIndex
+
+                                    Column(
+                                        modifier = Modifier.padding(
+                                            start = TvSafeAreaHorizontal,
+                                            top = 0.dp,
+                                            bottom = 8.dp
+                                        )
+                                    ) {
+                                        SectionTitle(
+                                            homeRailTitle(
                                         catalogName = rail.catalogName,
                                         addonName = rail.addonName,
                                         type = rail.type,
@@ -2214,7 +2266,7 @@ fun HomeScreen(
                                             ) in watchedKeys
 
                                         val isFirstRailFirstRow =
-                                            railIndex == 0 &&
+                                            railIndex == firstDisplayedRailSourceIndex &&
                                                 firstRailNeedsUpHook
 
                                         val cardWidth =
@@ -2331,6 +2383,8 @@ fun HomeScreen(
                                             }
                                         }
                                     }
+                                }
+                            }
                                 }
                             }
                         }
