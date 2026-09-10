@@ -26,7 +26,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -134,11 +133,10 @@ fun SearchScreen(
         viewModel.loadTrending()
     }
 
-    DisposableEffect(Unit) {
-        onDispose {
-            viewModel.resetSearchState()
-        }
-    }
+    // NOTE: no onDispose reset here — SearchViewModel is activity-scoped, so
+    // its state survives navigating into a collection/detail screen and back,
+    // returning you to the same results instead of a fresh search. The VM
+    // clears its own transient state when a new search starts.
 
     val totalCount = results.size + actorResults.size + studioResults.size + collectionResults.size +
         addonResultGroups.sumOf { it.results.size }
@@ -436,7 +434,7 @@ fun SearchScreen(
                             items = collectionResults,
                             key = { collection: TmdbSearchCollectionResult -> "collection:${collection.id}" }
                         ) { collection: TmdbSearchCollectionResult ->
-                            CollectionResultCard(
+                            CollectionPosterTile(
                                 collection = collection,
                                 onClick = {
                                     viewModel.onCollectionOpened(collection)
@@ -1040,52 +1038,24 @@ private fun StudioResultCard(
     }
 }
 
+/**
+ * Poster-only tile for the Collections rail — no text label underneath,
+ * the poster art carries the collection name.
+ */
 @Composable
-private fun CollectionResultCard(
+private fun CollectionPosterTile(
     collection: TmdbSearchCollectionResult,
     onClick: () -> Unit
 ) {
-    Card(
+    PosterCard(
+        posterUrl = collection.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" },
+        contentDescription = collection.name,
+        isWatched = false,
         onClick = onClick,
-        colors = CardDefaults.colors(
-            containerColor = KBSurface,
-            contentColor = KBTextHi,
-            focusedContainerColor = KBSurfaceRaised,
-            focusedContentColor = KBTextHi,
-            pressedContainerColor = KBSurfaceRaised,
-            pressedContentColor = KBTextHi
-        ),
-        border = CardDefaults.border(
-            border = Border(BorderStroke(1.dp, KBTextLo.copy(alpha = 0.25f))),
-            focusedBorder = Border(BorderStroke(2.dp, KBAccent))
-        ),
-        modifier = Modifier.width(150.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(10.dp)
-        ) {
-            PosterCard(
-                posterUrl = collection.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" },
-                contentDescription = collection.name,
-                isWatched = false,
-                onClick = onClick,
-                modifier = Modifier
-                    .width(128.dp)
-                    .height(192.dp)
-            )
-
-            Text(
-                text = collection.name,
-                style = MaterialTheme.typography.bodyMedium,
-                color = KBTextHi,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 6.dp)
-            )
-        }
-    }
+        modifier = Modifier
+            .width(124.dp)
+            .height(186.dp)
+    )
 }
 
 @Composable

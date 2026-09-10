@@ -1,6 +1,5 @@
 package com.kennyb1201.kbstream.ui.collection
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -8,14 +7,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
@@ -29,33 +28,29 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.tv.material3.Border
-import androidx.tv.material3.Card
-import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
-import com.kennyb1201.kbstream.data.tmdb.TmdbCollectionDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbCollectionPart
-import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
-import coil3.compose.AsyncImage
-import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
-import com.kennyb1201.kbstream.ui.components.WatchedCheckBadge
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
-import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 
+/**
+ * Collection screen: a fixed (non-scrolling) header — poster, name, count,
+ * overview — above a single poster rail. Collections hold 2-5 movies, so
+ * everything fits on one screen without the old full-width rows and their
+ * wasted space.
+ */
 @Composable
 fun CollectionScreen(
     collectionId: Int,
@@ -68,7 +63,7 @@ fun CollectionScreen(
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
     val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
 
-    // Long-press context menu for collection part rows.
+    // Long-press context menu for collection part posters.
     var menuPart by remember {
         mutableStateOf<TmdbCollectionPart?>(
             null
@@ -92,111 +87,107 @@ fun CollectionScreen(
 
     val detail = collection
 
+    // Screen root Box so the long-press context menu's full-screen scrim
+    // overlays everything (the menu fills whatever parent it's placed in).
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(KBVoid)
     ) {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 24.dp, vertical = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 24.dp, vertical = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            item(key = "hero") {
-                CollectionHero(
-                    name = detail?.name ?: collectionName,
-                    overview = detail?.overview,
-                    posterUrl = detail?.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
-                )
-            }
+            // Fixed header: never scrolls with the content.
+            CollectionHeader(
+                name = detail?.name ?: collectionName,
+                overview = detail?.overview,
+                posterUrl = detail?.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" },
+                partCount = detail?.parts?.size
+            )
 
             when {
                 isLoading -> {
-                    item(key = "loading") {
-                        CollectionMessagePanel(
-                            title = "Loading collection...",
-                            body = "Fetching movies in this collection.",
-                            showSpinner = true
-                        )
-                    }
+                    CollectionMessagePanel(
+                        title = "Loading collection...",
+                        body = "Fetching movies in this collection.",
+                        showSpinner = true
+                    )
                 }
 
                 detail == null -> {
-                    item(key = "error") {
-                        CollectionMessagePanel(
-                            title = "Collection unavailable",
-                            body = "We couldn't load this collection right now."
-                        )
-                    }
+                    CollectionMessagePanel(
+                        title = "Collection unavailable",
+                        body = "We couldn't load this collection right now."
+                    )
                 }
 
                 detail.parts.isEmpty() -> {
-                    item(key = "empty") {
-                        CollectionMessagePanel(
-                            title = "No movies found",
-                            body = "This collection does not currently list any titles."
-                        )
-                    }
+                    CollectionMessagePanel(
+                        title = "No movies found",
+                        body = "This collection does not currently list any titles."
+                    )
                 }
 
                 else -> {
-                    item(key = "count") {
-                        Text(
-                            text = "${detail.parts.size} movies",
-                            color = KBAccent,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
+                    // Compact poster rail: release order, watched badges, and
+                    // title/year captions — 2-5 titles fill one screen.
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        contentPadding = PaddingValues(top = 2.dp, bottom = 4.dp)
+                    ) {
+                        items(
+                            items = detail.parts.sortedBy { it.releaseDate ?: "9999-99-99" },
+                            key = { part: TmdbCollectionPart -> "collection_part:${part.id}" }
+                        ) { part: TmdbCollectionPart ->
+                            // Focus requester for restoring focus after the
+                            // long-press menu dismisses.
+                            val requester = remember(
+                                part.id
+                            ) {
+                                FocusRequester()
+                            }
 
-                    items(
-                        items = detail.parts.sortedBy { it.releaseDate ?: "9999-99-99" },
-                        key = { part: TmdbCollectionPart -> "collection_part:${part.id}" }
-                    ) { part: TmdbCollectionPart ->
-                        // Focus requester for restoring focus after the
-                        // long-press menu dismisses.
-                        val requester = remember(
-                            part.id
-                        ) {
-                            FocusRequester()
+                            val watched =
+                                resolvedIds[
+                                    viewModel.lookupKey(part.id, "movie")
+                                ]?.let { imdbId ->
+                                    viewModel.watchedKey(
+                                        imdbId,
+                                        "movie"
+                                    ) in watchedKeys
+                                } == true
+
+                            CollectionPosterTile(
+                                part = part,
+                                isWatched = watched,
+                                onClick = {
+                                    onNavigateDetail(
+                                        "movie",
+                                        part.id.toString()
+                                    )
+                                },
+                                onLongClick = {
+                                    lastPartFocusRequester =
+                                        requester
+                                    menuPart = part
+                                },
+                                modifier = Modifier
+                                    .focusRequester(requester)
+                            )
                         }
-
-                        val watched =
-                            resolvedIds[
-                                viewModel.lookupKey(part.id, "movie")
-                            ]?.let { imdbId ->
-                                viewModel.watchedKey(
-                                    imdbId,
-                                    "movie"
-                                ) in watchedKeys
-                            } == true
-
-                        CollectionMovieRow(
-                            part = part,
-                            isWatched = watched,
-                            onClick = {
-                                onNavigateDetail(
-                                    "movie",
-                                    part.id.toString()
-                                )
-                            },
-                            onLongClick = {
-                                lastPartFocusRequester =
-                                    requester
-                                menuPart = part
-                            },
-                            modifier = Modifier
-                                .focusRequester(requester)
-                        )
                     }
                 }
             }
         }
 
-        // Long-press context menu for collection part rows.
+        // Long-press context menu for collection part posters. Sits inside
+        // the root Box so its full-screen scrim covers the whole screen.
         menuPart?.let { part ->
-            // Same lookup the row badge uses, so the toggle matches what the
-            // poster currently shows.
+            // Same lookup the poster badge uses, so the toggle matches what
+            // the poster currently shows.
             val isWatched =
                 resolvedIds[
                     viewModel.lookupKey(
@@ -256,11 +247,16 @@ fun CollectionScreen(
     }
 }
 
+/**
+ * Fixed screen header: poster, name, accent count line, and the collection
+ * overview. No type pill — the screen itself says what it is.
+ */
 @Composable
-private fun CollectionHero(
+private fun CollectionHeader(
     name: String,
     overview: String?,
-    posterUrl: String?
+    posterUrl: String?,
+    partCount: Int?
 ) {
     Row(
         modifier = Modifier
@@ -276,8 +272,8 @@ private fun CollectionHero(
             isWatched = false,
             onClick = {},
             modifier = Modifier
-                .width(148.dp)
-                .height(222.dp)
+                .width(110.dp)
+                .height(165.dp)
         )
 
         Column(
@@ -285,17 +281,24 @@ private fun CollectionHero(
                 .padding(start = 18.dp)
                 .weight(1f)
         ) {
-            TypePill("collection")
-
             Text(
                 text = name,
-                style = MaterialTheme.typography.headlineMedium,
+                style = MaterialTheme.typography.headlineSmall,
                 color = KBTextHi,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 10.dp)
+                overflow = TextOverflow.Ellipsis
             )
+
+            partCount?.let { count ->
+                Text(
+                    text = if (count == 1) "1 movie" else "$count movies",
+                    color = KBAccent,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
 
             overview
                 ?.takeIf { it.isNotBlank() }
@@ -303,93 +306,65 @@ private fun CollectionHero(
                     Text(
                         text = it,
                         color = KBTextLo,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 6,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 4,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 10.dp)
+                        modifier = Modifier.padding(top = 8.dp)
                     )
                 }
         }
     }
 }
 
+/**
+ * Poster tile for a collection part: poster with watched badge plus a small
+ * title/year caption — same proportions as search tiles, so a handful of
+ * movies fills the rail instead of one stretched row each.
+ */
 @Composable
-private fun CollectionMovieRow(
+private fun CollectionPosterTile(
     part: TmdbCollectionPart,
     isWatched: Boolean,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    // KBCard is the row's single focusable/clickable surface so the D-pad
-    // always lands on one node - long-press (hold Select) opens the context
-    // menu, short press navigates. The poster is drawn inline (not wrapped
-    // in its own PosterCard) to avoid nested focusables in the same row.
-    KBCard(
-        onClick = onClick,
-        onLongClick = onLongClick,
-        modifier = modifier.fillMaxWidth()
+    Column(
+        modifier = modifier.width(124.dp)
     ) {
-        Row(
+        PosterCard(
+            posterUrl = part.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" },
+            contentDescription = part.title
+                ?: part.name
+                ?: "Collection movie",
+            isWatched = isWatched,
+            onClick = onClick,
+            onLongClick = onLongClick,
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .width(92.dp)
-                    .height(138.dp)
-                    .background(KBSurface, RoundedCornerShape(8.dp))
-            ) {
-                val posterUrl = part.posterPath
-                    ?.let { "https://image.tmdb.org/t/p/w500$it" }
+                .width(124.dp)
+                .height(186.dp)
+        )
 
-                if (!posterUrl.isNullOrBlank()) {
-                    AsyncImage(
-                        model = posterUrl,
-                        contentDescription = part.title
-                            ?: part.name
-                            ?: "Collection movie",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
+        Text(
+            text = part.title ?: part.name ?: "Untitled",
+            style = MaterialTheme.typography.bodySmall,
+            color = KBTextHi,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 5.dp)
+        )
 
-                if (isWatched) {
-                    WatchedCheckBadge(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(6.dp)
-                    )
-                }
-            }
-
-            Column(
-                modifier = Modifier
-                    .padding(start = 14.dp)
-                    .weight(1f)
-            ) {
+        part.releaseDate
+            ?.takeIf { it.isNotBlank() }
+            ?.let { releaseDate ->
                 Text(
-                    text = part.title ?: part.name ?: "Untitled",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = KBTextHi,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
+                    text = releaseDate.take(4),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = KBTextLo,
+                    maxLines = 1,
+                    modifier = Modifier.padding(top = 2.dp)
                 )
-
-                part.releaseDate
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let { releaseDate ->
-                        Text(
-                            text = releaseDate.take(4),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = KBTextLo,
-                            modifier = Modifier.padding(top = 6.dp)
-                        )
-                    }
             }
-        }
     }
 }
 
@@ -426,23 +401,6 @@ private fun CollectionMessagePanel(
             color = KBTextLo,
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.padding(top = 6.dp)
-        )
-    }
-}
-
-@Composable
-private fun TypePill(type: String) {
-    Box(
-        modifier = Modifier
-            .background(KBSurfaceRaised, RoundedCornerShape(999.dp))
-            .border(1.dp, KBAccent.copy(alpha = 0.55f), RoundedCornerShape(999.dp))
-            .padding(horizontal = 9.dp, vertical = 3.dp)
-    ) {
-        Text(
-            text = type.uppercase(),
-            color = KBAccent,
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.SemiBold
         )
     }
 }
