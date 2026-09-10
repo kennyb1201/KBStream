@@ -38,10 +38,18 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
@@ -68,6 +76,8 @@ fun SettingsScreen(
     onOpenNuvioManager: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     val focusRequester = remember { FocusRequester() }
 
     var bufferMode by remember { mutableIntStateOf(AppPreferences.getDefaultBufferMode(context)) }
@@ -177,8 +187,11 @@ fun SettingsScreen(
 
         // OMDb API key: free key from omdbapi.com enables the critic
         // ratings row (Rotten Tomatoes / Metacritic / IMDb) on detail pages.
+        // Declared before the card so the card's click can request focus —
+        // the field itself lives further down in the card's content.
+        val omdbFocusRequester = remember { FocusRequester() }
         KBCard(
-            onClick = { },
+            onClick = { omdbFocusRequester.requestFocus() },
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(
@@ -201,6 +214,10 @@ fun SettingsScreen(
                 )
 
                 var omdbFieldFocused by remember { mutableStateOf(false) }
+                // The wrapping KBCard swallows D-pad focus on TV — its click
+                // was a no-op, so the field could never gain focus and the
+                // IME never opened (paste unreachable). Card OK now requests
+                // focus here, which raises the keyboard.
                 BasicTextField(
                     value = omdbKeyInput,
                     onValueChange = {
@@ -246,6 +263,7 @@ fun SettingsScreen(
                     },
                     modifier = Modifier
                         .fillMaxWidth()
+                        .focusRequester(omdbFocusRequester)
                         .onFocusChanged {
                             omdbFieldFocused = it.isFocused
                             // Save on focus loss too — remote users often
@@ -253,6 +271,33 @@ fun SettingsScreen(
                             if (!it.isFocused) {
                                 AppPreferences.setOmdbApiKey(context, omdbKeyInput)
                                 omdbKeySaved = omdbKeyInput.isNotBlank()
+                            }
+                        }
+                        // TV D-pad escape: move focus out of the field with
+                        // up/down, and treat Enter as Done (many TV IMEs send
+                        // a raw ENTER instead of the IME action).
+                        .onPreviewKeyEvent { event ->
+                            if (event.type != KeyEventType.KeyDown) {
+                                false
+                            } else {
+                                when (event.key) {
+                                    Key.DirectionDown -> {
+                                        keyboardController?.hide()
+                                        focusManager.moveFocus(FocusDirection.Down)
+                                    }
+                                    Key.DirectionUp -> {
+                                        keyboardController?.hide()
+                                        focusManager.moveFocus(FocusDirection.Up)
+                                    }
+                                    Key.Enter, Key.NumPadEnter -> {
+                                        AppPreferences.setOmdbApiKey(context, omdbKeyInput)
+                                        omdbKeySaved = omdbKeyInput.isNotBlank()
+                                        keyboardController?.hide()
+                                        focusManager.clearFocus()
+                                        true
+                                    }
+                                    else -> false
+                                }
                             }
                         }
                 )
@@ -271,8 +316,9 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(12.dp))
 
         // ── STREAM BADGES (Nuvio-compatible packs) ────────────────
+        val badgeFocusRequester = remember { FocusRequester() }
         KBCard(
-            onClick = { },
+            onClick = { badgeFocusRequester.requestFocus() },
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(
@@ -349,7 +395,40 @@ fun SettingsScreen(
                     },
                     modifier = Modifier
                         .fillMaxWidth()
+                        .focusRequester(badgeFocusRequester)
                         .onFocusChanged { badgeFieldFocused = it.isFocused }
+                        // Same TV D-pad escape as the OMDb field.
+                        .onPreviewKeyEvent { event ->
+                            if (event.type != KeyEventType.KeyDown) {
+                                false
+                            } else {
+                                when (event.key) {
+                                    Key.DirectionDown -> {
+                                        keyboardController?.hide()
+                                        focusManager.moveFocus(FocusDirection.Down)
+                                    }
+                                    Key.DirectionUp -> {
+                                        keyboardController?.hide()
+                                        focusManager.moveFocus(FocusDirection.Up)
+                                    }
+                                    Key.Enter, Key.NumPadEnter -> {
+                                        if (badgePackInput.isNotBlank() && !badgeImporting) {
+                                            badgeImporting = true
+                                            scope.launch {
+                                                badgeStatus = StreamBadgeEngine
+                                                    .importFromUrl(context, badgePackInput)
+                                                    ?: "Badge pack imported"
+                                                badgeImporting = false
+                                            }
+                                        }
+                                        keyboardController?.hide()
+                                        focusManager.clearFocus()
+                                        true
+                                    }
+                                    else -> false
+                                }
+                            }
+                        }
                 )
 
                 Row(
