@@ -455,6 +455,9 @@ fun AddonsScreen(
                     show
                 )
             },
+            onToggleAll = { show ->
+                viewModel.setAllCatalogsShowOnHome(show)
+            },
             onMove = { config, action ->
                 when (action) {
                     CatalogMoveAction.TOP ->
@@ -1882,6 +1885,7 @@ private fun openManifest(
 private fun CatalogManagerDialog(
     configurations: List<CatalogConfiguration>,
     onToggle: (CatalogConfiguration, Boolean) -> Unit,
+    onToggleAll: (Boolean) -> Unit,
     onMove: (CatalogConfiguration, CatalogMoveAction) -> Unit,
     onRename: (CatalogConfiguration) -> Unit,
     onDismiss: () -> Unit
@@ -1914,6 +1918,14 @@ private fun CatalogManagerDialog(
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(top = 3.dp)
                     )
+                }
+                if (configurations.isNotEmpty()) {
+                    val allVisible = configurations.all { it.catalog.showOnHome }
+                    ActionButton(
+                        label = if (allVisible) "HIDE ALL" else "SHOW ALL",
+                        onClick = { onToggleAll(!allVisible) }
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
                 }
                 ActionButton(label = "DONE", onClick = onDismiss)
             }

@@ -219,6 +219,20 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
      * (type, id) — used by the catalog manager so same-named catalogs of
      * different types never collide.
      */
+    /**
+     * Bulk enable/disable every catalog from every addon on the home screen.
+     * Used by the catalog manager's Show All / Hide All actions.
+     */
+    fun setAllCatalogsShowOnHome(showOnHome: Boolean) {
+        _addons.value.forEach { addon ->
+            updateAddonCatalogs(addon.id) { catalogs ->
+                catalogs.map { it.copy(showOnHome = showOnHome) }
+            }
+        }
+        refresh()
+        _status.value = if (showOnHome) "All catalogs shown" else "All catalogs hidden"
+    }
+
     fun setCatalogShowOnHome(
         addonId: String,
         catalogType: String,

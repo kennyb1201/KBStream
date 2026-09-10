@@ -62,6 +62,7 @@ class PickerAdapter(
             val context = row.context
             val density = context.resources.displayMetrics.density
             badges.forEach { badge ->
+                val filled = badge.tagStyle.equals("filled", ignoreCase = true)
                 val chip = LinearLayout(context).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = android.view.Gravity.CENTER_VERTICAL
@@ -71,10 +72,10 @@ class PickerAdapter(
                     background = android.graphics.drawable.GradientDrawable().apply {
                         shape = android.graphics.drawable.GradientDrawable.RECTANGLE
                         cornerRadius = 6 * density
-                        setColor(badge.tagColor.toArgb("filled"))
+                        setColor(if (filled) badge.tagColor.toArgb(fallback = 0x00000000) else 0x00000000)
                         setStroke(
                             (1 * density).toInt(),
-                            badge.borderColor.toArgb(default = 0x00000000) ?: 0x00000000
+                            badge.borderColor.toArgb(fallback = 0x00000000)
                         )
                     }
                 }
@@ -94,8 +95,7 @@ class PickerAdapter(
                         text = badge.name
                         textSize = 10f
                         setTextColor(
-                            badge.textColor.toArgb(default = 0xFFFFFFFF)
-                                ?: ContextCompat.getColor(context, android.R.color.white)
+                            badge.textColor.toArgb(fallback = 0xFFFFFFFF.toInt())
                         )
                     }
                     chip.addView(text)
@@ -104,15 +104,15 @@ class PickerAdapter(
             }
         }
 
-        private fun String.toArgb(default: String? = null): Int? {
+        /** Parses "RRGGBB" or "AARRGGBB" hex into an ARGB Int; falls back to [fallback]. */
+        private fun String.toArgb(fallback: Int): Int {
             val hex = trim().removePrefix("#")
-            val argb = when (hex.length) {
+            val padded = when (hex.length) {
                 6 -> "FF$hex"
                 8 -> hex
-                else -> return default?.toLongOrNull(16)?.toInt()
-                    ?: (if (default == "filled") null else null)
+                else -> return fallback
             }
-            return argb.toLongOrNull(16)?.toInt()
+            return padded.toLongOrNull(16)?.toInt() ?: fallback
         }
     }
 }

@@ -182,7 +182,7 @@ object StreamBadgeEngine {
      * matches any of the stream's text fields, de-duplicated by badge key,
      * in pack order.
      */
-    fun resolveBadges(stream: Stream, filters: List<CompiledBadgeFilter>): List<StreamBadge> {
+    private fun resolveBadges(stream: Stream, filters: List<CompiledBadgeFilter>): List<StreamBadge> {
         if (filters.isEmpty()) return emptyList()
         val candidates = matchCandidates(stream)
         if (candidates.isEmpty()) return emptyList()
