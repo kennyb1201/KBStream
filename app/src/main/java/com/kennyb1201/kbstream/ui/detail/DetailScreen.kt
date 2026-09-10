@@ -1274,6 +1274,15 @@ fun DetailScreen(
                                     if (overviewOverflows) {
                                         Surface(
                                             onClick = { overviewExpanded = !overviewExpanded },
+                                            // The overview is the list's first item
+                                            // but is not focusable, so this toggle is
+                                            // the topmost focusable element in the
+                                            // list. Focusing it (e.g. walking D-pad up
+                                            // from the rails) snaps the list so the
+                                            // item's top is at the viewport top, which
+                                            // recovers a partially scrolled-out overview
+                                            // that the header hook below cannot fix (it
+                                            // only fires when item 0 scrolled fully out).
                                             shape = ClickableSurfaceDefaults.shape(
                                                 shape = RoundedCornerShape(8.dp)
                                             ),
@@ -1310,7 +1319,15 @@ fun DetailScreen(
                                                     elevation = 12.dp
                                                 )
                                             ),
-                                            modifier = Modifier.padding(top = 8.dp)
+                                            modifier = Modifier
+                                                .onFocusChanged { focusState ->
+                                                    if (focusState.hasFocus) {
+                                                        scope.launch {
+                                                            detailListState.animateScrollToItem(0)
+                                                        }
+                                                    }
+                                                }
+                                                .padding(top = 8.dp)
                                         ) {
                                             Text(
                                                 text = if (overviewExpanded) "View less" else "View more",
@@ -3850,7 +3867,13 @@ private fun Modifier.scrollToTopOnFocus(
     listState: LazyListState,
     scope: kotlinx.coroutines.CoroutineScope
 ): Modifier = this.onFocusChanged { state ->
-    if (state.hasFocus && listState.firstVisibleItemIndex > 0) {
+    if (
+        state.hasFocus &&
+        (
+            listState.firstVisibleItemIndex > 0 ||
+                listState.firstVisibleItemScrollOffset > 0
+            )
+    ) {
         scope.launch { listState.animateScrollToItem(0) }
     }
 }
