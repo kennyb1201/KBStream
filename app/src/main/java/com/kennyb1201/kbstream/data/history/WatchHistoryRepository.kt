@@ -34,6 +34,14 @@ class WatchHistoryRepository(context: Context) {
 
     suspend fun getById(id: String): WatchHistoryEntity? = dao.getById(id)
 
+    /**
+     * One-shot suspend read of the Continue Watching parent rows. Backs
+     * HomeViewModel's instant Continue Watching seed (cold-start fast path)
+     * so the rail can render before the enriched pipeline finishes.
+     */
+    suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity> =
+        dao.getContinueWatchingParentsSnapshot()
+
     suspend fun deleteById(id: String) {
         dao.deleteById(id)
     }

@@ -691,6 +691,14 @@ Log.d(
 
         observeUpNext()
 
+        // Instant Continue Watching: seed the rail from the warm watch
+        // history right away so the UI has cards the moment Home renders;
+        // the full enriched pipeline in observeUpNext replaces this
+        // snapshot when it finishes (TMDB enrichments + Simkl merge).
+        viewModelScope.launch {
+            publishInstantUpNextSnapshot()
+        }
+
         startPeriodicSimklRefresh()
 
         viewModelScope.launch {
@@ -1222,6 +1230,78 @@ Log.d(
         }
     }
 
+    /**
+     * Instant Continue Watching seed: publish a lightweight snapshot built
+     * ONLY from the local watch-history rows (no TMDB enrichment, no Simkl
+     * round-trip) so the rail renders the moment Home composes. The full
+     * observeUpNext pipeline later replaces this with enriched cards.
+     */
+    private suspend fun publishInstantUpNextSnapshot() {
+        val history = try {
+            watchHistoryRepository.getContinueWatchingParentsSnapshot()
+        } catch (e: Exception) {
+            Log.w("HOME_UPNEXT", "Instant up-next snapshot failed", e)
+            return
+        }
+        if (history.isEmpty()) return
+
+        val items = history.map { entry ->
+            UpNextItem(
+                id = buildString {
+                    append("history:")
+                    append(entry.id)
+                    entry.season?.let { append(":s$it") }
+                    entry.episode?.let { append(":e$it") }
+                },
+                title = entry.name,
+                poster = entry.poster,
+                badge = UpNextBadge.CONTINUE_WATCHING,
+                showTitle = if (entry.season != null && entry.episode != null) {
+                    entry.name
+                } else {
+                    null
+                },
+                episodeTitle = entry.episodeTitle?.takeIf { it.isNotBlank() },
+                episodeDescription = entry.overview?.takeIf { it.isNotBlank() },
+                backdrop = entry.backdropUrl,
+                clearLogo = entry.clearLogo,
+                progressPercent = progressFromHistory(
+                    positionMs = entry.positionMs,
+                    durationMs = entry.durationMs
+                ),
+                remainingMinutes = calculateRemainingMinutes(
+                    positionMs = entry.positionMs,
+                    durationMs = entry.durationMs
+                ),
+                runtimeMinutes =
+                    if (entry.durationMs > 0L) {
+                        ((entry.durationMs + 30_000L) / 60_000L)
+                            .toInt()
+                            .coerceAtLeast(1)
+                    } else {
+                        null
+                    },
+                streamUrl = entry.streamUrl,
+                parentId = entry.parentId.ifBlank { entry.id },
+                parentType = entry.type,
+                season = entry.season,
+                episode = entry.episode,
+                episodeStreamId = entry.episodeStreamId,
+                startPositionMs = entry.positionMs,
+                recencyTimestamp = entry.updatedAt,
+                historyRowId = entry.id
+            )
+        }
+
+        // Only seed when nothing is showing yet (cold start / fresh entry);
+        // never clobber a live enriched list with the raw snapshot.
+        if (_upNext.value.isEmpty()) {
+            _upNext.value = applyContinueWatchingDismissals(
+                dedupeAndSortUpNext(items)
+            )
+        }
+    }
+
     private fun observeUpNext() {
 
         viewModelScope.launch {
@@ -1517,6 +1597,16 @@ Log.d(
         }
     }.awaitAll()
 }
+
+                        // Publish local cards first: the enriched local rows
+                        // are ready here, so the rail shows real content while
+                        // the (potentially slow) Simkl network fetch runs.
+                        if (localItems.isNotEmpty()) {
+                            _upNext.value =
+                                applyContinueWatchingDismissals(
+                                    dedupeAndSortUpNext(localItems)
+                                )
+                        }
 
                         val simklResult =
                             loadSimklUpNextItems()

@@ -1594,12 +1594,31 @@ fun HomeScreen(
         mutableStateOf<String?>(null)
     }
 
-    val firstHomeItem = remember(rails) {
-        rails.asSequence()
+    // Seed hero = first focusable card: the first Continue Watching item
+    // when that rail exists, else the first catalog poster. Keeps the hero
+    // in sync with where D-pad focus lands on entry (the topmost card);
+    // previously this only looked at catalog rails, so returning home with
+    // focus restored onto Continue Watching showed the first rail's poster
+    // in the hero instead.
+    val firstHomeItem = remember(upNext, rails) {
+        upNext.firstOrNull()?.let { cw ->
+            MetaPreview(
+                id = cw.parentId ?: cw.id,
+                type = cw.parentType ?: "movie",
+                name = cw.title,
+                poster = cw.poster
+            )
+        } ?: rails.asSequence()
             .flatMap {
                 it.items.asSequence()
             }
             .firstOrNull()
+    }
+
+    // False until the user moves focus themselves; gates the auto-seed
+    // effect below so it stops overriding the hero after first interaction.
+    var userAdjustedFocus by remember {
+        mutableStateOf(false)
     }
 
     var focusedItem by remember {
@@ -1659,6 +1678,7 @@ fun HomeScreen(
     fun selectHero(
         item: MetaPreview
     ) {
+        userAdjustedFocus = true
         focusedItem = item
         focusedContinueWatchingItem = null
 
@@ -1685,6 +1705,7 @@ fun HomeScreen(
         item: MetaPreview,
         upNextItem: UpNextItem
     ) {
+        userAdjustedFocus = true
         focusedItem = item
         focusedContinueWatchingItem = upNextItem
     }
@@ -1707,10 +1728,18 @@ fun HomeScreen(
         firstHomeItem?.type
     ) {
         if (
-            focusedItem == null &&
+            !userAdjustedFocus &&
             firstHomeItem != null
         ) {
             focusedItem = firstHomeItem
+            // When the seed came from the Continue Watching rail, also
+            // attach its UpNextItem so the hero renders the episode /
+            // progress view exactly like focusing the card does.
+            if (focusedContinueWatchingItem == null) {
+                focusedContinueWatchingItem = upNext.firstOrNull()?.takeIf { cw ->
+                    (cw.parentId ?: cw.id) == firstHomeItem.id
+                }
+            }
         }
     }
 
