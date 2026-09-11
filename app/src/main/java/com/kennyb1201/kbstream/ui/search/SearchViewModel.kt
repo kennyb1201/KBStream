@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.data.addon.ManifestCatalog
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
@@ -401,10 +402,10 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
                         .getOrDefault(emptyList())
                 }
 
-                // Add-on / AI search (AIOMetadata, BingeCat, ...) runs as a
-                // second wave: it awaits the same TMDB lookups for de-dupe
-                // keys and publishes its own grouped section when done, so it
-                // never delays the TMDB results above.
+                // Add-on / AI search (AIOMetadata, BingeCat, ...) fires in
+                // parallel with the TMDB wave: probes start immediately and
+                // publish their own grouped section when done, so neither
+                // wave delays the other.
                 launchAddonSearch(
                     normalized,
                     tmdbMoviesDeferred,
@@ -459,18 +460,27 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
     ) {
         addonSearchJob?.cancel()
         addonSearchJob = viewModelScope.launch {
-            val tmdbKeys = buildSet {
-                tmdbMoviesDeferred.await().forEach {
-                    add(tmdbNameKey("movie", it))
-                }
-                tmdbTvDeferred.await().forEach {
-                    add(tmdbNameKey("series", it))
+            // The add-on probes start immediately now — they used to wait
+            // for BOTH TMDB searches to finish before firing a single
+            // request, adding ~0.5-1s to every addon rail. The de-dupe keys
+            // are instead resolved lazily: each addon consults them only
+            // after its own network response is back, by which time TMDB
+            // has almost always finished anyway (and if not, that addon
+            // was the slow one regardless).
+            val tmdbKeysDeferred = async {
+                buildSet {
+                    tmdbMoviesDeferred.await().forEach {
+                        add(tmdbNameKey("movie", it))
+                    }
+                    tmdbTvDeferred.await().forEach {
+                        add(tmdbNameKey("series", it))
+                    }
                 }
             }
 
             val groups =
                 try {
-                    searchAddonCatalogs(query, tmdbKeys)
+                    searchAddonCatalogs(query, tmdbKeysDeferred)
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -535,121 +545,122 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
 
     private suspend fun searchAddonCatalogs(
         query: String,
-        tmdbKeys: Set<String>
-    ): List<AddonResultGroup> {
-        val groups = mutableListOf<AddonResultGroup>()
+        tmdbKeysDeferred: Deferred<Set<String>>
+    ): List<AddonResultGroup> = coroutineScope {
         val addons = addonManager.getInstalledAddons()
 
-        for (addon in addons) {
-            val baseUrl =
-                addon.manifestUrl.removeSuffix("/manifest.json")
-
-            val collected = mutableListOf<MetaPreview>()
-
-            if (addon.resources.contains("search")) {
-                // Standard search resource (Cinemeta, ...): one grouped rail
-                // per addon via the /search endpoint.
+        // Every installed add-on is probed in parallel instead of one after
+        // another: wall clock is now the slowest add-on, not the sum of all
+        // of them. Results keep install order, and MAX_ADDON_GROUPS still
+        // caps the final rail count exactly like the old serial loop did.
+        addons.map { addon ->
+            async {
                 try {
-                    collected += repository.search(
-                        baseUrl,
-                        "*",
-                        query
-                    )
+                    collectAddonSearchGroup(addon, query, tmdbKeysDeferred)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
                 } catch (_: Exception) {
+                    emptyList()
                 }
-                if (collected.isEmpty()) continue
-            } else {
-                // Catalog-only addons (AIOMetadata, BingeCat, ...) implement
-                // search through the catalog endpoint's `search=` extra — the
-                // same endpoint the Discover rails use. AIOMetadata exposes
-                // every enabled search as its own catalog (Movies, Series,
-                // AI Search, People, Collections), so probe each catalog
-                // separately and keep one rail per catalog instead of
-                // merging everything into a single undifferentiated rail.
-                // AI/search catalogs (AIOMetadata "AI Search", BingeCat's
-                // search lists, People/Collections searches) are probed
-                // FIRST so they can never be pushed out of the probe cap by
-                // the regular movie/series catalogs, and their results are
-                // exempt from the cross-rail dedup below — overlapping
-                // titles is expected there, and an emptied rail is exactly
-                // the "my AI search rail disappeared" bug.
-                val searchableCatalogs = addon.catalogs
-                    .partition { it.isSearchStyleCatalog() }
-                    .let { (searchStyle, regular) -> searchStyle + regular }
-                    .take(MAX_ADDON_CATALOG_PROBES)
+            }
+        }.awaitAll()
+            .flatten()
+            .take(MAX_ADDON_GROUPS)
+    }
 
-                if (searchableCatalogs.isEmpty()) continue
+    /**
+     * Query one add-on for [query] and build its result rail(s).
+     * Catalog-only add-ons (AIOMetadata, BingeCat, ...) probe each
+     * searchable catalog separately; standard-search add-ons (Cinemeta)
+     * use the /search endpoint. Returns an empty list when the add-on
+     * yields no rails so it drops out just like the old loop's `continue`.
+     */
+    private suspend fun collectAddonSearchGroup(
+        addon: InstalledAddon,
+        query: String,
+        tmdbKeysDeferred: Deferred<Set<String>>
+    ): List<AddonResultGroup> = coroutineScope {
+        val groups = mutableListOf<AddonResultGroup>()
+        val baseUrl =
+            addon.manifestUrl.removeSuffix("/manifest.json")
 
-                val perCatalog = coroutineScope {
-                    searchableCatalogs.map { catalog ->
-                        async {
-                            catalog to runCatching {
-                                repository.searchCatalog(
-                                    baseUrl,
-                                    catalog.type,
-                                    catalog.id,
-                                    query
-                                )
-                            }.getOrDefault(emptyList())
-                        }
-                    }.awaitAll()
-                }
+        val collected = mutableListOf<MetaPreview>()
 
-                // Regular catalogs: a title found by an earlier catalog (or
-                // already present in the TMDB rails) is not repeated in the
-                // same addon's later regular rails.
-                val seen = mutableSetOf<String>()
-                for ((catalog, hits) in perCatalog) {
-                    if (groups.size >= MAX_ADDON_GROUPS) break
-                    val searchStyle = catalog.isSearchStyleCatalog()
-                    // A search that returns the SAME list as the catalog's
-                    // unfiltered browse view means the catalog ignored the
-                    // query — e.g. AIOStreams "Top 10" lists always echo
-                    // their ranking regardless of the search term. Those hits
-                    // are noise, not search matches, so the rail is dropped.
-                    if (!searchStyle && catalogIgnoredQuery(baseUrl, catalog, hits)) continue
-                    val items = hits
-                        .asSequence()
-                        .distinctBy { "${it.type}:${it.id}" }
-                        .filter { meta ->
-                            searchStyle ||
-                                "${meta.type}:${meta.name.lowercase()}" !in tmdbKeys
-                        }
-                        .filter { meta ->
-                            // Search-style rails never enter or consult the
-                            // dedup set: they must always render.
-                            searchStyle || seen.add("${meta.type}:${meta.id}")
-                        }
-                        .map { meta ->
-                            SearchTitleResult(
-                                id = meta.id,
-                                type = meta.type,
-                                name = meta.name,
-                                poster = meta.poster,
-                                year = meta.releaseInfo?.take(4)?.toIntOrNull(),
-                                rating = meta.imdbRating?.toDoubleOrNull()
-                                    ?.takeIf { it > 0.0 },
-                                meta = meta
-                            )
-                        }
-                        .take(MAX_ADDON_CATALOG_RESULTS)
-                        .toList()
-                    if (items.isEmpty()) continue
-                    groups += AddonResultGroup(
-                        addonName = addon.displayName,
-                        railLabel = catalog.railLabel(addon.displayName),
-                        results = items,
-                        catalogType = catalog.type
-                    )
-                }
-                continue
+        if (addon.resources.contains("search")) {
+            // Standard search resource (Cinemeta, ...): one grouped rail
+            // per addon via the /search endpoint.
+            try {
+                collected += repository.search(
+                    baseUrl,
+                    "*",
+                    query
+                )
+            } catch (_: Exception) {
+            }
+            if (collected.isEmpty()) return@coroutineScope emptyList<AddonResultGroup>()
+        } else {
+            // Catalog-only addons (AIOMetadata, BingeCat, ...) implement
+            // search through the catalog endpoint's `search=` extra — the
+            // same endpoint the Discover rails use. AIOMetadata exposes
+            // every enabled search as its own catalog (Movies, Series,
+            // AI Search, People, Collections), so probe each catalog
+            // separately and keep one rail per catalog instead of
+            // merging everything into a single undifferentiated rail.
+            // AI/search catalogs (AIOMetadata "AI Search", BingeCat's
+            // search lists, People/Collections searches) are probed
+            // FIRST so they can never be pushed out of the probe cap by
+            // the regular movie/series catalogs, and their results are
+            // exempt from the cross-rail dedup below — overlapping
+            // titles is expected there, and an emptied rail is exactly
+            // the "my AI search rail disappeared" bug.
+            val searchableCatalogs = addon.catalogs
+                .partition { it.isSearchStyleCatalog() }
+                .let { (searchStyle, regular) -> searchStyle + regular }
+                .take(MAX_ADDON_CATALOG_PROBES)
+
+            if (searchableCatalogs.isEmpty()) {
+                return@coroutineScope emptyList<AddonResultGroup>()
             }
 
-            val addonItems =
-                collected
+            val perCatalog = coroutineScope {
+                searchableCatalogs.map { catalog ->
+                    async {
+                        catalog to runCatching {
+                            repository.searchCatalog(
+                                baseUrl,
+                                catalog.type,
+                                catalog.id,
+                                query
+                            )
+                        }.getOrDefault(emptyList())
+                    }
+                }.awaitAll()
+            }
+
+            // Regular catalogs: a title found by an earlier catalog (or
+            // already present in the TMDB rails) is not repeated in the
+            // same addon's later regular rails.
+            val seen = mutableSetOf<String>()
+            val tmdbKeys = tmdbKeysDeferred.await()
+            for ((catalog, hits) in perCatalog) {
+                val searchStyle = catalog.isSearchStyleCatalog()
+                // A search that returns the SAME list as the catalog's
+                // unfiltered browse view means the catalog ignored the
+                // query — e.g. AIOStreams "Top 10" lists always echo
+                // their ranking regardless of the search term. Those hits
+                // are noise, not search matches, so the rail is dropped.
+                if (!searchStyle && catalogIgnoredQuery(baseUrl, catalog, hits)) continue
+                val items = hits
+                    .asSequence()
                     .distinctBy { "${it.type}:${it.id}" }
-                    .filter {
-                        "${it.type}:${it.name.lowercase()}" !in tmdbKeys
+                    .filter { meta ->
+                        searchStyle ||
+                            "${meta.type}:${meta.name.lowercase()}" !in tmdbKeys
+                    }
+                    .filter { meta ->
+                        // Search-style rails never enter or consult the
+                        // dedup set: they must always render.
+                        searchStyle || seen.add("${meta.type}:${meta.id}")
                     }
                     .map { meta ->
                         SearchTitleResult(
@@ -663,22 +674,57 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
                             meta = meta
                         )
                     }
-                    .take(MAX_ADDON_RESULTS_PER_ADDON)
-
-            if (addonItems.isEmpty()) continue
-
-            groups += AddonResultGroup(
-                // Standard search mixes movies + series in one rail.
-                addonName = addon.displayName,
-                railLabel = "All",
-                results = addonItems,
-                catalogType = null
-            )
-
-            if (groups.size >= MAX_ADDON_GROUPS) break
+                    .take(MAX_ADDON_CATALOG_RESULTS)
+                    .toList()
+                if (items.isEmpty()) continue
+                groups += AddonResultGroup(
+                    addonName = addon.displayName,
+                    railLabel = catalog.railLabel(addon.displayName),
+                    results = items,
+                    catalogType = catalog.type
+                )
+            }
+            return@coroutineScope if (groups.isEmpty()) {
+                emptyList<AddonResultGroup>()
+            } else {
+                groups
+            }
         }
 
-        return groups
+        // Await the de-dupe keys once, before filtering.
+        val tmdbKeys = tmdbKeysDeferred.await()
+
+        val addonItems =
+            collected
+                .distinctBy { "${it.type}:${it.id}" }
+                .filter {
+                    "${it.type}:${it.name.lowercase()}" !in tmdbKeys
+                }
+                .map { meta ->
+                    SearchTitleResult(
+                        id = meta.id,
+                        type = meta.type,
+                        name = meta.name,
+                        poster = meta.poster,
+                        year = meta.releaseInfo?.take(4)?.toIntOrNull(),
+                        rating = meta.imdbRating?.toDoubleOrNull()
+                            ?.takeIf { it > 0.0 },
+                        meta = meta
+                    )
+                }
+                .take(MAX_ADDON_RESULTS_PER_ADDON)
+
+        if (addonItems.isEmpty()) return@coroutineScope emptyList<AddonResultGroup>()
+
+        groups += AddonResultGroup(
+            // Standard search mixes movies + series in one rail.
+            addonName = addon.displayName,
+            railLabel = "All",
+            results = addonItems,
+            catalogType = null
+        )
+
+        return@coroutineScope groups
     }
 
     /**

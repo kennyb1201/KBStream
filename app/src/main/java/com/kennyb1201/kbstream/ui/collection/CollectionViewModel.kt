@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.supervisorScope
 
 /**
@@ -63,6 +65,9 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = emptySet()
     )
+
+    // Caps parallel TMDB imdb-id lookups (same rationale as TagViewModel).
+    private val imdbResolveSemaphore = Semaphore(permits = 8)
 
     private var currentId: Int? = null
 
@@ -116,7 +121,9 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
                 unique.map { tmdbId ->
                     async {
                         val imdbId = runCatching {
-                            tmdbRepository.resolveImdbId(tmdbId, "movie")
+                            imdbResolveSemaphore.withPermit {
+                                tmdbRepository.resolveImdbId(tmdbId, "movie")
+                            }
                         }.getOrNull()
                         Pair(tmdbId, imdbId)
                     }

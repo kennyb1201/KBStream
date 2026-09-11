@@ -53,9 +53,13 @@ class TmdbRepository(context: Context) {
         .add(KotlinJsonAdapterFactory())
         .build()
 
+    // One process-wide OkHttp client: TMDB traffic all goes to the same host,
+    // so sharing it lets every screen reuse pooled TCP+TLS connections instead
+    // of paying a fresh handshake per repository instance (Tag, Studio,
+    // Collection, Detail, Home, Search each built their own before).
     private val api: TmdbApiService = Retrofit.Builder()
         .baseUrl("https://api.themoviedb.org/3/")
-        .client(OkHttpClient.Builder().build())
+        .client(sharedOkHttpClient())
         .addConverterFactory(MoshiConverterFactory.create(moshi))
         .build()
         .create(TmdbApiService::class.java)
@@ -724,65 +728,80 @@ class TmdbRepository(context: Context) {
         ).filter { it.items.isNotEmpty() }
     }
 
-    suspend fun getInitialGenreSections(genreId: Int): List<StudioSection> {
-        return listOfNotNull(
-            getGenreRailPage(genreId, "MOVIES · RECENT", 1).items.takeIf { it.isNotEmpty() }
-                ?.let { StudioSection("MOVIES · RECENT", it) },
-            getGenreRailPage(genreId, "MOVIES · POPULAR", 1).items.takeIf { it.isNotEmpty() }
-                ?.let { StudioSection("MOVIES · POPULAR", it) },
-            getGenreRailPage(genreId, "MOVIES · TOP RATED", 1).items.takeIf { it.isNotEmpty() }
-                ?.let { StudioSection("MOVIES · TOP RATED", it) },
-            getGenreRailPage(genreId, "SERIES · RECENT", 1).items.takeIf { it.isNotEmpty() }
-                ?.let { StudioSection("SERIES · RECENT", it) },
-            getGenreRailPage(genreId, "SERIES · POPULAR", 1).items.takeIf { it.isNotEmpty() }
-                ?.let { StudioSection("SERIES · POPULAR", it) },
-            getGenreRailPage(genreId, "SERIES · TOP RATED", 1).items.takeIf { it.isNotEmpty() }
-                ?.let { StudioSection("SERIES · TOP RATED", it) }
+    // The six rail fetches used to run serially, making screen load time
+    // the SUM of all round-trips. In parallel it is just the slowest one
+    // (~6x faster wall clock). Sections keep the original render order and
+    // a failed rail still drops out (listOfNotNull semantics kept).
+    suspend fun getInitialGenreSections(genreId: Int): List<StudioSection> = coroutineScope {
+        val pages = listOf(
+            async { getGenreRailPage(genreId, "MOVIES · RECENT", 1) },
+            async { getGenreRailPage(genreId, "MOVIES · POPULAR", 1) },
+            async { getGenreRailPage(genreId, "MOVIES · TOP RATED", 1) },
+            async { getGenreRailPage(genreId, "SERIES · RECENT", 1) },
+            async { getGenreRailPage(genreId, "SERIES · POPULAR", 1) },
+            async { getGenreRailPage(genreId, "SERIES · TOP RATED", 1) }
+        ).awaitAll()
+        listOfNotNull(
+            pages[0].items.takeIf { it.isNotEmpty() }?.let { StudioSection("MOVIES · RECENT", it) },
+            pages[1].items.takeIf { it.isNotEmpty() }?.let { StudioSection("MOVIES · POPULAR", it) },
+            pages[2].items.takeIf { it.isNotEmpty() }?.let { StudioSection("MOVIES · TOP RATED", it) },
+            pages[3].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · RECENT", it) },
+            pages[4].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · POPULAR", it) },
+            pages[5].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · TOP RATED", it) }
         )
     }
 
-    suspend fun getInitialKeywordSections(keywordId: Int): List<StudioSection> {
-        return listOfNotNull(
-            getKeywordRailPage(keywordId, "MOVIES · RECENT", 1).items.takeIf { it.isNotEmpty() }
-                ?.let { StudioSection("MOVIES · RECENT", it) },
-            getKeywordRailPage(keywordId, "MOVIES · POPULAR", 1).items.takeIf { it.isNotEmpty() }
-                ?.let { StudioSection("MOVIES · POPULAR", it) },
-            getKeywordRailPage(keywordId, "MOVIES · TOP RATED", 1).items.takeIf { it.isNotEmpty() }
-                ?.let { StudioSection("MOVIES · TOP RATED", it) },
-            getKeywordRailPage(keywordId, "SERIES · RECENT", 1).items.takeIf { it.isNotEmpty() }
-                ?.let { StudioSection("SERIES · RECENT", it) },
-            getKeywordRailPage(keywordId, "SERIES · POPULAR", 1).items.takeIf { it.isNotEmpty() }
-                ?.let { StudioSection("SERIES · POPULAR", it) },
-            getKeywordRailPage(keywordId, "SERIES · TOP RATED", 1).items.takeIf { it.isNotEmpty() }
-                ?.let { StudioSection("SERIES · TOP RATED", it) }
+    // Same parallelization as getInitialGenreSections.
+    suspend fun getInitialKeywordSections(keywordId: Int): List<StudioSection> = coroutineScope {
+        val pages = listOf(
+            async { getKeywordRailPage(keywordId, "MOVIES · RECENT", 1) },
+            async { getKeywordRailPage(keywordId, "MOVIES · POPULAR", 1) },
+            async { getKeywordRailPage(keywordId, "MOVIES · TOP RATED", 1) },
+            async { getKeywordRailPage(keywordId, "SERIES · RECENT", 1) },
+            async { getKeywordRailPage(keywordId, "SERIES · POPULAR", 1) },
+            async { getKeywordRailPage(keywordId, "SERIES · TOP RATED", 1) }
+        ).awaitAll()
+        listOfNotNull(
+            pages[0].items.takeIf { it.isNotEmpty() }?.let { StudioSection("MOVIES · RECENT", it) },
+            pages[1].items.takeIf { it.isNotEmpty() }?.let { StudioSection("MOVIES · POPULAR", it) },
+            pages[2].items.takeIf { it.isNotEmpty() }?.let { StudioSection("MOVIES · TOP RATED", it) },
+            pages[3].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · RECENT", it) },
+            pages[4].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · POPULAR", it) },
+            pages[5].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · TOP RATED", it) }
         )
     }
 
-    suspend fun getInitialNetworkSections(networkId: Int): List<StudioSection> {
-        return listOfNotNull(
-            getNetworkRailPage(networkId, "SERIES · RECENT", 1).items.takeIf { it.isNotEmpty() }
-                ?.let { StudioSection("SERIES · RECENT", it) },
-            getNetworkRailPage(networkId, "SERIES · POPULAR", 1).items.takeIf { it.isNotEmpty() }
-                ?.let { StudioSection("SERIES · POPULAR", it) },
-            getNetworkRailPage(networkId, "SERIES · TOP RATED", 1).items.takeIf { it.isNotEmpty() }
-                ?.let { StudioSection("SERIES · TOP RATED", it) }
+    // Same parallelization as getInitialGenreSections.
+    suspend fun getInitialNetworkSections(networkId: Int): List<StudioSection> = coroutineScope {
+        val pages = listOf(
+            async { getNetworkRailPage(networkId, "SERIES · RECENT", 1) },
+            async { getNetworkRailPage(networkId, "SERIES · POPULAR", 1) },
+            async { getNetworkRailPage(networkId, "SERIES · TOP RATED", 1) }
+        ).awaitAll()
+        listOfNotNull(
+            pages[0].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · RECENT", it) },
+            pages[1].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · POPULAR", it) },
+            pages[2].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · TOP RATED", it) }
         )
     }
 
-    suspend fun getInitialCompanySections(companyId: Int): List<StudioSection> {
-        return listOfNotNull(
-            getCompanyRailPage(companyId, "MOVIES · RECENT", 1).items.takeIf { it.isNotEmpty() }
-                ?.let { StudioSection("MOVIES · RECENT", it) },
-            getCompanyRailPage(companyId, "MOVIES · POPULAR", 1).items.takeIf { it.isNotEmpty() }
-                ?.let { StudioSection("MOVIES · POPULAR", it) },
-            getCompanyRailPage(companyId, "MOVIES · TOP RATED", 1).items.takeIf { it.isNotEmpty() }
-                ?.let { StudioSection("MOVIES · TOP RATED", it) },
-            getCompanyRailPage(companyId, "SERIES · RECENT", 1).items.takeIf { it.isNotEmpty() }
-                ?.let { StudioSection("SERIES · RECENT", it) },
-            getCompanyRailPage(companyId, "SERIES · POPULAR", 1).items.takeIf { it.isNotEmpty() }
-                ?.let { StudioSection("SERIES · POPULAR", it) },
-            getCompanyRailPage(companyId, "SERIES · TOP RATED", 1).items.takeIf { it.isNotEmpty() }
-                ?.let { StudioSection("SERIES · TOP RATED", it) }
+    // Same parallelization as getInitialGenreSections.
+    suspend fun getInitialCompanySections(companyId: Int): List<StudioSection> = coroutineScope {
+        val pages = listOf(
+            async { getCompanyRailPage(companyId, "MOVIES · RECENT", 1) },
+            async { getCompanyRailPage(companyId, "MOVIES · POPULAR", 1) },
+            async { getCompanyRailPage(companyId, "MOVIES · TOP RATED", 1) },
+            async { getCompanyRailPage(companyId, "SERIES · RECENT", 1) },
+            async { getCompanyRailPage(companyId, "SERIES · POPULAR", 1) },
+            async { getCompanyRailPage(companyId, "SERIES · TOP RATED", 1) }
+        ).awaitAll()
+        listOfNotNull(
+            pages[0].items.takeIf { it.isNotEmpty() }?.let { StudioSection("MOVIES · RECENT", it) },
+            pages[1].items.takeIf { it.isNotEmpty() }?.let { StudioSection("MOVIES · POPULAR", it) },
+            pages[2].items.takeIf { it.isNotEmpty() }?.let { StudioSection("MOVIES · TOP RATED", it) },
+            pages[3].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · RECENT", it) },
+            pages[4].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · POPULAR", it) },
+            pages[5].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · TOP RATED", it) }
         )
     }
 
@@ -1254,6 +1273,15 @@ class TmdbRepository(context: Context) {
     }
 
     companion object {
+        @Volatile
+        private var sharedClient: OkHttpClient? = null
+
+        /** Lazily built, process-wide client for TMDB API traffic. */
+        fun sharedOkHttpClient(): OkHttpClient =
+            sharedClient ?: synchronized(this) {
+                sharedClient ?: OkHttpClient.Builder().build().also { sharedClient = it }
+            }
+
         const val PROFILE_BASE = "https://image.tmdb.org/t/p/w185"
         const val BACKDROP_BASE = "https://image.tmdb.org/t/p/w1280"
         const val POSTER_BASE = "https://image.tmdb.org/t/p/w500"

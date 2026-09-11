@@ -7,6 +7,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
+import okhttp3.Dispatcher
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.HttpException
 import retrofit2.Retrofit
@@ -14,6 +15,52 @@ import retrofit2.converter.moshi.MoshiConverterFactory
 import kotlinx.coroutines.delay
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
+
+// One process-wide OkHttp client for Stremio add-on traffic: every
+// AddonRepository instance used to build its own, so Search, Detail,
+// Streams, Home and the subtitle fetcher each paid fresh TCP+TLS
+// handshakes to every add-on host instead of reusing pooled connections.
+private val sharedAddonLogging =
+    HttpLoggingInterceptor().apply {
+        // BASIC logs the full request URL, and self-hosted addons can
+        // carry an auth token baked into the path - never log that in
+        // a release build.
+        level = if (BuildConfig.DEBUG) {
+            HttpLoggingInterceptor.Level.BASIC
+        } else {
+            HttpLoggingInterceptor.Level.NONE
+        }
+    }
+
+private val sharedAddonClient: OkHttpClient by lazy {
+    OkHttpClient.Builder()
+        .dispatcher(
+            Dispatcher().apply {
+                // Catalog-only addons like AIOMetadata expose ~12 search
+                // catalogs that are probed in parallel; the default 5
+                // requests-per-host cap would queue them into 3 waves.
+                maxRequestsPerHost = 12
+            }
+        )
+        .connectTimeout(
+            10,
+            TimeUnit.SECONDS
+        )
+        .readTimeout(
+            20,
+            TimeUnit.SECONDS
+        )
+        .writeTimeout(
+            20,
+            TimeUnit.SECONDS
+        )
+        .callTimeout(
+            25,
+            TimeUnit.SECONDS
+        )
+        .addInterceptor(sharedAddonLogging)
+        .build()
+}
 
 class AddonRepository {
 
@@ -38,38 +85,10 @@ class AddonRepository {
             .add(ManifestResourcesAdapterFactory)
             .build()
 
-    private val logging =
-        HttpLoggingInterceptor().apply {
-            // BASIC logs the full request URL, and self-hosted addons can
-            // carry an auth token baked into the path - never log that in
-            // a release build.
-            level = if (BuildConfig.DEBUG) {
-                HttpLoggingInterceptor.Level.BASIC
-            } else {
-                HttpLoggingInterceptor.Level.NONE
-            }
-        }
-
-    private val client =
-        OkHttpClient.Builder()
-            .connectTimeout(
-                10,
-                TimeUnit.SECONDS
-            )
-            .readTimeout(
-                20,
-                TimeUnit.SECONDS
-            )
-            .writeTimeout(
-                20,
-                TimeUnit.SECONDS
-            )
-            .callTimeout(
-                25,
-                TimeUnit.SECONDS
-            )
-            .addInterceptor(logging)
-            .build()
+    // Shared, file-scope instances (declared above): all repository
+    // instances reuse one connection pool per add-on host.
+    private val logging = sharedAddonLogging
+    private val client = sharedAddonClient
 
     private val api: StremioApiService =
         Retrofit.Builder()

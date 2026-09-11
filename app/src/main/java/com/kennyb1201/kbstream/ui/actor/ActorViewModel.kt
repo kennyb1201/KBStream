@@ -17,10 +17,17 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 class ActorViewModel(application: Application) : AndroidViewModel(application) {
     private val tmdbRepository = TmdbRepository(application)
     private val watchedStatusRepository = WatchedStatusRepository(application)
+
+    // Caps parallel TMDB imdb-id lookups so a prolific actor's credit list
+    // can't flood the shared OkHttp pool and starve whichever screen the
+    // user navigated to mid-load (same rationale as Tag/Studio/Collection).
+    private val imdbResolveSemaphore = Semaphore(permits = 8)
 
     private val _person = MutableStateFlow<TmdbPersonDetail?>(null)
     val person: StateFlow<TmdbPersonDetail?> = _person.asStateFlow()
@@ -215,7 +222,9 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
                 cast.map { (credit, mediaType) ->
                     async {
                         val imdbId = runCatching {
-                            tmdbRepository.resolveImdbId(credit.id, mediaType)
+                            imdbResolveSemaphore.withPermit {
+                                tmdbRepository.resolveImdbId(credit.id, mediaType)
+                            }
                         }.getOrNull()
                         Triple(credit, mediaType, imdbId)
                     }

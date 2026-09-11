@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.supervisorScope
 
 data class RailPagingState(
@@ -70,6 +72,11 @@ class TagViewModel(application: Application) : AndroidViewModel(application) {
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = emptySet()
     )
+
+    // Caps parallel TMDB imdb-id lookups so a full tag screen's watched
+    // preload can't flood the shared OkHttp connection pool and starve
+    // whichever screen the user navigated to mid-load.
+    private val imdbResolveSemaphore = Semaphore(permits = 8)
 
     private var currentId: Int? = null
     private var currentIsKeyword: Boolean = false
@@ -202,7 +209,9 @@ class TagViewModel(application: Application) : AndroidViewModel(application) {
                 uniqueItems.map { (tmdbId, mediaType) ->
                     async {
                         val imdbId = runCatching {
-                            tmdbRepository.resolveImdbId(tmdbId, mediaType)
+                            imdbResolveSemaphore.withPermit {
+                                tmdbRepository.resolveImdbId(tmdbId, mediaType)
+                            }
                         }.getOrNull()
                         Triple(tmdbId, mediaType, imdbId)
                     }

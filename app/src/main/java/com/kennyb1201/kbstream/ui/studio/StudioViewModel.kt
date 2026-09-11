@@ -18,6 +18,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.supervisorScope
 
 data class StudioRailPagingState(
@@ -75,6 +77,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = emptySet()
     )
+
+    // Caps parallel TMDB imdb-id lookups (same rationale as TagViewModel).
+    private val imdbResolveSemaphore = Semaphore(permits = 8)
 
     private var currentId: Int? = null
     private var currentIsNetwork: Boolean = false
@@ -231,7 +236,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 uniqueItems.map { (tmdbId, mediaType) ->
                     async {
                         val imdbId = runCatching {
-                            tmdbRepository.resolveImdbId(tmdbId, mediaType)
+                            imdbResolveSemaphore.withPermit {
+                                tmdbRepository.resolveImdbId(tmdbId, mediaType)
+                            }
                         }.getOrNull()
                         Triple(tmdbId, mediaType, imdbId)
                     }
