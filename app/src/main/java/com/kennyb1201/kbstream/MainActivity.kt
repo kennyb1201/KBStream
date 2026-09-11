@@ -10,13 +10,17 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -36,6 +40,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
@@ -53,6 +58,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.actor.ActorScreen
 import com.kennyb1201.kbstream.ui.addons.AddonsScreen
 import com.kennyb1201.kbstream.ui.collection.CollectionScreen
+import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
 import com.kennyb1201.kbstream.ui.detail.DetailScreen
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
@@ -78,6 +84,8 @@ import com.kennyb1201.kbstream.ui.streams.StreamsViewModel
 import com.kennyb1201.kbstream.ui.studio.StudioScreen
 import com.kennyb1201.kbstream.ui.tag.TagScreen
 import com.kennyb1201.kbstream.ui.theme.KBStreamTheme
+import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
@@ -753,9 +761,18 @@ fun AppRoot() {
         TvLauncherPublisher.sync(context, entries)
     }
 
-    BackHandler(
-        enabled = screen != Screen.Home || pendingAutoPlay != null
-    ) {
+    // "Back to exit" confirmation: on Home, Back opens an exit prompt instead
+    // of finishing the Activity immediately, so an accidental press can't drop
+    // the user out of the app. Cancelling an in-flight auto-play keeps
+    // priority over the prompt.
+    var confirmExit by remember { mutableStateOf(false) }
+    val interceptBack = screen == Screen.Home && pendingAutoPlay == null
+
+    BackHandler {
+        if (interceptBack) {
+            confirmExit = true
+            return@BackHandler
+        }
         // Backing out while "Finding sources" is up cancels the in-flight
         // resolution (the LaunchedEffect above is keyed on pendingAutoPlay) and
         // navigates back from the screen underneath.
@@ -818,6 +835,18 @@ fun AppRoot() {
             else ->
                 Screen.Home
         }
+    }
+
+    // The exit prompt sits before the onboarding early-return so Back is also
+    // confirmed while the onboarding guide stands in for Home.
+    if (confirmExit) {
+        ExitConfirmDialog(
+            onDismiss = { confirmExit = false },
+            onConfirm = {
+                confirmExit = false
+                (context as? android.app.Activity)?.finish()
+            }
+        )
     }
 
     // Onboarding stands in for Home until the user finishes it — other
@@ -1670,5 +1699,60 @@ fun AppRoot() {
             }
         }
     }
+    }
+}
+
+@Composable
+private fun ExitConfirmDialog(
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .width(620.dp)
+                .background(KBSurface, RoundedCornerShape(18.dp))
+                .border(1.dp, KBAccent.copy(alpha = 0.38f), RoundedCornerShape(18.dp))
+                .padding(22.dp)
+        ) {
+            Text(
+                text = "EXIT KBSTREAM?",
+                color = KBAccent,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = "Are you sure you want to exit?",
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.padding(top = 18.dp)
+            ) {
+                ExitDialogButton(label = "STAY", onClick = onDismiss)
+                ExitDialogButton(label = "EXIT", onClick = onConfirm)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ExitDialogButton(
+    label: String,
+    onClick: () -> Unit
+) {
+    KBCard(onClick = onClick) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
     }
 }
