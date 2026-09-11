@@ -285,12 +285,17 @@ LaunchedEffect(groupedChannels) {
     }
 }
 
-// Keep the selected group chip in view on every group change (left/right
-// from the channel list, focus walks along the chips row, restores). When
-// the chip is already fully visible the row is left alone -- so walking
-// the chips themselves slides minimally -- but an off-screen chip snaps
-// in instantly. scrollToItem (not animateScrollToItem): an animated
-// scroll is slow enough that the whole rail visibly flashes past
+// Keep the selected group chip FULLY in view on every group change
+// (left/right from the channel list, focus walks along the chips row,
+// restores). "Fully" matters: visibleItemsInfo also reports chips clipped
+// to a sliver at the row edge, so the old any-index check let a
+// highlighted chip sit mostly offscreen with an unreadable selection --
+// it only self-corrected once the target was completely off the row.
+// Now: a chip clipped by the end edge scrolls in by exactly the overflow
+// (so chips walks still slide minimally), a chip truly clipped by the
+// start edge (or not composed at all) snaps flush, and a fully visible
+// chip leaves the row alone. scrollToItem (not animateScrollToItem): an
+// animated scroll is slow enough that the whole rail visibly flashes past
 // intermediate chips on every group change, and during the animation the
 // target chip is not yet composed, which the Up-from-list focus flow
 // below depends on (an uncomposed chip has no FocusRequester and default
@@ -300,10 +305,19 @@ LaunchedEffect(selectedGroup, groups) {
     val chipIndex = groups.indexOf(selectedGroup)
     if (chipIndex < 0) return@LaunchedEffect
 
-    val visible = groupRowState.layoutInfo.visibleItemsInfo
-    val chipVisible = visible.any { it.index == chipIndex }
-    if (!chipVisible && visible.isNotEmpty()) {
-        groupRowState.scrollToItem(chipIndex.coerceIn(0, groups.lastIndex))
+    val layout = groupRowState.layoutInfo
+    val info = layout.visibleItemsInfo.firstOrNull { it.index == chipIndex }
+    // viewportMainAxisStartOffset is negative while beforeContentPadding
+    // is showing; a chip tucked under it is still fully on screen, so only
+    // offsets beyond that count as clipped. viewportMainAxisEndOffset is
+    // the documented "not fully visible past this" bound (after padding).
+    val startClipped = info == null || info.offset < layout.viewportMainAxisStartOffset
+    val endOverflow = info?.let { (it.offset + it.size) - layout.viewportMainAxisEndOffset } ?: 0
+    when {
+        startClipped ->
+            groupRowState.scrollToItem(chipIndex.coerceIn(0, groups.lastIndex))
+        endOverflow > 0 ->
+            groupRowState.dispatchRawDelta(endOverflow.toFloat())
     }
 }
 
