@@ -392,6 +392,7 @@ private fun HeroInlineTrailerPlayer(
     // would restart the trailer from the beginning mid-viewing).
     DisposableEffect(exoPlayer, muted) {
         exoPlayer.volume = if (muted) 0f else 1f
+        onDispose { }
     }
 
     // Backgrounding the app (TV Home press, input switch) STOPS the activity
