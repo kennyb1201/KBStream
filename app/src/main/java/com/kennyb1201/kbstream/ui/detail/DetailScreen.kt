@@ -2312,7 +2312,7 @@ fun DetailScreen(
                                         .focusRestorer()
                                 ) {
                                     items(
-                                        reviews.take(30),
+                                        reviews.take(60),
                                         key = { it.id }
                                     ) { review ->
                                         ReviewCard(

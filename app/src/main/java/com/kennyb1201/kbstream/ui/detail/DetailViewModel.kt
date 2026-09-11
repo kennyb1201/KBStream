@@ -18,6 +18,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbPersonDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
+import com.kennyb1201.kbstream.data.trakt.TraktCommentsClient
 import com.kennyb1201.kbstream.data.omdb.OmdbClient
 import com.kennyb1201.kbstream.data.omdb.OmdbRatings
 import com.kennyb1201.kbstream.data.tmdb.TmdbSeasonSummary
@@ -664,8 +665,12 @@ for (metaAddon in metaAddons) {
     /**
      * Reviews beyond the first page. TMDB's detail payload bundles only page
      * 1 of reviews (often just a handful); the standalone endpoint paginates
-     * the full list. Fetch pages 2..N (bounded) in the background and merge,
-     * de-duped, after the bundled page so the UI paints immediately.
+     * the full list. Fetch pages 2..totalPages (bounded) in the background
+     * and merge, de-duped, after the bundled page so the UI paints
+     * immediately. Trakt's public comments (same IMDb id, sorted by likes)
+     * are then appended as a supplementary source — most titles carry only
+     * a handful of written TMDB reviews, so this is where the volume comes
+     * from. Everything fails soft: reviews must never block the detail UI.
      */
     private fun fetchExtraReviews(normalizedType: String) {
         val detail = _tmdbDetail.value ?: return
@@ -673,28 +678,54 @@ for (metaAddon in metaAddons) {
         val bundled = detail.reviews?.results.orEmpty()
 
         viewModelScope.launch {
+            val extras = mutableListOf<TmdbReview>()
+            var lastPage = 1
+
             // Probe page 2 for the total; short-circuit when the title only
             // has one page (the common case).
             val second = tmdbRepository.getReviews(tmdbId, normalizedType, 2)
-            if (second.isEmpty()) {
-                _allReviews.value = bundled
-                return@launch
+            if (second == null || second.results.isEmpty()) {
+                if (second?.results != null) lastPage = second.totalPages ?: 1
+            } else {
+                lastPage = second.totalPages ?: 2
+                extras += second.results
             }
 
-            val extras = mutableListOf<TmdbReview>()
-            extras += second
-
-            // Conservative page cap: enough for very review-heavy titles
-            // (20/page -> up to ~120 more reviews) without hammering the API.
-            val maxPage = 7
-            (3..maxPage).forEach { page ->
-                val pageResults = tmdbRepository.getReviews(tmdbId, normalizedType, page)
-                if (pageResults.isEmpty()) return@forEach
-                extras += pageResults
+            if (lastPage > 2) {
+                // Hard safety cap (server totalPages minus page 1) so a
+                // pathological response can never spin the loop; 30 pages
+                // = 600 reviews is far beyond any title's real list.
+                val maxPage = minOf(lastPage, 31)
+                (3..maxPage).forEach { page ->
+                    val pageResults = tmdbRepository.getReviews(
+                        tmdbId,
+                        normalizedType,
+                        page
+                    )?.results.orEmpty()
+                    if (pageResults.isEmpty()) return@forEach
+                    extras += pageResults
+                }
             }
 
-            _allReviews.value = (bundled + extras)
-                .distinctBy { it.id }
+            // Publish TMDB pages immediately so the row grows as fast as the
+            // network allows, then merge Trakt comments on top when they land.
+            _allReviews.value = (bundled + extras).distinctBy { it.id }
+
+            // Trakt supplementary comments by IMDb id (same id the OMDb flow
+            // already resolves). Sorted by likes server-side, so the first
+            // page carries the substantive reviews.
+            val rawImdb = _meta.value?.id ?: imdbId
+            val resolved = rawImdb.takeIf { it.startsWith("tt") }
+                ?: tmdbRepository.resolveImdbId(tmdbId, normalizedType)
+            if (!resolved.isNullOrBlank()) {
+                val traktReviews = runCatching {
+                    TraktCommentsClient.fetchReviews(resolved, normalizedType)
+                }.getOrDefault(emptyList())
+                if (traktReviews.isNotEmpty()) {
+                    _allReviews.value = (_allReviews.value + traktReviews)
+                        .distinctBy { it.id }
+                }
+            }
         }
     }
 
