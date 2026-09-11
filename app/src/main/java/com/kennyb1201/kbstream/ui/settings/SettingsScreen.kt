@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -90,6 +91,7 @@ fun SettingsScreen(
     var landscapeCards by remember { mutableStateOf(AppPreferences.getHomeLandscapeCards(context)) }
     var clearingHistory by remember { mutableStateOf(false) }
     var historyClearedAt by remember { mutableStateOf<Long?>(null) }
+    var showClearHistoryConfirm by remember { mutableStateOf(false) }
     var dvCompatMode by remember { mutableIntStateOf(AppPreferences.getDvCompatMode(context)) }
     var convertP5To81 by remember { mutableStateOf(AppPreferences.getConvertP5To81(context)) }
     var stripHdr10Plus by remember { mutableStateOf(AppPreferences.getStripHdr10Plus(context)) }
@@ -395,15 +397,7 @@ fun SettingsScreen(
                 "Reset all resume positions and watched markers (Simkl link is kept)",
             onClick = {
                 if (clearingHistory) return@NavigationRow
-                clearingHistory = true
-                backupScope.launch {
-                    runCatching {
-                        WatchHistoryRepository(context).clearAll()
-                        WatchedStatusRepository(context).clearLocalWatchState(clearSimklAuth = false)
-                    }
-                    clearingHistory = false
-                    historyClearedAt = System.currentTimeMillis()
-                }
+                showClearHistoryConfirm = true
             }
         )
 
@@ -939,6 +933,68 @@ fun SettingsScreen(
             }        }
 
         Spacer(modifier = Modifier.height(24.dp))
+    }
+
+    if (showClearHistoryConfirm) {
+        androidx.compose.ui.window.Dialog(onDismissRequest = { showClearHistoryConfirm = false }) {
+            Column(
+                modifier = Modifier
+                    .width(620.dp)
+                    .background(KBSurface, RoundedCornerShape(18.dp))
+                    .border(1.dp, KBAccent.copy(alpha = 0.38f), RoundedCornerShape(18.dp))
+                    .padding(22.dp)
+            ) {
+                Text(
+                    text = "CLEAR CONTINUE WATCHING?",
+                    color = KBAccent,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "This erases every resume position and watched marker " +
+                        "on this device. It cannot be undone.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.padding(top = 18.dp)
+                ) {
+                    KBCard(onClick = {
+                        showClearHistoryConfirm = false
+                        if (clearingHistory) return@KBCard
+                        clearingHistory = true
+                        backupScope.launch {
+                            runCatching {
+                                WatchHistoryRepository(context).clearAll()
+                                WatchedStatusRepository(context)
+                                    .clearLocalWatchState(clearSimklAuth = false)
+                            }
+                            clearingHistory = false
+                            historyClearedAt = System.currentTimeMillis()
+                        }
+                    }) {
+                        Text(
+                            text = "CLEAR",
+                            color = KBAccent,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                        )
+                    }
+                    KBCard(onClick = { showClearHistoryConfirm = false }) {
+                        Text(
+                            text = "CANCEL",
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                        )
+                    }
+                }
+            }
+        }
     }
 
     LaunchedEffect(Unit) {

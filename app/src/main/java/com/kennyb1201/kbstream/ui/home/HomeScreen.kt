@@ -471,6 +471,21 @@ private fun HeroClearLogo(
     modifier: Modifier = Modifier
 ) {
     var logoIsDark by remember(url) { mutableStateOf(false) }
+    // A logo URL that exists but fails to load (dead TMDB path, CDN 404)
+    // used to render as blank space. Fall back to the plain title text,
+    // same as the no-logo case.
+    var loadFailed by remember(url) { mutableStateOf(false) }
+
+    if (loadFailed) {
+        Text(
+            text = name,
+            color = KBTextHi,
+            style = MaterialTheme.typography.headlineLarge,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        return
+    }
 
     AsyncImage(
         model = ImageRequest.Builder(LocalContext.current)
@@ -483,6 +498,7 @@ private fun HeroClearLogo(
                 isDarkMonochromeArtwork(state.result.image.toBitmap())
             }.getOrDefault(false)
         },
+        onError = { loadFailed = true },
         colorFilter = if (logoIsDark) ColorFilter.tint(KBTextHi) else null,
         modifier = modifier
     )

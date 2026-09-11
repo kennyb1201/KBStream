@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -50,6 +51,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -105,6 +107,31 @@ private enum class CatalogMoveAction {
     DOWN,
     BOTTOM
 }
+
+/**
+ * Per-row focus anchors for the catalog manager dialog. Reordering a row
+ * recomposes it under a new item key (often off-screen), which disposes the
+ * focused button and throws D-pad focus back at the dialog header. After a
+ * move we scroll to the row's new index and re-focus the SAME button there.
+ */
+private class CatalogRowFocus {
+    enum class Slot { TOGGLE, TOP, UP, DOWN, BOTTOM }
+
+    val toggle = FocusRequester()
+    val top = FocusRequester()
+    val up = FocusRequester()
+    val down = FocusRequester()
+    val bottom = FocusRequester()
+
+    fun of(slot: Slot): FocusRequester? = when (slot) {
+        Slot.TOGGLE -> toggle
+        Slot.TOP -> top
+        Slot.UP -> up
+        Slot.DOWN -> down
+        Slot.BOTTOM -> bottom
+    }
+}
+
 
 @Composable
 fun AddonsScreen(
@@ -1789,6 +1816,61 @@ private fun CatalogManagerDialog(
 ) {
     BackHandler(onBack = onDismiss)
 
+    // Focus pinning for the reorder arrows: a move relocates the pressed
+    // row (items are keyed by catalog identity) and off-screen relocations
+    // dispose the focused button, throwing D-pad focus back to the header.
+    // After each move, scroll to the index the catalog landed on and re-focus
+    // the SAME button there, so repeated presses just keep working. If that
+    // button is disabled at its new position (e.g. DOWN on the last-1 row),
+    // fall back to the row's toggle card.
+    val listState = rememberLazyListState()
+    val rowRequesters = remember { mutableMapOf<String, CatalogRowFocus>() }
+    var pendingFocus by remember {
+        mutableStateOf<Pair<Int, CatalogRowFocus.Slot>?>(null)
+    }
+
+    val handleMove: (CatalogConfiguration, CatalogRowFocus.Slot, CatalogMoveAction) -> Unit =
+        { config, slot, action ->
+            val fromIndex = configurations.indexOfFirst {
+                it.addonId == config.addonId &&
+                    it.catalog.type == config.catalog.type &&
+                    it.catalog.id == config.catalog.id
+            }
+            if (fromIndex >= 0) {
+                pendingFocus = when (action) {
+                    CatalogMoveAction.TOP -> 0 to slot
+                    CatalogMoveAction.BOTTOM -> configurations.lastIndex to slot
+                    CatalogMoveAction.UP -> (fromIndex - 1).coerceAtLeast(0) to slot
+                    CatalogMoveAction.DOWN -> (fromIndex + 1).coerceAtMost(configurations.lastIndex) to slot
+                }
+            }
+            onMove(config, action)
+        }
+
+    LaunchedEffect(configurations) {
+        val target = pendingFocus ?: return@LaunchedEffect
+        pendingFocus = null
+        val (index, slot) = target
+        runCatching { listState.animateScrollToItem(index) }
+        val config = configurations.getOrNull(index) ?: return@LaunchedEffect
+        val key = "${config.addonId}::${config.catalog.type}::${config.catalog.id}"
+        // A row scrolled in from off-screen registers its requesters during
+        // composition; wait for that frame to settle before grabbing one.
+        var focus = rowRequesters[key]
+        var attempts = 0
+        while (focus == null && attempts < 5) {
+            withFrameNanos { }
+            focus = rowRequesters[key]
+            attempts++
+        }
+        focus ?: return@LaunchedEffect
+        // Preferred slot first; toggle card is the guaranteed focusable
+        // fallback (a moved row can disable its arrows at the boundary).
+        focus.of(slot)?.let { requester ->
+            runCatching { requester.requestFocus() }
+        } ?: run { runCatching { focus.toggle.requestFocus() } }
+    }
+
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
@@ -1842,6 +1924,7 @@ private fun CatalogManagerDialog(
                 }
             } else {
                 LazyColumn(
+                    state = listState,
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier.fillMaxSize().focusGroup()
                 ) {
@@ -1851,15 +1934,20 @@ private fun CatalogManagerDialog(
                             "${config.addonId}::${config.catalog.type}::${config.catalog.id}"
                         }
                     ) { index, config ->
+                        val rowKey =
+                            "${config.addonId}::${config.catalog.type}::${config.catalog.id}"
+                        val rowFocus = remember(rowKey) { CatalogRowFocus() }
+                        rowRequesters[rowKey] = rowFocus
                         CatalogManagerRow(
                             config = config,
                             position = index,
                             total = configurations.size,
+                            rowFocus = rowFocus,
                             onToggle = {
                                 onToggle(config, !config.catalog.showOnHome)
                             },
                             onRename = { onRename(config) },
-                            onMove = { action -> onMove(config, action) }
+                            onMove = { slot, action -> handleMove(config, slot, action) }
                         )
                     }
                 }
@@ -1966,9 +2054,10 @@ private fun CatalogManagerRow(
     config: CatalogConfiguration,
     position: Int,
     total: Int,
+    rowFocus: CatalogRowFocus,
     onToggle: () -> Unit,
     onRename: () -> Unit,
-    onMove: (CatalogMoveAction) -> Unit
+    onMove: (CatalogRowFocus.Slot, CatalogMoveAction) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -2001,7 +2090,8 @@ private fun CatalogManagerRow(
 
             CatalogToggle(
                 checked = config.catalog.showOnHome,
-                onClick = onToggle
+                onClick = onToggle,
+                modifier = Modifier.focusRequester(rowFocus.toggle)
             )
         }
 
@@ -2032,29 +2122,29 @@ private fun CatalogManagerRow(
             CatalogIconButton(
                 icon = Icons.Filled.KeyboardDoubleArrowUp,
                 enabled = position > 0,
-                onClick = { onMove(CatalogMoveAction.TOP) },
-                modifier = Modifier.size(38.dp)
+                onClick = { onMove(CatalogRowFocus.Slot.TOP, CatalogMoveAction.TOP) },
+                modifier = Modifier.size(38.dp).focusRequester(rowFocus.top)
             )
             Spacer(modifier = Modifier.width(4.dp))
             CatalogIconButton(
                 icon = Icons.Filled.ArrowUpward,
                 enabled = position > 0,
-                onClick = { onMove(CatalogMoveAction.UP) },
-                modifier = Modifier.size(38.dp)
+                onClick = { onMove(CatalogRowFocus.Slot.UP, CatalogMoveAction.UP) },
+                modifier = Modifier.size(38.dp).focusRequester(rowFocus.up)
             )
             Spacer(modifier = Modifier.width(4.dp))
             CatalogIconButton(
                 icon = Icons.Filled.ArrowDownward,
                 enabled = position < total - 1,
-                onClick = { onMove(CatalogMoveAction.DOWN) },
-                modifier = Modifier.size(38.dp)
+                onClick = { onMove(CatalogRowFocus.Slot.DOWN, CatalogMoveAction.DOWN) },
+                modifier = Modifier.size(38.dp).focusRequester(rowFocus.down)
             )
             Spacer(modifier = Modifier.width(4.dp))
             CatalogIconButton(
                 icon = Icons.Filled.KeyboardDoubleArrowDown,
                 enabled = position < total - 1,
-                onClick = { onMove(CatalogMoveAction.BOTTOM) },
-                modifier = Modifier.size(38.dp)
+                onClick = { onMove(CatalogRowFocus.Slot.BOTTOM, CatalogMoveAction.BOTTOM) },
+                modifier = Modifier.size(38.dp).focusRequester(rowFocus.bottom)
             )
         }
     }

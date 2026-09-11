@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -52,17 +53,26 @@ fun LandscapeCard(
 ) {
     val context = LocalContext.current
     var hasError by remember(backdropUrl) { mutableStateOf(false) }
+    // Logo URL present but unloadable (dead TMDB path, CDN 404): fall back
+    // to the plain title text instead of a silent blank corner.
+    var logoFailed by remember(logoUrl) { mutableStateOf(false) }
+    val showLogo = !logoUrl.isNullOrBlank() && !logoFailed
 
     KBCard(
         onClick = onClick,
         onLongClick = onLongClick,
         modifier = modifier
     ) {
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
                 .background(KBSurface)
         ) {
+            // Corner logo scales with the card (210dp-wide rails -> ~28dp
+            // logo) instead of the old fixed 20dp that read as tiny.
+            val logoHeight = (maxWidth * 0.135f).coerceIn(22.dp, 32.dp)
+            val logoMaxWidth = maxWidth * 0.68f
+
             val effectiveUrl =
                 backdropUrl?.takeIf { it.isNotBlank() }
 
@@ -99,7 +109,7 @@ fun LandscapeCard(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .fillMaxWidth()
-                    .height(44.dp)
+                    .height(56.dp)
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
@@ -110,24 +120,25 @@ fun LandscapeCard(
                     )
             )
 
-            if (!logoUrl.isNullOrBlank()) {
+            if (showLogo) {
                 AsyncImage(
                     model = ImageRequest.Builder(context)
                         .data(logoUrl)
                         .build(),
                     contentDescription = null,
                     contentScale = ContentScale.Fit,
+                    onError = { logoFailed = true },
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .padding(start = 8.dp, bottom = 6.dp)
-                        .height(20.dp)
-                        .widthIn(max = 120.dp)
+                        .height(logoHeight)
+                        .widthIn(max = logoMaxWidth)
                 )
             } else if (!fallbackTitle.isNullOrBlank()) {
                 Text(
                     text = fallbackTitle,
                     color = KBTextHi,
-                    fontSize = 12.sp,
+                    fontSize = 13.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier
