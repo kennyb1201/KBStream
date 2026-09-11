@@ -74,6 +74,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -2993,6 +2994,10 @@ class NativePlayerActivity : ComponentActivity() {
                 // Pausing — keep overlay visible
                 showControls()
                 removeAutoHide()
+                // Persist the pause point right away so the item jumps to
+                // the top of Continue Watching even if the player is torn
+                // down before onStop() (process death, force close).
+                saveProgress(reason = "pause")
             } else {
                 // Resuming — hide overlay instantly
                 hideControls()
@@ -3524,7 +3529,11 @@ class NativePlayerActivity : ComponentActivity() {
         val safePos = if (isCompleted) 0L else pos.coerceAtMost(dur)
         val now = System.currentTimeMillis()
 
-        lifecycleScope.launch(Dispatchers.IO) {
+        // NonCancellable: this write must land even when the activity is
+        // being torn down (onStop/onDestroy cancel their scopes mid-exit).
+        // Without it the upsert could be aborted partway through exiting the
+        // player, leaving Continue Watching stale until the next save.
+        lifecycleScope.launch(Dispatchers.IO + NonCancellable) {
             runCatching {
                 val dao = WatchHistoryDatabase.getInstance(this@NativePlayerActivity).watchHistoryDao()
                 val existing = dao.getById(historyId)
@@ -3703,8 +3712,12 @@ class NativePlayerActivity : ComponentActivity() {
         // doesn't collide with a stale MediaSession ID.
         handler.removeCallbacksAndMessages(null)
         nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
-        scope?.cancel()
+        // Save progress BEFORE cancelling scope: saveProgress writes via
+        // lifecycleScope, which is independent of `scope`, but ordering it
+        // ahead of teardown keeps intent clear and avoids racing any
+        // scope-bound work that reads history.
         saveProgress(reason = "stop")
+        scope?.cancel()
         scrobbleSimkl("stop")
         subtitleCueHandler?.cancelPending()
         subtitleCueHandler = null
