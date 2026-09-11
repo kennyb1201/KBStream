@@ -105,7 +105,8 @@ object TraktCommentsClient {
             author = author,
             authorDetails = rating?.let { TmdbAuthorDetails(rating = it) },
             content = text,
-            createdAt = obj.optString("created_at").takeIf { it.isNotBlank() }
+            createdAt = obj.optString("created_at").takeIf { it.isNotBlank() },
+            spoiler = obj.optBoolean("spoiler", false)
         )
     }
 }

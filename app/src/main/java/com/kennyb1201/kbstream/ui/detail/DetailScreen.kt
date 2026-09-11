@@ -64,6 +64,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -3938,15 +3939,28 @@ private fun ReviewCard(
                 }
             }
 
-            Text(
-                text = review.content,
-                color = KBTextLo,
-                maxLines = 5,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(
-                    top = 6.dp
+            // Spoiler-flagged reviews never leak text on the card: the
+            // preview shows a fixed gate notice (no excerpt), and the full
+            // text is only revealed inside the overlay after opt-in.
+            if (review.spoiler) {
+                Text(
+                    text = "Spoiler \u2014 click to reveal",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontStyle = FontStyle.Italic,
+                    modifier = Modifier.padding(top = 6.dp)
                 )
-            )
+            } else {
+                Text(
+                    text = review.content,
+                    color = KBTextLo,
+                    maxLines = 5,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(
+                        top = 6.dp
+                    )
+                )
+            }
         }
     }
 }
@@ -4095,6 +4109,12 @@ private fun ReviewOverlay(
                         )
                         .focusable()
                 ) {
+                    // Spoiler gate inside the overlay: the review body stays
+                    // blurred out until the user clicks (D-pad OK/enter).
+                    // Revealing is per-session local state, never persisted.
+                    var spoilerRevealed by remember(review.id) {
+                        mutableStateOf(false)
+                    }
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
@@ -4102,6 +4122,29 @@ private fun ReviewOverlay(
                                 scrollState
                             )
                     ) {
+                        if (review.spoiler && !spoilerRevealed) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(KBSurface)
+                                    .border(
+                                        1.dp,
+                                        KBAccent.copy(alpha = 0.45f),
+                                        RoundedCornerShape(14.dp)
+                                    )
+                                    .clickable { spoilerRevealed = true }
+                                    .padding(horizontal = 18.dp, vertical = 22.dp)
+                            ) {
+                                Text(
+                                    text = "This review contains spoilers." +
+                                        " Click to reveal.",
+                                    color = KBTextHi,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        } else {
                         Text(
                             text = review.content,
                             color = KBTextLo,
@@ -4112,6 +4155,7 @@ private fun ReviewOverlay(
                                     bottom = 32.dp
                                 )
                         )
+                        }
                     }
                 }
             }

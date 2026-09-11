@@ -144,7 +144,11 @@ data class TmdbReview(
     val author: String,
     @Json(name = "author_details") val authorDetails: TmdbAuthorDetails? = null,
     val content: String,
-    @Json(name = "created_at") val createdAt: String? = null
+    @Json(name = "created_at") val createdAt: String? = null,
+    // Trakt comments carry a spoiler flag (TMDB reviews never do, so it
+    // defaults false there). Spoiler-flagged reviews render a click-to-
+    // reveal gate instead of their text until the user opts in.
+    val spoiler: Boolean = false
 )
 
 @JsonClass(generateAdapter = true)
