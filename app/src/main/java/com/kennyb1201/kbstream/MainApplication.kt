@@ -8,6 +8,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
+import coil3.decode.SvgDecoder
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.work.SimklSyncWorker
 import io.sentry.android.core.SentryAndroid
@@ -36,6 +37,9 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
     override fun newImageLoader(context: android.content.Context): ImageLoader {
         return ImageLoader.Builder(context)
             .crossfade(true)
+            // Nuvio badge packs commonly ship .svg chip art; without this
+            // decoder those badges silently fail to render (blank chips).
+            .components { add(SvgDecoder.Factory()) }
             .build()
     }
 

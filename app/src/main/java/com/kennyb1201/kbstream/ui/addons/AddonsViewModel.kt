@@ -140,29 +140,34 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
     private fun reloadCollections() {
         val context = getApplication<Application>()
         val prefs = NuvioHomeOrderPrefs.get(context)
-        val collections = runCatching { nuvioRepository.loadProfiles() }
-            .getOrDefault(emptyList())
-            .sortedByDescending { it.pinToTop }
-        // Fresh imports have never been arranged anywhere: surface them as
-        // hidden in the manager (matching Home's default-off rendering).
-        val arranged = prefs.pinned.toSet() + prefs.order.toSet() + prefs.hiddenSet
-        _collections.value = CollectionUiState(
-            profileUrls = NuvioProfilePrefs.getProfileUrls(context),
-            collections = collections.map { collection ->
-                val key = NuvioHomeOrderPrefs.collectionKey(
-                    collection.id,
-                    collection.title
-                )
-                ManagedCollection(
-                    key = key,
-                    title = collection.title.ifBlank { "Untitled collection" },
-                    folderCount = collection.folders.size,
-                    isPinned = key in prefs.pinned,
-                    isHidden = key in prefs.hiddenSet || key !in arranged
-                )
-            },
-            statusMessage = _collections.value.statusMessage
-        )
+        // loadProfiles is suspend (it can hit the network for uncached
+        // profile URLs), so the collection slice resolves in a coroutine;
+        // the prefs snapshot is synchronous and cheap.
+        viewModelScope.launch {
+            val collections = runCatching { nuvioRepository.loadProfiles() }
+                .getOrDefault(emptyList())
+                .sortedByDescending { it.pinToTop }
+            // Fresh imports have never been arranged anywhere: surface them as
+            // hidden in the manager (matching Home's default-off rendering).
+            val arranged = prefs.pinned.toSet() + prefs.order.toSet() + prefs.hiddenSet
+            _collections.value = CollectionUiState(
+                profileUrls = NuvioProfilePrefs.getProfileUrls(context),
+                collections = collections.map { collection ->
+                    val key = NuvioHomeOrderPrefs.collectionKey(
+                        collection.id,
+                        collection.title
+                    )
+                    ManagedCollection(
+                        key = key,
+                        title = collection.title.ifBlank { "Untitled collection" },
+                        folderCount = collection.folders.size,
+                        isPinned = key in prefs.pinned,
+                        isHidden = key in prefs.hiddenSet || key !in arranged
+                    )
+                },
+                statusMessage = _collections.value.statusMessage
+            )
+        }
     }
 
     // ------------------------------------------------------------------
@@ -292,9 +297,9 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         persistHomeOrder { prefs ->
             val visible = mergedRailKeys(prefs).filter { it !in prefs.hiddenSet }
             val from = visible.indexOf(key)
-            if (from == -1) return@persist prefs
+            if (from == -1) return@persistHomeOrder prefs
             val to = (from + delta).coerceIn(0, visible.lastIndex)
-            if (from == to) return@persist prefs
+            if (from == to) return@persistHomeOrder prefs
 
             val ordered = visible.toMutableList()
             val item = ordered.removeAt(from)

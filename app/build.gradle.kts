@@ -147,6 +147,9 @@ implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.26.4")
     implementation("io.coil-kt.coil3:coil-compose:3.0.0")
     implementation("io.coil-kt.coil3:coil:3.0.0")
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.0.0")
+    // SVG badge art: several popular Nuvio badge packs serve chips as .svg,
+    // which base Coil cannot decode — without this those badges render blank.
+    implementation("io.coil-kt.coil3:coil-svg:3.0.0")
 
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.4")
 

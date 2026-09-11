@@ -80,6 +80,14 @@ class PickerAdapter(
                     }
                 }
                 if (badge.imageURL.isNotBlank()) {
+                    val text = TextView(context).apply {
+                        text = badge.name
+                        textSize = 10f
+                        setTextColor(
+                            badge.textColor.toArgb(fallback = 0xFFFFFFFF.toInt())
+                        )
+                        visibility = View.GONE
+                    }
                     val image = ImageView(context).apply {
                         layoutParams = LinearLayout.LayoutParams(
                             LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -88,8 +96,20 @@ class PickerAdapter(
                         adjustViewBounds = true
                         clipToOutline = true
                     }
-                    image.load(badge.imageURL)
+                    // On load failure (dead URL, unsupported format) swap the
+                    // invisible empty image for a text chip so the badge stays
+                    // visible, mirroring the Compose StreamBadgeChip fallback.
+                    image.load(badge.imageURL) {
+                        listener(
+                            onSuccess = { _, _ -> text.visibility = View.GONE },
+                            onError = { _, _ ->
+                                image.visibility = View.GONE
+                                text.visibility = View.VISIBLE
+                            }
+                        )
+                    }
                     chip.addView(image)
+                    chip.addView(text)
                 } else {
                     val text = TextView(context).apply {
                         text = badge.name

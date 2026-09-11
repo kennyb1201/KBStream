@@ -10,6 +10,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -70,24 +74,39 @@ fun StreamBadgeChip(
         contentAlignment = Alignment.Center
     ) {
         if (badge.imageURL.isNotBlank()) {
-            AsyncImage(
-                model = badge.imageURL,
-                contentDescription = badge.name,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier
-                    .height(imageHeight.dp)
-                    .widthIn(min = 34.dp, max = 92.dp)
-            )
+            // A failed image load (dead URL, unsupported format) must never
+            // collapse into an invisible empty chip — fall back to a text
+            // pill so the badge pack's name is always visible.
+            var imageFailed by remember(badge.imageURL) { mutableStateOf(false) }
+            if (imageFailed) {
+                BadgeTextPill(badge)
+            } else {
+                AsyncImage(
+                    model = badge.imageURL,
+                    contentDescription = badge.name,
+                    contentScale = ContentScale.Fit,
+                    onError = { imageFailed = true },
+                    modifier = Modifier
+                        .height(imageHeight.dp)
+                        .widthIn(min = 34.dp, max = 92.dp)
+                )
+            }
         } else {
-            androidx.compose.material3.Text(
-                text = badge.name,
-                color = badge.textColor.toBadgeColorOrNull() ?: Color.White,
-                style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
-                maxLines = 1,
-                modifier = Modifier.padding(horizontal = 4.dp)
-            )
+            BadgeTextPill(badge)
         }
     }
+}
+
+/** Text-only rendering of a badge (no art or art failed to load). */
+@Composable
+private fun BadgeTextPill(badge: StreamBadge) {
+    androidx.compose.material3.Text(
+        text = badge.name,
+        color = badge.textColor.toBadgeColorOrNull() ?: Color.White,
+        style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
+        maxLines = 1,
+        modifier = Modifier.padding(horizontal = 4.dp)
+    )
 }
 
 /** A horizontal row of badge chips; empty when the stream has no badges. */
