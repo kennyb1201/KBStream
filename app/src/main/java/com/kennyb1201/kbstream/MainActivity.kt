@@ -136,9 +136,6 @@ sealed class Screen {
         val returnTo: Screen = Home
     ) : Screen()
 
-    /** Collections manager: import profiles + arrange home rails. */
-    object NuvioManager : Screen()
-
     data class Streams(
         val target: StreamsTarget,
         val parentId: String,
@@ -259,7 +256,6 @@ private fun encodeScreen(
                 put("returnTo", encodeScreen(screen.returnTo, depth + 1))
             }
         }
-        is Screen.NuvioManager -> Unit // plain object carries no payload
         is Screen.Streams -> {
             put("target", encodeTarget(screen.target))
             put("parentId", screen.parentId)
@@ -339,7 +335,8 @@ private fun decodeScreen(
                 folderId = json.optString("folderId"),
                 returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
             )
-            "nuvioManager" -> Screen.NuvioManager
+            // Legacy saved state from when the manager was its own screen.
+            "nuvioManager" -> Screen.Addons
             "streams" -> {
                 val target = json.optJSONObject("target")
                     ?.let { decodeTarget(it) }
@@ -425,7 +422,6 @@ private fun Screen.typeName(): String = when (this) {
     is Screen.Tag -> "tag"
     is Screen.Collection -> "collection"
     is Screen.NuvioFolder -> "nuvioFolder"
-    is Screen.NuvioManager -> "nuvioManager"
     is Screen.Streams -> "streams"
     is Screen.Player -> "player"
 }
@@ -783,9 +779,6 @@ fun AppRoot() {
 
             is Screen.NuvioFolder ->
                 current.returnTo
-
-            is Screen.NuvioManager ->
-                Screen.Addons
 
             else ->
                 Screen.Home

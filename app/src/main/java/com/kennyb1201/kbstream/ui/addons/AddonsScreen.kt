@@ -1750,7 +1750,7 @@ private fun CatalogManagerDialog(
     val hiddenRows = rows.filter { it.isHidden }
     val allCatalogsVisible = configurations.all { it.catalog.showOnHome }
 
-    fun moveRow(row: Row, slot: CatalogRowFocus.Slot, delta: Int) {
+    fun moveRow(row: CatalogManagerDialogRow, slot: CatalogRowFocus.Slot, delta: Int) {
         if (row.isCollection) {
             pendingFocus = null
             onCollectionMove(row.key, delta)

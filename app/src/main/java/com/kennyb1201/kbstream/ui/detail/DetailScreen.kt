@@ -213,7 +213,12 @@ fun DetailScreen(
     initialBackdrop: String? = null,
     initialClearLogo: String? = null,
     initialOverview: String? = null,
-    viewModel: DetailViewModel = viewModel()
+    // Keyed per (type, id): DetailScreen is the only consumer of a shared
+    // DetailViewModel, and an unscoped (Activity-wide) instance carries the
+    // previous title's meta/episodes/resume state into the next one — the
+    // Continue Watching auto-play effect then fired with the previous card's
+    // play target (second card opened the first card's stream screen).
+    viewModel: DetailViewModel = viewModel(key = "detail_${type}_$id")
 ) {
     val scope = rememberCoroutineScope()
     var selectedSeason by remember { mutableStateOf<Int?>(null) }
@@ -298,6 +303,10 @@ fun DetailScreen(
     val episodesLoading by viewModel.episodesLoading.collectAsState()
     val episodeError by viewModel.episodeError.collectAsState()
     val resumeInfo by viewModel.resumeInfo.collectAsState()
+    // All in-progress rows for this title, keyed by episodeStreamId: lets
+    // EVERY in-progress episode card show its own progress bar / time left,
+    // not just the single most recent one in resumeInfo.
+    val inProgressByStreamId by viewModel.inProgressByStreamId.collectAsState()
     val collection by viewModel.collection.collectAsState()
     val watchedKeys by viewModel.watchedKeys.collectAsState()
     val resolvedPosterIds by viewModel.resolvedPosterIds.collectAsState()
@@ -1755,17 +1764,28 @@ fun DetailScreen(
                                                         ep = ep,
                                                         isWatched =
                                                             isEpisodeWatched,
-                                                        progressFraction =
+                                                        progressFraction = run {
+                                                            // Per-episode progress first (any
+                                                            // in-progress episode), then the
+                                                            // resume row (covers the Simkl
+                                                            // cloud-derived fallback which has
+                                                            // no local history row).
+                                                            val row =
+                                                                inProgressByStreamId[ep.streamId]
+                                                                    ?: resumeInfo?.takeIf {
+                                                                        it.episodeStreamId == ep.streamId
+                                                                    }
                                                             if (
-                                                                resumeInfo?.episodeStreamId == ep.streamId &&
-                                                                    (resumeInfo?.durationMs ?: 0L) > 0L
+                                                                row != null &&
+                                                                row.durationMs > 0L
                                                             ) {
-                                                                ((resumeInfo?.positionMs ?: 0L).toFloat() /
-                                                                    (resumeInfo?.durationMs ?: 0L).toFloat())
+                                                                (row.positionMs.toFloat() /
+                                                                    row.durationMs.toFloat())
                                                                     .coerceIn(0f, 1f)
                                                             } else {
                                                                 0f
-                                                            },
+                                                            }
+                                                        },
                                                         fallbackImageUrl =
                                                             backdropUrl
                                                                 ?: m.poster,

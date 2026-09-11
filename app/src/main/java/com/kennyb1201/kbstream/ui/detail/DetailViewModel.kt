@@ -95,6 +95,12 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
     private val _resumeInfo = MutableStateFlow<WatchHistoryEntity?>(null)
     val resumeInfo: StateFlow<WatchHistoryEntity?> = _resumeInfo.asStateFlow()
 
+    /** In-progress rows for the loaded parent, keyed by episodeStreamId. */
+    private val _inProgressByStreamId =
+        MutableStateFlow<Map<String, WatchHistoryEntity>>(emptyMap())
+    val inProgressByStreamId: StateFlow<Map<String, WatchHistoryEntity>> =
+        _inProgressByStreamId.asStateFlow()
+
     private val _completedEpisodeIds = MutableStateFlow<Set<String>>(emptySet())
     val completedEpisodeIds: StateFlow<Set<String>> = _completedEpisodeIds.asStateFlow()
 
@@ -259,6 +265,7 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
         _episodes.value = emptyList()
         _episodeError.value = null
         _episodesLoading.value = false
+        _inProgressByStreamId.value = emptyMap()
         latestEpisodeSeasonRequest = initialSeason
         _collection.value = null
         _omdbRatings.value = null
@@ -303,6 +310,19 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
                             tmdbId = tmdbDetailResult.getOrNull()?.id
                         )
                     }
+                // Per-episode in-progress map for the episode cards: every
+                // card derives its own progress bar / time left from its
+                // episodeStreamId instead of only the single latest row.
+                _inProgressByStreamId.value = runCatching {
+                    historyDao.getInProgressForParent(id)
+                }.getOrDefault(emptyList())
+                    // Rows arrive newest-first and toMap keeps the LAST entry
+                    // per key — reverse so the newest row wins per streamId.
+                    .reversed()
+                    .mapNotNull { row ->
+                        row.episodeStreamId?.takeIf { it.isNotBlank() }?.let { it to row }
+                    }
+                    .toMap()
 
                 val localCompletedEntries = completedDeferred.await().getOrDefault(emptyList())
                 _completedEpisodeIds.value = localCompletedEntries.map { it.id }.toSet()

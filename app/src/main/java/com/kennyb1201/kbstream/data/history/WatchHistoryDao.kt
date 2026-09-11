@@ -50,6 +50,23 @@ interface WatchHistoryDao {
     )
     suspend fun getResumeForParent(parentId: String): WatchHistoryEntity?
 
+    /**
+     * Every in-progress row for a parent, newest first. The detail screen
+     * maps these by episodeStreamId so every episode card can show its own
+     * progress bar / time left — [getResumeForParent] only carries the most
+     * recent one, which left the other in-progress episodes without progress.
+     */
+    @Query(
+        """
+        SELECT * FROM watch_history
+        WHERE parentId = :parentId
+          AND positionMs > 0
+          AND isCompleted = 0
+        ORDER BY updatedAt DESC
+        """
+    )
+    suspend fun getInProgressForParent(parentId: String): List<WatchHistoryEntity>
+
     @Query(
         """
         SELECT * FROM watch_history

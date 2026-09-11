@@ -65,6 +65,13 @@ class NuvioRepository(private val context: Context) {
             val trimmed = raw.trim()
             return trimmed.startsWith("http://") || trimmed.startsWith("https://")
         }
+
+        /** Pseudo-URL scheme for profiles imported from local storage. */
+        const val LOCAL_SCHEME = "local:"
+
+        /** True when the URL refers to an imported local profile. */
+        fun isLocalUrl(url: String): Boolean =
+            url.startsWith(LOCAL_SCHEME, ignoreCase = true)
     }
 
     /**
@@ -192,12 +199,6 @@ class NuvioRepository(private val context: Context) {
         parsed.size
     }
 
-    companion object Local {
-        const val LOCAL_SCHEME = "local:"
-        fun isLocalUrl(url: String): Boolean =
-            url.startsWith(LOCAL_SCHEME, ignoreCase = true)
-    }
-
     /**
      * Validate a pasted/picked Nuvio profile JSON and store it in app
      * storage. Returns the "local:<id>" pseudo-URL the rest of the
@@ -308,7 +309,7 @@ object NuvioProfilePrefs {
 
     fun addProfileUrl(context: Context, url: String): Boolean {
         val clean = url.trim()
-        val isLocal = NuvioRepository.Local.isLocalUrl(clean)
+        val isLocal = NuvioRepository.isLocalUrl(clean)
         if (!isLocal && !NuvioRepository.isPlausibleUrl(clean)) return false
         val current = getProfileUrls(context)
         if (current.any { it.equals(clean, ignoreCase = true) }) return false
