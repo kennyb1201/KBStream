@@ -1230,6 +1230,15 @@ Log.d(
     private val showEpisodeTotalsCache =
         java.util.concurrent.ConcurrentHashMap<Int, ShowEpisodeTotals>()
 
+    // Full season-episode map (season -> episodes) per TMDB show, produced by
+    // resolveSeriesTargetFromSharedWatchedState's season walk. The Simkl path
+    // reuses it so several Simkl rows of the SAME show don't repeat the walk:
+    // the resolver builds its next-episode target, finale flags and "X of Y"
+    // totals entirely from this map. Keyed by numeric TMDB id (both paths
+    // resolve to the same id for one show); cleared with the totals cache.
+    private val showSeasonEpisodesCache =
+        java.util.concurrent.ConcurrentHashMap<Int, Map<Int, List<ResolvedEpisode>>>()
+
     private suspend fun clearWatchedStateCaches() {
 
         watchedStateMutex.withLock {
@@ -1241,6 +1250,8 @@ Log.d(
             watchedStatePreloadInFlight.clear()
 
             showEpisodeTotalsCache.clear()
+
+            showSeasonEpisodesCache.clear()
         }
     }
 
@@ -2421,8 +2432,19 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
      * "X of Y episodes watched" display.
      */
     var season = 1
-    val seasonEpisodesBySeason =
-        mutableMapOf<Int, List<ResolvedEpisode>>()
+
+    // Reuse the full season map another row of the SAME show already walked
+    // (local and Simkl paths share this cache by TMDB id): the resolver's
+    // next-episode target, finale flags and "X of Y" totals all derive from
+    // this map, so a cache hit skips the entire TMDB season walk.
+    val cachedSeasonEpisodesBySeason =
+        showSeasonEpisodesCache[tmdbId]
+
+    val seasonEpisodesBySeason: MutableMap<Int, List<ResolvedEpisode>> =
+        cachedSeasonEpisodesBySeason?.toMutableMap()
+            ?: mutableMapOf()
+
+    if (cachedSeasonEpisodesBySeason == null) {
 
     // Small concurrent batches instead of a 50-season serial walk: for long
     // shows that loop used to do 30+ sequential TMDB lookups per row, which
@@ -2462,6 +2484,16 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
         }
         if (!anySeasonInBatch) break
         season = batchEnd + 1
+    }
+
+    // Publish the walked season map for other rows of the same show. Only
+    // self-walked maps get stored (a cache-seeded call must not re-store a
+    // map it didn't build), and an empty walk means every lookup failed, so
+    // that isn't cached either.
+    if (seasonEpisodesBySeason.isNotEmpty()) {
+        showSeasonEpisodesCache[tmdbId] =
+            seasonEpisodesBySeason.toMap()
+    }
     }
 
     season = 1

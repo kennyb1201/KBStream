@@ -5,10 +5,21 @@ import android.content.Intent
 import android.net.Uri
 import android.util.Log
 import com.kennyb1201.kbstream.ui.player.NativePlayerActivity
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 object TrailerPlayerLauncher {
 
     private const val TAG = "TrailerLauncher"
+
+    /**
+     * Serializes resolve chains so concurrent callers for the same (or any)
+     * video coalesce behind one network flight: the hero pre-warm and the
+     * post-dwell resolve would otherwise both run the full InnerTube →
+     * NewPipe → Piped chain, and hammering YouTube's anonymous player API
+     * with duplicate calls is exactly what invites its bot-gating.
+     */
+    private val resolveMutex = Mutex()
 
     /** Cache of resolved playback sources per video ID (expire-based TTL). */
     private val sourceCache =
@@ -85,8 +96,14 @@ object TrailerPlayerLauncher {
      * passes (fallback: 6h) — never later than the URL can actually serve.
      */
     suspend fun resolvePlayableUrl(
-        trailerUrlOrId: String
-    ): Result<PlayableSource> {
+        trailerUrlOrId: String,
+        /**
+         * False for background pre-warms: a speculative resolve that fails
+         * (network hiccup, transient extractor outage) must NOT poison the
+         * real post-dwell resolve via the failure cache.
+         */
+        recordFailure: Boolean = true
+    ): Result<PlayableSource> = resolveMutex.withLock {
 
         val videoId = extractVideoId(trailerUrlOrId)
 
@@ -96,7 +113,7 @@ object TrailerPlayerLauncher {
                 "Could not extract YouTube video ID: $trailerUrlOrId"
             )
 
-            return Result.failure(
+            return@withLock Result.failure(
                 IllegalArgumentException(
                     "Could not extract YouTube video ID"
                 )
@@ -114,7 +131,7 @@ object TrailerPlayerLauncher {
         resolutionFailures[videoId]?.let { failedAt ->
             if (System.currentTimeMillis() - failedAt < FAILURE_TTL_MS) {
                 Log.w(TAG, "Skipping resolution for $videoId (recently failed)")
-                return Result.failure(
+                return@withLock Result.failure(
                     IllegalStateException("Trailer $videoId recently failed to resolve")
                 )
             }
@@ -125,7 +142,7 @@ object TrailerPlayerLauncher {
         sourceCache[videoId]?.let { cached ->
             if (!cached.isStale) {
                 Log.w(TAG, "Trailer source cache hit for $videoId")
-                return Result.success(cached.source)
+                return@withLock Result.success(cached.source)
             }
             sourceCache.remove(videoId)
         }
@@ -139,7 +156,7 @@ object TrailerPlayerLauncher {
             sourceCache[videoId] = CachedSource(innerTubeSource)
             resolutionFailures.remove(videoId)
             logResolved("InnerTube", innerTubeSource)
-            return Result.success(innerTubeSource)
+            return@withLock Result.success(innerTubeSource)
         }
         Log.w(TAG, "InnerTube extraction failed; falling back to NewPipe")
 
@@ -152,7 +169,9 @@ object TrailerPlayerLauncher {
                 logResolved("NewPipe/Piped", source)
             }
             .onFailure { error ->
-                markFailed(videoId)
+                if (recordFailure) {
+                    markFailed(videoId)
+                }
                 Log.e(
                     TAG,
                     "All trailer resolvers failed (InnerTube + NewPipe/Piped)",

@@ -69,6 +69,7 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MergingMediaSource
@@ -94,6 +95,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.tmdb.movieStatusTag
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
+import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.ui.components.LandscapeCard
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.nuvio.NuvioHomeCollectionRail
@@ -291,7 +293,31 @@ private fun HeroInlineTrailerPlayer(
     onFailed: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    val exoPlayer = remember(source) {
+    // One pooled player for every hero trailer: renderer initialization is
+    // the expensive part of ExoPlayer startup, so TrailerPlayerPool hands
+    // back the same instance across focus changes and this composable only
+    // swaps the MediaSource. (remember(source) used to rebuild the whole
+    // player on every resolved-source change.)
+    val exoPlayer = remember {
+        TrailerPlayerPool.acquire {
+            val renderersFactory =
+                DefaultRenderersFactory(context.applicationContext)
+                    .setExtensionRendererMode(
+                        DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
+                    )
+                    .setEnableDecoderFallback(true)
+
+            ExoPlayer.Builder(context.applicationContext, renderersFactory)
+                .setLoadControl(
+                    DefaultLoadControl.Builder()
+                        .setBufferDurationsMs(2_000, 12_000, 500, 1_000)
+                        .build()
+                )
+                .build()
+        }
+    }
+
+    DisposableEffect(exoPlayer, source) {
 
         // Fire TV suppresses debug logs, so surface what the player actually
         // receives -- this proves which resolver produced the source.
@@ -319,64 +345,65 @@ private fun HeroInlineTrailerPlayer(
                 DefaultExtractorsFactory()
             )
 
-        val renderersFactory =
-            DefaultRenderersFactory(context)
-                .setExtensionRendererMode(
-                    DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
+        when (source) {
+            is PlayableSource.Muxed -> {
+                val mediaItem = MediaItem.Builder()
+                    .setUri(source.url)
+                    .apply {
+                        if (source.url.substringBefore('?').endsWith(".m3u8", ignoreCase = true)) {
+                            setMimeType(MimeTypes.APPLICATION_M3U8)
+                        }
+                    }
+                    .build()
+                exoPlayer.setMediaSource(
+                    mediaSourceFactory.createMediaSource(mediaItem)
                 )
-                .setEnableDecoderFallback(true)
-
-        ExoPlayer.Builder(context, renderersFactory)
-            .setMediaSourceFactory(
-                mediaSourceFactory
-            )
-            .build()
-            .apply {
-                when (source) {
-                    is PlayableSource.Muxed -> {
-                        val mediaItem = MediaItem.Builder()
-                            .setUri(source.url)
-                            .apply {
-                                if (source.url.substringBefore('?').endsWith(".m3u8", ignoreCase = true)) {
-                                    setMimeType(MimeTypes.APPLICATION_M3U8)
-                                }
-                            }
-                            .build()
-                        setMediaItem(mediaItem)
-                    }
-
-                    is PlayableSource.Adaptive -> {
-                        // Adaptive streams are video-only: the audio URL MUST be
-                        // merged in or the trailer plays silently. Same pattern
-                        // the fullscreen player uses (NativePlayerActivity).
-                        // Both URLs are googlevideo, so the chunked factory
-                        // serves both.
-                        val videoSource = mediaSourceFactory
-                            .createMediaSource(MediaItem.fromUri(source.videoUrl))
-                        val audioSource = mediaSourceFactory
-                            .createMediaSource(MediaItem.fromUri(source.audioUrl))
-                        setMediaSource(MergingMediaSource(videoSource, audioSource))
-                    }
-                }
-
-                repeatMode = Player.REPEAT_MODE_OFF
-                volume = if (muted) 0f else 1f
-                playWhenReady = true
-                prepare()
             }
+
+            is PlayableSource.Adaptive -> {
+                // Adaptive streams are video-only: the audio URL MUST be
+                // merged in or the trailer plays silently. Same pattern
+                // the fullscreen player uses (NativePlayerActivity).
+                // Both URLs are googlevideo, so the chunked factory
+                // serves both.
+                val videoSource = mediaSourceFactory
+                    .createMediaSource(MediaItem.fromUri(source.videoUrl))
+                val audioSource = mediaSourceFactory
+                    .createMediaSource(MediaItem.fromUri(source.audioUrl))
+                exoPlayer.setMediaSource(MergingMediaSource(videoSource, audioSource))
+            }
+        }
+
+        exoPlayer.repeatMode = Player.REPEAT_MODE_OFF
+        exoPlayer.volume = if (muted) 0f else 1f
+        exoPlayer.playWhenReady = true
+        exoPlayer.prepare()
+
+        onDispose {
+            // Intentionally empty: during a crossfade this instance can be
+            // the OUTGOING content while the incoming one already prepared
+            // new media on the shared pooled player, so a stop here would
+            // kill the new trailer. HomeHero owns the stops instead (backdrop
+            // transitions, ON_STOP, navigation teardown).
+        }
+    }
+
+    // Volume tracks the mute toggle without re-prepping media (re-prepping
+    // would restart the trailer from the beginning mid-viewing).
+    DisposableEffect(exoPlayer, muted) {
+        exoPlayer.volume = if (muted) 0f else 1f
     }
 
     // Backgrounding the app (TV Home press, input switch) STOPS the activity
-    // but does not dispose the composition, so the DisposableEffect cleanup
-    // below never runs and the trailer audio keeps playing over other apps.
-    // Release the player on ON_STOP; the resume epoch in HomeHero re-resolves
-    // and remounts a fresh player when the app returns.
+    // but does not dispose the composition, so the DisposableEffect cleanups
+    // above never run and the trailer audio keeps playing over other apps.
+    // Pause the pooled player on ON_STOP; the resume epoch in HomeHero
+    // re-resolves and re-preps it when the app returns.
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
-        exoPlayer.playWhenReady = false
-        exoPlayer.release()
+        TrailerPlayerPool.pauseCurrent()
     }
 
-    DisposableEffect(exoPlayer) {
+    DisposableEffect(exoPlayer, source) {
         val handler = android.os.Handler(
             android.os.Looper.getMainLooper()
         )
@@ -451,7 +478,6 @@ private fun HeroInlineTrailerPlayer(
         onDispose {
             handler.removeCallbacks(watchdog)
             exoPlayer.removeListener(listener)
-            exoPlayer.release()
         }
     }
 
@@ -599,6 +625,24 @@ private fun HomeHero(
             appInBackground = false
             resumeEpoch += 1
         }
+    }
+
+    // Backdrop transitions (trailer ended, watchdog bail, resume re-arm)
+    // must silence the pooled player immediately: the inline player's own
+    // dispose can't do it -- during a crossfade the outgoing instance is
+    // disposed AFTER the incoming one already prepared new media, and a stop
+    // there would kill the new trailer.
+    LaunchedEffect(resolvedTrailerSource) {
+        if (resolvedTrailerSource == null) {
+            TrailerPlayerPool.releaseForReuse()
+        }
+    }
+
+    // Leaving Home entirely (Details, Settings, Search) disposes the hero
+    // while the pooled player survives composition; without this its audio
+    // would keep playing over the next screen.
+    DisposableEffect(Unit) {
+        onDispose { TrailerPlayerPool.releaseForReuse() }
     }
 
     LaunchedEffect(trailerPlaying, trailerKey, trailerAttempt, resumeEpoch) {
@@ -1627,6 +1671,29 @@ fun HomeScreen(
     val heroBackdropUrl by viewModel.heroBackdropUrl.collectAsStateWithLifecycle()
     val heroLogoUrl by viewModel.heroLogoUrl.collectAsStateWithLifecycle()
     val heroTrailerKey by viewModel.heroTrailerKey.collectAsStateWithLifecycle()
+
+    // Pre-warm the hero trailer resolve: on a cold start the source cache is
+    // empty, so the first post-dwell resolve otherwise starts the full
+    // InnerTube -> NewPipe chain only AFTER the 4s dwell elapses. Kicking the
+    // resolve off in the background the moment the key arrives means the
+    // post-dwell resolve is usually a cache hit (the resolve mutex coalesces
+    // both callers into one network flight) and playback starts immediately.
+    LaunchedEffect(heroTrailerKey) {
+        // Local val: delegated state properties can't be smart-cast to
+        // non-null after the isNullOrBlank() check.
+        val key = heroTrailerKey
+        if (
+            !key.isNullOrBlank() &&
+            AppPreferences.getHeroTrailerAutoplay(context)
+        ) {
+            runCatching {
+                TrailerPlayerLauncher.resolvePlayableUrl(
+                    key,
+                    recordFailure = false
+                )
+            }
+        }
+    }
 
     // Nuvio collections interleaved with addon rails (merged order from the
     // Collections manager: pin / reorder / hide). Computed in composable
