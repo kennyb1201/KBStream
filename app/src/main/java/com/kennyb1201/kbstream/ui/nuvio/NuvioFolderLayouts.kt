@@ -41,7 +41,9 @@ import com.kennyb1201.kbstream.data.nuvio.NuvioContentItem
 import com.kennyb1201.kbstream.data.nuvio.NuvioFolder
 import com.kennyb1201.kbstream.data.nuvio.NuvioRail
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.components.LandscapeCard
+import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -202,17 +204,28 @@ private fun RailTitle(text: String) {
     )
 }
 
-/** Poster or landscape card per the folder's tile shape. */
+/**
+ * Poster or landscape card for collection ITEMS. Honors the global
+ * "Landscape Cards" toggle for Rows and Follow-Home layouts (grid always
+ * keeps regular posters), plus the global Title/Year/Star-Rating caption
+ * toggles via PosterCaptions.
+ */
 @Composable
 private fun FolderItemCard(
     item: NuvioContentItem,
     tileShape: String?,
     isWatched: Boolean,
+    showLandscapeCards: Boolean,
+    showCaptions: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onFocus: (() -> Unit)? = null
 ) {
-    val isLandscape = tileShape?.uppercase() == "LANDSCAPE"
+    // Folder tileShape still wins for per-folder landscape folders; the
+    // global toggle switches poster->landscape for the item art itself in
+    // Rows and Follow-Home (never in Grid — grid stays posters).
+    val isLandscape = tileShape?.uppercase() == "LANDSCAPE" ||
+        (showLandscapeCards && tileShape?.uppercase() != "POSTER")
     val width = if (isLandscape) FolderLandscapeWidth else FolderPosterWidth
     val height = if (isLandscape) FolderLandscapeHeight else FolderPosterHeight
 
@@ -222,32 +235,42 @@ private fun FolderItemCard(
         Modifier
     }
 
-    Box(
-        modifier = Modifier
-            .width(width)
-            .height(height + 24.dp)
-            .padding(end = FolderRailGap),
-        contentAlignment = Alignment.Center
-    ) {
-        if (isLandscape) {
-            LandscapeCard(
-                backdropUrl = item.backdropUrl ?: item.posterUrl,
-                logoUrl = null,
-                fallbackTitle = item.title,
-                contentDescription = item.title,
-                isWatched = isWatched,
-                onClick = onClick,
-                onLongClick = onLongClick,
-                modifier = focusModifier
-            )
-        } else {
-            PosterCard(
-                posterUrl = item.posterUrl,
-                contentDescription = item.title,
-                isWatched = isWatched,
-                onClick = onClick,
-                onLongClick = onLongClick,
-                modifier = focusModifier
+    Column {
+        Box(
+            modifier = Modifier
+                .width(width)
+                .height(height + 24.dp)
+                .padding(end = FolderRailGap),
+            contentAlignment = Alignment.Center
+        ) {
+            if (isLandscape) {
+                LandscapeCard(
+                    backdropUrl = item.backdropUrl ?: item.posterUrl,
+                    logoUrl = null,
+                    fallbackTitle = item.title,
+                    contentDescription = item.title,
+                    isWatched = isWatched,
+                    onClick = onClick,
+                    onLongClick = onLongClick,
+                    modifier = focusModifier
+                )
+            } else {
+                PosterCard(
+                    posterUrl = item.posterUrl,
+                    contentDescription = item.title,
+                    isWatched = isWatched,
+                    onClick = onClick,
+                    onLongClick = onLongClick,
+                    modifier = focusModifier
+                )
+            }
+        }
+        if (showCaptions) {
+            PosterCaptions(
+                title = item.title,
+                year = item.year,
+                rating = item.rating,
+                modifier = Modifier.padding(top = 2.dp, start = FolderRailGap / 2)
             )
         }
     }
@@ -284,6 +307,7 @@ private fun FollowHomeLayout(
     onOpenItem: (NuvioContentItem) -> Unit,
     onLongPressItem: (NuvioContentItem) -> Unit
 ) {
+    val context = LocalContext.current
     var heroItem by remember { mutableStateOf<NuvioContentItem?>(null) }
 
     // Folder-hosted hero art: the folder's backdrop + logo/title image sit
@@ -400,6 +424,8 @@ private fun FollowHomeLayout(
                                         item = item,
                                         tileShape = state.folder?.tileShape,
                                         isWatched = itemWatched(item, watchedKeys, resolvedIds),
+                                        showLandscapeCards = AppPreferences.getHomeLandscapeCards(context),
+                                        showCaptions = false,
                                         onClick = { onOpenItem(item) },
                                         onLongClick = { onLongPressItem(item) },
                                         onFocus = { heroItem = item }
@@ -428,6 +454,7 @@ private fun RowsLayout(
     onOpenItem: (NuvioContentItem) -> Unit,
     onLongPressItem: (NuvioContentItem) -> Unit
 ) {
+    val context = LocalContext.current
     Column(modifier = Modifier.fillMaxSize()) {
         FolderTitleBlock(state.folder)
         SourceTabs(state, selectedSourceId, onSelectSource)
@@ -467,6 +494,8 @@ private fun RowsLayout(
                                         item = item,
                                         tileShape = state.folder?.tileShape,
                                         isWatched = itemWatched(item, watchedKeys, resolvedIds),
+                                        showLandscapeCards = AppPreferences.getHomeLandscapeCards(context),
+                                        showCaptions = true,
                                         onClick = { onOpenItem(item) },
                                         onLongClick = { onLongPressItem(item) }
                                     )
@@ -529,16 +558,26 @@ private fun GridLayout(
                         items = gridItems,
                         key = { "grid:${it.type}:${it.id}" }
                     ) { item ->
-                        PosterCard(
-                            posterUrl = item.posterUrl,
-                            contentDescription = item.title,
-                            isWatched = itemWatched(item, watchedKeys, resolvedIds),
-                            onClick = { onOpenItem(item) },
-                            onLongClick = { onLongPressItem(item) },
-                            modifier = Modifier
-                                .width(FolderPosterWidth)
-                                .height(FolderPosterHeight)
-                        )
+                        Column {
+                            PosterCard(
+                                posterUrl = item.posterUrl,
+                                contentDescription = item.title,
+                                isWatched = itemWatched(item, watchedKeys, resolvedIds),
+                                onClick = { onOpenItem(item) },
+                                onLongClick = { onLongPressItem(item) },
+                                modifier = Modifier
+                                    .width(FolderPosterWidth)
+                                    .height(FolderPosterHeight)
+                            )
+                            // Grid always keeps regular posters, but its
+                            // item captions honor the toggles like Rows.
+                            PosterCaptions(
+                                title = item.title,
+                                year = item.year,
+                                rating = item.rating,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
                     }
                 }
             }

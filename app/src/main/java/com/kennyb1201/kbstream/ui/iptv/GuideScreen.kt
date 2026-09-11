@@ -2,7 +2,6 @@ package com.kennyb1201.kbstream.ui.iptv
 
 import android.content.Context
 import android.view.KeyEvent
-import androidx.compose.material3.Text as Material3Text
 import androidx.tv.material3.Border
 import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
@@ -12,9 +11,6 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,8 +36,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.activity.compose.BackHandler
@@ -58,13 +52,11 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -74,13 +66,10 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
@@ -90,6 +79,8 @@ import com.kennyb1201.kbstream.data.iptv.EpgMatchType
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.iptv.IptvPlaylist
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBPasteChip
+import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -979,52 +970,21 @@ private fun SetupPanel(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        var playlistNameFocused by remember { mutableStateOf(false) }
-        val focusManager = LocalFocusManager.current
-        val keyboardController = LocalSoftwareKeyboardController.current
-        // TV-safe input: the leanback IME is allowed here so the user can
-        // type with the remote D-pad if no external keyboard is available.
-
-        OutlinedTextField(
-            value = playlistName,
-            onValueChange = onPlaylistNameChanged,
-            label = { Material3Text("Playlist name") },
-            singleLine = true,
-            colors = setupTextFieldColors(),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(
-                onDone = {
-                    keyboardController?.hide()
-                    focusManager.clearFocus()
-                }
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .onFocusChanged { playlistNameFocused = it.isFocused }
-                .onPreviewKeyEvent { event ->
-                    if (event.type != KeyEventType.KeyDown) {
-                        false
-                    } else {
-                        when (event.key) {
-                            Key.DirectionDown -> {
-                                val moved = focusManager.moveFocus(FocusDirection.Down)
-                                if (moved) {
-                                    keyboardController?.hide()
-                                }
-                                moved
-                            }
-                            Key.DirectionUp -> {
-                                val moved = focusManager.moveFocus(FocusDirection.Up)
-                                if (moved) {
-                                    keyboardController?.hide()
-                                }
-                                moved
-                            }
-                            else -> false
-                        }
-                    }
-                }
-        )
+        // TV-safe input, shared KB field: leanback IME allowed, D-pad
+        // escape, Enter = Done. PASTE chip for the URL fields below.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            KBTextField(
+                value = playlistName,
+                onValueChange = onPlaylistNameChanged,
+                placeholder = "Playlist name",
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            KBPasteChip(onPaste = { onPlaylistNameChanged(it) })
+        }
 
         if (!error.isNullOrBlank()) {
             Text(
@@ -1121,104 +1081,18 @@ private fun NativeUrlField(
     modifier: Modifier = Modifier,
     focusRequester: FocusRequester? = null
 ) {
-    // Compose BasicTextField instead of the old AndroidView/EditText wrapper:
-    // the EditText kept view focus inside the android widget layer and never
-    // released D-pad events to Compose, so Down/Up did nothing and the rest
-    // of the panel (EPG field, name, action buttons) was unreachable. The
-    // compose field participates in the panel's focus order and still allows
-    // the soft keyboard for text entry.
-    val focusManager = LocalFocusManager.current
-    val keyboardController = LocalSoftwareKeyboardController.current
-    var fieldFocused by remember { mutableStateOf(false) }
-
-    BasicTextField(
+    // One shared KB field everywhere: same look, IME behavior, D-pad
+    // escape, and Enter handling (see KBTextField).
+    KBTextField(
         value = value,
         onValueChange = onValueChange,
-        singleLine = true,
-        textStyle = TextStyle(color = KBTextHi, fontSize = 16.sp),
-        keyboardOptions = KeyboardOptions(
-            imeAction = ImeAction.Done,
-            keyboardType = KeyboardType.Uri
-        ),
-        keyboardActions = KeyboardActions(
-            onDone = {
-                keyboardController?.hide()
-                focusManager.clearFocus()
-            }
-        ),
-        decorationBox = { innerTextField ->
-            Box(
-                contentAlignment = Alignment.CenterStart,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(54.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(KBSurfaceRaised)
-                    .border(
-                        width = 1.dp,
-                        color = if (fieldFocused) KBAccent else KBSurfaceRaised,
-                        shape = RoundedCornerShape(12.dp)
-                    )
-                    .padding(horizontal = 18.dp)
-            ) {
-                if (value.isBlank()) {
-                    Text(
-                        text = label,
-                        color = KBTextLo,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                innerTextField()
-            }
-        },
-        modifier = modifier
-            .onFocusChanged { fieldFocused = it.isFocused }
-            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown) {
-                    false
-                } else {
-                    when (event.key) {
-                        // TV D-pad escape, same pattern as the name field and
-                        // the search screen: while the leanback IME is up it
-                        // swallows the D-pad, so moving between fields is
-                        // handled here explicitly.
-                        Key.DirectionDown -> {
-                            val moved = focusManager.moveFocus(FocusDirection.Down)
-                            if (moved) {
-                                keyboardController?.hide()
-                            }
-                            moved
-                        }
-                        Key.DirectionUp -> {
-                            val moved = focusManager.moveFocus(FocusDirection.Up)
-                            if (moved) {
-                                keyboardController?.hide()
-                            }
-                            moved
-                        }
-                        else -> false
-                    }
-                }
-            }
+        placeholder = label,
+        modifier = modifier,
+        focusRequester = focusRequester,
+        keyboardType = KeyboardType.Uri
     )
 }
 
-@Composable
-private fun setupTextFieldColors() = TextFieldDefaults.colors(
-    focusedContainerColor = KBSurfaceRaised,
-    unfocusedContainerColor = KBSurfaceRaised,
-    disabledContainerColor = KBSurfaceRaised,
-    focusedTextColor = Color.White,
-    unfocusedTextColor = Color.White,
-    cursorColor = KBAccent,
-    focusedIndicatorColor = KBAccent,
-    unfocusedIndicatorColor = KBTextLo.copy(alpha = 0.4f),
-    focusedLabelColor = KBAccent,
-    unfocusedLabelColor = KBTextLo
-)
 
 @Composable
 private fun GuideHeader(

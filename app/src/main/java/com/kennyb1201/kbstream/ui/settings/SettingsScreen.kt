@@ -5,10 +5,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -30,26 +30,11 @@ import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.foundation.border
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
@@ -57,6 +42,8 @@ import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.backup.BackupManager
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBPasteChip
+import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -76,8 +63,6 @@ fun SettingsScreen(
     onOpenNuvioManager: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    val focusManager = LocalFocusManager.current
-    val keyboardController = LocalSoftwareKeyboardController.current
     val focusRequester = remember { FocusRequester() }
 
     var bufferMode by remember { mutableIntStateOf(AppPreferences.getDefaultBufferMode(context)) }
@@ -213,94 +198,45 @@ fun SettingsScreen(
                     modifier = Modifier.padding(top = 2.dp)
                 )
 
-                var omdbFieldFocused by remember { mutableStateOf(false) }
-                // The wrapping KBCard swallows D-pad focus on TV — its click
-                // was a no-op, so the field could never gain focus and the
-                // IME never opened (paste unreachable). Card OK now requests
-                // focus here, which raises the keyboard.
-                BasicTextField(
-                    value = omdbKeyInput,
-                    onValueChange = {
-                        omdbKeyInput = it.trim()
-                        omdbKeySaved = false
-                    },
-                    singleLine = true,
-                    textStyle = TextStyle(
-                        color = KBTextHi,
-                        fontSize = MaterialTheme.typography.bodyMedium.fontSize
-                    ),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(
+                // Shared KB field: same look/behavior everywhere. Card OK
+                // requests focus (raises the IME); PASTE chip reads the
+                // clipboard; blur and Done both save.
+                val omdbPaste: (String) -> Unit = { pasted ->
+                    omdbKeyInput = pasted.trim()
+                    AppPreferences.setOmdbApiKey(context, omdbKeyInput)
+                    omdbKeySaved = omdbKeyInput.isNotBlank()
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .padding(top = 6.dp)
+                        .fillMaxWidth()
+                ) {
+                    KBTextField(
+                        value = omdbKeyInput,
+                        onValueChange = {
+                            omdbKeyInput = it.trim()
+                            omdbKeySaved = false
+                        },
+                        placeholder = "Paste key (e.g. a1b2c3d4)",
+                        modifier = Modifier.weight(1f),
+                        focusRequester = omdbFocusRequester,
                         onDone = {
                             AppPreferences.setOmdbApiKey(context, omdbKeyInput)
                             omdbKeySaved = omdbKeyInput.isNotBlank()
-                        }
-                    ),
-                    cursorBrush = SolidColor(KBAccent),
-                    decorationBox = { innerTextField ->
-                        Box(
-                            modifier = Modifier
-                                .padding(top = 6.dp)
-                                .fillMaxWidth()
-                                .background(KBSurface, RoundedCornerShape(8.dp))
-                                .border(
-                                    if (omdbFieldFocused) 2.dp else 1.dp,
-                                    if (omdbFieldFocused) KBAccent
-                                    else KBTextLo.copy(alpha = 0.25f),
-                                    RoundedCornerShape(8.dp)
-                                )
-                                .padding(horizontal = 10.dp, vertical = 8.dp)
-                        ) {
-                            if (omdbKeyInput.isBlank()) {
-                                Text(
-                                    text = "Paste key (e.g. a1b2c3d4)",
-                                    color = KBTextLo.copy(alpha = 0.7f),
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                            }
-                            innerTextField()
-                        }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .focusRequester(omdbFocusRequester)
-                        .onFocusChanged {
-                            omdbFieldFocused = it.isFocused
+                        },
+                        onFocusChanged = { focusedNow ->
                             // Save on focus loss too — remote users often
                             // just navigate away after pasting.
-                            if (!it.isFocused) {
+                            if (!focusedNow) {
                                 AppPreferences.setOmdbApiKey(context, omdbKeyInput)
                                 omdbKeySaved = omdbKeyInput.isNotBlank()
                             }
                         }
-                        // TV D-pad escape: move focus out of the field with
-                        // up/down, and treat Enter as Done (many TV IMEs send
-                        // a raw ENTER instead of the IME action).
-                        .onPreviewKeyEvent { event ->
-                            if (event.type != KeyEventType.KeyDown) {
-                                false
-                            } else {
-                                when (event.key) {
-                                    Key.DirectionDown -> {
-                                        keyboardController?.hide()
-                                        focusManager.moveFocus(FocusDirection.Down)
-                                    }
-                                    Key.DirectionUp -> {
-                                        keyboardController?.hide()
-                                        focusManager.moveFocus(FocusDirection.Up)
-                                    }
-                                    Key.Enter, Key.NumPadEnter -> {
-                                        AppPreferences.setOmdbApiKey(context, omdbKeyInput)
-                                        omdbKeySaved = omdbKeyInput.isNotBlank()
-                                        keyboardController?.hide()
-                                        focusManager.clearFocus()
-                                        true
-                                    }
-                                    else -> false
-                                }
-                            }
-                        }
-                )
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    KBPasteChip(onPaste = omdbPaste)
+                }
 
                 if (omdbKeySaved) {
                     Text(
@@ -338,115 +274,54 @@ fun SettingsScreen(
                     modifier = Modifier.padding(top = 2.dp)
                 )
 
-                var badgeFieldFocused by remember { mutableStateOf(false) }
                 var badgeStatus by remember { mutableStateOf<String?>(null) }
                 var badgeImporting by remember { mutableStateOf(false) }
                 val scope = rememberCoroutineScope()
 
-                BasicTextField(
-                    value = badgePackInput,
-                    onValueChange = {
-                        badgePackInput = it.trim()
-                        badgeStatus = null
-                    },
-                    singleLine = true,
-                    textStyle = TextStyle(
-                        color = KBTextHi,
-                        fontSize = MaterialTheme.typography.bodyMedium.fontSize
-                    ),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(
-                        onDone = {
-                            if (badgePackInput.isNotBlank() && !badgeImporting) {
-                                badgeImporting = true
-                                scope.launch {
-                                    badgeStatus = StreamBadgeEngine
-                                        .importFromUrl(context, badgePackInput)
-                                        ?: "Badge pack imported"
-                                    badgeImporting = false
-                                }
-                            }
+                fun importBadgePack() {
+                    if (badgePackInput.isNotBlank() && !badgeImporting) {
+                        badgeImporting = true
+                        scope.launch {
+                            badgeStatus = StreamBadgeEngine
+                                .importFromUrl(context, badgePackInput)
+                                ?: "Badge pack imported"
+                            badgeImporting = false
                         }
-                    ),
-                    cursorBrush = SolidColor(KBAccent),
-                    decorationBox = { innerTextField ->
-                        Box(
-                            modifier = Modifier
-                                .padding(top = 6.dp)
-                                .fillMaxWidth()
-                                .background(KBSurface, RoundedCornerShape(8.dp))
-                                .border(
-                                    if (badgeFieldFocused) 2.dp else 1.dp,
-                                    if (badgeFieldFocused) KBAccent
-                                    else KBTextLo.copy(alpha = 0.25f),
-                                    RoundedCornerShape(8.dp)
-                                )
-                                .padding(horizontal = 10.dp, vertical = 8.dp)
-                        ) {
-                            if (badgePackInput.isBlank()) {
-                                Text(
-                                    text = "https://…/stream-badges.json",
-                                    color = KBTextLo.copy(alpha = 0.7f),
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                            }
-                            innerTextField()
-                        }
-                    },
+                    }
+                }
+
+                // Shared KB field: identical to OMDb (focus via card OK,
+                // PASTE chip, Enter = import, D-pad escape).
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
+                        .padding(top = 6.dp)
                         .fillMaxWidth()
-                        .focusRequester(badgeFocusRequester)
-                        .onFocusChanged { badgeFieldFocused = it.isFocused }
-                        // Same TV D-pad escape as the OMDb field.
-                        .onPreviewKeyEvent { event ->
-                            if (event.type != KeyEventType.KeyDown) {
-                                false
-                            } else {
-                                when (event.key) {
-                                    Key.DirectionDown -> {
-                                        keyboardController?.hide()
-                                        focusManager.moveFocus(FocusDirection.Down)
-                                    }
-                                    Key.DirectionUp -> {
-                                        keyboardController?.hide()
-                                        focusManager.moveFocus(FocusDirection.Up)
-                                    }
-                                    Key.Enter, Key.NumPadEnter -> {
-                                        if (badgePackInput.isNotBlank() && !badgeImporting) {
-                                            badgeImporting = true
-                                            scope.launch {
-                                                badgeStatus = StreamBadgeEngine
-                                                    .importFromUrl(context, badgePackInput)
-                                                    ?: "Badge pack imported"
-                                                badgeImporting = false
-                                            }
-                                        }
-                                        keyboardController?.hide()
-                                        focusManager.clearFocus()
-                                        true
-                                    }
-                                    else -> false
-                                }
-                            }
-                        }
-                )
+                ) {
+                    KBTextField(
+                        value = badgePackInput,
+                        onValueChange = {
+                            badgePackInput = it.trim()
+                            badgeStatus = null
+                        },
+                        placeholder = "https://…/stream-badges.json",
+                        modifier = Modifier.weight(1f),
+                        focusRequester = badgeFocusRequester,
+                        onDone = { importBadgePack() }
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    KBPasteChip(onPaste = { pasted ->
+                        badgePackInput = pasted.trim()
+                        badgeStatus = null
+                    })
+                }
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(top = 8.dp)
                 ) {
                     KBCard(
-                        onClick = {
-                            if (badgePackInput.isNotBlank() && !badgeImporting) {
-                                badgeImporting = true
-                                scope.launch {
-                                    badgeStatus = StreamBadgeEngine
-                                        .importFromUrl(context, badgePackInput)
-                                        ?: "Badge pack imported"
-                                    badgeImporting = false
-                                }
-                            }
-                        },
+                        onClick = { importBadgePack() },
                         modifier = Modifier
                             .background(KBSurfaceRaised, RoundedCornerShape(6.dp))
                     ) {
@@ -783,7 +658,7 @@ fun SettingsScreen(
 
         ToggleRow(
             label = "Poster Titles",
-            description = "Show the title under posters on every screen except Home rails.",
+            description = "Show the title under posters. Collection folders: Rows and Grid only — Follow Home keeps its hero clean.",
             checked = captionTitle,
             onToggle = {
                 captionTitle = it
@@ -795,7 +670,7 @@ fun SettingsScreen(
 
         ToggleRow(
             label = "Poster Years",
-            description = "Show the release year under posters on every screen except Home rails (where the screen has it).",
+            description = "Show the release year under posters. Collection folders: Rows and Grid only.",
             checked = captionYear,
             onToggle = {
                 captionYear = it
@@ -807,7 +682,7 @@ fun SettingsScreen(
 
         ToggleRow(
             label = "Poster Star Ratings",
-            description = "Show the star rating under posters on every screen except Home rails (where the screen has it).",
+            description = "Show the star rating under posters. Collection folders: Rows and Grid only.",
             checked = captionRating,
             onToggle = {
                 captionRating = it
@@ -831,7 +706,7 @@ fun SettingsScreen(
 
         ToggleRow(
             label = "Landscape Cards on Home Rails",
-            description = "Show 16:9 backdrop cards with a small clearlogo instead of posters.",
+            description = "Show 16:9 backdrop cards with a small clearlogo instead of posters. Also applies to collection folder items in Rows and Follow Home (Grid keeps posters).",
             checked = landscapeCards,
             onToggle = {
                 landscapeCards = it

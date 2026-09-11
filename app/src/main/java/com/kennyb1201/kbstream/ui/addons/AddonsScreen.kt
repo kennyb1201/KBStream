@@ -1,7 +1,6 @@
 package com.kennyb1201.kbstream.ui.addons
 
 import android.content.ActivityNotFoundException
-import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
@@ -28,16 +27,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardDoubleArrowDown
@@ -61,9 +56,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
@@ -77,7 +70,6 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -95,6 +87,8 @@ import com.kennyb1201.kbstream.data.addon.CatalogConfiguration
 import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.data.addon.ManifestCatalog
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBPasteChip
+import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBSuccess
@@ -1555,20 +1549,9 @@ private fun AddAddonDialog(
                     focusRequester = urlFocusRequester
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                ActionButton(
-                    label = "PASTE",
-                    icon = Icons.Filled.ContentPaste,
-                    enabled = !isLoading,
-                    onClick = {
-                        pasteFromClipboard(context) { pasted ->
-                            onUrlChange(pasted)
-                            // Drop focus right after pasting so the leanback
-                            // IME can't re-cover the screen.
-                            focusManager.clearFocus()
-                            keyboardController?.hide()
-                        }
-                    }
-                )
+                KBPasteChip(onPaste = { pasted ->
+                    onUrlChange(pasted)
+                })
             }
 
             Text(
@@ -1772,101 +1755,15 @@ private fun UrlField(
     modifier: Modifier = Modifier.fillMaxWidth(),
     focusRequester: FocusRequester? = null
 ) {
-    var focused by remember { mutableStateOf(false) }
-    val keyboardController = LocalSoftwareKeyboardController.current
-    val focusManager = LocalFocusManager.current
-
-    BasicTextField(
+    // One shared field everywhere: identical styling, IME behavior, TV
+    // D-pad escape, and Enter handling (see KBTextField).
+    KBTextField(
         value = value,
         onValueChange = onValueChange,
-        singleLine = true,
-        textStyle = TextStyle(
-            color = KBTextHi,
-            fontSize = MaterialTheme.typography.bodyLarge.fontSize
-        ),
-        cursorBrush = SolidColor(KBAccent),
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-        keyboardActions = KeyboardActions(
-            onDone = {
-                keyboardController?.hide()
-                focusManager.clearFocus()
-            }
-        ),
-        modifier = (if (focusRequester != null) {
-            modifier.focusRequester(focusRequester)
-        } else {
-            modifier
-        })
-            .clip(RoundedCornerShape(12.dp))
-            .background(KBSurfaceRaised)
-            .border(
-                1.dp,
-                if (focused) KBAccent.copy(alpha = 0.72f)
-                else KBTextLo.copy(alpha = 0.20f),
-                RoundedCornerShape(12.dp)
-            )
-            .onFocusChanged { focused = it.isFocused }
-            .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown) {
-                    false
-                } else {
-                    when (event.key) {
-                        Key.DirectionDown -> {
-                            val moved = focusManager.moveFocus(FocusDirection.Down)
-                            if (moved) {
-                                keyboardController?.hide()
-                            }
-                            moved
-                        }
-                        Key.DirectionUp -> {
-                            val moved = focusManager.moveFocus(FocusDirection.Up)
-                            if (moved) {
-                                keyboardController?.hide()
-                            }
-                            moved
-                        }
-                        else -> false
-                    }
-                }
-            }
-            .padding(horizontal = 14.dp, vertical = 13.dp),
-        decorationBox = { innerTextField ->
-            if (value.isBlank()) {
-                Text(
-                    text = placeholder,
-                    color = KBTextLo,
-                    style = MaterialTheme.typography.bodyLarge
-                )
-            }
-            innerTextField()
-        }
+        placeholder = placeholder,
+        modifier = modifier,
+        focusRequester = focusRequester
     )
-}
-
-/**
- * Reads plain text from the system clipboard (the TV leanback keyboard has
- * no paste action, so the ADD dialog gets an explicit PASTE button). Returns
- * null silently when the clipboard is empty/unreadable.
- */
-private fun pasteFromClipboard(
-    context: android.content.Context,
-    onPasted: (String) -> Unit
-) {
-    // `::class.java` is required: getSystemService's Class overload
-    // takes a class literal, not a bare class name expression.
-    val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
-
-    val text = runCatching {
-        clipboard.primaryClip
-            ?.takeIf { it.itemCount > 0 }
-            ?.getItemAt(0)
-            ?.text
-            ?.toString()
-    }.getOrNull()
-
-    text?.trim()
-        ?.takeIf { it.isNotEmpty() }
-        ?.let(onPasted)
 }
 
 private fun openManifest(

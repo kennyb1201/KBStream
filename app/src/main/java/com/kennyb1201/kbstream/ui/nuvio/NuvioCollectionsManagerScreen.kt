@@ -1,7 +1,6 @@
 package com.kennyb1201.kbstream.ui.nuvio
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -17,18 +16,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import androidx.compose.runtime.Composable
@@ -40,15 +30,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.nativeKeyCode
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBPasteChip
+import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.data.nuvio.NuvioHomeOrderPrefs
-import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -71,7 +57,6 @@ fun NuvioCollectionsManagerScreen(
     val state by viewModel.state.collectAsState()
 
     var urlInput by remember { mutableStateOf("") }
-    var urlFieldFocused by remember { mutableStateOf(false) }
     val urlFocusRequester = remember { FocusRequester() }
 
     // Re-focus the import field once imports land.
@@ -111,52 +96,28 @@ fun NuvioCollectionsManagerScreen(
                     color = KBTextHi,
                     style = MaterialTheme.typography.titleSmall
                 )
-                BasicTextField(
-                    value = urlInput,
-                    onValueChange = { urlInput = it },
-                    singleLine = true,
-                    textStyle = TextStyle(
-                        color = KBTextHi,
-                        fontSize = 14.sp
-                    ),
-                    cursorBrush = SolidColor(KBAccent),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .padding(top = 6.dp)
+                        .fillMaxWidth()
+                ) {
+                    KBTextField(
+                        value = urlInput,
+                        onValueChange = { urlInput = it },
+                        placeholder = "https://…/nuvio-collections.json",
+                        modifier = Modifier.weight(1f),
+                        focusRequester = urlFocusRequester,
                         onDone = {
                             if (urlInput.isNotBlank()) {
                                 viewModel.addProfileUrl(urlInput.trim())
                                 urlInput = ""
                             }
                         }
-                    ),
-                    decorationBox = { innerTextField ->
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(KBSurface, RoundedCornerShape(8.dp))
-                                .border(
-                                    width = if (urlFieldFocused) 2.dp else 1.dp,
-                                    color = if (urlFieldFocused) KBAccent
-                                    else KBTextLo.copy(alpha = 0.25f),
-                                    shape = RoundedCornerShape(8.dp)
-                                )
-                                .padding(horizontal = 10.dp, vertical = 8.dp)
-                        ) {
-                            if (urlInput.isBlank()) {
-                                Text(
-                                    text = "https://…/nuvio-collections.json",
-                                    color = KBTextLo.copy(alpha = 0.7f),
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                            }
-                            innerTextField()
-                        }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .focusRequester(urlFocusRequester)
-                        .onFocusChanged { urlFieldFocused = it.isFocused }
-                )
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    KBPasteChip(onPaste = { pasted -> urlInput = pasted.trim() })
+                }
                 state.statusMessage?.let { message ->
                     Text(
                         text = message,

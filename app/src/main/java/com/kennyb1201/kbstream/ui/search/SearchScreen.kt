@@ -18,9 +18,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Mic
@@ -33,27 +30,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import android.app.Activity
 import android.content.Intent
 import android.speech.RecognizerIntent
 import android.provider.Settings
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -72,6 +60,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
+import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
@@ -569,7 +558,6 @@ private fun SearchHero(
     isLoading: Boolean
 ) {
     val context = LocalContext.current
-    var searchFocused by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
 
@@ -651,98 +639,25 @@ private fun SearchHero(
             color = KBTextHi
         )
 
-        Row(
+        KBTextField(
+            value = query,
+            onValueChange = onQueryChanged,
+            placeholder = "Search titles, people, collections...",
             modifier = Modifier
                 .padding(top = 12.dp)
-                .fillMaxWidth()
-                .background(KBSurfaceRaised, RoundedCornerShape(12.dp))
-                .border(1.dp, KBTextLo.copy(alpha = 0.25f), RoundedCornerShape(12.dp))
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = Icons.Default.Search,
-                contentDescription = null,
-                tint = KBTextLo,
-                modifier = Modifier.size(18.dp)
-            )
-
-            Box(
-                modifier = Modifier
-                    .padding(start = 12.dp)
-                    .weight(1f)
-            ) {
-                if (query.isBlank()) {
-                    Text(
-                        text = "Search titles, people, collections...",
-                        color = KBTextLo,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-
-                BasicTextField(
-                    value = query,
-                    onValueChange = onQueryChanged,
-                    singleLine = true,
-                    textStyle = TextStyle(
-                        color = KBTextHi,
-                        fontSize = MaterialTheme.typography.bodyMedium.fontSize
-                    ),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(
-                        onDone = {
-                            // IME-action path: leanback keyboards whose
-                            // checkmark dispatches ImeAction.Done land here.
-                            onSubmit()
-                            keyboardController?.hide()
-                            focusManager.clearFocus()
-                        }
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .onFocusChanged { searchFocused = it.isFocused }
-                        // TV D-pad escape: the field consumes DirectionDown/Up
-                        // for cursor movement, and the leanback IME grabs the
-                        // D-pad entirely while it is up. Intercepting here
-                        // moves focus out of the field (down into the results,
-                        // up back to the tab bar) so search results are always
-                        // reachable with the remote.
-                        // Enter (checkmark) is ALSO handled here: many TV
-                        // IMEs deliver it as a raw KEYCODE_ENTER key event
-                        // instead of an IME action, in which case onDone
-                        // above never fires.
-                        .onPreviewKeyEvent { event ->
-                            if (event.type != KeyEventType.KeyDown) {
-                                false
-                            } else {
-                                when (event.key) {
-                                    Key.DirectionDown -> {
-                                        val moved = focusManager.moveFocus(FocusDirection.Down)
-                                        if (moved) {
-                                            keyboardController?.hide()
-                                        }
-                                        moved
-                                    }
-                                    Key.DirectionUp -> {
-                                        val moved = focusManager.moveFocus(FocusDirection.Up)
-                                        if (moved) {
-                                            keyboardController?.hide()
-                                        }
-                                        moved
-                                    }
-                                    Key.Enter, Key.NumPadEnter -> {
-                                        onSubmit()
-                                        keyboardController?.hide()
-                                        focusManager.clearFocus()
-                                        true
-                                    }
-                                    else -> false
-                                }
-                            }
-                        }
+                .fillMaxWidth(),
+            onDone = { onSubmit() },
+            leading = {
+                Icon(
+                    imageVector = Icons.Default.Search,
+                    contentDescription = null,
+                    tint = KBTextLo,
+                    modifier = Modifier.size(18.dp)
                 )
             }
-        }
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
 
         // Voice search trigger — same focused Surface treatment as the app's
         // other focusable chips (raised surface + accent content + border +
