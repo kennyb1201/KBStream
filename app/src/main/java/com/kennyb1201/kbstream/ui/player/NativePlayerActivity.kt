@@ -1572,12 +1572,17 @@ class NativePlayerActivity : ComponentActivity() {
         // instead decodes in MediaCodec buffer mode — raw planes, no
         // conversion — and the GL shader does the ICtCp math on the GPU.
         // Reset each attempt so the setting only applies to the current stream.
-        // Decide which video path to use for P5 content:
-        // - P5VideoGlesView + P5PlaneVideoRenderer: P5 with GLES available
-        //   (raw planes → GPU color conversion).
-        // - PlayerView (hardware Surface): everything else, and P5 on
-        //   devices without GLES (colors uncorrected, as before).
-        val useP5GlesView = p5Content && P5ColorShader.hasGles3()
+        // Effective state of the P5 GLES path (never engages silently):
+        // - Strip All rewrites P5's RPU away and ships raw ICtCp pixels to
+        //   the display — the GLES path is REQUIRED there, so it is always on.
+        // - P5 → 8.1 conversion rewrites the bitstream to Profile 8.1; the
+        //   display decodes it natively and does its own color work — the
+        //   GLES path must stay OFF (it would re-convert converted pixels).
+        // - Everything else (native DV, None, P7 → 8.1): OFF unless the user
+        //   explicitly enables the P5 Color Correction setting.
+        val useP5GlesView = p5Content &&
+            p5GlesPathWanted() &&
+            !forceTextureViewFallback
         if (useP5GlesView && !p5GlesActive) {
             Log.i(
                 "PLAYER_DV",
@@ -1587,6 +1592,7 @@ class NativePlayerActivity : ComponentActivity() {
             p5VideoGlesView.visibility = View.VISIBLE
             p5GlesActive = true
         } else if (!useP5GlesView && p5GlesActive) {
+            p5VideoGlesView.onFirstFrameRendered = null
             p5VideoGlesView.release()
             p5VideoGlesView.visibility = View.GONE
             playerView.visibility = View.VISIBLE
@@ -1807,6 +1813,15 @@ class NativePlayerActivity : ComponentActivity() {
 
             exoPlayer = player
             if (p5GlesActive) {
+                // The GL view draws decoder buffers directly — Media3's
+                // surface-based onRenderedFirstFrame never fires on this
+                // path, which is exactly why the black-video watchdog used
+                // to "recover" streams that were playing perfectly. The
+                // view reports its first real content frame instead.
+                p5VideoGlesView.clearFirstFrame()
+                p5VideoGlesView.onFirstFrameRendered = {
+                    runOnUiThread { markFirstFrameRendered() }
+                }
                 // P5 raw-plane path: the view implements
                 // VideoDecoderOutputBufferRenderer, so setVideoSurfaceView
                 // routes the view itself (not a Surface) to the video
@@ -1944,11 +1959,7 @@ class NativePlayerActivity : ComponentActivity() {
         }
 
         override fun onRenderedFirstFrame() {
-            if (firstFrameRendered) return
-            firstFrameRendered = true
-            firstFrameRenderedAtMs = System.currentTimeMillis()
-            reconnectingContainer.visibility = View.GONE
-            bufferingSpinner.visibility = View.GONE
+            markFirstFrameRendered()
         }
 
         override fun onTracksChanged(tracks: Tracks) {
@@ -1984,6 +1995,8 @@ class NativePlayerActivity : ComponentActivity() {
                         // FFmpeg fallback) color path engages from the start.
                         if (declaredDvCodec != null &&
                             DolbyVisionCompat.isP5Profile(declaredDvCodec) &&
+                            p5GlesPathWanted() &&
+                            !forceTextureViewFallback &&
                             !p5GlesActive &&
                             !firstFrameRendered && !p5ReroutePending
                         ) {
@@ -2141,6 +2154,40 @@ class NativePlayerActivity : ComponentActivity() {
         errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
             errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
             errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES
+
+    /**
+     * Single source of truth for "video output works". Called from Media3's
+     * onRenderedFirstFrame (surface paths) and from P5VideoGlesView's first
+     * real content draw (raw-plane path). The black-video recovery ladder
+     * checks this at every stage: frame rendered → stop.
+     */
+    private fun markFirstFrameRendered() {
+        if (firstFrameRendered) return
+        firstFrameRendered = true
+        firstFrameRenderedAtMs = System.currentTimeMillis()
+        reconnectingContainer.visibility = View.GONE
+        bufferingSpinner.visibility = View.GONE
+    }
+
+    /**
+     * Effective state of the P5 raw-plane GLES color path, independent of
+     * whether P5 content is currently detected:
+     *  - Strip All: required — stripping the RPU is what leaves ICtCp
+     *    pixels for the display, so the shader is the color fix.
+     *  - P5 → 8.1: wrong — the bitstream is Profile 8.1; the display does
+     *    the color work natively.
+     *  - Otherwise: strict opt-in via the P5 Color Correction setting.
+     */
+    private fun p5GlesPathWanted(): Boolean {
+        if (!P5ColorShader.hasGles3()) return false
+        return when (AppPreferences.getDvCompatMode(this)) {
+            AppPreferences.DV_COMPAT_ALL -> true
+            AppPreferences.DV_COMPAT_AUTO ->
+                !AppPreferences.getConvertP5To81(this) &&
+                    AppPreferences.getP5GlesCorrection(this)
+            else -> AppPreferences.getP5GlesCorrection(this)
+        }
+    }
 
     private fun armStartupWatchdog() {
         // VOD only: live channels have their own recovery paths and an HLS

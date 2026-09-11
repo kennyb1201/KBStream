@@ -93,6 +93,29 @@ fun SettingsScreen(
     var showClearHistoryConfirm by remember { mutableStateOf(false) }
     var dvCompatMode by remember { mutableIntStateOf(AppPreferences.getDvCompatMode(context)) }
     var convertP5To81 by remember { mutableStateOf(AppPreferences.getConvertP5To81(context)) }
+    var p5GlesCorrection by remember { mutableStateOf(AppPreferences.getP5GlesCorrection(context)) }
+
+    // P5 Color Correction is forced on in Strip All (stripping the RPU is
+    // exactly what leaves ICtCp pixels for the shader to fix), forced off
+    // when P5 → 8.1 conversion is enabled (the display does the color work
+    // natively there), and otherwise follows the explicit toggle.
+    val p5GlesEffective = dvCompatMode == AppPreferences.DV_COMPAT_ALL ||
+        (
+            (dvCompatMode != AppPreferences.DV_COMPAT_AUTO || !convertP5To81) &&
+                p5GlesCorrection
+            )
+    // Tappable only when the toggle actually controls the outcome: forced on
+    // in Strip All, forced off under P5 → 8.1, user-controlled otherwise.
+    val p5GlesToggleEnabled = dvCompatMode != AppPreferences.DV_COMPAT_ALL &&
+        (dvCompatMode != AppPreferences.DV_COMPAT_AUTO || !convertP5To81)
+    val p5GlesDescription = when {
+        dvCompatMode == AppPreferences.DV_COMPAT_ALL ->
+            "Always on in Strip All — stripped P5 needs the GLES color shader"
+        dvCompatMode == AppPreferences.DV_COMPAT_AUTO && convertP5To81 ->
+            "Off while P5 \u2192 8.1 conversion is on — the display handles colors natively"
+        else ->
+            "Raw-plane GLES color path for Profile 5 (ICtCp) streams. Off unless you enable it"
+    }
     var stripHdr10Plus by remember { mutableStateOf(AppPreferences.getStripHdr10Plus(context)) }
     var aspectRatio by remember { mutableIntStateOf(AppPreferences.getDefaultAspectRatio(context)) }
     var preferredAudioLang by remember { mutableStateOf(AppPreferences.getPreferredAudioLanguage(context)) }
@@ -485,7 +508,7 @@ fun SettingsScreen(
             text = when (dvCompatMode) {
                 AppPreferences.DV_COMPAT_AUTO -> "Convert Blu-ray Profile 7 remuxes to Profile 8.1; P4/P5/P8 play as Dolby Vision"
                 AppPreferences.DV_COMPAT_OFF -> "Play files exactly as provided (device must handle DV)"
-                AppPreferences.DV_COMPAT_ALL -> "Convert every DV profile (P4/P5/P7/P8) \u2192 HDR10/HEVC — for non-DV TVs (P5 colors may be off)"
+                AppPreferences.DV_COMPAT_ALL -> "Convert every DV profile (P4/P5/P7/P8) \u2192 HDR10/HEVC — for non-DV TVs (P5 colors corrected via GLES on capable devices)"
                 else -> ""
             },
             color = KBTextLo,
@@ -515,6 +538,19 @@ fun SettingsScreen(
             onToggle = {
                 convertP5To81 = it
                 AppPreferences.setConvertP5To81(context, it)
+            }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        ToggleRow(
+            label = "P5 Color Correction",
+            description = p5GlesDescription,
+            checked = p5GlesEffective,
+            enabled = p5GlesToggleEnabled,
+            onToggle = {
+                p5GlesCorrection = it
+                AppPreferences.setP5GlesCorrection(context, it)
             }
         )
 

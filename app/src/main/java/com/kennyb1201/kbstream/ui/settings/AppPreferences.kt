@@ -35,6 +35,7 @@ object AppPreferences {
     private const val KEY_STRIP_HDR10_PLUS = "strip_hdr10_plus"             // independent of the DV mode
     private const val KEY_CONVERT_P7_TO_81 = "dv_convert_p7_to_81"          // P7 → Profile 8.1 (independent of the DV mode)
     private const val KEY_CONVERT_P5_TO_81 = "dv_convert_p5_to_81"          // P5 → Profile 8.1 (independent of the DV mode)
+    private const val KEY_P5_GLES_CORRECTION = "dv_p5_gles_correction"      // P5 raw-plane GLES color path (explicit opt-in, default off)
     private const val KEY_DEFAULT_ASPECT_RATIO = "default_aspect_ratio"     // 0=fit, 1=zoom, 2=fill
     private const val KEY_PREFERRED_AUDIO_LANG = "preferred_audio_language"   // BCP-47 tag or "" for auto
     private const val KEY_PREFERRED_SUBTITLE_LANG = "preferred_subtitle_language" // BCP-47 tag or "" for auto
@@ -268,6 +269,19 @@ object AppPreferences {
 
     fun setConvertP5To81(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_CONVERT_P5_TO_81, enabled).apply()
+    }
+
+    // Explicit opt-in for the P5 raw-plane GLES color path. Default OFF:
+    // the path is heavyweight (buffer-mode decode + GPU shader) and only
+    // makes sense when ICtCp pixels actually reach the display — which the
+    // Strip All mode produces and nothing else does. P5 → 8.1 conversion
+    // makes it actively wrong: the bitstream is rewritten to 8.1 and the
+    // display does the color work natively.
+    fun getP5GlesCorrection(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_P5_GLES_CORRECTION, false)
+
+    fun setP5GlesCorrection(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_P5_GLES_CORRECTION, enabled).apply()
     }
 
     // ── HDR10+ (ST 2094-40) stripping ──────────────────────────────────

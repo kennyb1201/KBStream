@@ -42,6 +42,23 @@ class P5VideoGlesView(
     attrs: AttributeSet? = null
 ) : GLSurfaceView(context, attrs), GLSurfaceView.Renderer, VideoDecoderOutputBufferRenderer {
 
+    /**
+     * Fired once, on the GL thread, the first time a decoded frame is
+     * actually drawn as content. Media3's surface-based
+     * onRenderedFirstFrame never fires on this decoder-buffer path, so the
+     * activity subscribes to this instead — it is the black-video
+     * watchdog's "video output works" signal for P5 sessions.
+     */
+    @Volatile
+    var onFirstFrameRendered: (() -> Unit)? = null
+
+    private var firstFrameReported = false
+
+    /** Resets the one-shot first-frame report (called per player build). */
+    fun clearFirstFrame() {
+        firstFrameReported = false
+    }
+
     /** Latest buffer handed over by the renderer — playback thread writer. */
     private val pendingBuffer = AtomicReference<VideoDecoderOutputBuffer?>()
 
@@ -96,6 +113,10 @@ class P5VideoGlesView(
             GLES20.glClearColor(0f, 0f, 0f, 1f)
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
             return
+        }
+        if (!firstFrameReported) {
+            firstFrameReported = true
+            onFirstFrameRendered?.invoke()
         }
         try {
             // Bind the program BEFORE the upload: uploadOutputBuffer sets
