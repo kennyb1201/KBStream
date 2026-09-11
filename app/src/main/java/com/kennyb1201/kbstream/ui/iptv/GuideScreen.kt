@@ -307,12 +307,12 @@ LaunchedEffect(selectedGroup, groups) {
 
     val layout = groupRowState.layoutInfo
     val info = layout.visibleItemsInfo.firstOrNull { it.index == chipIndex }
-    // viewportMainAxisStartOffset is negative while beforeContentPadding
-    // is showing; a chip tucked under it is still fully on screen, so only
-    // offsets beyond that count as clipped. viewportMainAxisEndOffset is
-    // the documented "not fully visible past this" bound (after padding).
-    val startClipped = info == null || info.offset < layout.viewportMainAxisStartOffset
-    val endOverflow = info?.let { (it.offset + it.size) - layout.viewportMainAxisEndOffset } ?: 0
+    // viewportStartOffset is negative while beforeContentPadding is
+    // showing; a chip tucked under it is still fully on screen, so only
+    // offsets beyond that count as clipped. viewportEndOffset is the
+    // documented "not fully visible past this" bound (after padding).
+    val startClipped = info == null || info.offset < layout.viewportStartOffset
+    val endOverflow = info?.let { (it.offset + it.size) - layout.viewportEndOffset } ?: 0
     when {
         startClipped ->
             groupRowState.scrollToItem(chipIndex.coerceIn(0, groups.lastIndex))
