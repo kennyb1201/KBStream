@@ -178,7 +178,7 @@ fun SettingsScreen(
 
         NavigationRow(
             label = "Add-ons",
-            description = "Manage add-ons, import collections, and arrange the home screen"
+            description = "Manage add-ons, import collections, and arrange the home screen",
             onClick = onOpenAddons
         )
 

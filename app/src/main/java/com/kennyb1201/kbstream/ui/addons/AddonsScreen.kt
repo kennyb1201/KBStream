@@ -1168,7 +1168,7 @@ private fun AddonTileLetter(
     )
 }
 
-Composable
+@Composable
 private fun AddonFilterField(
     query: String,
     onClick: () -> Unit
@@ -2170,7 +2170,7 @@ private fun CatalogToggle(
     }
 }
 
-Composable
+@Composable
 private fun RenameCatalogDialog(
     currentName: String,
     hasCustomName: Boolean,
