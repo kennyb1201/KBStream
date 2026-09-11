@@ -17,11 +17,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.SaverScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -78,6 +80,7 @@ import com.kennyb1201.kbstream.ui.theme.KBStreamTheme
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import kotlinx.coroutines.launch
 
 sealed class Screen {
 
@@ -655,6 +658,18 @@ fun AppRoot() {
 
     val streamsViewModel: StreamsViewModel = viewModel()
 
+    // Activity-scoped search state, referenced by the BackHandler so exiting
+    // Search commits the query to history and clears the session.
+    val searchViewModel: SearchViewModel = viewModel()
+
+    // Hoisted here (not inside SearchScreen) so the scroll position survives
+    // Search -> Detail -> Back: the when-branch swap decomposes SearchScreen,
+    // which would otherwise discard a locally-remembered LazyListState. Back
+    // from a drill-down lands on the same title; exiting Search itself resets
+    // it (in the BackHandler below) so a fresh entry starts at the top.
+    val searchListState = rememberLazyListState()
+    val searchListScope = rememberCoroutineScope()
+
     // When autoselect is on, sources resolve here in the background while the
     // current screen stays visible (a brief "Finding sources" overlay), then
     // playback starts straight from the player — the streams picker never
@@ -779,6 +794,25 @@ fun AppRoot() {
 
             is Screen.NuvioFolder ->
                 current.returnTo
+
+            // Detail carries the screen it was opened from (Search, Home,
+            // an actor page, ...), so Back returns there instead of always
+            // bouncing to Home — clicking a Search result and pressing Back
+            // lands back on that result rail.
+            is Screen.Detail ->
+                stableBackDestination(current.returnTo)
+
+            is Screen.Search -> {
+                // Leaving Search itself: commit the query to recent-search
+                // history and clear the session state, so re-entering Search
+                // starts fresh with the query one chip away. Drill-downs
+                // (Detail/Actor/...) skip this — Back must restore results.
+                // The hoisted list state resets too: re-entering Search
+                // re-composes with a fresh top-of-list view.
+                searchViewModel.exitSearch()
+                searchListScope.launch { searchListState.scrollToItem(0) }
+                Screen.Home
+            }
 
             else ->
                 Screen.Home
@@ -930,6 +964,12 @@ fun AppRoot() {
         is Screen.Search -> {
 
             SearchScreen(
+                // Share the activity-scoped ViewModel the BackHandler uses,
+                // so exit-commit and state clearing operate on one instance.
+                viewModel = searchViewModel,
+                // Hoisted list state: Back from Detail/Actor/... restores the
+                // scroll position at the same title.
+                listState = searchListState,
                 onItemClick = {
                         meta: MetaPreview ->
 

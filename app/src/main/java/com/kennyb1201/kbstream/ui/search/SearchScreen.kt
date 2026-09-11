@@ -16,8 +16,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
@@ -78,6 +80,9 @@ fun SearchScreen(
     onPersonClick: ((TmdbSearchPersonResult) -> Unit)? = null,
     onStudioClick: ((TmdbSearchStudioResult) -> Unit)? = null,
     onCollectionClick: ((TmdbSearchCollectionResult) -> Unit)? = null,
+    // Hoisted by MainActivity (survives Search -> Detail -> Back) so Back
+    // lands on the same title. Defaults keep previews/standalone use working.
+    listState: LazyListState = rememberLazyListState(),
     viewModel: SearchViewModel = viewModel()
 ) {
     val query by viewModel.searchQuery.collectAsStateWithLifecycle()
@@ -129,6 +134,9 @@ fun SearchScreen(
     // its state survives navigating into a collection/detail screen and back,
     // returning you to the same results instead of a fresh search. The VM
     // clears its own transient state when a new search starts.
+    // Scroll position comes from the hoisted LazyListState (see signature):
+    // Back from a drill-down restores the list at the same title. Exiting
+    // Search itself resets it in MainActivity's BackHandler.
 
     val totalCount = results.size + actorResults.size + studioResults.size + collectionResults.size +
         addonResultGroups.sumOf { it.results.size }
@@ -144,6 +152,7 @@ fun SearchScreen(
             .background(KBVoid)
     ) {
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(
                 start = SEARCH_RAIL_EDGE_PADDING,

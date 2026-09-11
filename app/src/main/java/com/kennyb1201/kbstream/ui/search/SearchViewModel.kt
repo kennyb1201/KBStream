@@ -478,8 +478,59 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
                     emptyList()
                 }
 
-            _addonResultGroups.value = groups
+            // Add-on catalogs often omit releaseInfo/imdbRating on their
+            // preview metas (AIOStreams movies frequently ship neither), so
+            // the year/rating captions never render even with the toggles
+            // on. Fill the gaps from TMDB (disk+memory cached, keyed by the
+            // IMDB id these results already carry) — series get the same
+            // treatment so all rails honor the captions identically.
+            _addonResultGroups.value = enrichAddonGroups(groups)
         }
+    }
+
+    /**
+     * Fill missing year/rating display data on add-on search results from
+     * the TMDB detail cache. Only metas with a blank releaseInfo or missing
+     * rating trigger a lookup; hits come back as new group copies so the
+     * rails recompose. Lookups are capped so a broad query never floods the
+     * TMDB API, and failures leave the result untouched.
+     */
+    private suspend fun enrichAddonGroups(
+        groups: List<AddonResultGroup>
+    ): List<AddonResultGroup> = coroutineScope {
+        val jobs = groups.mapIndexed { groupIndex, group ->
+            async {
+                val results = group.results
+                // Collect which indices actually need enrichment.
+                val needed = results.withIndex()
+                    .filter { (_, r) ->
+                        r.year == null || r.rating == null
+                    }
+                    .take(MAX_ENRICH_PER_GROUP)
+                if (needed.isEmpty()) return@async groupIndex to group
+
+                val enriched = results.toMutableList()
+                needed.forEach { (index, result) ->
+                    val imdbId = result.meta.id.takeIf { it.startsWith("tt") }
+                        ?: return@forEach
+                    val type = normalizedType(result.type) ?: return@forEach
+                    val detail = runCatching {
+                        tmdbRepository.fetchEnrichedMetaCached(imdbId, type)
+                    }.getOrNull() ?: return@forEach
+                    val year = result.year
+                        ?: detail.releaseDate?.take(4)?.toIntOrNull()
+                        ?: detail.firstAirDate?.take(4)?.toIntOrNull()
+                    val rating = result.rating
+                        ?: detail.voteAverage?.takeIf { it > 0.0 }
+                    if (year != result.year || rating != result.rating) {
+                        enriched[index] = result.copy(year = year, rating = rating)
+                    }
+                }
+                groupIndex to group.copy(results = enriched)
+            }
+        }
+        jobs.awaitAll().sortedBy { (index, _) -> index }
+            .map { (_, group) -> group }
     }
 
     private suspend fun searchAddonCatalogs(
@@ -551,6 +602,12 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
                 for ((catalog, hits) in perCatalog) {
                     if (groups.size >= MAX_ADDON_GROUPS) break
                     val searchStyle = catalog.isSearchStyleCatalog()
+                    // A search that returns the SAME list as the catalog's
+                    // unfiltered browse view means the catalog ignored the
+                    // query — e.g. AIOStreams "Top 10" lists always echo
+                    // their ranking regardless of the search term. Those hits
+                    // are noise, not search matches, so the rail is dropped.
+                    if (!searchStyle && catalogIgnoredQuery(baseUrl, catalog, hits)) continue
                     val items = hits
                         .asSequence()
                         .distinctBy { "${it.type}:${it.id}" }
@@ -622,6 +679,44 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         return groups
+    }
+
+    /**
+     * Heuristic for catalogs that answer every request with their browse
+     * list (Top-10/ranking lists): if a catalog's "search" response equals
+     * its unfiltered response, the query was ignored and the rail is noise.
+     * Cached per catalog so the probe runs at most once per session.
+     */
+    private val ignoredQueryCache =
+        mutableMapOf<String, Boolean>()
+
+    private suspend fun catalogIgnoredQuery(
+        baseUrl: String,
+        catalog: ManifestCatalog,
+        hits: List<MetaPreview>
+    ): Boolean {
+        // Only worth probing when the catalog declares a rank-style id/name
+        // (top10, trending, popular, ...) — the probe costs one extra HTTP
+        // call and normal catalogs must never pay it.
+        if (!catalog.isRankStyleCatalog()) return false
+        val key = "${baseUrl}|${catalog.type}:${catalog.id}"
+        synchronized(ignoredQueryCache) {
+            ignoredQueryCache[key]?.let { return it }
+        }
+        val unfiltered = runCatching {
+            repository.getCatalog(
+                baseUrl = baseUrl,
+                type = catalog.type,
+                catalogId = catalog.id
+            )
+        }.getOrNull()
+        val ignored = unfiltered != null &&
+            unfiltered.map { "${it.type}:${it.id}" } ==
+            hits.map { "${it.type}:${it.id}" }
+        synchronized(ignoredQueryCache) {
+            ignoredQueryCache[key] = ignored
+        }
+        return ignored
     }
 
     private fun tmdbNameKey(
@@ -818,6 +913,17 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         _isLoading.value = false
     }
 
+    /**
+     * Called when the user leaves the Search screen (Back from Search).
+     * Commits the current query to recent-search history (so it comes back
+     * as a one-tap chip) and clears the session state, so re-entering
+     * Search starts fresh instead of restoring stale results.
+     */
+    fun exitSearch() {
+        commitSearch()
+        resetSearchState()
+    }
+
     private fun loadRecentSearches() {
         val saved =
             prefs.getString(
@@ -871,6 +977,21 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         /**
+         * True for rank/browse-style catalogs ("Top 10", "Trending",
+         * "Popular", ...) whose content does not depend on a search query.
+         * Used to skip the ignored-query probe's extra HTTP call on normal
+         * catalogs, and as a fast pre-filter for dropping rank-list rails
+         * that echo the same list for every query.
+         */
+        fun ManifestCatalog.isRankStyleCatalog(): Boolean {
+            val hay = "$id $name"
+            // "top" as a substring also covers "top10" / "top-10" variants.
+            return listOf("top", "trending", "popular").any {
+                hay.contains(it, ignoreCase = true)
+            }
+        }
+
+        /**
          * Rail label for a catalog: search-style catalogs keep their own
          * (addon-prefix-stripped) name, e.g. "AI Search"; regular catalogs
          * get a plural type label ("Movies" / "Series" / "All" / ...).
@@ -895,6 +1016,9 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
 
         /** Catalog probes per catalog-only addon when it has no search resource. */
         const val MAX_ADDON_CATALOG_PROBES = 12
+
+        /** Per-rail cap on TMDB enrichments for missing year/rating. */
+        const val MAX_ENRICH_PER_GROUP = 20
 
         /** Per-rail cap for a catalog-only addon's per-catalog search rail. */
         const val MAX_ADDON_CATALOG_RESULTS = 20
