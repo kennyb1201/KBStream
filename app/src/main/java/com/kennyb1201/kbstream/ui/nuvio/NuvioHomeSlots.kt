@@ -56,7 +56,16 @@ object NuvioHomeSlots {
         if (collections.isEmpty()) return addonEntries
 
         val arrangement = state.arrangement
-        val hidden = arrangement.hiddenSet
+        // Never-arranged collections are HIDDEN by default: they only
+        // appear on Home after the user enables them in the home manager
+        // (Add-ons -> HOME -> Show). Legacy profiles already arranged keep
+        // their saved state.
+        val arrangedKeys = arrangement.pinned.toSet() +
+            arrangement.order.toSet() + arrangement.hiddenSet
+        val effectiveHidden = arrangement.hiddenSet + collectionKeysNeedingDefault(
+            state.collections, arrangedKeys
+        )
+        val hidden = effectiveHidden
         val pinnedKeys = arrangement.pinned.toSet()
 
         val collectionByKey = LinkedHashMap<String, NuvioCollectionProfile>()
@@ -115,6 +124,19 @@ object NuvioHomeSlots {
 
         return pinned + middle + tail
     }
+
+    /**
+     * Collection keys that have never been arranged anywhere: these default
+     * to hidden so a fresh import stays off Home until Show is pressed in
+     * the home manager.
+     */
+    private fun collectionKeysNeedingDefault(
+        collections: List<NuvioCollectionProfile>,
+        arrangedKeys: Set<String>
+    ): Set<String> = collections
+        .map { key(it) }
+        .filter { it !in arrangedKeys }
+        .toSet()
 
     private fun key(collection: NuvioCollectionProfile): String =
         NuvioHomeOrderPrefs.collectionKey(collection.id, collection.title)

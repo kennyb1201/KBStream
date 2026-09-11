@@ -53,6 +53,7 @@ class NuvioRepository(private val context: Context) {
     companion object {
         private const val TAG = "NUVIO_REPO"
         private const val CACHE_DIR = "nuvio_collections"
+        private const val LOCAL_DIR = "nuvio_collections_local"
         private const val CACHE_TTL_MS = 12L * 60L * 60L * 1000L
 
         private fun cacheFileFor(url: String): String =
@@ -125,6 +126,12 @@ class NuvioRepository(private val context: Context) {
             return disk.second
         }
 
+        if (isLocalUrl(url)) {
+            val fresh = readLocalProfile(url.removePrefix(LOCAL_SCHEME))
+            cacheMutex.withLock { memoryCache[url] = (now to fresh) }
+            return fresh
+        }
+
         val fresh = fetchAndParse(url)
         cacheMutex.withLock { memoryCache[url] = (now to fresh) }
         writeDiskCache(url, fresh)
@@ -147,6 +154,9 @@ class NuvioRepository(private val context: Context) {
      * list — used to validate an import before it is persisted.
      */
     suspend fun loadProfileForValidation(url: String): List<NuvioCollectionProfile> {
+        if (isLocalUrl(url)) {
+            return readLocalProfile(url.removePrefix(LOCAL_SCHEME))
+        }
         val now = System.currentTimeMillis()
         val cached = memoryCache[url]
         if (cached != null && now - cached.first < CACHE_TTL_MS) {
@@ -166,6 +176,13 @@ class NuvioRepository(private val context: Context) {
                 .resolve(cacheFileFor(url))
                 .delete()
         }
+        if (isLocalUrl(url)) {
+            runCatching {
+                File(context.filesDir, LOCAL_DIR)
+                    .resolve(url.removePrefix(LOCAL_SCHEME) + ".json")
+                    .delete()
+            }
+        }
     }
 
     /** Validate + import a pasted JSON document; returns collection count. */
@@ -174,6 +191,39 @@ class NuvioRepository(private val context: Context) {
             ?: throw IllegalArgumentException("Not a Nuvio collections profile")
         parsed.size
     }
+
+    companion object Local {
+        const val LOCAL_SCHEME = "local:"
+        fun isLocalUrl(url: String): Boolean =
+            url.startsWith(LOCAL_SCHEME, ignoreCase = true)
+    }
+
+    /**
+     * Validate a pasted/picked Nuvio profile JSON and store it in app
+     * storage. Returns the "local:<id>" pseudo-URL the rest of the
+     * pipeline (loadProfiles / Home rails) reads it back with.
+     */
+    suspend fun importLocalProfile(jsonText: String): String =
+        withContext(Dispatchers.IO) {
+            val parsed = profileListAdapter.fromJson(jsonText)
+                ?: throw IllegalArgumentException("Not a Nuvio collections profile")
+            if (parsed.isEmpty()) {
+                throw IllegalArgumentException("Profile contains no collections")
+            }
+
+            val dir = File(context.filesDir, LOCAL_DIR).apply { mkdirs() }
+            val id = "file_" + System.currentTimeMillis().toString(36) +
+                "_" + (0..999).random()
+            File(dir, "$id.json").writeText(jsonText)
+            LOCAL_SCHEME + id
+        }
+
+    private fun readLocalProfile(id: String): List<NuvioCollectionProfile> =
+        runCatching {
+            val file = File(context.filesDir, LOCAL_DIR).resolve("$id.json")
+            profileListAdapter.fromJson(file.readText())
+                ?.filter { it.folders.isNotEmpty() || it.title.isNotBlank() }
+        }.getOrNull().orEmpty()
 
     private suspend fun fetchAndParse(url: String): List<NuvioCollectionProfile> =
         withContext(Dispatchers.IO) {
@@ -258,7 +308,8 @@ object NuvioProfilePrefs {
 
     fun addProfileUrl(context: Context, url: String): Boolean {
         val clean = url.trim()
-        if (!NuvioRepository.isPlausibleUrl(clean)) return false
+        val isLocal = NuvioRepository.Local.isLocalUrl(clean)
+        if (!isLocal && !NuvioRepository.isPlausibleUrl(clean)) return false
         val current = getProfileUrls(context)
         if (current.any { it.equals(clean, ignoreCase = true) }) return false
         prefs(context).edit().putString(KEY_URLS, (current + clean).joinToString("\n")).apply()

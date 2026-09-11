@@ -1456,6 +1456,12 @@ class NativePlayerActivity : ComponentActivity() {
         videoTrackPresent = false
         firstFrameRendered = false
         blackVideoNoticeShown = false
+        // Invalidate any black-video recovery scheduled for the previous
+        // player instance. Without this, a watchdog armed on the old player
+        // (e.g. the P5 re-route rebuild that fires right after READY) keeps
+        // running and bounces the fresh player's surface seconds after it
+        // starts — the "resetting video surface" flash on working streams.
+        blackVideoWatchdogToken++
         p5ReroutePending = false
         // The surface reset is cheap and valid on every attempt (including the
         // software one); only the software retry itself is once-per-session.
@@ -2242,7 +2248,12 @@ class NativePlayerActivity : ComponentActivity() {
     private fun handleBlackVideoTimeout(token: Int, requirePlaying: Boolean = true) {
         if (token != blackVideoWatchdogToken) return
         if (blackVideoNoticeShown) return
-        if (firstFrameRendered && System.currentTimeMillis() - firstFrameRenderedAtMs > 2000L) return
+        // A rendered first frame means video output works — the recovery
+        // ladder is pointless and destructive (it has bounce-rebuilt the
+        // surface on streams that were already playing fine, e.g. DV P5
+        // sessions whose GLES path reports frames late). One truth, checked
+        // at every stage: frame rendered -> stop.
+        if (firstFrameRendered) return
         // buffering start or rebuffer must not trip the notice. The startup
         // watchdog bypasses this gate — a session that never reached READY
         // needs the same recovery ladder, not an eternal splash.
@@ -2281,7 +2292,7 @@ class NativePlayerActivity : ComponentActivity() {
                 {
                     if (token != blackVideoWatchdogToken) return@postDelayed
                     if (blackVideoNoticeShown) return@postDelayed
-                    if (firstFrameRendered && System.currentTimeMillis() - firstFrameRenderedAtMs > 2000L) return@postDelayed
+                    if (firstFrameRendered) return@postDelayed
                     if (surfaceView == null) {
                         // No SurfaceView to bounce (unexpected layout) — skip
                         // straight to the TextureView stage.
@@ -2323,7 +2334,7 @@ class NativePlayerActivity : ComponentActivity() {
                 {
                     if (token != blackVideoWatchdogToken) return@postDelayed
                     if (blackVideoNoticeShown) return@postDelayed
-                    if (firstFrameRendered && System.currentTimeMillis() - firstFrameRenderedAtMs > 2000L) return@postDelayed
+                    if (firstFrameRendered) return@postDelayed
                     errorMessageStr = null
                     recreatePlayer()
                 },
@@ -2349,6 +2360,8 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     private fun showBlackVideoNotice() {
+        // Belt-and-braces: a frame rendered at any point means output works.
+        if (firstFrameRendered) return
         blackVideoNoticeShown = true
         val codecInfo = streamCodec?.let { codec ->
             if (streamWidth > 0) " ($codec ${streamWidth}x$streamHeight)" else " ($codec)"

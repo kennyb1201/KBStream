@@ -7,6 +7,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
@@ -32,6 +34,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
@@ -88,6 +91,7 @@ import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.addon.CatalogConfiguration
 import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.data.addon.ManifestCatalog
+import com.kennyb1201.kbstream.data.nuvio.NuvioHomeOrderPrefs
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
@@ -233,7 +237,7 @@ fun AddonsScreen(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 ActionButton(
-                    label = "CATALOGS",
+                    label = "HOME",
                     icon = Icons.Filled.List,
                     onClick = { showCatalogManager = true }
                 )
@@ -371,28 +375,6 @@ fun AddonsScreen(
                                 },
                                 onRefresh = { viewModel.refreshManifest(selectedAddon.id) },
                                 onRemove = { showRemoveConfirm = true },
-                                onToggleCatalog = { catalogId, showOnHome ->
-                                    viewModel.setCatalogShowOnHome(
-                                        selectedAddon.id,
-                                        catalogId,
-                                        showOnHome
-                                    )
-                                },
-                                onMoveCatalog = { catalogId, action ->
-                                    when (action) {
-                                        CatalogMoveAction.TOP ->
-                                            viewModel.moveCatalogToTop(selectedAddon.id, catalogId)
-
-                                        CatalogMoveAction.UP ->
-                                            viewModel.moveCatalogUp(selectedAddon.id, catalogId)
-
-                                        CatalogMoveAction.DOWN ->
-                                            viewModel.moveCatalogDown(selectedAddon.id, catalogId)
-
-                                        CatalogMoveAction.BOTTOM ->
-                                            viewModel.moveCatalogToBottom(selectedAddon.id, catalogId)
-                                    }
-                                },
                                 firstActionFocusRequester = firstActionFocusRequester
                             )
                         }
@@ -465,9 +447,45 @@ fun AddonsScreen(
         )
     }
 
+    val collectionsState by viewModel.collections.collectAsState()
+    var collectionUrlInput by remember { mutableStateOf("") }
+    val collectionFilePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            val json = runCatching {
+                context.contentResolver.openInputStream(uri)
+                    ?.bufferedReader(Charsets.UTF_8)
+                    ?.use { it.readText() }
+            }.getOrNull()
+            if (json != null) {
+                viewModel.importCollectionProfileJson(json)
+            } else {
+                viewModel.onCollectionImportFileError()
+            }
+        }
+    }
+
     if (showCatalogManager) {
         CatalogManagerDialog(
             configurations = catalogConfigurations,
+            collectionsState = collectionsState,
+            collectionUrlInput = collectionUrlInput,
+            onCollectionUrlChange = { collectionUrlInput = it },
+            onImportCollectionUrl = {
+                if (collectionUrlInput.isNotBlank()) {
+                    viewModel.addCollectionProfileUrl(collectionUrlInput.trim())
+                    collectionUrlInput = ""
+                }
+            },
+            onPickCollectionFile = {
+                collectionFilePicker.launch(
+                    arrayOf("application/json", "text/plain", "application/octet-stream")
+                )
+            },
+            onRemoveCollectionProfile = { url ->
+                viewModel.removeCollectionProfileUrl(url)
+            },
             onToggle = { config, show ->
                 viewModel.setCatalogShowOnHome(
                     config.addonId,
@@ -514,6 +532,9 @@ fun AddonsScreen(
                         )
                 }
             },
+            onCollectionPin = { key -> viewModel.toggleCollectionPinned(key) },
+            onCollectionHide = { key -> viewModel.toggleCollectionHidden(key) },
+            onCollectionMove = { key, delta -> viewModel.moveCollection(key, delta) },
             onRename = { config ->
                 renameCatalogDraft = config.catalog.displayName
                 renameCatalogTarget = config
@@ -708,8 +729,6 @@ private fun AddonDetails(
     onOpenManifest: () -> Unit,
     onRefresh: () -> Unit,
     onRemove: () -> Unit,
-    onToggleCatalog: (catalogId: String, showOnHome: Boolean) -> Unit,
-    onMoveCatalog: (catalogId: String, action: CatalogMoveAction) -> Unit,
     firstActionFocusRequester: FocusRequester? = null
 ) {
     val catalogScrollState = rememberScrollState()
@@ -883,43 +902,10 @@ private fun AddonDetails(
             )
         }
 
-        if (addon.catalogs.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(10.dp))
-            Text(
-                text = "CATALOGS ON HOME",
-                color = KBTextLo,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(bottom = 6.dp)
-            )
-
-            // Scrolls with the panel now — see the verticalScroll note above.
-            Column(modifier = Modifier.fillMaxWidth()) {
-                val sortedCatalogs =
-                    addon.catalogs.sortedBy { it.order }
-
-                sortedCatalogs.forEachIndexed { index, catalog ->
-                    CatalogToggleRow(
-                        catalog = catalog,
-                        isFirst = index == 0,
-                        isLast = index == sortedCatalogs.lastIndex,
-                        onToggle = {
-                            onToggleCatalog(
-                                catalog.id,
-                                !catalog.showOnHome
-                            )
-                        },
-                        onMove = { action ->
-                            onMoveCatalog(catalog.id, action)
-                        }
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                }
-            }
-        } else {
+        if (addon.catalogs.isEmpty()) {
             Spacer(modifier = Modifier.weight(1f))
             Text(
-                text = "This add-on has no catalogs.",
+                text = "This add-on has no catalogs. Use HOME to manage them.",
                 color = KBTextLo,
                 style = MaterialTheme.typography.bodySmall
             )
@@ -1182,138 +1168,7 @@ private fun AddonTileLetter(
     )
 }
 
-@Composable
-private fun CatalogToggleRow(
-    catalog: ManifestCatalog,
-    isFirst: Boolean,
-    isLast: Boolean,
-    onToggle: () -> Unit,
-    onMove: (CatalogMoveAction) -> Unit
-) {
-    // The toggle card and the four arrow buttons are SIBLINGS, not nested:
-    // nested clickables inside a TV focusable card can't be reached with a
-    // D-pad (the outer card swallows focus), so arrows must be peers of the
-    // toggle card to stay focusable.
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        KBCard(
-            onClick = onToggle,
-            modifier = Modifier.weight(1f)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 7.dp)
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = catalog.displayName.ifBlank { catalog.id },
-                        color = KBTextHi,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = catalog.type.uppercase(),
-                        color = KBTextLo,
-                        style = MaterialTheme.typography.labelSmall,
-                        maxLines = 1
-                    )
-                }
-
-                Text(
-                    text = if (catalog.showOnHome) "ON HOME" else "HIDDEN",
-                    color = if (catalog.showOnHome) KBAccent else KBTextLo,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(start = 10.dp)
-                )
-            }
-        }
-
-        CatalogMoveButton(
-            icon = Icons.Filled.KeyboardDoubleArrowUp,
-            contentDescription = "Move to top",
-            enabled = !isFirst,
-            onClick = { onMove(CatalogMoveAction.TOP) }
-        )
-        CatalogMoveButton(
-            icon = Icons.Filled.ArrowUpward,
-            contentDescription = "Move up",
-            enabled = !isFirst,
-            onClick = { onMove(CatalogMoveAction.UP) }
-        )
-        CatalogMoveButton(
-            icon = Icons.Filled.ArrowDownward,
-            contentDescription = "Move down",
-            enabled = !isLast,
-            onClick = { onMove(CatalogMoveAction.DOWN) }
-        )
-        CatalogMoveButton(
-            icon = Icons.Filled.KeyboardDoubleArrowDown,
-            contentDescription = "Move to bottom",
-            enabled = !isLast,
-            onClick = { onMove(CatalogMoveAction.BOTTOM) }
-        )
-    }
-}
-
-@Composable
-private fun CatalogMoveButton(
-    icon: ImageVector,
-    contentDescription: String,
-    enabled: Boolean,
-    onClick: () -> Unit
-) {
-    val buttonModifier = Modifier
-        .padding(start = 6.dp)
-        .size(34.dp)
-
-    if (enabled) {
-        KBCard(
-            onClick = onClick,
-            modifier = buttonModifier
-        ) {
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier.fillMaxSize()
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = contentDescription,
-                    tint = KBTextHi,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-        }
-    } else {
-        Surface(
-            shape = RoundedCornerShape(8.dp),
-            colors = SurfaceDefaults.colors(
-                containerColor = KBSurface.copy(alpha = 0.50f),
-                contentColor = KBTextLo.copy(alpha = 0.40f)
-            ),
-            modifier = buttonModifier
-        ) {
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier.fillMaxSize()
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = contentDescription,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-        }
-    }
-}
-
-@Composable
+Composable
 private fun AddonFilterField(
     query: String,
     onClick: () -> Unit
@@ -1808,64 +1663,115 @@ private fun openManifest(
 @Composable
 private fun CatalogManagerDialog(
     configurations: List<CatalogConfiguration>,
+    collectionsState: com.kennyb1201.kbstream.ui.addons.AddonsViewModel.CollectionUiState,
+    collectionUrlInput: String,
+    onCollectionUrlChange: (String) -> Unit,
+    onImportCollectionUrl: () -> Unit,
+    onPickCollectionFile: () -> Unit,
+    onRemoveCollectionProfile: (String) -> Unit,
     onToggle: (CatalogConfiguration, Boolean) -> Unit,
     onToggleAll: (Boolean) -> Unit,
     onMove: (CatalogConfiguration, CatalogMoveAction) -> Unit,
+    onCollectionPin: (String) -> Unit,
+    onCollectionHide: (String) -> Unit,
+    onCollectionMove: (String, Int) -> Unit,
     onRename: (CatalogConfiguration) -> Unit,
     onDismiss: () -> Unit
 ) {
     BackHandler(onBack = onDismiss)
 
     // Focus pinning for the reorder arrows: a move relocates the pressed
-    // row (items are keyed by catalog identity) and off-screen relocations
-    // dispose the focused button, throwing D-pad focus back to the header.
-    // After each move, scroll to the index the catalog landed on and re-focus
-    // the SAME button there, so repeated presses just keep working. If that
-    // button is disabled at its new position (e.g. DOWN on the last-1 row),
-    // fall back to the row's toggle card.
+    // row (items are keyed by identity) and off-screen relocations dispose
+    // the focused button, throwing D-pad focus back to the header. After
+    // each move, scroll to the index the row landed on and re-focus the
+    // SAME button there, so repeated presses just keep working. If that
+    // button is disabled at its new position, fall back to the row's
+    // toggle card.
     val listState = rememberLazyListState()
     val rowRequesters = remember { mutableMapOf<String, CatalogRowFocus>() }
     var pendingFocus by remember {
         mutableStateOf<Pair<Int, CatalogRowFocus.Slot>?>(null)
     }
 
-    val handleMove: (CatalogConfiguration, CatalogRowFocus.Slot, CatalogMoveAction) -> Unit =
-        { config, slot, action ->
-            val fromIndex = configurations.indexOfFirst {
-                it.addonId == config.addonId &&
-                    it.catalog.type == config.catalog.type &&
-                    it.catalog.id == config.catalog.id
+    // One flat list: addon catalog rows first-class alongside collection
+    // rows, arranged by the merged home order the ViewModel owns.
+    val rows: List<CatalogManagerDialogRow> = remember(configurations, collectionsState) {
+        val collectionByKey = collectionsState.collections.associateBy { it.key }
+        val addonByKey = configurations.associateBy {
+            "${it.addonId}::${it.catalog.type}::${it.catalog.id}"
+        }
+        val known = buildList {
+            configurations.forEach {
+                add(NuvioHomeOrderPrefs.addonKey(it.addonId, it.catalog.type, it.catalog.id))
             }
-            if (fromIndex >= 0) {
-                pendingFocus = when (action) {
-                    CatalogMoveAction.TOP -> 0 to slot
-                    CatalogMoveAction.BOTTOM -> configurations.lastIndex to slot
-                    CatalogMoveAction.UP -> (fromIndex - 1).coerceAtLeast(0) to slot
-                    CatalogMoveAction.DOWN -> (fromIndex + 1).coerceAtMost(configurations.lastIndex) to slot
-                }
-            }
-            onMove(config, action)
+            collectionsState.collections.forEach { add(it.key) }
+        }.toSet()
+        // Best-effort merged order read (same prefs the ViewModel writes);
+        // keys not found keep their default slot at the end.
+        val prefs = NuvioHomeOrderPrefs.readOrder()
+        val orderedKeys = buildList {
+            prefs.pinned.filter { it in known }.forEach { add(it) }
+            prefs.order.filter { it in known && it !in prefs.pinned }.forEach { add(it) }
+            known.forEach { if (it !in this) add(it) }
         }
 
-    LaunchedEffect(configurations) {
+        orderedKeys.mapNotNull { key ->
+            if (key.startsWith("nuvio:")) {
+                val collection = collectionByKey[key] ?: return@mapNotNull null
+                CatalogManagerDialogRow(
+                    key = key,
+                    isCollection = true,
+                    config = null,
+                    collectionKey = key,
+                    title = collection.title,
+                    subtitle = "Collection · ${collection.folderCount} folders",
+                    isPinned = collection.isPinned,
+                    isHidden = collection.isHidden
+                )
+            } else {
+                val config = addonByKey.values.firstOrNull {
+                    NuvioHomeOrderPrefs.addonKey(it.addonId, it.catalog.type, it.catalog.id) == key
+                } ?: return@mapNotNull null
+                CatalogManagerDialogRow(
+                    key = "${config.addonId}::${config.catalog.type}::${config.catalog.id}",
+                    isCollection = false,
+                    config = config,
+                    collectionKey = null,
+                    title = config.catalog.displayName.ifBlank { config.catalog.id },
+                    subtitle = "${config.catalog.type} · ${config.addonName}",
+                    isPinned = false,
+                    isHidden = !config.catalog.showOnHome
+                )
+            }
+        }
+    }
+
+    val visibleRows = rows.filter { !it.isHidden }
+    val hiddenRows = rows.filter { it.isHidden }
+    val allCatalogsVisible = configurations.all { it.catalog.showOnHome }
+
+    fun moveRow(row: Row, slot: CatalogRowFocus.Slot, delta: Int) {
+        if (row.isCollection) {
+            pendingFocus = null
+            onCollectionMove(row.key, delta)
+            return
+        }
+        val fromIndex = visibleRows.indexOfFirst { it.key == row.key }
+        if (fromIndex < 0) return
+        pendingFocus = when {
+            delta < 0 -> (fromIndex - 1).coerceAtLeast(0) to slot
+            delta > 0 -> (fromIndex + 1).coerceAtMost(visibleRows.lastIndex) to slot
+            else -> null
+        }
+    }
+
+    LaunchedEffect(configurations, collectionsState) {
         val target = pendingFocus ?: return@LaunchedEffect
         pendingFocus = null
         val (index, slot) = target
         runCatching { listState.animateScrollToItem(index) }
-        val config = configurations.getOrNull(index) ?: return@LaunchedEffect
-        val key = "${config.addonId}::${config.catalog.type}::${config.catalog.id}"
-        // A row scrolled in from off-screen registers its requesters during
-        // composition; wait for that frame to settle before grabbing one.
-        var focus = rowRequesters[key]
-        var attempts = 0
-        while (focus == null && attempts < 5) {
-            withFrameNanos { }
-            focus = rowRequesters[key]
-            attempts++
-        }
-        focus ?: return@LaunchedEffect
-        // Preferred slot first; toggle card is the guaranteed focusable
-        // fallback (a moved row can disable its arrows at the boundary).
+        val row = visibleRows.getOrNull(index) ?: return@LaunchedEffect
+        val focus = rowRequesters[row.key] ?: return@LaunchedEffect
         focus.of(slot)?.let { requester ->
             runCatching { requester.requestFocus() }
         } ?: run { runCatching { focus.toggle.requestFocus() } }
@@ -1874,35 +1780,35 @@ private fun CatalogManagerDialog(
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
-                .width(780.dp)
-                .fillMaxHeight(0.85f)
+                .width(860.dp)
+                .fillMaxHeight(0.88f)
                 .background(KBVoid, RoundedCornerShape(18.dp))
                 .border(1.dp, KBAccent.copy(alpha = 0.38f), RoundedCornerShape(18.dp))
                 .padding(18.dp)
         ) {
+            // Header
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "CATALOG MANAGER",
+                        text = "HOME MANAGER",
                         color = KBAccent,
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "Rename, reorder, and toggle rails. Changes are instant.",
+                        text = "Arrange collections and catalogs. Changes are instant.",
                         color = KBTextLo,
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(top = 3.dp)
                     )
                 }
                 if (configurations.isNotEmpty()) {
-                    val allVisible = configurations.all { it.catalog.showOnHome }
                     ActionButton(
-                        label = if (allVisible) "HIDE ALL" else "SHOW ALL",
-                        onClick = { onToggleAll(!allVisible) }
+                        label = if (allCatalogsVisible) "HIDE ALL" else "SHOW ALL",
+                        onClick = { onToggleAll(!allCatalogsVisible) }
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                 }
@@ -1911,43 +1817,142 @@ private fun CatalogManagerDialog(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            if (configurations.isEmpty()) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
+            // Import section
+            Text(
+                text = "IMPORT COLLECTIONS",
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .padding(top = 6.dp)
+                    .fillMaxWidth()
+            ) {
+                KBTextField(
+                    value = collectionUrlInput,
+                    onValueChange = onCollectionUrlChange,
+                    placeholder = "https://…/nuvio-collections.json",
+                    modifier = Modifier.weight(1f),
+                    onDone = onImportCollectionUrl
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                KBPasteChip(onPaste = onCollectionUrlChange)
+                Spacer(modifier = Modifier.width(6.dp))
+                ActionButton(label = "ADD", onClick = onImportCollectionUrl)
+                Spacer(modifier = Modifier.width(6.dp))
+                ActionButton(label = "FILE", onClick = onPickCollectionFile)
+            }
+            collectionsState.statusMessage?.let { message ->
+                Text(
+                    text = message,
+                    color = if (message.startsWith("Import failed")) KBTextLo else KBAccent,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+
+            // Imported profile sources (removable)
+            if (collectionsState.profileUrls.isNotEmpty()) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier
+                        .padding(top = 6.dp)
+                        .fillMaxWidth()
                 ) {
-                    Text(
-                        text = "No catalogs installed.",
-                        color = KBTextLo,
-                        style = MaterialTheme.typography.bodyMedium
+                    collectionsState.profileUrls.forEach { url ->
+                        val isFile = url.startsWith("local:")
+                        ActionButton(
+                            label = (if (isFile) "📎 " else "") +
+                                url.substringAfterLast('/').ifBlank { url },
+                            onClick = { onRemoveCollectionProfile(url) }
+                        )
+                    }
+                }
+                Text(
+                    text = "Press OK on a source to remove it",
+                    color = KBTextLo.copy(alpha = 0.6f),
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(top = 3.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Text(
+                text = "HOME RAILS (${visibleRows.size} shown)",
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+
+            LazyColumn(
+                state = listState,
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .focusGroup()
+            ) {
+                itemsIndexed(
+                    items = visibleRows,
+                    key = { _, row -> row.key }
+                ) { index, row ->
+                    val rowFocus = remember(row.key) { CatalogRowFocus() }
+                    rowRequesters[row.key] = rowFocus
+                    UnifiedManagerRow(
+                        row = row,
+                        position = index,
+                        total = visibleRows.size,
+                        rowFocus = rowFocus,
+                        onToggle = {
+                            if (row.isCollection) {
+                                onCollectionHide(row.collectionKey.orEmpty())
+                            } else {
+                                onToggle(row.config!!, !row.config.catalog.showOnHome)
+                            }
+                        },
+                        onPin = {
+                            if (row.isCollection) {
+                                onCollectionPin(row.collectionKey.orEmpty())
+                            }
+                        },
+                        onMove = { slot, delta -> moveRow(row, slot, delta) },
+                        onRename = {
+                            if (!row.isCollection) onRename(row.config!!)
+                        }
                     )
                 }
-            } else {
-                LazyColumn(
-                    state = listState,
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.fillMaxSize().focusGroup()
-                ) {
+
+                if (hiddenRows.isNotEmpty()) {
+                    item(key = "hidden_header") {
+                        Text(
+                            text = "HIDDEN — press SHOW to bring back",
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.padding(top = 10.dp, bottom = 2.dp)
+                        )
+                    }
                     itemsIndexed(
-                        items = configurations,
-                        key = { _, config ->
-                            "${config.addonId}::${config.catalog.type}::${config.catalog.id}"
-                        }
-                    ) { index, config ->
-                        val rowKey =
-                            "${config.addonId}::${config.catalog.type}::${config.catalog.id}"
-                        val rowFocus = remember(rowKey) { CatalogRowFocus() }
-                        rowRequesters[rowKey] = rowFocus
-                        CatalogManagerRow(
-                            config = config,
-                            position = index,
-                            total = configurations.size,
-                            rowFocus = rowFocus,
+                        items = hiddenRows,
+                        key = { _, row -> "hidden:${row.key}" }
+                    ) { _, row ->
+                        UnifiedManagerRow(
+                            row = row,
+                            position = -1,
+                            total = -1,
+                            rowFocus = remember(row.key) { CatalogRowFocus() },
                             onToggle = {
-                                onToggle(config, !config.catalog.showOnHome)
+                                if (row.isCollection) {
+                                    onCollectionHide(row.collectionKey.orEmpty())
+                                } else {
+                                    onToggle(row.config!!, !row.config.catalog.showOnHome)
+                                }
                             },
-                            onRename = { onRename(config) },
-                            onMove = { slot, action -> handleMove(config, slot, action) }
+                            onPin = {},
+                            onMove = { _, _ -> },
+                            onRename = {}
                         )
                     }
                 }
@@ -1955,6 +1960,122 @@ private fun CatalogManagerDialog(
         }
     }
 }
+
+@Composable
+private fun UnifiedManagerRow(
+    row: CatalogManagerDialogRow,
+    position: Int,
+    total: Int,
+    rowFocus: CatalogRowFocus,
+    onToggle: () -> Unit,
+    onPin: () -> Unit,
+    onMove: (CatalogRowFocus.Slot, Int) -> Unit,
+    onRename: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(KBSurface)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+    ) {
+        // Line 1: position + pin indicator + name + show/hide switch
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = if (position >= 0) (position + 1).toString() else "—",
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.width(24.dp)
+            )
+            if (row.isPinned) {
+                Text(
+                    text = "📌",
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.width(22.dp)
+                )
+            } else {
+                Spacer(modifier = Modifier.width(22.dp))
+            }
+            Text(
+                text = row.title,
+                color = KBTextHi,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).padding(end = 6.dp)
+            )
+            CatalogToggle(
+                checked = !row.isHidden,
+                onClick = onToggle,
+                modifier = Modifier.focusRequester(rowFocus.toggle)
+            )
+        }
+
+        // Line 2: subtitle + actions
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 4.dp)
+        ) {
+            Text(
+                text = row.subtitle,
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(end = 8.dp)
+            )
+
+            if (!row.isCollection) {
+                CatalogIconButton(
+                    icon = Icons.Filled.Edit,
+                    onClick = onRename,
+                    modifier = Modifier.size(38.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+            }
+            CatalogIconButton(
+                icon = Icons.Filled.PushPin,
+                enabled = row.isCollection && position >= 0,
+                onClick = onPin,
+                modifier = Modifier.size(38.dp)
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            CatalogIconButton(
+                icon = Icons.Filled.ArrowUpward,
+                enabled = position > 0,
+                onClick = { onMove(CatalogRowFocus.Slot.TOP, -1) },
+                modifier = Modifier.size(38.dp).focusRequester(rowFocus.up)
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            CatalogIconButton(
+                icon = Icons.Filled.ArrowDownward,
+                enabled = position in 0 until (total - 1),
+                onClick = { onMove(CatalogRowFocus.Slot.DOWN, +1) },
+                modifier = Modifier.size(38.dp).focusRequester(rowFocus.down)
+            )
+        }
+    }
+}
+
+/** Plain data holder for a unified manager row. */
+private data class CatalogManagerDialogRow(
+    val key: String,
+    val isCollection: Boolean,
+    val config: CatalogConfiguration?,
+    val collectionKey: String?,
+    val title: String,
+    val subtitle: String,
+    val isPinned: Boolean,
+    val isHidden: Boolean
+)
 
 @Composable
 private fun CatalogIconButton(
@@ -2049,108 +2170,7 @@ private fun CatalogToggle(
     }
 }
 
-@Composable
-private fun CatalogManagerRow(
-    config: CatalogConfiguration,
-    position: Int,
-    total: Int,
-    rowFocus: CatalogRowFocus,
-    onToggle: () -> Unit,
-    onRename: () -> Unit,
-    onMove: (CatalogRowFocus.Slot, CatalogMoveAction) -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(KBSurface)
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-    ) {
-        // Line 1: position + name + show/hide switch
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(
-                text = (position + 1).toString(),
-                color = KBTextLo,
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.width(24.dp)
-            )
-
-            Text(
-                text = config.catalog.displayName.ifBlank { config.catalog.id },
-                color = KBTextHi,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f).padding(end = 6.dp)
-            )
-
-            CatalogToggle(
-                checked = config.catalog.showOnHome,
-                onClick = onToggle,
-                modifier = Modifier.focusRequester(rowFocus.toggle)
-            )
-        }
-
-        // Line 2: type + addon subtitle + action buttons
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 4.dp)
-        ) {
-            Text(
-                text = "${config.catalog.type} · ${config.addonName}",
-                color = KBTextLo,
-                style = MaterialTheme.typography.labelSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(end = 8.dp)
-            )
-
-            CatalogIconButton(
-                icon = Icons.Filled.Edit,
-                onClick = onRename,
-                modifier = Modifier.size(38.dp)
-            )
-            Spacer(modifier = Modifier.width(4.dp))
-            CatalogIconButton(
-                icon = Icons.Filled.KeyboardDoubleArrowUp,
-                enabled = position > 0,
-                onClick = { onMove(CatalogRowFocus.Slot.TOP, CatalogMoveAction.TOP) },
-                modifier = Modifier.size(38.dp).focusRequester(rowFocus.top)
-            )
-            Spacer(modifier = Modifier.width(4.dp))
-            CatalogIconButton(
-                icon = Icons.Filled.ArrowUpward,
-                enabled = position > 0,
-                onClick = { onMove(CatalogRowFocus.Slot.UP, CatalogMoveAction.UP) },
-                modifier = Modifier.size(38.dp).focusRequester(rowFocus.up)
-            )
-            Spacer(modifier = Modifier.width(4.dp))
-            CatalogIconButton(
-                icon = Icons.Filled.ArrowDownward,
-                enabled = position < total - 1,
-                onClick = { onMove(CatalogRowFocus.Slot.DOWN, CatalogMoveAction.DOWN) },
-                modifier = Modifier.size(38.dp).focusRequester(rowFocus.down)
-            )
-            Spacer(modifier = Modifier.width(4.dp))
-            CatalogIconButton(
-                icon = Icons.Filled.KeyboardDoubleArrowDown,
-                enabled = position < total - 1,
-                onClick = { onMove(CatalogRowFocus.Slot.BOTTOM, CatalogMoveAction.BOTTOM) },
-                modifier = Modifier.size(38.dp).focusRequester(rowFocus.bottom)
-            )
-        }
-    }
-}
-
-@Composable
+Composable
 private fun RenameCatalogDialog(
     currentName: String,
     hasCustomName: Boolean,

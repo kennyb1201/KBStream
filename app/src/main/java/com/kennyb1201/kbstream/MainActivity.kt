@@ -66,7 +66,6 @@ import com.kennyb1201.kbstream.ui.player.PlayerCastMember
 import android.content.Intent
 import org.json.JSONArray
 import org.json.JSONObject
-import com.kennyb1201.kbstream.ui.nuvio.NuvioCollectionsManagerScreen
 import com.kennyb1201.kbstream.ui.nuvio.NuvioFolderScreen
 import com.kennyb1201.kbstream.ui.settings.SettingsScreen
 import com.kennyb1201.kbstream.ui.search.SearchScreen
@@ -786,7 +785,7 @@ fun AppRoot() {
                 current.returnTo
 
             is Screen.NuvioManager ->
-                Screen.Settings
+                Screen.Addons
 
             else ->
                 Screen.Home
@@ -905,14 +904,7 @@ fun AppRoot() {
             SettingsScreen(
                 onBack = { screen = Screen.Home },
                 onOpenAddons = { screen = Screen.Addons },
-                onOpenSimkl = { screen = Screen.Simkl },
-                onOpenNuvioManager = { screen = Screen.NuvioManager }
-            )
-        }
-
-        is Screen.NuvioManager -> {
-            NuvioCollectionsManagerScreen(
-                onBack = { screen = Screen.Settings }
+                onOpenSimkl = { screen = Screen.Simkl }
             )
         }
 

@@ -9,6 +9,11 @@ import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.CatalogConfiguration
 import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.data.addon.ManifestCatalog
+import com.kennyb1201.kbstream.data.nuvio.NuvioCollectionProfile
+import com.kennyb1201.kbstream.data.nuvio.NuvioHomeOrder
+import com.kennyb1201.kbstream.data.nuvio.NuvioHomeOrderPrefs
+import com.kennyb1201.kbstream.data.nuvio.NuvioProfilePrefs
+import com.kennyb1201.kbstream.data.nuvio.NuvioRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -34,6 +39,32 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
 
     val catalogConfigurations: StateFlow<List<CatalogConfiguration>> =
         _catalogConfigurations.asStateFlow()
+
+    private val nuvioRepository = NuvioRepository(application)
+
+    /**
+     * Imported Nuvio collections: import URL list plus each loaded
+     * collection (title, folder count) so the home manager can arrange
+     * them among addon catalog rails and import/remove profile URLs.
+     */
+    data class ManagedCollection(
+        val key: String,
+        val title: String,
+        val folderCount: Int,
+        val isPinned: Boolean,
+        val isHidden: Boolean
+    )
+
+    data class CollectionUiState(
+        val profileUrls: List<String> = emptyList(),
+        val collections: List<ManagedCollection> = emptyList(),
+        val statusMessage: String? = null
+    )
+
+    private val _collections =
+        MutableStateFlow(CollectionUiState())
+    val collections: StateFlow<CollectionUiState> =
+        _collections.asStateFlow()
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -98,6 +129,227 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         _addons.value = addonManager.getInstalledAddons()
         _catalogConfigurations.value =
             addonManager.getCatalogConfigurations()
+        reloadCollections()
+    }
+
+    /**
+     * Reload the imported-collections slice of the home manager: profile
+     * URLs, loaded collections (from cache), and each one's pin/hidden
+     * state from the shared home order prefs.
+     */
+    private fun reloadCollections() {
+        val context = getApplication<Application>()
+        val prefs = NuvioHomeOrderPrefs.get(context)
+        val collections = runCatching { nuvioRepository.loadProfiles() }
+            .getOrDefault(emptyList())
+            .sortedByDescending { it.pinToTop }
+        // Fresh imports have never been arranged anywhere: surface them as
+        // hidden in the manager (matching Home's default-off rendering).
+        val arranged = prefs.pinned.toSet() + prefs.order.toSet() + prefs.hiddenSet
+        _collections.value = CollectionUiState(
+            profileUrls = NuvioProfilePrefs.getProfileUrls(context),
+            collections = collections.map { collection ->
+                val key = NuvioHomeOrderPrefs.collectionKey(
+                    collection.id,
+                    collection.title
+                )
+                ManagedCollection(
+                    key = key,
+                    title = collection.title.ifBlank { "Untitled collection" },
+                    folderCount = collection.folders.size,
+                    isPinned = key in prefs.pinned,
+                    isHidden = key in prefs.hiddenSet || key !in arranged
+                )
+            },
+            statusMessage = _collections.value.statusMessage
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // Nuvio collections: import / remove / arrange (home manager)
+    // ------------------------------------------------------------------
+
+    fun addCollectionProfileUrl(url: String) {
+        val context = getApplication<Application>()
+        if (!NuvioRepository.isPlausibleUrl(url)) {
+            _collections.value = _collections.value.copy(
+                statusMessage = "Enter an https:// URL"
+            )
+            return
+        }
+        viewModelScope.launch {
+            _collections.value = _collections.value.copy(
+                statusMessage = "Importing…"
+            )
+            val ok = runCatching {
+                NuvioProfilePrefs.addProfileUrl(context, url) &&
+                    nuvioRepository.loadProfileForValidation(url).isNotEmpty()
+            }.getOrElse { false }
+            if (ok) {
+                _collections.value = _collections.value.copy(
+                    statusMessage = "Collections imported"
+                )
+                refresh()
+            } else {
+                NuvioProfilePrefs.removeProfileUrl(context, url)
+                nuvioRepository.evict(url)
+                _collections.value = _collections.value.copy(
+                    statusMessage = "Import failed — not a Nuvio collections profile"
+                )
+            }
+        }
+    }
+
+    /**
+     * Import a local Nuvio profile JSON document (picked from device
+     * storage). The parsed document is stored inside app storage behind a
+     * "local:" pseudo-URL so the rest of the pipeline (Home rails, folder
+     * screens) treats it exactly like a hosted profile.
+     */
+    fun importCollectionProfileJson(jsonText: String) {
+        if (jsonText.isBlank()) {
+            _collections.value = _collections.value.copy(
+                statusMessage = "Pick a .json collections profile"
+            )
+            return
+        }
+        viewModelScope.launch {
+            _collections.value = _collections.value.copy(
+                statusMessage = "Importing file…"
+            )
+            val result = runCatching {
+                val pseudoUrl = nuvioRepository.importLocalProfile(jsonText)
+                val context = getApplication<Application>()
+                if (NuvioProfilePrefs.addProfileUrl(context, pseudoUrl)) {
+                    pseudoUrl
+                } else {
+                    nuvioRepository.evict(pseudoUrl)
+                    null
+                }
+            }.getOrElse { null }
+
+            _collections.value = _collections.value.copy(
+                statusMessage = if (result != null) {
+                    "Collections file imported"
+                } else {
+                    "Import failed — not a Nuvio collections profile"
+                }
+            )
+            if (result != null) refresh()
+        }
+    }
+
+    fun onCollectionImportFileError() {
+        _collections.value = _collections.value.copy(
+            statusMessage = "Couldn't read the selected file"
+        )
+    }
+
+    fun removeCollectionProfileUrl(url: String) {
+        val context = getApplication<Application>()
+        NuvioProfilePrefs.removeProfileUrl(context, url)
+        viewModelScope.launch { nuvioRepository.evict(url) }
+        _collections.value = _collections.value.copy(
+            statusMessage = "Collection source removed"
+        )
+        refresh()
+    }
+
+    fun toggleCollectionPinned(key: String) {
+        persistHomeOrder { prefs ->
+            if (prefs.pinned.contains(key)) {
+                prefs.copy(pinned = prefs.pinned - key)
+            } else {
+                prefs.copy(
+                    pinned = prefs.pinned + key,
+                    order = prefs.order - key
+                )
+            }
+        }
+    }
+
+    fun toggleCollectionHidden(key: String) {
+        persistHomeOrder { prefs ->
+            if (prefs.hidden.contains(key)) {
+                prefs.copy(hidden = prefs.hidden - key)
+            } else {
+                prefs.copy(
+                    hidden = prefs.hidden + key,
+                    pinned = prefs.pinned - key,
+                    order = prefs.order - key
+                )
+            }
+        }
+    }
+
+    /**
+     * Move a collection one slot among VISIBLE home rails (collections and
+     * addon catalogs interleaved) — same merge semantics the standalone
+     * collections manager used, so a collection can sit between two addon
+     * catalogs. Pinned keys stay pinned in their new order.
+     */
+    fun moveCollection(key: String, delta: Int) {
+        persistHomeOrder { prefs ->
+            val visible = mergedRailKeys(prefs).filter { it !in prefs.hiddenSet }
+            val from = visible.indexOf(key)
+            if (from == -1) return@persist prefs
+            val to = (from + delta).coerceIn(0, visible.lastIndex)
+            if (from == to) return@persist prefs
+
+            val ordered = visible.toMutableList()
+            val item = ordered.removeAt(from)
+            ordered.add(to, item)
+
+            val pinnedCount = prefs.pinned.count { pinKey ->
+                visible.any { it == pinKey }
+            }
+            prefs.copy(
+                order = ordered.drop(pinnedCount),
+                pinned = ordered.take(pinnedCount)
+            )
+        }
+    }
+
+    /**
+     * Merged visible rail keys in display order: pinned (pin order) first,
+     * then stored order, then defaults (import order for collections, global
+     * catalog order for addons). Mirrors NuvioHomeSlots.buildMergedEntries.
+     */
+    private fun mergedRailKeys(prefs: NuvioHomeOrder): List<String> {
+        val collectionKeys = _collections.value.collections.map { it.key }
+        val addonKeys = _catalogConfigurations.value
+            .filter { it.catalog.showOnHome }
+            .map {
+                NuvioHomeOrderPrefs.addonKey(
+                    it.addonId,
+                    it.catalog.type,
+                    it.catalog.id
+                )
+            }
+        val defaults = collectionKeys + addonKeys
+        val known = defaults.toSet()
+
+        val positioned = mutableListOf<String>()
+        val seen = mutableSetOf<String>()
+        for (key in prefs.pinned) {
+            if (key in known && seen.add(key)) positioned += key
+        }
+        for (key in prefs.order) {
+            if (seen.add(key) && key in known) positioned += key
+        }
+        for (key in defaults) {
+            if (seen.add(key)) positioned += key
+        }
+        return positioned
+    }
+
+    private fun persistHomeOrder(
+        transform: (NuvioHomeOrder) -> NuvioHomeOrder
+    ) {
+        val context = getApplication<Application>()
+        val updated = transform(NuvioHomeOrderPrefs.get(context))
+        NuvioHomeOrderPrefs.save(context, updated)
+        refresh()
     }
 
     fun clearError() {

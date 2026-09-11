@@ -45,7 +45,15 @@ object NuvioHomeOrderPrefs {
     fun addonKey(baseUrl: String?, type: String, catalogId: String?): String =
         "addon:${baseUrl.orEmpty()}:$type:${catalogId.orEmpty()}"
 
+    /** Context-free read: uses the most recent get(context) caller's app context. */
+    @Volatile
+    private var lastContext: Context? = null
+
+    fun readOrder(): NuvioHomeOrder =
+        lastContext?.let { get(it) } ?: NuvioHomeOrder()
+
     fun get(context: Context): NuvioHomeOrder {
+        lastContext = context.applicationContext
         val raw = prefs(context).getString(KEY_BLOB, null) ?: return NuvioHomeOrder()
         return runCatching { adapter.fromJson(raw) }.getOrNull() ?: NuvioHomeOrder()
     }
