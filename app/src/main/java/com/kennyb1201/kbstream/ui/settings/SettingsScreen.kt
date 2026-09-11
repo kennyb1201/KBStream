@@ -78,6 +78,7 @@ fun SettingsScreen(
     val isFireTv = android.os.Build.MANUFACTURER.equals("Amazon", ignoreCase = true)
     var audioDecoder by remember { mutableIntStateOf(AppPreferences.getAudioDecoder(context)) }
     var heroTrailerAutoplay by remember { mutableStateOf(AppPreferences.getHeroTrailerAutoplay(context)) }
+    var heroTrailerMuted by remember { mutableStateOf(AppPreferences.getHeroTrailerMuted(context)) }
     var use24hClock by remember { mutableStateOf(AppPreferences.getUse24HourClock(context)) }
     var badgePackInput by remember { mutableStateOf(StreamBadgeEngine.getPackUrl(context)) }
     var railShowType by remember { mutableStateOf(AppPreferences.getHomeRailShowCatalogType(context)) }
@@ -615,6 +616,18 @@ fun SettingsScreen(
             onToggle = {
                 heroTrailerAutoplay = it
                 AppPreferences.setHeroTrailerAutoplay(context, it)
+            }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        ToggleRow(
+            label = "Mute Hero Trailers",
+            description = "Play hero trailers silently (no background audio). Applies the next time a hero trailer starts.",
+            checked = heroTrailerMuted,
+            onToggle = {
+                heroTrailerMuted = it
+                AppPreferences.setHeroTrailerMuted(context, it)
             }
         )
 

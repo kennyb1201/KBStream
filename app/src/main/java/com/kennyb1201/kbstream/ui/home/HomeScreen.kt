@@ -285,6 +285,7 @@ private fun heroSourceOrigin(source: PlayableSource): String =
 @Composable
 private fun HeroInlineTrailerPlayer(
     source: PlayableSource,
+    muted: Boolean,
     modifier: Modifier = Modifier,
     onEnded: () -> Unit = {},
     onFailed: () -> Unit = {}
@@ -359,10 +360,20 @@ private fun HeroInlineTrailerPlayer(
                 }
 
                 repeatMode = Player.REPEAT_MODE_OFF
-                volume = 1f
+                volume = if (muted) 0f else 1f
                 playWhenReady = true
                 prepare()
             }
+    }
+
+    // Backgrounding the app (TV Home press, input switch) STOPS the activity
+    // but does not dispose the composition, so the DisposableEffect cleanup
+    // below never runs and the trailer audio keeps playing over other apps.
+    // Release the player on ON_STOP; the resume epoch in HomeHero re-resolves
+    // and remounts a fresh player when the app returns.
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
+        exoPlayer.playWhenReady = false
+        exoPlayer.release()
     }
 
     DisposableEffect(exoPlayer) {
@@ -541,6 +552,7 @@ private fun HomeHero(
     heroLogoUrl: String?,
     trailerKey: String?,
     autoPlayTrailer: Boolean,
+    muted: Boolean,
     continueWatchingItem: UpNextItem? = null,
     heroHeight: Dp = HomeHeroHeight
 ) {
@@ -576,7 +588,20 @@ private fun HomeHero(
     // loop resolve → mount → 403 forever.
     var trailerAttempt by remember(trailerKey) { mutableStateOf(0) }
 
-    LaunchedEffect(trailerPlaying, trailerKey, trailerAttempt) {
+    // Re-arm the trailer when the app returns to the foreground: ON_STOP
+    // released the player (audio-leak fix), so bump the epoch to drop the
+    // stale source and re-resolve instead of leaving a released/blank player.
+    var appInBackground by remember { mutableStateOf(false) }
+    var resumeEpoch by remember { mutableStateOf(0) }
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { appInBackground = true }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        if (appInBackground) {
+            appInBackground = false
+            resumeEpoch += 1
+        }
+    }
+
+    LaunchedEffect(trailerPlaying, trailerKey, trailerAttempt, resumeEpoch) {
         resolvedTrailerSource = null
 
         if (trailerPlaying && !trailerKey.isNullOrBlank()) {
@@ -897,6 +922,7 @@ private fun HomeHero(
     if (trailerSource != null) {
         HeroInlineTrailerPlayer(
             source = trailerSource,
+            muted = muted,
             modifier = Modifier.fillMaxSize(),
             onEnded = {
                 // Video finished (or the watchdog gave up on a stuck
@@ -1990,6 +2016,10 @@ fun HomeScreen(
                             // Settings > Playback: hero trailer autoplay toggle
                             com.kennyb1201.kbstream.ui.settings.AppPreferences
                                 .getHeroTrailerAutoplay(context),
+                    // Settings > Interface: mute hero trailers toggle
+                    muted =
+                        com.kennyb1201.kbstream.ui.settings.AppPreferences
+                            .getHeroTrailerMuted(context),
                     continueWatchingItem =
                         focusedContinueWatchingItem
                 )

@@ -40,6 +40,7 @@ object AppPreferences {
     private const val KEY_PREFERRED_AUDIO_LANG = "preferred_audio_language"   // BCP-47 tag or "" for auto
     private const val KEY_PREFERRED_SUBTITLE_LANG = "preferred_subtitle_language" // BCP-47 tag or "" for auto
     private const val KEY_HERO_TRAILER_AUTOPLAY = "hero_trailer_autoplay"
+    private const val KEY_HERO_TRAILER_MUTED = "hero_trailer_muted"
     private const val KEY_USE_24H_CLOCK = "use_24h_clock"
     private const val KEY_SHOW_CATALOG_TYPE = "home_rail_show_catalog_type"
     private const val KEY_SHOW_ADDON_NAME = "home_rail_show_addon_name"
@@ -328,6 +329,16 @@ object AppPreferences {
 
     fun setHeroTrailerAutoplay(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_HERO_TRAILER_AUTOPLAY, enabled).apply()
+    }
+
+    // ── Hero trailer audio (Home hero) ─────────────────────────────
+    // Default is sound ON — this only exists to let users silence the
+    // hero trailers entirely while keeping the visual autoplay.
+    fun getHeroTrailerMuted(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_HERO_TRAILER_MUTED, false)
+
+    fun setHeroTrailerMuted(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_HERO_TRAILER_MUTED, enabled).apply()
     }
 
     // ── 24-hour clock (player overlay clock) ──────────────────────────
