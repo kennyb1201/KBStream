@@ -71,6 +71,7 @@ import org.json.JSONObject
 import com.kennyb1201.kbstream.ui.nuvio.NuvioFolderScreen
 import com.kennyb1201.kbstream.ui.settings.SettingsScreen
 import com.kennyb1201.kbstream.ui.search.SearchScreen
+import com.kennyb1201.kbstream.ui.search.SearchViewModel
 import com.kennyb1201.kbstream.ui.simkl.SimklConnectScreen
 import com.kennyb1201.kbstream.ui.streams.StreamsScreen
 import com.kennyb1201.kbstream.ui.streams.StreamsViewModel
