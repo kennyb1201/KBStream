@@ -1218,6 +1218,18 @@ Log.d(
         .coerceAtLeast(1)
     }
 
+    // Per-show "watched of total aired" cache for Continue Watching rows.
+    // resolveSeriesTargetFromSharedWatchedState walks every TMDB season
+    // listing of a show (up to 50 season pages) - without this cache a rail
+    // holding several rows of the SAME show repeated that whole walk per row.
+    // Keyed by the numeric TMDB id so the local-history path and the Simkl
+    // path (which often use different parent-id flavors for the same show)
+    // share one entry; cleared by clearWatchedStateCaches() on refresh.
+    // Concurrent access: the local pipeline enriches rows in parallel, so
+    // this must be a concurrent map.
+    private val showEpisodeTotalsCache =
+        java.util.concurrent.ConcurrentHashMap<Int, ShowEpisodeTotals>()
+
     private suspend fun clearWatchedStateCaches() {
 
         watchedStateMutex.withLock {
@@ -1227,6 +1239,8 @@ Log.d(
             watchedEpisodeKeysByShow.clear()
 
             watchedStatePreloadInFlight.clear()
+
+            showEpisodeTotalsCache.clear()
         }
     }
 
@@ -1448,21 +1462,33 @@ Log.d(
                         parentId = parentId,
                         tmdbShowId = tmdbId
                     )
-                    val target = resolveSeriesTargetFromSharedWatchedState(
-                        parentId = parentId,
-                        tmdbId = tmdbId,
-                        simklSeason = entry.season,
-                        simklEpisode = entry.episode
-                    )
-                    tmdbEpisodeTotals =
-                        target?.episodesWatched?.let { w ->
-                            target.episodesTotal?.let { t -> ShowEpisodeTotals(w, t) }
-                        }
-                    tmdbEpisodesRemaining = target?.episodesRemaining
-                    localSeasonFinale =
-                        target?.isSeasonFinale == true
-                    localSeriesFinale =
-                        target?.isSeriesFinale == true
+                    val cachedTotals = showEpisodeTotalsCache[tmdbId]
+                    if (cachedTotals != null) {
+                        // Same show already walked its full season list in
+                        // this pass - reuse the counts instead of repeating
+                        // the whole TMDB season walk for every row. Finale
+                        // flags stay false here: detecting them needs the
+                        // full season walk, and post-dedupe cached rows are
+                        // rare same-show duplicates.
+                        tmdbEpisodeTotals = cachedTotals
+                    } else {
+                        val target = resolveSeriesTargetFromSharedWatchedState(
+                            parentId = parentId,
+                            tmdbId = tmdbId,
+                            simklSeason = entry.season,
+                            simklEpisode = entry.episode
+                        )
+                        localSeasonFinale =
+                            target?.isSeasonFinale == true
+                        localSeriesFinale =
+                            target?.isSeriesFinale == true
+                        tmdbEpisodesRemaining = target?.episodesRemaining
+                        tmdbEpisodeTotals =
+                            target?.episodesWatched?.let { w ->
+                                target.episodesTotal?.let { t -> ShowEpisodeTotals(w, t) }
+                            }
+                        tmdbEpisodeTotals?.let { showEpisodeTotalsCache[tmdbId] = it }
+                    }
                 }
 
                 if (tmdbId != null && tmdbId > 0) {
@@ -2957,7 +2983,11 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
             }
 
         if (seasonEpisodes.isEmpty()) {
-            continue
+            // First empty season = end of the show (TMDB season
+            // listings are contiguous). The old continue kept
+            // scanning up to MAX_FORWARD_SEASON_LOOKAHEAD empty
+            // seasons per row, which made Continue Watching crawl.
+            break
         }
 
         val watchedEpisodesForSeason =
@@ -3116,7 +3146,11 @@ private suspend fun calculateEpisodesRemaining(
             }
 
         if (seasonEpisodes.isEmpty()) {
-            continue
+            // First empty season = end of the show (TMDB season
+            // listings are contiguous). The old continue kept
+            // scanning up to MAX_FORWARD_SEASON_LOOKAHEAD empty
+            // seasons per row, which made Continue Watching crawl.
+            break
         }
 
         val watchedEpisodesForSeason =
