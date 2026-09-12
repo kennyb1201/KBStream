@@ -1554,9 +1554,8 @@ class NativePlayerActivity : ComponentActivity() {
         // ignored in "Strip All" (every profile 4/5/7/8 → HDR10/HEVC for TVs
         // without Dolby Vision) and "None" (pure pass-through) — see
         // DolbyVisionCompatExtractorsFactory. The P5 GLES/FFmpeg color path
-        // below stays engaged — the pixels remain ICtCp after the bitstream
-        // rewrite, so the color converter is what makes a P5 → 8.1 stream look
-        // right on the display.
+        // below is independent of the bitstream rewrite: it engages only via
+        // Strip All (automatic) or the P5 Color Correction toggle (explicit).
         val convertP7To81 = dvCompatMode == AppPreferences.DV_COMPAT_AUTO
         val convertP5To81 = dvCompatMode == AppPreferences.DV_COMPAT_AUTO &&
             AppPreferences.getConvertP5To81(this)
@@ -1574,12 +1573,12 @@ class NativePlayerActivity : ComponentActivity() {
         // Reset each attempt so the setting only applies to the current stream.
         // Effective state of the P5 GLES path (never engages silently):
         // - Strip All rewrites P5's RPU away and ships raw ICtCp pixels to
-        //   the display — the GLES path is REQUIRED there, so it is always on.
-        // - P5 → 8.1 conversion rewrites the bitstream to Profile 8.1; the
-        //   display decodes it natively and does its own color work — the
-        //   GLES path must stay OFF (it would re-convert converted pixels).
-        // - Everything else (native DV, None, P7 → 8.1): OFF unless the user
-        //   explicitly enables the P5 Color Correction setting.
+        //   the display — the GLES path is REQUIRED there, so it is the one
+        //   mode that turns it on automatically.
+        // - Every other mode (native DV, None, P7 → 8.1, P5 → 8.1): strictly
+        //   follows the P5 Color Correction toggle — on if you enable it
+        //   (even alongside P5 → 8.1, if you prefer shader-converted
+        //   colors), off otherwise.
         val useP5GlesView = p5Content &&
             p5GlesPathWanted() &&
             !forceTextureViewFallback
@@ -2172,21 +2171,17 @@ class NativePlayerActivity : ComponentActivity() {
     /**
      * Effective state of the P5 raw-plane GLES color path, independent of
      * whether P5 content is currently detected:
-     *  - Strip All: required — stripping the RPU is what leaves ICtCp
-     *    pixels for the display, so the shader is the color fix.
-     *  - P5 → 8.1: wrong — the bitstream is Profile 8.1; the display does
-     *    the color work natively.
-     *  - Otherwise: strict opt-in via the P5 Color Correction setting.
+     *  - Strip All: the one automatic engagement — stripping the RPU is
+     *    what leaves ICtCp pixels for the display, so the shader is the
+     *    color fix.
+     *  - Every other mode (native DV, None, P7 → 8.1, P5 → 8.1): the
+     *    explicit P5 Color Correction toggle decides. No mode silently
+     *    overrides the user's choice.
      */
     private fun p5GlesPathWanted(): Boolean {
         if (!P5ColorShader.hasGles3()) return false
-        return when (AppPreferences.getDvCompatMode(this)) {
-            AppPreferences.DV_COMPAT_ALL -> true
-            AppPreferences.DV_COMPAT_AUTO ->
-                !AppPreferences.getConvertP5To81(this) &&
-                    AppPreferences.getP5GlesCorrection(this)
-            else -> AppPreferences.getP5GlesCorrection(this)
-        }
+        return AppPreferences.getDvCompatMode(this) == AppPreferences.DV_COMPAT_ALL ||
+            AppPreferences.getP5GlesCorrection(this)
     }
 
     private fun armStartupWatchdog() {

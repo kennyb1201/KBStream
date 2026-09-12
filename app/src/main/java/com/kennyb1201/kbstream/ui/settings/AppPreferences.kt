@@ -272,12 +272,12 @@ object AppPreferences {
         prefs(context).edit().putBoolean(KEY_CONVERT_P5_TO_81, enabled).apply()
     }
 
-    // Explicit opt-in for the P5 raw-plane GLES color path. Default OFF:
-    // the path is heavyweight (buffer-mode decode + GPU shader) and only
-    // makes sense when ICtCp pixels actually reach the display — which the
-    // Strip All mode produces and nothing else does. P5 → 8.1 conversion
-    // makes it actively wrong: the bitstream is rewritten to 8.1 and the
-    // display does the color work natively.
+    // Toggle for the P5 raw-plane GLES color path. Default OFF: the path is
+    // heavyweight (buffer-mode decode + GPU shader). It engages
+    // automatically only in Strip All — stripping the RPU is what leaves
+    // ICtCp pixels for the shader to fix. In every other mode (including
+    // alongside P5 → 8.1) it runs strictly when this toggle is on: the
+    // user explicitly opts in and no mode overrides their choice.
     fun getP5GlesCorrection(context: Context): Boolean =
         prefs(context).getBoolean(KEY_P5_GLES_CORRECTION, false)
 
