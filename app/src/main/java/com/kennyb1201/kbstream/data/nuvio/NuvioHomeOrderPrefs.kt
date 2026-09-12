@@ -45,6 +45,23 @@ object NuvioHomeOrderPrefs {
     fun addonKey(baseUrl: String?, type: String, catalogId: String?): String =
         "addon:${baseUrl.orEmpty()}:$type:${catalogId.orEmpty()}"
 
+    /**
+     * The exact addon rail key Home renders, derived from the manifest URL
+     * the same way HomeViewModel derives Rail.baseUrl (manifest URL minus
+     * the "/manifest.json" suffix and any trailing slash). Every manager
+     * write path must use this so arrangement keys match the rails Home
+     * actually builds — keying by addon id or by the raw manifest URL
+     * silently writes keys Home can never match.
+     */
+    fun addonKeyFromManifest(manifestUrl: String?, type: String, catalogId: String?): String =
+        addonKey(
+            manifestUrl.orEmpty()
+                .removeSuffix("/manifest.json")
+                .removeSuffix("/"),
+            type,
+            catalogId
+        )
+
     /** Context-free read: uses the most recent get(context) caller's app context. */
     @Volatile
     private var lastContext: Context? = null

@@ -43,6 +43,17 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
     private val nuvioRepository = NuvioRepository(application)
 
     /**
+     * addonId -> manifestUrl, so rail keys match Home exactly. Home builds
+     * its rail keys from the manifest BASE URL (NuvioHomeOrderPrefs.addonKey
+     * takes the baseUrl the rail was loaded from); keying by addon id here
+     * wrote arrangement keys Home could never match, so reordered catalogs
+     * fell back to their default slots on Home while the manager claimed
+     * otherwise.
+     */
+    private val manifestUrlByAddonId: Map<String, String>
+        get() = _addons.value.associate { it.id to it.manifestUrl }
+
+    /**
      * Imported Nuvio collections: import URL list plus each loaded
      * collection (title, folder count) so the home manager can arrange
      * them among addon catalog rails and import/remove profile URLs.
@@ -65,6 +76,17 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         MutableStateFlow(CollectionUiState())
     val collections: StateFlow<CollectionUiState> =
         _collections.asStateFlow()
+
+    /**
+     * Bumped on every home-arrangement write. Catalog arrangement moves
+     * often leave addon/catalog state EQUAL (StateFlow dedupes, no
+     * recomposition) while only the prefs order changed — the manager
+     * dialog keys its row layout on this counter so every move re-renders
+     * instantly instead of looking dead.
+     */
+    private val _homeOrderVersion = MutableStateFlow(0)
+    val homeOrderVersion: StateFlow<Int> =
+        _homeOrderVersion.asStateFlow()
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -274,10 +296,30 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun toggleCollectionHidden(key: String) {
+        // Intent comes from the row's DISPLAYED state, not just the stored
+        // hidden list: a freshly imported collection is hidden by default
+        // WITHOUT a hidden entry ("never arranged"), so keying off
+        // hiddenSet alone made the first SHOW click take the hide path and
+        // the toggle visibly do nothing.
+        val currentlyHidden = _collections.value.collections
+            .firstOrNull { it.key == key }?.isHidden ?: true
         persistHomeOrder { prefs ->
-            if (prefs.hidden.contains(key)) {
-                prefs.copy(hidden = prefs.hidden - key)
+            if (currentlyHidden) {
+                // SHOW: clear the hidden flag AND arrange the rail. A
+                // never-arranged collection only counts as arranged once it
+                // sits in pinned/order — otherwise Home re-derives its
+                // "hidden by default" state and it never appears.
+                prefs.copy(
+                    hidden = prefs.hidden - key,
+                    order = if (key in prefs.order) {
+                        prefs.order
+                    } else {
+                        prefs.order + key
+                    }
+                )
             } else {
+                // HIDE: also lift it out of pinned/order so the hidden
+                // state is the only thing remembered about it.
                 prefs.copy(
                     hidden = prefs.hidden + key,
                     pinned = prefs.pinned - key,
@@ -289,29 +331,83 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
 
     /**
      * Move a collection one slot among VISIBLE home rails (collections and
-     * addon catalogs interleaved) — same merge semantics the standalone
-     * collections manager used, so a collection can sit between two addon
-     * catalogs. Pinned keys stay pinned in their new order.
+     * addon catalogs interleaved). Pinned keys stay pinned in their new
+     * order. delta = Int.MIN_VALUE jumps to the very top, Int.MAX_VALUE to
+     * the very bottom of the visible list.
      */
     fun moveCollection(key: String, delta: Int) {
+        moveRailInArrangement(key, delta)
+    }
+
+    /**
+     * Move one ADDON catalog rail inside the merged home arrangement — the
+     * same visible list (collections + catalogs interleaved) the manager
+     * dialog shows and Home renders. Writes NuvioHomeOrderPrefs, NOT the
+     * addon-global catalog order: the global order only decides default
+     * tail positions, so moving there never changed what the dialog (or
+     * Home, once any arrangement exists) displayed.
+     *
+     * delta = -1/+1 steps one slot; Int.MIN_VALUE jumps to the very top,
+     * Int.MAX_VALUE to the very bottom.
+     */
+    fun moveCatalogArrangement(config: CatalogConfiguration, delta: Int) {
+        moveRailInArrangement(
+            NuvioHomeOrderPrefs.addonKeyFromManifest(
+                config.addonManifestUrl,
+                config.catalog.type,
+                config.catalog.id
+            ),
+            delta
+        )
+    }
+
+    /**
+     * Shared reorder core. Works on the merged VISIBLE rail keys (the exact
+     * list the manager dialog shows and Home renders):
+     *  - ±1 steps one slot; pinned keys stay pinned inside the pinned block.
+     *  - Int.MIN_VALUE (VERY TOP) puts the key at the HEAD of the pinned
+     *    list, so it renders as the absolute first rail — ABOVE everything,
+     *    including previously pinned collections.
+     *  - Int.MAX_VALUE (VERY BOTTOM) unpins the key and appends it after
+     *    everything else.
+     */
+    private fun moveRailInArrangement(key: String, delta: Int) {
         persistHomeOrder { prefs ->
-            val visible = mergedRailKeys(prefs).filter { it !in prefs.hiddenSet }
-            val from = visible.indexOf(key)
-            if (from == -1) return@persistHomeOrder prefs
-            val to = (from + delta).coerceIn(0, visible.lastIndex)
-            if (from == to) return@persistHomeOrder prefs
+            when (delta) {
+                Int.MIN_VALUE -> prefs.copy(
+                    pinned = listOf(key) + prefs.pinned.filter { it != key },
+                    order = prefs.order - key,
+                    hidden = prefs.hidden - key
+                )
 
-            val ordered = visible.toMutableList()
-            val item = ordered.removeAt(from)
-            ordered.add(to, item)
+                Int.MAX_VALUE -> prefs.copy(
+                    pinned = prefs.pinned - key,
+                    order = (prefs.order - key) + key,
+                    hidden = prefs.hidden - key
+                )
 
-            val pinnedCount = prefs.pinned.count { pinKey ->
-                visible.any { it == pinKey }
+                else -> {
+                    val visible =
+                        mergedRailKeys(prefs).filter { it !in prefs.hiddenSet }
+                    val from = visible.indexOf(key)
+                    if (from == -1) return@persistHomeOrder prefs
+                    val to = (from + delta).coerceIn(0, visible.lastIndex)
+                    if (from == to) return@persistHomeOrder prefs
+
+                    val ordered = visible.toMutableList()
+                    val item = ordered.removeAt(from)
+                    ordered.add(to, item)
+
+                    // Re-split by pin membership: a moved PIN keeps its
+                    // pinned status (re-ordered within the pinned block),
+                    // and hidden/stale pins can never inflate the head.
+                    val pinnedSet = prefs.pinned.toSet()
+                    prefs.copy(
+                        order = ordered.filter { it !in pinnedSet },
+                        pinned = ordered.filter { it in pinnedSet }
+                    )
+                }
             }
-            prefs.copy(
-                order = ordered.drop(pinnedCount),
-                pinned = ordered.take(pinnedCount)
-            )
         }
     }
 
@@ -322,11 +418,12 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
      */
     private fun mergedRailKeys(prefs: NuvioHomeOrder): List<String> {
         val collectionKeys = _collections.value.collections.map { it.key }
+        val urls = manifestUrlByAddonId
         val addonKeys = _catalogConfigurations.value
             .filter { it.catalog.showOnHome }
             .map {
-                NuvioHomeOrderPrefs.addonKey(
-                    it.addonId,
+                NuvioHomeOrderPrefs.addonKeyFromManifest(
+                    urls[it.addonId],
                     it.catalog.type,
                     it.catalog.id
                 )
@@ -354,6 +451,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         val context = getApplication<Application>()
         val updated = transform(NuvioHomeOrderPrefs.get(context))
         NuvioHomeOrderPrefs.save(context, updated)
+        _homeOrderVersion.value += 1
         refresh()
     }
 

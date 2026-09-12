@@ -713,15 +713,13 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         return getInstalledAddons()
             .flatMap { addon ->
 
-                addon.catalogs.map { catalog ->
-
-                    CatalogConfiguration(
+                addon.catalogs.map { catalog ->                    CatalogConfiguration(
                         addonId =
                             addon.id,
-
                         addonName =
                             addon.displayName,
-
+                        addonManifestUrl =
+                            addon.manifestUrl,
                         catalog =
                             catalog
                     )
@@ -940,5 +938,6 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
 data class CatalogConfiguration(
     val addonId: String,
     val addonName: String,
+    val addonManifestUrl: String,
     val catalog: ManifestCatalog
 )

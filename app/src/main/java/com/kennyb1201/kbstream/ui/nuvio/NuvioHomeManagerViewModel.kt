@@ -76,7 +76,7 @@ class NuvioHomeManagerViewModel(application: Application) : AndroidViewModel(app
                         .filter { it.showOnHome }
                         .map { catalog ->
                             ManagedRail(
-                                key = NuvioHomeOrderPrefs.addonKey(
+                                key = NuvioHomeOrderPrefs.addonKeyFromManifest(
                                     addon.manifestUrl,
                                     catalog.type,
                                     catalog.id

@@ -105,13 +105,6 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 
 /** Actions for reordering a catalog within its addon. */
-private enum class CatalogMoveAction {
-    TOP,
-    UP,
-    DOWN,
-    BOTTOM
-}
-
 /**
  * Per-row focus anchors for the catalog manager dialog. Reordering a row
  * recomposes it under a new item key (often off-screen), which disposes the
@@ -448,6 +441,7 @@ fun AddonsScreen(
     }
 
     val collectionsState by viewModel.collections.collectAsState()
+    val homeOrderVersion by viewModel.homeOrderVersion.collectAsState()
     var collectionUrlInput by remember { mutableStateOf("") }
     val collectionFilePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -470,6 +464,7 @@ fun AddonsScreen(
         CatalogManagerDialog(
             configurations = catalogConfigurations,
             collectionsState = collectionsState,
+            homeOrderVersion = homeOrderVersion,
             collectionUrlInput = collectionUrlInput,
             onCollectionUrlChange = { collectionUrlInput = it },
             onImportCollectionUrl = {
@@ -497,40 +492,12 @@ fun AddonsScreen(
             onToggleAll = { show ->
                 viewModel.setAllCatalogsShowOnHome(show)
             },
-            onMove = { config, action ->
-                when (action) {
-                    CatalogMoveAction.TOP ->
-                        viewModel.moveCatalogGlobalToPosition(
-                            config.addonId,
-                            config.catalog.type,
-                            config.catalog.id,
-                            0
-                        )
-
-                    CatalogMoveAction.UP ->
-                        viewModel.moveCatalogGlobal(
-                            config.addonId,
-                            config.catalog.type,
-                            config.catalog.id,
-                            -1
-                        )
-
-                    CatalogMoveAction.DOWN ->
-                        viewModel.moveCatalogGlobal(
-                            config.addonId,
-                            config.catalog.type,
-                            config.catalog.id,
-                            1
-                        )
-
-                    CatalogMoveAction.BOTTOM ->
-                        viewModel.moveCatalogGlobalToPosition(
-                            config.addonId,
-                            config.catalog.type,
-                            config.catalog.id,
-                            (catalogConfigurations.size - 1).coerceAtLeast(0)
-                        )
-                }
+            onCatalogMove = { config, delta ->
+                // Arrangement move (merged visible rails: collections +
+                // catalogs, exactly what this dialog and Home render).
+                // delta: -1/+1 step, Int.MIN_VALUE very top, Int.MAX_VALUE
+                // very bottom.
+                viewModel.moveCatalogArrangement(config, delta)
             },
             onCollectionPin = { key -> viewModel.toggleCollectionPinned(key) },
             onCollectionHide = { key -> viewModel.toggleCollectionHidden(key) },
@@ -1664,6 +1631,7 @@ private fun openManifest(
 private fun CatalogManagerDialog(
     configurations: List<CatalogConfiguration>,
     collectionsState: com.kennyb1201.kbstream.ui.addons.AddonsViewModel.CollectionUiState,
+    homeOrderVersion: Int,
     collectionUrlInput: String,
     onCollectionUrlChange: (String) -> Unit,
     onImportCollectionUrl: () -> Unit,
@@ -1671,7 +1639,7 @@ private fun CatalogManagerDialog(
     onRemoveCollectionProfile: (String) -> Unit,
     onToggle: (CatalogConfiguration, Boolean) -> Unit,
     onToggleAll: (Boolean) -> Unit,
-    onMove: (CatalogConfiguration, CatalogMoveAction) -> Unit,
+    onCatalogMove: (CatalogConfiguration, Int) -> Unit,
     onCollectionPin: (String) -> Unit,
     onCollectionHide: (String) -> Unit,
     onCollectionMove: (String, Int) -> Unit,
@@ -1695,17 +1663,17 @@ private fun CatalogManagerDialog(
 
     // One flat list: addon catalog rows first-class alongside collection
     // rows, arranged by the merged home order the ViewModel owns.
-    val rows: List<CatalogManagerDialogRow> = remember(configurations, collectionsState) {
+    val rows: List<CatalogManagerDialogRow> =
+        remember(configurations, collectionsState, homeOrderVersion) {
         val collectionByKey = collectionsState.collections.associateBy { it.key }
         val addonByKey = configurations.associateBy {
-            "${it.addonId}::${it.catalog.type}::${it.catalog.id}"
+            NuvioHomeOrderPrefs.addonKeyFromManifest(
+                it.addonManifestUrl,
+                it.catalog.type,
+                it.catalog.id
+            )
         }
-        val known = buildList {
-            configurations.forEach {
-                add(NuvioHomeOrderPrefs.addonKey(it.addonId, it.catalog.type, it.catalog.id))
-            }
-            collectionsState.collections.forEach { add(it.key) }
-        }.toSet()
+        val known = addonByKey.keys + collectionsState.collections.map { it.key }
         // Best-effort merged order read (same prefs the ViewModel writes);
         // keys not found keep their default slot at the end.
         val prefs = NuvioHomeOrderPrefs.readOrder()
@@ -1729,17 +1697,15 @@ private fun CatalogManagerDialog(
                     isHidden = collection.isHidden
                 )
             } else {
-                val config = addonByKey.values.firstOrNull {
-                    NuvioHomeOrderPrefs.addonKey(it.addonId, it.catalog.type, it.catalog.id) == key
-                } ?: return@mapNotNull null
+                val config = addonByKey[key] ?: return@mapNotNull null
                 CatalogManagerDialogRow(
-                    key = "${config.addonId}::${config.catalog.type}::${config.catalog.id}",
+                    key = key,
                     isCollection = false,
                     config = config,
                     collectionKey = null,
                     title = config.catalog.displayName.ifBlank { config.catalog.id },
                     subtitle = "${config.catalog.type} · ${config.addonName}",
-                    isPinned = false,
+                    isPinned = key in prefs.pinned.toSet(),
                     isHidden = !config.catalog.showOnHome
                 )
             }
@@ -1751,21 +1717,23 @@ private fun CatalogManagerDialog(
     val allCatalogsVisible = configurations.all { it.catalog.showOnHome }
 
     fun moveRow(row: CatalogManagerDialogRow, slot: CatalogRowFocus.Slot, delta: Int) {
-        if (row.isCollection) {
-            pendingFocus = null
-            onCollectionMove(row.key, delta)
-            return
-        }
         val fromIndex = visibleRows.indexOfFirst { it.key == row.key }
         if (fromIndex < 0) return
-        pendingFocus = when {
-            delta < 0 -> (fromIndex - 1).coerceAtLeast(0) to slot
-            delta > 0 -> (fromIndex + 1).coerceAtMost(visibleRows.lastIndex) to slot
-            else -> null
+        // Arrange focus restore FIRST: the ViewModel write rebuilds the row
+        // list, so the target index is computed from the pre-move snapshot.
+        pendingFocus = when (delta) {
+            Int.MIN_VALUE -> 0 to slot
+            Int.MAX_VALUE -> visibleRows.lastIndex to slot
+            else -> (fromIndex + delta).coerceIn(0, visibleRows.lastIndex) to slot
+        }
+        if (row.isCollection) {
+            onCollectionMove(row.key, delta)
+        } else {
+            onCatalogMove(row.config!!, delta)
         }
     }
 
-    LaunchedEffect(configurations, collectionsState) {
+    LaunchedEffect(configurations, collectionsState, homeOrderVersion) {
         val target = pendingFocus ?: return@LaunchedEffect
         pendingFocus = null
         val (index, slot) = target
@@ -2049,17 +2017,35 @@ private fun UnifiedManagerRow(
             )
             Spacer(modifier = Modifier.width(4.dp))
             CatalogIconButton(
-                icon = Icons.Filled.ArrowUpward,
+                icon = Icons.Filled.KeyboardDoubleArrowUp,
+                tint = KBTextHi,
                 enabled = position > 0,
-                onClick = { onMove(CatalogRowFocus.Slot.TOP, -1) },
+                onClick = { onMove(CatalogRowFocus.Slot.TOP, Int.MIN_VALUE) },
+                modifier = Modifier.size(38.dp).focusRequester(rowFocus.top)
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            CatalogIconButton(
+                icon = Icons.Filled.ArrowUpward,
+                tint = KBTextHi,
+                enabled = position > 0,
+                onClick = { onMove(CatalogRowFocus.Slot.UP, -1) },
                 modifier = Modifier.size(38.dp).focusRequester(rowFocus.up)
             )
             Spacer(modifier = Modifier.width(4.dp))
             CatalogIconButton(
                 icon = Icons.Filled.ArrowDownward,
+                tint = KBTextHi,
                 enabled = position in 0 until (total - 1),
                 onClick = { onMove(CatalogRowFocus.Slot.DOWN, +1) },
                 modifier = Modifier.size(38.dp).focusRequester(rowFocus.down)
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            CatalogIconButton(
+                icon = Icons.Filled.KeyboardDoubleArrowDown,
+                tint = KBTextHi,
+                enabled = position in 0 until (total - 1),
+                onClick = { onMove(CatalogRowFocus.Slot.BOTTOM, Int.MAX_VALUE) },
+                modifier = Modifier.size(38.dp).focusRequester(rowFocus.bottom)
             )
         }
     }
@@ -2081,6 +2067,7 @@ private data class CatalogManagerDialogRow(
 private fun CatalogIconButton(
     icon: ImageVector,
     enabled: Boolean = true,
+    tint: Color = Color.Unspecified,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -2093,6 +2080,10 @@ private fun CatalogIconButton(
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
+                    // Icons render in the app text color, not the dark
+                    // default - black glyphs on the raised card were
+                    // nearly invisible.
+                    tint = tint.takeIf { it != Color.Unspecified } ?: KBTextHi,
                     modifier = Modifier.size(16.dp)
                 )
             }
@@ -2113,6 +2104,7 @@ private fun CatalogIconButton(
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
+                    tint = KBTextLo.copy(alpha = 0.55f),
                     modifier = Modifier.size(16.dp)
                 )
             }

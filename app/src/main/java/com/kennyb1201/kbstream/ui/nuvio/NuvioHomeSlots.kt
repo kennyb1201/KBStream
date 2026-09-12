@@ -79,17 +79,50 @@ object NuvioHomeSlots {
             rail to NuvioHomeOrderPrefs.addonKey(rail.baseUrl, rail.type, rail.catalogId)
         }
 
-        val pinned = arrangement.pinned
-            .mapNotNull { collectionByKey[it] }
-            .filter { key(it) !in hidden }
-            .map { HomeEntry.Collection(it) }
+        // Top Today rails are hard-pinned by the home rail loader
+        // (loadPinnedTopTodayRails) to render ABOVE every addon rail. The
+        // merged arrangement must never demote them into the middle/tail,
+        // or a stored order key for any other rail pushes them to the
+        // bottom. Identify them by the manifest base URL and keep them
+        // first, exactly like HomeViewModel does.
+        val topTodayKeys = addonEntries
+            .map { entry -> addonKeyByRail[(entry as HomeEntry.AddonRail).rail] }
+            .filter { it.startsWith("addon:https://toptoday.llamayu.com/") }
+            .toSet()
+        val topTodayRails = addonEntries.filter { entry ->
+            addonKeyByRail[(entry as HomeEntry.AddonRail).rail] in topTodayKeys
+        }
+
+        // Pinned block: collections first-class, but addon catalog keys can
+        // be pinned too (manager's jump-to-top writes them here). Hidden
+        // keys never render. Top Today rails stay ABOVE this block.
+        val pinned = arrangement.pinned.flatMap { pinKey ->
+            when {
+                pinKey in hidden -> emptyList()
+                // Top Today renders first unconditionally — never also in
+                // the pinned block (would duplicate the rail).
+                pinKey in topTodayKeys -> emptyList()
+                pinKey.startsWith("nuvio:") ->
+                    listOfNotNull(collectionByKey[pinKey]).map { HomeEntry.Collection(it) }
+                else ->
+                    addonEntries.filter { entry ->
+                        addonKeyByRail[(entry as HomeEntry.AddonRail).rail] == pinKey
+                    }
+            }
+        }
+        val pinnedAddonKeys = arrangement.pinned
+            .filter { it !in collectionByKey }
+            .toSet()
 
         // Walk the stored merged order (pinned handled separately). A
         // collection key emits a collection entry; an addon key emits every
         // addon rail matching it (multiple addons can share a catalog id).
+        // Top Today keys are skipped: those rails always lead the list.
         val middle = mutableListOf<HomeEntry>()
         for (key in arrangement.order) {
             if (key in pinnedKeys) continue
+            if (key in topTodayKeys) continue
+            if (key in pinnedAddonKeys) continue
             val collection = collectionByKey[key]
             if (collection != null) {
                 if (key !in hidden) {
@@ -110,7 +143,13 @@ object NuvioHomeSlots {
         val placedRails = middle.filterIsInstance<HomeEntry.AddonRail>().toSet()
         val tail = mutableListOf<HomeEntry>()
         for (entry in addonEntries) {
-            if (entry !in placedRails) tail += entry
+            val railKey = addonKeyByRail[(entry as HomeEntry.AddonRail).rail]
+            if (entry !in placedRails &&
+                railKey !in topTodayKeys &&
+                railKey !in pinnedAddonKeys
+            ) {
+                tail += entry
+            }
         }
         val placedCollections = middle.filterIsInstance<HomeEntry.Collection>().toSet()
         for ((key, collection) in collectionByKey) {
@@ -122,7 +161,7 @@ object NuvioHomeSlots {
             }
         }
 
-        return pinned + middle + tail
+        return topTodayRails + pinned + middle + tail
     }
 
     /**
