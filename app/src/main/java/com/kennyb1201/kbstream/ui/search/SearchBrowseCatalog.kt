@@ -3,29 +3,39 @@ package com.kennyb1201.kbstream.ui.search
 /**
  * Curated entries for the Search screen's browse browser (the browsable
  * replacement for the empty "no results" whitespace). Sidebar categories
- * open a submenu; an entry loads discover rails in the browser itself or
- * opens an existing app screen:
+ * open a submenu; an entry opens an existing app screen:
  *
  *  - Genres / Keywords      -> Screen.Tag (genre / keyword discover)
- *  - Networks / Studios     -> Screen.Studio (network / company discover)
+ *  - Services & Networks    -> Screen.Studio (service entries carry a
+ *                             watch-provider id, so their page runs MOVIES
+ *                             + SERIES provider rails; plain network
+ *                             entries keep the series-only network page)
+ *  - Studios                -> Screen.Studio (company discover)
  *  - Collections            -> Screen.Collection
- *  - Services               -> watch-provider discover (Recent / Popular /
- *                             Most Voted) plus network/company discover
- *                             ("Originals") — order: Originals first
- *  - Decades                -> in-browser discover rails (Popular / Most
- *                             Voted), movies+series merged
+ *  - Decades                -> Screen.Decade (per-decade page, genre-style
+ *                             rails minus RECENT, movies and series kept
+ *                             separate)
  *
- * Network ids below were verified against themoviedb.org/network/{id}
- * pages; company ids against themoviedb.org/company/{id}; watch-provider
- * ids against TMDB's /watch/providers registry. Keyword and collection ids
- * are NOT hand-maintained: they resolve at runtime from /search/keyword and
+ * Network ids below were verified against themoviedb.org/network/{id} pages;
+ * company ids against themoviedb.org/company/{id}; watch-provider ids
+ * against TMDB's /watch/providers registry. Keyword and collection ids are
+ * NOT hand-maintained: they resolve at runtime from /search/keyword and
  * /search/collection so they can never rot.
  */
 
-/** One selectable entry in a browse submenu. */
+/**
+ * One selectable entry in a browse submenu. [id] is the TMDB network or
+ * company id that the destination screen discovers with; the three
+ * provider fields (all null for plain network entries) additionally let a
+ * service page run watch-provider rails for everything "On Now" in the
+ * US region — see [BROWSE_PROVIDER_ENTRIES].
+ */
 data class BrowseEntry(
     val id: Int,
-    val name: String
+    val name: String,
+    val providerId: Int? = null,
+    val networkOrCompanyId: Int? = null,
+    val networkIsCompany: Boolean = false
 )
 
 /**
@@ -275,13 +285,24 @@ val BROWSE_SERVICES = listOf(
     )
 )
 
-/** Services submenu entries; [BrowseEntry.id] indexes BROWSE_SERVICES. */
-val BROWSE_SERVICE_ENTRIES: List<BrowseEntry> = BROWSE_SERVICES
-    .mapIndexed { index, service -> BrowseEntry(index, service.name) }
+// Merged "Services & Networks" submenu: every streaming service (with its
+// watch-provider id, so its screen gets Recent / Popular / Most Voted rails
+// alongside Originals) followed by the TV network list — one screen per
+// brand instead of separate Services and Networks categories.
+val BROWSE_PROVIDER_ENTRIES: List<BrowseEntry> = BROWSE_SERVICES
+    .map { service ->
+        BrowseEntry(
+            service.networkOrCompanyId ?: -1,
+            service.name,
+            service.providerId,
+            service.networkOrCompanyId,
+            service.networkIsCompany
+        )
+    } + BROWSE_NETWORKS
 
 // ---------------------------------------------------------------------------
-// Decades 2020s -> 1950s. Popular + Most Voted rails only (per design);
-// the rail loader merges movies and series into each rail.
+// Decades 2020s -> 1950s. Each decade opens Screen.Decade, whose rails keep
+// movies and series separate like the genre/keyword screens.
 // ---------------------------------------------------------------------------
 
 val BROWSE_DECADES: List<BrowseEntry> = (2020 downTo 1950 step 10)
@@ -329,9 +350,8 @@ val BROWSE_COLLECTION_NAMES = listOf(
 fun browseCategoryEntries(key: String): List<BrowseEntry> = when (key) {
     "genres" -> BROWSE_GENRES
     "keywords" -> emptyList() // runtime-resolved
-    "networks" -> BROWSE_NETWORKS
+    "services" -> BROWSE_PROVIDER_ENTRIES
     "studios" -> BROWSE_STUDIOS
-    "services" -> BROWSE_SERVICE_ENTRIES
     "decades" -> BROWSE_DECADES
     "collections" -> emptyList() // runtime-resolved
     else -> emptyList()
@@ -340,9 +360,8 @@ fun browseCategoryEntries(key: String): List<BrowseEntry> = when (key) {
 val BROWSE_CATEGORIES: List<BrowseCategory> = listOf(
     BrowseCategory("genres", "Genres", BROWSE_GENRES),
     BrowseCategory("keywords", "Keywords", emptyList()),
-    BrowseCategory("networks", "Networks", BROWSE_NETWORKS),
+    BrowseCategory("services", "Services & Networks", BROWSE_PROVIDER_ENTRIES),
     BrowseCategory("studios", "Studios", BROWSE_STUDIOS),
-    BrowseCategory("services", "Services", BROWSE_SERVICE_ENTRIES),
     BrowseCategory("decades", "Decades", BROWSE_DECADES),
     BrowseCategory("collections", "Collections", emptyList())
 )

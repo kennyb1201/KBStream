@@ -1201,16 +1201,21 @@ class TmdbRepository(context: Context) {
     }
 
     /**
-     * One decade rail for the Search browse browser (decades deliberately
-     * offer just Popular and Most Voted). Movies and series run as two
-     * parallel discover calls and are merged, best-rated first, so one rail
-     * shows both. Decades reuse the Nuvio filter plumbing: year="1980-1989"
-     * becomes primary_release_date / first_air_date bounds.
+     * One decade rail, single media type — movies and series stay separate
+     * like the genre/keyword screens. Decades reuse the Nuvio filter
+     * plumbing: year="1980-1989" becomes primary_release_date /
+     * first_air_date bounds. [mediaType] is "movie" or "tv".
      */
-    suspend fun getDecadeRailPage(decadeStart: Int, sortBy: String, page: Int): TagRailPage {
+    suspend fun getDecadeSectionPage(
+        decadeStart: Int,
+        mediaType: String,
+        sortBy: String,
+        page: Int
+    ): TagRailPage {
         if (apiKey.isBlank()) return TagRailPage(emptyList(), false)
         val decadeEnd = decadeStart + 9
         val yearRange = "$decadeStart-$decadeEnd"
+        val isTv = mediaType.equals("tv", ignoreCase = true)
 
         // "Most Voted" sorts by vote_average, which without a floor surfaces
         // obscure 8.5-rated shorts with 12 votes; "Popular" (popularity.desc)
@@ -1221,63 +1226,52 @@ class TmdbRepository(context: Context) {
             voteCountGte = voteFloor
         )
 
-        val (movies, tv) = coroutineScope {
-            val m = async {
-                runCatching {
-                    discoverNuvio(
-                        mediaType = "movie",
-                        page = page,
-                        sortBy = sortBy,
-                        filters = filters
-                    )
-                }.getOrNull().orEmpty()
-            }
-            val t = async {
-                runCatching {
-                    discoverNuvio(
-                        mediaType = "tv",
-                        page = page,
-                        sortBy = sortBy,
-                        filters = filters
-                    )
-                }.getOrNull().orEmpty()
-            }
-            m.await() to t.await()
-        }
+        val items = runCatching {
+            discoverNuvio(
+                mediaType = if (isTv) "tv" else "movie",
+                page = page,
+                sortBy = sortBy,
+                filters = filters
+            )
+        }.getOrNull().orEmpty()
+            .map { StudioItem(it, if (isTv) "series" else "movie") }
+            .distinctBy { it.item.id }
 
-        val items = (movies.map { StudioItem(it, "movie") } + tv.map { StudioItem(it, "series") })
-            .sortedByDescending { it.item.voteAverage ?: 0.0 }
-        return TagRailPage(items, true)
+        // A discover page caps at 20 items; a full page means more exist.
+        return TagRailPage(items, items.size >= 20)
     }
 
     /**
-     * One rail of the Search browse browser for a streaming service.
-     * Modes:
+     * One rail of a streaming service's dedicated screen. [mediaType] picks
+     * which single discover call runs, so a service always gets both movie
+     * and series rails (each with full TMDB page depth, like the genre
+     * screens). Modes:
      *  - "originals": what the service produced — network discover for
-     *    series, company discover for movies ([networkOrCompanyId] required).
+     *    series, company discover for movies ([networkOrCompanyId] required;
+     *    a pure network id has no movie-discover equivalent, so its movie
+     *    rail is simply empty).
      *  - "recent" / "popular" / "voted": everything on the service now via
      *    watch-provider discover (US watch region, [providerId] required).
-     * Movies and series run as two parallel discover calls; the rail keeps
-     * movies first, each block in API order.
      */
-    suspend fun getBrowseRailPage(
+    suspend fun getProviderRailPage(
         mode: String,
+        mediaType: String,
         providerId: Int?,
         networkOrCompanyId: Int?,
         networkIsCompany: Boolean,
         page: Int
     ): TagRailPage {
         if (apiKey.isBlank()) return TagRailPage(emptyList(), false)
+        val isTv = mediaType.equals("tv", ignoreCase = true)
         val currentYear = java.time.LocalDate.now().year.toString()
 
         // Recent sorts by release date, which differs per media type; a
         // vote floor keeps "recent" from surfacing announced-but-unreleased
         // entries (they have almost no votes yet).
-        val (movieSortBy, tvSortBy) = when (mode) {
-            "recent" -> "primary_release_date.desc" to "first_air_date.desc"
-            "popular" -> "popularity.desc" to "popularity.desc"
-            "voted" -> "vote_average.desc" to "vote_average.desc"
-            else -> "popularity.desc" to "popularity.desc"
+        val sortBy = when (mode) {
+            "recent" -> if (isTv) "first_air_date.desc" else "primary_release_date.desc"
+            "voted" -> "vote_average.desc"
+            else -> "popularity.desc"
         }
         val voteFloor = when (mode) {
             "recent" -> 20
@@ -1286,61 +1280,158 @@ class TmdbRepository(context: Context) {
             else -> 10
         }
 
-        fun filters(forTv: Boolean): com.kennyb1201.kbstream.data.nuvio.NuvioFilters {
-            val base = com.kennyb1201.kbstream.data.nuvio.NuvioFilters(
-                voteCountGte = voteFloor
-            )
-            return if (mode == "originals") {
-                // A network id only makes sense for TV; a company id only
-                // for movies. Mixing them returns wrong/empty results.
-                base.copy(
-                    withNetworks = if (forTv && !networkIsCompany) {
-                        networkOrCompanyId?.toString()
-                    } else {
-                        null
-                    },
-                    withCompanies = if (networkIsCompany) {
-                        networkOrCompanyId?.toString()
-                    } else {
-                        null
-                    }
-                )
-            } else {
-                base.copy(
-                    withWatchProviders = providerId?.toString(),
-                    watchRegion = "US",
-                    year = if (mode == "recent") currentYear else null
-                )
-            }
-        }
-
-        // TV networks have no movie-discover equivalent, so their
-        // Originals rail is series-only.
-        val skipMovies = mode == "originals" && !networkIsCompany
-
-        val (movies, tv) = coroutineScope {
-            val m = async {
-                if (skipMovies) {
-                    emptyList()
+        val base = com.kennyb1201.kbstream.data.nuvio.NuvioFilters(
+            voteCountGte = voteFloor
+        )
+        val filters = if (mode == "originals") {
+            // A network id only makes sense for TV; a company id applies to
+            // both discover endpoints. Mixing them returns wrong/empty results.
+            base.copy(
+                withNetworks = if (isTv && !networkIsCompany) {
+                    networkOrCompanyId?.toString()
                 } else {
-                    runCatching {
-                        discoverNuvio("movie", page, movieSortBy, filters(forTv = false))
-                    }.getOrNull().orEmpty()
+                    null
+                },
+                withCompanies = if (networkIsCompany) {
+                    networkOrCompanyId?.toString()
+                } else {
+                    null
                 }
-            }
-            val t = async {
-                runCatching {
-                    discoverNuvio("tv", page, tvSortBy, filters(forTv = true))
-                }.getOrNull().orEmpty()
-            }
-            m.await() to t.await()
+            )
+        } else {
+            base.copy(
+                withWatchProviders = providerId?.toString(),
+                watchRegion = "US",
+                year = if (mode == "recent") currentYear else null
+            )
         }
 
-        val items = movies.map { StudioItem(it, "movie") } +
-            tv.map { StudioItem(it, "series") }
-        // A discover page caps at 20 per media; a full page on either side
-        // means more pages may exist.
-        return TagRailPage(items, movies.size >= 20 || tv.size >= 20)
+        val items = runCatching {
+            discoverNuvio(
+                mediaType = if (isTv) "tv" else "movie",
+                page = page,
+                sortBy = sortBy,
+                filters = filters
+            )
+        }.getOrNull().orEmpty()
+            .map { StudioItem(it, if (isTv) "series" else "movie") }
+            .distinctBy { it.item.id }
+
+        // A discover page caps at 20 items; a full page means more exist.
+        return TagRailPage(items, items.size >= 20)
+    }
+
+    // ------------------------------------------------------------------
+    // Decade discover screens (Screen.Decade): same rail structure as the
+    // genre/keyword screens, minus the RECENT rails — every decade is old
+    // by definition, so "recent" adds nothing. Popular + Top Rated for
+    // movies and series.
+    // ------------------------------------------------------------------
+
+    /** Rail titles a decade screen loads, in display order. */
+    private val DECADE_RAIL_TITLES = listOf(
+        "MOVIES · POPULAR",
+        "MOVIES · TOP RATED",
+        "SERIES · POPULAR",
+        "SERIES · TOP RATED"
+    )
+
+    suspend fun getInitialDecadeSections(decadeStart: Int): List<StudioSection> = coroutineScope {
+        val pages = DECADE_RAIL_TITLES.map { title ->
+            async { getDecadeRailPage(decadeStart, title, 1) }
+        }.awaitAll()
+        DECADE_RAIL_TITLES.mapIndexed { index, title ->
+            pages[index].items.takeIf { it.isNotEmpty() }?.let { StudioSection(title, it) }
+        }.filterNotNull()
+    }
+
+    /**
+     * One page of one decade rail, keyed off the rail title the same way
+     * the genre/keyword rail pages are ("MOVIES · POPULAR", ...).
+     */
+    suspend fun getDecadeRailPage(decadeStart: Int, title: String, page: Int): TagRailPage {
+        if (apiKey.isBlank()) return TagRailPage(emptyList(), false)
+
+        val parts = title.split("·").map { it.trim() }
+        val mediaType = when (parts.getOrNull(0)?.uppercase()) {
+            "MOVIES" -> "movie"
+            "SERIES" -> "tv"
+            else -> return TagRailPage(emptyList(), false)
+        }
+        val sortBy = when (parts.getOrNull(1)?.uppercase()) {
+            "POPULAR" -> "popularity.desc"
+            "TOP RATED" -> "vote_average.desc"
+            else -> return TagRailPage(emptyList(), false)
+        }
+
+        val result = getDecadeSectionPage(decadeStart, mediaType, sortBy, page)
+        val filtered =
+            if (isDigitalFilterEnabled()) {
+                filterByHomeAvailability(result.items) { it.item.id to it.mediaType }
+            } else {
+                result.items
+            }
+        return TagRailPage(filtered, result.hasMore)
+    }
+
+    // ------------------------------------------------------------------
+    // Streaming-service screens: the consolidated Services & Networks
+    // submenu opens one screen per brand whose rails cover BOTH media
+    // types via watch-provider discover (US region) — so opening Netflix
+    // shows its movies and shows, not series-only like the old network
+    // page. Plain network entries (no provider id) keep the old rails.
+    // ------------------------------------------------------------------
+
+    /** Rail titles a service screen loads, in display order. */
+    private val SERVICE_RAIL_TITLES = listOf(
+        "MOVIES · RECENT",
+        "MOVIES · POPULAR",
+        "MOVIES · TOP RATED",
+        "SERIES · RECENT",
+        "SERIES · POPULAR",
+        "SERIES · TOP RATED"
+    )
+
+    suspend fun getInitialServiceSections(providerId: Int): List<StudioSection> = coroutineScope {
+        val pages = SERVICE_RAIL_TITLES.map { title ->
+            async { getServiceRailPage(providerId, title, 1) }
+        }.awaitAll()
+        SERVICE_RAIL_TITLES.mapIndexed { index, title ->
+            pages[index].items.takeIf { it.isNotEmpty() }?.let { StudioSection(title, it) }
+        }.filterNotNull()
+    }
+
+    suspend fun getServiceRailPage(providerId: Int, title: String, page: Int): TagRailPage {
+        if (apiKey.isBlank()) return TagRailPage(emptyList(), false)
+
+        val parts = title.split("·").map { it.trim() }
+        val mediaType = when (parts.getOrNull(0)?.uppercase()) {
+            "MOVIES" -> "movie"
+            "SERIES" -> "tv"
+            else -> return TagRailPage(emptyList(), false)
+        }
+        val mode = when (parts.getOrNull(1)?.uppercase()) {
+            "RECENT" -> "recent"
+            "POPULAR" -> "popular"
+            "TOP RATED" -> "voted"
+            else -> return TagRailPage(emptyList(), false)
+        }
+
+        val result = getProviderRailPage(
+            mode = mode,
+            mediaType = mediaType,
+            providerId = providerId,
+            networkOrCompanyId = null,
+            networkIsCompany = false,
+            page = page
+        )
+        val filtered =
+            if (isDigitalFilterEnabled()) {
+                filterByHomeAvailability(result.items) { it.item.id to it.mediaType }
+            } else {
+                result.items
+            }
+        return TagRailPage(filtered, result.hasMore)
     }
 
     suspend fun searchCollection(query: String): List<TmdbSearchCollectionResult> {

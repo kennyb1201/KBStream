@@ -1,25 +1,25 @@
-package com.kennyb1201.kbstream.ui.studio
+package com.kennyb1201.kbstream.ui.decade
 
-import android.graphics.Bitmap
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -27,56 +27,59 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
-import coil3.request.allowHardware
+import coil3.request.crossfade
+import coil3.size.Size
 import com.kennyb1201.kbstream.data.tmdb.StudioItem
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
-import com.kennyb1201.kbstream.data.tmdb.TmdbCompanyDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
+import com.kennyb1201.kbstream.ui.tag.RailPagingState
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 
+/**
+ * Decade screen (Screen.Decade): the genre-screen experience for decades —
+ * pinned header with a DECADE eyebrow and a tilted poster fan built from
+ * the decade's top titles, then MOVIES/SERIES rails (Popular / Top Rated —
+ * no RECENT rails; a decade is old by definition) with the same infinite
+ * scroll and long-press watched toggles as the genre screens.
+ */
 @Composable
-fun StudioScreen(
-    id: Int,
+fun DecadeScreen(
+    decadeStart: Int,
     name: String,
-    isNetwork: Boolean,
-    // Set when this page is a streaming SERVICE (Services & Networks browse
-    // entries with a watch-provider id): rails then cover movies + series
-    // via provider discover while the header still shows the brand logo.
-    providerId: Int? = null,
     onNavigateDetail: (String, String) -> Unit = { _, _ -> },
-    viewModel: StudioViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    viewModel: DecadeViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
     val sections by viewModel.sections.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
     val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
     val pagingStates by viewModel.pagingStates.collectAsStateWithLifecycle()
-    val logoUrl by viewModel.logoUrl.collectAsStateWithLifecycle()
-    val companyInfo by viewModel.companyInfo.collectAsStateWithLifecycle()
-    val isService by viewModel.isService.collectAsStateWithLifecycle()
 
     val firstItemFocusRequester = remember { FocusRequester() }
 
@@ -98,8 +101,8 @@ fun StudioScreen(
         lastRailFocusRequester?.requestFocus()
     }
 
-    LaunchedEffect(id, isNetwork, providerId) {
-        viewModel.load(id, isNetwork, providerId)
+    LaunchedEffect(decadeStart) {
+        viewModel.load(decadeStart)
     }
 
     LaunchedEffect(sections, isLoading) {
@@ -109,34 +112,32 @@ fun StudioScreen(
         }
     }
 
-    // Full-bleed screen (matches SearchScreen): the background fills the
-    // whole display and edge spacing lives in the LazyColumn's
-    // contentPadding, so focused poster borders + glow draw to the screen
-    // edge without being clipped by a fixed-inset parent.
-    // The header is PINNED above the scrolling rails: when focus lands on
-    // the first poster, the LazyColumn only scrolls its own items, so the
-    // title/logo can never be pushed up under the top screen edge and
-    // clipped.
+    // Full-bleed screen (matches TagScreen): the background fills the whole
+    // display and edge spacing lives in the LazyColumn's contentPadding, so
+    // focused poster borders + glow draw to the screen edge without being
+    // clipped by a fixed-inset parent. The header is PINNED above the
+    // scrolling rails so it can never be pushed under the top edge.
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(KBVoid)
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            Box(
-                modifier = Modifier.padding(
-                    start = 28.dp,
-                    end = 28.dp,
-                    top = 28.dp
-                )
-            ) {
-                StudioHeader(
-                    name = name,
-                    logoUrl = logoUrl,
-                    info = companyInfo,
-                    isService = isService
-                )
+            // Top posters in this decade, for the header's poster fan.
+            val headerPosters = remember(sections) {
+                sections.asSequence()
+                    .flatMap { it.items.asSequence() }
+                    .mapNotNull { it.item.posterPath }
+                    .distinct()
+                    .take(5)
+                    .toList()
+                    .map { "${TmdbRepository.POSTER_BASE}$it" }
             }
+
+            DecadeHeader(
+                name = name,
+                posterUrls = headerPosters
+            )
 
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
@@ -163,9 +164,9 @@ fun StudioScreen(
                         items = sections,
                         key = { section: StudioSection -> section.title }
                     ) { section ->
-                    val pagingState = pagingStates[section.title] ?: StudioRailPagingState()
+                    val pagingState = pagingStates[section.title] ?: RailPagingState()
 
-                    StudioRailRow(
+                    DecadeRailRow(
                         section = section,
                         watchedKeys = watchedKeys,
                         resolvedIds = resolvedIds,
@@ -268,155 +269,87 @@ fun StudioScreen(
     }
 }
 
+/**
+ * Pinned header for decade screens: gradient-accented decade name with a
+ * DECADE eyebrow, plus the same tilted poster fan the genre screens use —
+ * five cards from the decade's top titles, tapering in size with
+ * alternating tilt, front card largest.
+ */
 @Composable
-private fun StudioHeader(
+private fun DecadeHeader(
     name: String,
-    logoUrl: String?,
-    info: TmdbCompanyDetail?,
-    isService: Boolean
+    posterUrls: List<String>
 ) {
+    val accent = KBAccent
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(bottom = 16.dp),
+            .padding(start = 28.dp, end = 28.dp, top = 28.dp, bottom = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.Top
+        verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = if (info?.let { it.name.isNullOrBlank() } == false) {
-                    info.name.orEmpty()
-                } else {
-                    name
-                },
-                style = MaterialTheme.typography.displayLarge
+                text = "DECADE",
+                style = MaterialTheme.typography.labelLarge,
+                color = accent,
+                modifier = Modifier.padding(bottom = 6.dp)
             )
-
             Text(
-                text = when {
-                    isService -> "Streaming Service"
-                    info?.description != null -> "Production Company"
-                    else -> "Network"
-                },
-                style = MaterialTheme.typography.titleMedium,
-                color = KBTextLo,
-                modifier = Modifier.padding(top = 2.dp)
-            )
-
-            val location = listOfNotNull(
-                info?.originCountry?.takeIf { it.isNotBlank() },
-                info?.headquarters?.takeIf { it.isNotBlank() }
-            ).joinToString(" · ")
-            if (location.isNotBlank()) {
-                Text(
-                    text = location,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = KBAccent,
-                    modifier = Modifier.padding(top = 6.dp)
+                text = name,
+                style = MaterialTheme.typography.displayLarge,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.background(
+                    Brush.horizontalGradient(
+                        listOf(
+                            accent.copy(alpha = 0.35f),
+                            Color.Transparent
+                        )
+                    )
                 )
+            )
+        }
+
+        if (posterUrls.isNotEmpty()) {
+            // Staggered poster fan: back cards peek out behind the front
+            // one (same treatment as the genre screens).
+            Row {
+                val rotations = listOf(-10f, -5f, 3f, 7f, -3f)
+                val widths = listOf(66.dp, 76.dp, 96.dp, 76.dp, 66.dp)
+                val heights = listOf(99.dp, 114.dp, 144.dp, 114.dp, 99.dp)
+                posterUrls.take(5).forEachIndexed { index, url ->
+                    val context = LocalContext.current
+                    AsyncImage(
+                        model = ImageRequest.Builder(context)
+                            .data(url)
+                            .size(Size(200, 300))
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .zIndex((posterUrls.size - index).toFloat())
+                            .offset(x = (-12 * index).dp)
+                            .rotate(rotations[index])
+                            .clip(RoundedCornerShape(8.dp))
+                            .border(
+                                1.dp,
+                                Color.White.copy(alpha = 0.25f),
+                                RoundedCornerShape(8.dp)
+                            )
+                            .width(widths[index])
+                            .height(heights[index])
+                    )
+                }
             }
         }
-
-        if (!logoUrl.isNullOrBlank()) {
-            BrandLogo(
-                url = logoUrl,
-                name = name,
-                modifier = Modifier
-                    .width(360.dp)
-                    .height(150.dp)
-                    .padding(start = 24.dp)
-            )
-        }
-    }
-}
-
-/**
- * Brand logo rendered for a dark surface. Sample the decoded artwork's
- * pixels; when the mark is dark and essentially colorless (black/gray logos
- * drawn for light backgrounds — the TMDB company/network default), recolor
- * it white via a SrcIn tint, which preserves the alpha and turns the mark
- * into a white silhouette. Light or strongly colored logos pass through
- * unchanged (the Netflix N, NBC peacock, etc. stay colored).
- * Public so other screens can share the same logic.
- */
-@Composable
-fun BrandLogo(
-    url: String,
-    name: String,
-    modifier: Modifier = Modifier
-) {
-    val context = LocalContext.current
-    var tintWhite by remember(url) { mutableStateOf(false) }
-
-    val request = remember(url) {
-        ImageRequest.Builder(context)
-            .data(url)
-            // Force a software bitmap so pixels can be sampled for luminance.
-            .allowHardware(false)
-            .build()
-    }
-
-    AsyncImage(
-        model = request,
-        contentDescription = name,
-        contentScale = ContentScale.Fit,
-        colorFilter = if (tintWhite) {
-            ColorFilter.tint(Color.White, BlendMode.SrcIn)
-        } else {
-            null
-        },
-        onSuccess = { state ->
-            tintWhite = isDarkMonochromeMark(state.result.image)
-        },
-        onError = { tintWhite = false },
-        modifier = modifier
-    )
-}
-
-/**
- * True when the decoded mark is dark and essentially colorless — the
- * signature of a logo designed for a light background.
- */
-private fun isDarkMonochromeMark(image: coil3.Image): Boolean {
-    return try {
-        val src = (image as? coil3.BitmapImage)?.bitmap ?: return false
-        val small = if (src.width <= 48 && src.height <= 48) {
-            src
-        } else {
-            Bitmap.createScaledBitmap(src, 48, 48, true)
-        }
-        val pixels = IntArray(small.width * small.height)
-        small.getPixels(pixels, 0, small.width, 0, 0, small.width, small.height)
-        var count = 0
-        var lumTotal = 0f
-        var satTotal = 0f
-        for (pixel in pixels) {
-            val alpha = (pixel ushr 24) and 0xFF
-            if (alpha < 64) continue // transparent padding
-            val r = (pixel shr 16) and 0xFF
-            val g = (pixel shr 8) and 0xFF
-            val b = pixel and 0xFF
-            lumTotal += (0.299f * r + 0.587f * g + 0.114f * b) / 255f
-            val max = maxOf(r, g, b)
-            val min = minOf(r, g, b)
-            satTotal += (max - min) / 255f
-            count++
-        }
-        if (count == 0) {
-            false
-        } else {
-            val avgLum = lumTotal / count
-            val avgSat = satTotal / count
-            avgLum < 0.55f && avgSat < 0.28f
-        }
-    } catch (_: Exception) {
-        // Undecodable/protected bitmap — leave the logo untouched.
-        false
     }
 }
 
 @Composable
-private fun StudioRailRow(
+private fun DecadeRailRow(
     section: StudioSection,
     watchedKeys: Set<String>,
     resolvedIds: Map<String, String>,
@@ -426,12 +359,12 @@ private fun StudioRailRow(
     isLoadingMore: Boolean,
     isFirstSection: Boolean,
     firstItemFocusRequester: FocusRequester,
-    viewModel: StudioViewModel,
+    viewModel: DecadeViewModel,
     onOpenPosterMenu: (StudioItem, FocusRequester) -> Unit
 ) {
     val rowState = rememberLazyListState()
 
-    InfiniteStudioRailHandler(
+    InfiniteDecadeRailHandler(
         listState = rowState,
         itemCount = section.items.size,
         hasMore = hasMore,
@@ -536,8 +469,8 @@ private fun StudioRailRow(
 }
 
 @Composable
-private fun InfiniteStudioRailHandler(
-    listState: LazyListState,
+private fun InfiniteDecadeRailHandler(
+    listState: androidx.compose.foundation.lazy.LazyListState,
     itemCount: Int,
     hasMore: Boolean,
     isLoadingMore: Boolean,

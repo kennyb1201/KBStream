@@ -81,6 +81,7 @@ import com.kennyb1201.kbstream.ui.search.SearchViewModel
 import com.kennyb1201.kbstream.ui.simkl.SimklConnectScreen
 import com.kennyb1201.kbstream.ui.streams.StreamsScreen
 import com.kennyb1201.kbstream.ui.streams.StreamsViewModel
+import com.kennyb1201.kbstream.ui.decade.DecadeScreen
 import com.kennyb1201.kbstream.ui.studio.StudioScreen
 import com.kennyb1201.kbstream.ui.tag.TagScreen
 import com.kennyb1201.kbstream.ui.theme.KBStreamTheme
@@ -125,6 +126,17 @@ sealed class Screen {
         val id: Int,
         val name: String,
         val isNetwork: Boolean,
+        // Watch-provider id when this page is a streaming SERVICE (movies +
+        // series rails via provider discover); null for plain network/company
+        // pages.
+        val providerId: Int? = null,
+        val returnTo: Screen = Home
+    ) : Screen()
+
+    /** One decade's discover page (genre-style rails, no RECENT rails). */
+    data class Decade(
+        val decadeStart: Int,
+        val name: String,
         val returnTo: Screen = Home
     ) : Screen()
 
@@ -242,6 +254,14 @@ private fun encodeScreen(
             put("id", screen.id)
             put("name", screen.name)
             put("isNetwork", screen.isNetwork)
+            screen.providerId?.let { put("providerId", it) }
+            if (depth < MAX_RETURN_DEPTH) {
+                put("returnTo", encodeScreen(screen.returnTo, depth + 1))
+            }
+        }
+        is Screen.Decade -> {
+            put("decadeStart", screen.decadeStart)
+            put("name", screen.name)
             if (depth < MAX_RETURN_DEPTH) {
                 put("returnTo", encodeScreen(screen.returnTo, depth + 1))
             }
@@ -329,6 +349,12 @@ private fun decodeScreen(
                 id = json.optInt("id"),
                 name = json.optString("name"),
                 isNetwork = json.optBoolean("isNetwork"),
+                providerId = json.optInt("providerId").takeIf { it != 0 },
+                returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
+            )
+            "decade" -> Screen.Decade(
+                decadeStart = json.optInt("decadeStart"),
+                name = json.optString("name"),
                 returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
             )
             "tag" -> Screen.Tag(
@@ -431,6 +457,7 @@ private fun Screen.typeName(): String = when (this) {
     is Screen.Detail -> "detail"
     is Screen.Actor -> "actor"
     is Screen.Studio -> "studio"
+    is Screen.Decade -> "decade"
     is Screen.Tag -> "tag"
     is Screen.Collection -> "collection"
     is Screen.NuvioFolder -> "nuvioFolder"
@@ -804,6 +831,9 @@ fun AppRoot() {
             is Screen.Studio ->
                 current.returnTo
 
+            is Screen.Decade ->
+                current.returnTo
+
             is Screen.Tag ->
                 current.returnTo
 
@@ -1022,6 +1052,7 @@ fun AppRoot() {
                         studio.id,
                         studio.name,
                         false,
+                        null,
                         Screen.Search
                     )
                 },
@@ -1037,11 +1068,20 @@ fun AppRoot() {
                 onOpenTagScreen = { id, name, isKeyword, mediaType ->
                     screen = Screen.Tag(id, name, isKeyword, mediaType, Screen.Search)
                 },
-                onOpenStudioScreen = { id, name, isNetwork ->
-                    screen = Screen.Studio(id, name, isNetwork, Screen.Search)
+                onOpenStudioScreen = { id, name, isNetwork, providerId ->
+                    screen = Screen.Studio(
+                        id,
+                        name,
+                        isNetwork,
+                        providerId,
+                        Screen.Search
+                    )
                 },
                 onOpenCollectionScreen = { id, name ->
                     screen = Screen.Collection(id, name, Screen.Search)
+                },
+                onOpenDecadeScreen = { decadeStart, name ->
+                    screen = Screen.Decade(decadeStart, name, Screen.Search)
                 }
             )
         }
@@ -1152,6 +1192,7 @@ fun AppRoot() {
                         id,
                         name,
                         isNetwork,
+                        null,
                         Screen.Detail(current.type, current.id, current.pendingTarget, current.itemPoster)
                     )
                 },
@@ -1251,6 +1292,24 @@ fun AppRoot() {
                 current.id,
                 current.name,
                 current.isNetwork,
+                current.providerId,
+
+                onNavigateDetail = {
+                        type,
+                        id ->                        screen = Screen.Detail(
+                            type,
+                            id,
+                            returnTo = current
+                        )
+                }
+            )
+        }
+
+        is Screen.Decade -> {
+
+            DecadeScreen(
+                current.decadeStart,
+                current.name,
 
                 onNavigateDetail = {
                         type,

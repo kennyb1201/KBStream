@@ -1,4 +1,4 @@
-package com.kennyb1201.kbstream.ui.studio
+package com.kennyb1201.kbstream.ui.decade
 
 import android.app.Application
 import android.util.Log
@@ -6,11 +6,10 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TagRailPage
-import com.kennyb1201.kbstream.data.tmdb.TmdbCompanyDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
+import com.kennyb1201.kbstream.ui.tag.RailPagingState
 import kotlinx.coroutines.async
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -22,13 +21,15 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.supervisorScope
 
-data class StudioRailPagingState(
-    val nextPage: Int = 2,
-    val hasMore: Boolean = true,
-    val isLoadingMore: Boolean = false
-)
-
-class StudioViewModel(application: Application) : AndroidViewModel(application) {
+/**
+ * ViewModel for the Decade screen (Screen.Decade): TMDB discover rails for
+ * one decade, movies and series in their own rails with Popular / Top Rated
+ * sorts — the same structure as the genre/keyword screens but without the
+ * RECENT rails (a decade is old by definition, "recent" adds nothing).
+ * Shares [RailPagingState] with TagViewModel so the infinite-scroll rails
+ * behave identically.
+ */
+class DecadeViewModel(application: Application) : AndroidViewModel(application) {
     private val tmdbRepository = TmdbRepository(application)
     private val watchedStatusRepository = WatchedStatusRepository(application)
 
@@ -41,21 +42,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
-    private val _pagingStates = MutableStateFlow<Map<String, StudioRailPagingState>>(emptyMap())
-    val pagingStates: StateFlow<Map<String, StudioRailPagingState>> = _pagingStates.asStateFlow()
+    private val _pagingStates = MutableStateFlow<Map<String, RailPagingState>>(emptyMap())
+    val pagingStates: StateFlow<Map<String, RailPagingState>> = _pagingStates.asStateFlow()
 
-    private val _logoUrl = MutableStateFlow<String?>(null)
-    val logoUrl: StateFlow<String?> = _logoUrl.asStateFlow()
-
-    private val _companyInfo = MutableStateFlow<TmdbCompanyDetail?>(null)
-    val companyInfo: StateFlow<TmdbCompanyDetail?> = _companyInfo.asStateFlow()
-
-    // True when this screen is a streaming SERVICE page (watch-provider
-    // rails for movies + series) rather than a plain network/company page.
-    private val _isService = MutableStateFlow(false)
-    val isService: StateFlow<Boolean> = _isService.asStateFlow()
-
-    // Reactive watched keys pipeline combining resolved IDs with the repository's hot update flow
+    // Same reactive watched-keys pipeline as TagViewModel/StudioViewModel.
     val watchedKeys: StateFlow<Set<String>> = combine(
         _sections,
         _resolvedIds,
@@ -86,72 +76,37 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     // Caps parallel TMDB imdb-id lookups (same rationale as TagViewModel).
     private val imdbResolveSemaphore = Semaphore(permits = 8)
 
-    private var currentId: Int? = null
-    private var currentIsNetwork: Boolean = false
-    private var currentProviderId: Int? = null
+    private var currentDecadeStart: Int? = null
 
     fun watchedKey(id: String, type: String): String = "${type.lowercase()}::$id"
 
     fun lookupKey(tmdbId: Int, mediaType: String): String =
         "${mediaType.lowercase()}::$tmdbId"
 
-    fun load(id: Int, isNetwork: Boolean, providerId: Int? = null) {
-        val isSameRoute =
-            currentId == id &&
-            currentIsNetwork == isNetwork &&
-            currentProviderId == providerId &&
-            _sections.value.isNotEmpty()
-
-        if (isSameRoute) return
-
-        currentId = id
-        currentIsNetwork = isNetwork
-        currentProviderId = providerId
+    fun load(decadeStart: Int) {
+        // Same-route guard so Back-restore doesn't reload and clear state.
+        if (currentDecadeStart == decadeStart && _sections.value.isNotEmpty()) return
+        currentDecadeStart = decadeStart
 
         viewModelScope.launch {
             _isLoading.value = true
             _sections.value = emptyList()
             _resolvedIds.value = emptyMap()
             _pagingStates.value = emptyMap()
-            _logoUrl.value = null
-            _companyInfo.value = null
-            _isService.value = providerId != null
-
-            // Clear logo + blurb for the header. Networks use their own TMDB
-            // endpoints (a network id is not a company id), so route by type.
-            try {
-                _logoUrl.value = tmdbRepository.getEntityLogoUrl(id, isNetwork)
-            } catch (e: Exception) {
-                Log.w("STUDIO_VM", "Logo lookup failed for id=$id", e)
-            }
-            try {
-                _companyInfo.value = tmdbRepository.getEntityDetail(id, isNetwork)
-            } catch (e: Exception) {
-                Log.w("STUDIO_VM", "Entity detail failed for id=$id", e)
-            }
 
             try {
-                val result = when {
-                    // Service pages discover through watch-provider rails
-                    // (movies + series) instead of network/company rails.
-                    providerId != null ->
-                        tmdbRepository.getInitialServiceSections(providerId)
-                    isNetwork ->
-                        tmdbRepository.getByNetwork(id)
-                    else ->
-                        tmdbRepository.getByCompany(id)
-                }
+                val result = tmdbRepository.getInitialDecadeSections(decadeStart)
 
                 _sections.value = result
                 _pagingStates.value = result.associate { section ->
-                    section.title to StudioRailPagingState(
+                    section.title to RailPagingState(
                         nextPage = 2,
                         hasMore = section.items.isNotEmpty(),
                         isLoadingMore = false
                     )
                 }
             } catch (e: Exception) {
-                Log.e("STUDIO_VM", "load failed for id=$id isNetwork=$isNetwork", e)
+                Log.e("DECADE_VM", "load failed for decade $decadeStart", e)
             } finally {
                 _isLoading.value = false
             }
@@ -159,7 +114,6 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             val loadedSections = _sections.value
             if (loadedSections.isNotEmpty()) {
                 launch {
-                    delay(350)
                     resolveAndPreloadWatched(loadedSections)
                 }
             }
@@ -167,7 +121,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun loadMoreSection(title: String) {
-        val screenId = currentId ?: return
+        val decadeStart = currentDecadeStart ?: return
         var pageToLoad: Int? = null
 
         _pagingStates.value = _pagingStates.value.toMutableMap().apply {
@@ -181,17 +135,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch {
             try {
-                val page: TagRailPage = when {
-                    currentProviderId != null ->
-                        tmdbRepository.getServiceRailPage(currentProviderId!!, title, pageNumber)
-                    currentIsNetwork ->
-                        tmdbRepository.getNetworkRailPage(screenId, title, pageNumber)
-                    else ->
-                        tmdbRepository.getCompanyRailPage(screenId, title, pageNumber)
-                }
+                val page: TagRailPage =
+                    tmdbRepository.getDecadeRailPage(decadeStart, title, pageNumber)
 
                 val existingSection = _sections.value.firstOrNull { it.title == title }
-                if (existingSection != null) {
+                if (existingSection != null && page.items.isNotEmpty()) {
                     val mergedItems = (existingSection.items + page.items)
                         .distinctBy { item -> item.item.id }
 
@@ -204,21 +152,18 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     }
 
                     _sections.value = updatedSections
-
-                    if (page.items.isNotEmpty()) {
-                        resolveAndPreloadWatched(updatedSections)
-                    }
+                    resolveAndPreloadWatched(updatedSections)
                 }
 
                 _pagingStates.value = _pagingStates.value.toMutableMap().apply {
-                    this[title] = StudioRailPagingState(
+                    this[title] = RailPagingState(
                         nextPage = pageNumber + 1,
                         hasMore = page.hasMore,
                         isLoadingMore = false
                     )
                 }
             } catch (e: Exception) {
-                Log.e("STUDIO_VM", "loadMoreSection failed for $title", e)
+                Log.e("DECADE_VM", "loadMoreSection failed for $title", e)
                 _pagingStates.value = _pagingStates.value.toMutableMap().apply {
                     val current = this[title] ?: return@apply
                     this[title] = current.copy(isLoadingMore = false)
@@ -271,22 +216,18 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 return
             }
 
-            _resolvedIds.value = resolved.associate { (tmdbId, mediaType, imdbId) ->
+            val newResolvedIds = resolved.associate { (tmdbId, mediaType, imdbId) ->
                 lookupKey(tmdbId, mediaType) to imdbId!!
             }
+            _resolvedIds.value = _resolvedIds.value + newResolvedIds
 
             val preloadItems = resolved
                 .map { (_, mediaType, imdbId) -> imdbId!! to mediaType }
                 .distinct()
 
             watchedStatusRepository.preload(preloadItems)
-
-            Log.d(
-                "STUDIO_WATCHED",
-                "resolveAndPreloadWatched done, items=${uniqueItems.size}, resolved=${resolved.size}"
-            )
         } catch (e: Exception) {
-            Log.e("STUDIO_WATCHED", "resolveAndPreloadWatched failed: ${e.message}", e)
+            Log.e("DECADE_VM", "resolveAndPreloadWatched failed", e)
             _resolvedIds.value = emptyMap()
         }
     }
@@ -342,7 +283,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             runCatching {
                 watchedStatusRepository.markWatchedLocal(imdbId, normalizedType)
             }.onFailure { e ->
-                Log.e("STUDIO_WATCHED", "markAsWatched failed tmdb=$tmdbId", e)
+                Log.e("DECADE_VM", "markAsWatched failed tmdb=$tmdbId", e)
             }
         }
     }
@@ -373,11 +314,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             runCatching {
                 watchedStatusRepository.markUnwatchedLocal(imdbId, normalizedType)
             }.onFailure { e ->
-                Log.e("STUDIO_WATCHED", "markUnwatched failed tmdb=$tmdbId", e)
+                Log.e("DECADE_VM", "markUnwatched failed tmdb=$tmdbId", e)
             }
         }
     }
-
-    suspend fun resolveImdbId(tmdbId: Int, type: String): String? =
-        tmdbRepository.resolveImdbId(tmdbId, normalizeMediaType(type) ?: type)
 }

@@ -11,8 +11,6 @@ import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.data.addon.ManifestCatalog
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
-import com.kennyb1201.kbstream.data.tmdb.StudioItem
-import com.kennyb1201.kbstream.data.tmdb.TagRailPage
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
@@ -170,16 +168,18 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
 
     private var addonSearchJob: Job? = null
 
-    // Set by MainActivity: browse entries that open existing app screens
-    // (Tag = genre/keyword discover, Studio = network/company discover,
-    // Collection = franchise page). The browser itself shows entries whose
-    // rails load in place (services, decades).
+    // Set by MainActivity: every browse entry opens a dedicated discover
+    // screen (Tag = genre/keyword, Studio = network/company/service —
+    // services carry a non-null providerId for movies+series rails,
+    // Collection = franchise page, Decade = per-decade page).
     var onOpenTagScreen:
         ((id: Int, name: String, isKeyword: Boolean, mediaType: String) -> Unit)? = null
     var onOpenStudioScreen:
-        ((id: Int, name: String, isNetwork: Boolean) -> Unit)? = null
+        ((id: Int, name: String, isNetwork: Boolean, providerId: Int?) -> Unit)? = null
     var onOpenCollectionScreen:
         ((id: Int, name: String) -> Unit)? = null
+    var onOpenDecadeScreen:
+        ((decadeStart: Int, name: String) -> Unit)? = null
 
     init {
         loadRecentSearches()
@@ -930,25 +930,10 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     // ------------------------------------------------------------------
-    // Search browse browser (blank-query / no-results browsing)
+    // Search browse browser (blank-query / no-results browsing). Every
+    // entry opens a dedicated discover screen; the browser itself only
+    // shows the category strip and submenu chips.
     // ------------------------------------------------------------------
-
-    /** One loaded rail of the browse browser. */
-    data class BrowseRail(
-        val key: String,
-        val title: String,
-        val items: List<StudioItem>,
-        val hasMore: Boolean,
-        val isLoadingMore: Boolean = false
-    )
-
-    /** What the browser is currently showing (null = sidebar/submenu level). */
-    data class BrowseSelection(
-        val categoryKey: String,
-        val categoryLabel: String,
-        val entryId: Int,
-        val entryName: String
-    )
 
     private val _browseCategories =
         MutableStateFlow(BROWSE_CATEGORIES)
@@ -956,27 +941,12 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
     val browseCategories: StateFlow<List<BrowseCategory>> =
         _browseCategories.asStateFlow()
 
-    private val _browseSelection =
-        MutableStateFlow<BrowseSelection?>(null)
-
-    val browseSelection: StateFlow<BrowseSelection?> =
-        _browseSelection.asStateFlow()
-
-    private val _browseRails =
-        MutableStateFlow<List<BrowseRail>>(emptyList())
-
-    val browseRails: StateFlow<List<BrowseRail>> =
-        _browseRails.asStateFlow()
-
     private val _browseSubmenuLoading =
         MutableStateFlow(false)
 
     val browseSubmenuLoading: StateFlow<Boolean> =
         _browseSubmenuLoading.asStateFlow()
 
-    private var browseLoadJob: Job? = null
-    private var browseFetchFn: (suspend (mode: String, page: Int) -> TagRailPage)? = null
-    private val browsePageState = HashMap<String, Int>()
     private var catalogResolveStarted = false
 
     /**
@@ -985,9 +955,6 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
      * once-per-session) resolution off.
      */
     fun selectBrowseCategory(key: String) {
-        browseLoadJob?.cancel()
-        _browseSelection.value = null
-        _browseRails.value = emptyList()
         if (key == "keywords" || key == "collections") {
             _browseSubmenuLoading.value = !catalogResolveStarted
             if (!catalogResolveStarted) {
@@ -998,161 +965,26 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun clearBrowseSelection() {
-        browseLoadJob?.cancel()
-        _browseSelection.value = null
-        _browseRails.value = emptyList()
-    }
-
-    /** A submenu entry press: navigate away or load rails in the browser. */
+    /** A submenu entry press: open its dedicated discover screen. */
     fun onBrowseEntryClicked(categoryKey: String, entry: BrowseEntry) {
         when (categoryKey) {
             "genres" -> onOpenTagScreen?.invoke(entry.id, entry.name, false, "movie")
             "keywords" -> onOpenTagScreen?.invoke(entry.id, entry.name, true, "movie")
-            "networks" -> onOpenStudioScreen?.invoke(entry.id, entry.name, true)
-            "studios" -> onOpenStudioScreen?.invoke(entry.id, entry.name, false)
+            // Services carry their watch-provider id so their screen runs
+            // movies + series rails; plain network entries have none and
+            // keep the old network page. isNetwork follows the id space
+            // (network unless the entry ids a company) so the header's
+            // logo/detail lookups hit the right TMDB endpoint.
+            "services" -> onOpenStudioScreen?.invoke(
+                entry.id,
+                entry.name,
+                !entry.networkIsCompany,
+                entry.providerId
+            )
+            "studios" -> onOpenStudioScreen?.invoke(entry.id, entry.name, false, null)
             "collections" -> onOpenCollectionScreen?.invoke(entry.id, entry.name)
-            "services" -> {
-                val service = BROWSE_SERVICES.getOrNull(entry.id) ?: return
-                loadServiceRails(service, entry.name)
-            }
-            "decades" -> loadDecadeRails(entry.id, entry.name)
+            "decades" -> onOpenDecadeScreen?.invoke(entry.id, entry.name)
         }
-    }
-
-    /**
-     * Service rails: Originals (network/company discover) then Recent,
-     * Popular, Most Voted (watch-provider discover, US region).
-     */
-    private fun loadServiceRails(service: BrowseService, name: String) {
-        browseLoadJob?.cancel()
-        _browseSubmenuLoading.value = false
-        _browseSelection.value = BrowseSelection(
-            categoryKey = "services",
-            categoryLabel = "Services",
-            entryId = service.providerId ?: -1,
-            entryName = name
-        )
-        val definitions = buildList {
-            if (service.networkOrCompanyId != null) {
-                add("originals" to "Originals")
-            }
-            add("recent" to "Recent")
-            add("popular" to "Popular")
-            add("voted" to "Most Voted")
-        }
-        loadDiscoverRails(definitions) { mode, page ->
-            tmdbRepository.getBrowseRailPage(
-                mode = mode,
-                providerId = service.providerId,
-                networkOrCompanyId = service.networkOrCompanyId,
-                networkIsCompany = service.networkIsCompany,
-                page = page
-            )
-        }
-    }
-
-    /** Decade rails: Popular + Most Voted, movies and series merged. */
-    private fun loadDecadeRails(decadeStart: Int, name: String) {
-        browseLoadJob?.cancel()
-        _browseSubmenuLoading.value = false
-        _browseSelection.value = BrowseSelection(
-            categoryKey = "decades",
-            categoryLabel = "Decades",
-            entryId = decadeStart,
-            entryName = name
-        )
-        loadDiscoverRails(listOf("popular" to "Popular", "voted" to "Most Voted")) { mode, page ->
-            tmdbRepository.getDecadeRailPage(
-                decadeStart = decadeStart,
-                sortBy = if (mode == "voted") "vote_average.desc" else "popularity.desc",
-                page = page
-            )
-        }
-    }
-
-    private fun loadDiscoverRails(
-        definitions: List<Pair<String, String>>,
-        fetch: suspend (mode: String, page: Int) -> TagRailPage
-    ) {
-        val selection = _browseSelection.value ?: return
-        browseFetchFn = fetch
-        browsePageState.clear()
-        _browseRails.value = definitions.map { (mode, title) ->
-            BrowseRail(
-                key = browseRailKey(selection, mode),
-                title = title,
-                items = emptyList(),
-                hasMore = true
-            )
-        }
-        browseLoadJob = viewModelScope.launch {
-            definitions.map { (mode, _) ->
-                async { loadBrowseRail(mode, 1, fetch) }
-            }.awaitAll()
-        }
-    }
-
-    private fun browseRailKey(selection: BrowseSelection, mode: String): String =
-        "${selection.categoryKey}:${selection.entryId}:${selection.entryName}:$mode"
-
-    /** Loads (or appends) one page into its rail; safe on stale selections. */
-    private suspend fun loadBrowseRail(
-        mode: String,
-        page: Int,
-        fetch: suspend (String, Int) -> TagRailPage
-    ) {
-        val selection = _browseSelection.value ?: return
-        val railKey = browseRailKey(selection, mode)
-        val result = runCatching { fetch(mode, page) }
-            .onFailure { e -> Log.e("KBStream", "Browse rail load failed", e) }
-            .getOrNull() ?: return
-        // Selection changed while the request was in flight: drop it.
-        if (_browseSelection.value != selection) return
-
-        _browseRails.value = _browseRails.value.map { rail ->
-            if (rail.key != railKey) {
-                rail
-            } else {
-                rail.copy(
-                    items = if (page == 1) result.items else rail.items + result.items,
-                    hasMore = result.hasMore,
-                    isLoadingMore = false
-                )
-            }
-        }
-        browsePageState[railKey] = page + 1
-        resolveBrowseTitles(_browseRails.value)
-    }
-
-    /** End-of-rail trigger from the screen: append the next page. */
-    fun loadMoreBrowseRail(railKey: String) {
-        val fetch = browseFetchFn ?: return
-        val rail = _browseRails.value.firstOrNull { it.key == railKey } ?: return
-        if (!rail.hasMore || rail.isLoadingMore || rail.items.isEmpty()) return
-        val page = browsePageState[railKey] ?: return
-        val mode = railKey.substringAfterLast(':')
-
-        _browseRails.value = _browseRails.value.map {
-            if (it.key == railKey) it.copy(isLoadingMore = true) else it
-        }
-        viewModelScope.launch {
-            loadBrowseRail(mode, page, fetch)
-        }
-    }
-
-    /** Watched-badge resolution for browse rails (shared IMDB resolver). */
-    private fun resolveBrowseTitles(rails: List<BrowseRail>) {
-        resolveTmdbIds(
-            rails.asSequence()
-                .flatMap { it.items.asSequence() }
-                .mapNotNull { studioItem ->
-                    val mediaType = normalizedType(studioItem.mediaType)
-                        ?: return@mapNotNull null
-                    if (studioItem.item.id <= 0) null else studioItem.item.id to mediaType
-                }
-                .toList()
-        )
     }
 
     /**
