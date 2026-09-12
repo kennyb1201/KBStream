@@ -1221,8 +1221,8 @@ class TmdbRepository(context: Context) {
             voteCountGte = voteFloor
         )
 
-        val (movies, tv) = kotlinx.coroutines.coroutineScope {
-            val m = kotlinx.coroutines.async {
+        val (movies, tv) = coroutineScope {
+            val m = async {
                 runCatching {
                     discoverNuvio(
                         mediaType = "movie",
@@ -1232,7 +1232,7 @@ class TmdbRepository(context: Context) {
                     )
                 }.getOrNull().orEmpty()
             }
-            val t = kotlinx.coroutines.async {
+            val t = async {
                 runCatching {
                     discoverNuvio(
                         mediaType = "tv",
@@ -1318,8 +1318,8 @@ class TmdbRepository(context: Context) {
         // Originals rail is series-only.
         val skipMovies = mode == "originals" && !networkIsCompany
 
-        val (movies, tv) = kotlinx.coroutines.coroutineScope {
-            val m = kotlinx.coroutines.async {
+        val (movies, tv) = coroutineScope {
+            val m = async {
                 if (skipMovies) {
                     emptyList()
                 } else {
@@ -1328,7 +1328,7 @@ class TmdbRepository(context: Context) {
                     }.getOrNull().orEmpty()
                 }
             }
-            val t = kotlinx.coroutines.async {
+            val t = async {
                 runCatching {
                     discoverNuvio("tv", page, tvSortBy, filters(forTv = true))
                 }.getOrNull().orEmpty()
