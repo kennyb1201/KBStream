@@ -87,7 +87,7 @@ object NuvioHomeSlots {
         // first, exactly like HomeViewModel does.
         val topTodayKeys = addonEntries
             .map { entry -> addonKeyByRail[(entry as HomeEntry.AddonRail).rail] }
-            .filter { it.startsWith("addon:https://toptoday.llamayu.com/") }
+            .filter { it?.startsWith("addon:https://toptoday.llamayu.com/") == true }
             .toSet()
         val topTodayRails = addonEntries.filter { entry ->
             addonKeyByRail[(entry as HomeEntry.AddonRail).rail] in topTodayKeys
