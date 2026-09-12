@@ -161,11 +161,6 @@ fun SettingsScreen(
             color = KBAccent,
             style = MaterialTheme.typography.headlineMedium
         )
-        Text(
-            text = "Player defaults \u2014 applied to every new playback session",
-            color = KBTextLo,
-            style = MaterialTheme.typography.bodyMedium
-        )
         Spacer(modifier = Modifier.height(16.dp))
 
         // ── INTEGRATIONS ────────────────────────────────────────
@@ -434,6 +429,12 @@ fun SettingsScreen(
 
         // ── PLAYBACK ──────────────────────────────────────────────
         SectionHeader("PLAYBACK")
+        Text(
+            text = "Player defaults \u2014 applied to every new playback session",
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
 
         Text(
             text = "Audio Decoder",
