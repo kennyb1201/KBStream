@@ -282,7 +282,17 @@ fun SettingsScreen(
                     modifier = Modifier.padding(top = 2.dp)
                 )
 
-                var badgeStatus by remember { mutableStateOf<String?>(null) }
+                // Persistent status: seeded from the saved pack so the
+                // imported-state line survives leaving and re-entering
+                // settings (the OMDb "Saved" parity). Import/remove then
+                // update it live.
+                var badgeStatus by remember { mutableStateOf(
+                    if (StreamBadgeEngine.hasPack(context)) {
+                        "Badge pack imported — ${StreamBadgeEngine.filterCount(context)} filters active"
+                    } else {
+                        null
+                    }
+                ) }
                 var badgeImporting by remember { mutableStateOf(false) }
                 val scope = rememberCoroutineScope()
 
@@ -292,7 +302,8 @@ fun SettingsScreen(
                         scope.launch {
                             badgeStatus = StreamBadgeEngine
                                 .importFromUrl(context, badgePackInput)
-                                ?: "Badge pack imported"
+                                ?: "Badge pack imported — " +
+                                    "${StreamBadgeEngine.filterCount(context)} filters active"
                             badgeImporting = false
                         }
                     }

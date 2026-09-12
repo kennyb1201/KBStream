@@ -89,6 +89,9 @@ object StreamBadgeEngine {
     fun hasPack(context: Context): Boolean =
         prefs(context).getString(KEY_PACK_JSON, null)?.isNotBlank() == true
 
+    /** Number of active (enabled, valid) filters in the loaded pack. */
+    fun filterCount(context: Context): Int = loadFilters(context).size
+
     /** Store a fetched pack; returns false when parsing failed. */
     fun savePack(context: Context, url: String, json: String): Boolean {
         val normalized = normalizePack(json) ?: return false
@@ -170,11 +173,17 @@ object StreamBadgeEngine {
         }
     }
 
-    /** Text fields a badge pattern may match against, mirroring Nuvio's candidates. */
+    /**
+     * Text fields a badge pattern may match against: Nuvio's candidates
+     * (name / title / description) plus the URL. The URL is beyond Nuvio's
+     * set — direct-link addons often keep quality/host info only in the
+     * link, and packs with host or release-name patterns need it to match.
+     */
     private fun matchCandidates(stream: Stream): List<String> = listOfNotNull(
         stream.name,
         stream.title,
-        stream.description
+        stream.description,
+        stream.url
     ).filter { it.isNotBlank() }
 
     /**
