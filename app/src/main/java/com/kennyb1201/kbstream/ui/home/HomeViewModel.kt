@@ -1068,18 +1068,30 @@ Log.d(
      */
     fun onHomeResumed() {
 
-        val current =
+        // Rebuild the rails when either display toggle changed in Settings:
+        // hide-upcoming needs a refilter, and landscape cards need
+        // landscapeArt resolved — which only happens at rail-build time.
+        // Rails loaded while landscape was OFF carry an empty landscapeArt
+        // map, so flipping the toggle on used to leave every card on the
+        // addon's primary backdrop (the same image the hero shows) until a
+        // full app restart.
+        val currentHideUpcoming =
             AppPreferences.getHomeRailHideUpcoming(
                 getApplication()
             )
 
-        val applied =
-            lastAppliedHideUpcoming
+        val currentLandscape =
+            AppPreferences.getHomeLandscapeCards(
+                getApplication()
+            )
 
-        if (
-            applied != null &&
-            current != applied
-        ) {
+        val needsRebuild =
+            (lastAppliedHideUpcoming != null &&
+                currentHideUpcoming != lastAppliedHideUpcoming) ||
+                (lastAppliedLandscape != null &&
+                    currentLandscape != lastAppliedLandscape)
+
+        if (needsRebuild) {
 
             viewModelScope.launch {
 
@@ -1092,6 +1104,7 @@ Log.d(
     }
 
     private var lastAppliedHideUpcoming: Boolean? = null
+    private var lastAppliedLandscape: Boolean? = null
 
     fun refreshWatchedStatusForCurrentRails() {
 
@@ -3724,11 +3737,12 @@ private suspend fun calculateEpisodesRemaining(
 
     /**
      * Resolves landscape-card artwork (backdrop + clearlogo) for a rail's
-     * items, keyed by "type:id". Prefers the addon's own background/logo
-     * fields, falls back to the shared TMDB detail cache (backdropPath /
-     * bestLogoPath). All TMDB hits land in the same 12h/30d cache the
-     * digital filter and detail screens use, so rails that were filtered
-     * already have warm entries.
+     * items, keyed by "type:id". The TMDB alternate backdrop always wins so
+     * cards never mirror the hero's primary backdrop; the addon's own
+     * background/logo are fallbacks (logo keeps addon-first priority).
+     * All TMDB hits land in the same 12h/30d cache the digital filter and
+     * detail screens use, so rails that were filtered already have warm
+     * entries.
      */
     private suspend fun resolveLandscapeArt(
         metas: List<MetaPreview>,
@@ -3757,12 +3771,11 @@ private suspend fun calculateEpisodesRemaining(
                             meta.logo?.takeIf { it.isNotBlank() }
                         }
 
-                    if (
-                        addonBackdrop != null &&
-                        addonLogo != null
-                    ) {
-                        return@async key to (addonBackdrop to addonLogo)
-                    }
+                    // No fast-path on the addon's own fields: the addon
+                    // background is typically the same primary backdrop the
+                    // Home hero shows, so returning it early made landscape
+                    // cards mirror the hero. TMDB is always consulted; the
+                    // addon fields stay as fallbacks in the merge below.
 
                     val detail =
                         landscapeArtSemaphore.withPermit {
@@ -3888,6 +3901,9 @@ private suspend fun calculateEpisodesRemaining(
 
         lastAppliedHideUpcoming =
             hideUpcoming
+
+        lastAppliedLandscape =
+            landscapeCards
 
         _isLoading.value =
             _rails.value.isEmpty()
