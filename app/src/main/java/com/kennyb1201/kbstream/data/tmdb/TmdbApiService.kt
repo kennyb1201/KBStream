@@ -181,6 +181,13 @@ interface TmdbApiService {
         @Query("api_key") apiKey: String
     ): TmdbSearchCompanyResponse
 
+    @GET("search/keyword")
+    suspend fun searchKeyword(
+        @Query("query") query: String,
+        @Query("api_key") apiKey: String,
+        @Query("page") page: Int = 1
+    ): TmdbSearchKeywordResponse
+
     @GET("search/collection")
 suspend fun searchCollection(
     @Query("query") query: String,

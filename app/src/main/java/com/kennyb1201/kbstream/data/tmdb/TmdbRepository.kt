@@ -1188,6 +1188,161 @@ class TmdbRepository(context: Context) {
         )
     }
 
+    /**
+     * Keyword id lookup for the Search browse browser: TMDB's search/keyword
+     * endpoint resolves a user-facing name ("Zombie", "Time Travel") to its
+     * stable keyword id, which the Tag screen then discovers with. Cached in
+     * the ViewModel so a name is resolved at most once per session.
+     */
+    suspend fun searchKeywords(query: String): List<TmdbSearchKeywordResult> {
+        if (apiKey.isBlank()) return emptyList()
+        return runCatching { api.searchKeyword(query, apiKey).results }
+            .getOrDefault(emptyList())
+    }
+
+    /**
+     * One decade rail for the Search browse browser (decades deliberately
+     * offer just Popular and Most Voted). Movies and series run as two
+     * parallel discover calls and are merged, best-rated first, so one rail
+     * shows both. Decades reuse the Nuvio filter plumbing: year="1980-1989"
+     * becomes primary_release_date / first_air_date bounds.
+     */
+    suspend fun getDecadeRailPage(decadeStart: Int, sortBy: String, page: Int): TagRailPage {
+        if (apiKey.isBlank()) return TagRailPage(emptyList(), false)
+        val decadeEnd = decadeStart + 9
+        val yearRange = "$decadeStart-$decadeEnd"
+
+        // "Most Voted" sorts by vote_average, which without a floor surfaces
+        // obscure 8.5-rated shorts with 12 votes; "Popular" (popularity.desc)
+        // only needs a light floor to skip no-title entries.
+        val voteFloor = if (sortBy.startsWith("vote_average")) 500 else 100
+        val filters = com.kennyb1201.kbstream.data.nuvio.NuvioFilters(
+            year = yearRange,
+            voteCountGte = voteFloor
+        )
+
+        val (movies, tv) = kotlinx.coroutines.coroutineScope {
+            val m = kotlinx.coroutines.async {
+                runCatching {
+                    discoverNuvio(
+                        mediaType = "movie",
+                        page = page,
+                        sortBy = sortBy,
+                        filters = filters
+                    )
+                }.getOrNull().orEmpty()
+            }
+            val t = kotlinx.coroutines.async {
+                runCatching {
+                    discoverNuvio(
+                        mediaType = "tv",
+                        page = page,
+                        sortBy = sortBy,
+                        filters = filters
+                    )
+                }.getOrNull().orEmpty()
+            }
+            m.await() to t.await()
+        }
+
+        val items = (movies.map { StudioItem(it, "movie") } + tv.map { StudioItem(it, "series") })
+            .sortedByDescending { it.item.voteAverage ?: 0.0 }
+        return TagRailPage(items, true)
+    }
+
+    /**
+     * One rail of the Search browse browser for a streaming service.
+     * Modes:
+     *  - "originals": what the service produced — network discover for
+     *    series, company discover for movies ([networkOrCompanyId] required).
+     *  - "recent" / "popular" / "voted": everything on the service now via
+     *    watch-provider discover (US watch region, [providerId] required).
+     * Movies and series run as two parallel discover calls; the rail keeps
+     * movies first, each block in API order.
+     */
+    suspend fun getBrowseRailPage(
+        mode: String,
+        providerId: Int?,
+        networkOrCompanyId: Int?,
+        networkIsCompany: Boolean,
+        page: Int
+    ): TagRailPage {
+        if (apiKey.isBlank()) return TagRailPage(emptyList(), false)
+        val currentYear = java.time.LocalDate.now().year.toString()
+
+        // Recent sorts by release date, which differs per media type; a
+        // vote floor keeps "recent" from surfacing announced-but-unreleased
+        // entries (they have almost no votes yet).
+        val (movieSortBy, tvSortBy) = when (mode) {
+            "recent" -> "primary_release_date.desc" to "first_air_date.desc"
+            "popular" -> "popularity.desc" to "popularity.desc"
+            "voted" -> "vote_average.desc" to "vote_average.desc"
+            else -> "popularity.desc" to "popularity.desc"
+        }
+        val voteFloor = when (mode) {
+            "recent" -> 20
+            "popular" -> 100
+            "voted" -> 500
+            else -> 10
+        }
+
+        fun filters(forTv: Boolean): com.kennyb1201.kbstream.data.nuvio.NuvioFilters {
+            val base = com.kennyb1201.kbstream.data.nuvio.NuvioFilters(
+                voteCountGte = voteFloor
+            )
+            return if (mode == "originals") {
+                // A network id only makes sense for TV; a company id only
+                // for movies. Mixing them returns wrong/empty results.
+                base.copy(
+                    withNetworks = if (forTv && !networkIsCompany) {
+                        networkOrCompanyId?.toString()
+                    } else {
+                        null
+                    },
+                    withCompanies = if (networkIsCompany) {
+                        networkOrCompanyId?.toString()
+                    } else {
+                        null
+                    }
+                )
+            } else {
+                base.copy(
+                    withWatchProviders = providerId?.toString(),
+                    watchRegion = "US",
+                    year = if (mode == "recent") currentYear else null
+                )
+            }
+        }
+
+        // TV networks have no movie-discover equivalent, so their
+        // Originals rail is series-only.
+        val skipMovies = mode == "originals" && !networkIsCompany
+
+        val (movies, tv) = kotlinx.coroutines.coroutineScope {
+            val m = kotlinx.coroutines.async {
+                if (skipMovies) {
+                    emptyList()
+                } else {
+                    runCatching {
+                        discoverNuvio("movie", page, movieSortBy, filters(forTv = false))
+                    }.getOrNull().orEmpty()
+                }
+            }
+            val t = kotlinx.coroutines.async {
+                runCatching {
+                    discoverNuvio("tv", page, tvSortBy, filters(forTv = true))
+                }.getOrNull().orEmpty()
+            }
+            m.await() to t.await()
+        }
+
+        val items = movies.map { StudioItem(it, "movie") } +
+            tv.map { StudioItem(it, "series") }
+        // A discover page caps at 20 per media; a full page on either side
+        // means more pages may exist.
+        return TagRailPage(items, movies.size >= 20 || tv.size >= 20)
+    }
+
     suspend fun searchCollection(query: String): List<TmdbSearchCollectionResult> {
     if (apiKey.isBlank()) return emptyList()
     return runCatching { api.searchCollection(query, apiKey).results }

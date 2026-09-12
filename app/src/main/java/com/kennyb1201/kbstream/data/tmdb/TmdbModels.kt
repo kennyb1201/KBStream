@@ -468,6 +468,19 @@ data class TmdbSearchCollectionResult(
 )
 
 @JsonClass(generateAdapter = true)
+data class TmdbSearchKeywordResult(
+    val id: Int,
+    val name: String
+)
+
+@JsonClass(generateAdapter = true)
+data class TmdbSearchKeywordResponse(
+    val page: Int = 1,
+    val results: List<TmdbSearchKeywordResult> = emptyList(),
+    @Json(name = "total_results") val totalResults: Int = 0
+)
+
+@JsonClass(generateAdapter = true)
 data class TmdbSearchCollectionResponse(
     val results: List<TmdbSearchCollectionResult> = emptyList()
 )

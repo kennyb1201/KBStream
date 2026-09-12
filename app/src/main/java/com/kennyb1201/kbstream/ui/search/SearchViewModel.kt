@@ -11,6 +11,8 @@ import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.data.addon.ManifestCatalog
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tmdb.StudioItem
+import com.kennyb1201.kbstream.data.tmdb.TagRailPage
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
@@ -121,13 +123,6 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
     val collectionResults: StateFlow<List<TmdbSearchCollectionResult>> =
         _collectionResults.asStateFlow()
 
-    private val _trendingResults =
-        MutableStateFlow<List<SearchTitleResult>>(
-            emptyList()
-        )
-
-    val trendingResults: StateFlow<List<SearchTitleResult>> =
-        _trendingResults.asStateFlow()
 
     private val _recentSearches =
         MutableStateFlow<List<String>>(
@@ -175,6 +170,17 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
 
     private var addonSearchJob: Job? = null
 
+    // Set by MainActivity: browse entries that open existing app screens
+    // (Tag = genre/keyword discover, Studio = network/company discover,
+    // Collection = franchise page). The browser itself shows entries whose
+    // rails load in place (services, decades).
+    var onOpenTagScreen:
+        ((id: Int, name: String, isKeyword: Boolean, mediaType: String) -> Unit)? = null
+    var onOpenStudioScreen:
+        ((id: Int, name: String, isNetwork: Boolean) -> Unit)? = null
+    var onOpenCollectionScreen:
+        ((id: Int, name: String) -> Unit)? = null
+
     init {
         loadRecentSearches()
 
@@ -212,14 +218,21 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
      * long-press "Mark as Watched" action can key off the IMDB id.
      */
     private fun resolveTmdbTitles(items: List<SearchTitleResult>) {
+        resolveTmdbIds(
+            items.mapNotNull { result ->
+                val mediaType = normalizedType(result.type) ?: return@mapNotNull null
+                val tmdbId = result.id.removePrefix("tmdb:").toIntOrNull()
+                    ?: return@mapNotNull null
+                if (tmdbId <= 0) null else tmdbId to mediaType
+            }
+        )
+    }
+
+    /** (tmdbId, mediaType) variant shared by search results and browse rails. */
+    private fun resolveTmdbIds(items: List<Pair<Int, String>>) {
         if (items.isEmpty()) return
 
         val uniqueItems = items
-            .mapNotNull { result ->
-                val normalizedType = normalizedType(result.type) ?: return@mapNotNull null
-                val tmdbId = result.id.removePrefix("tmdb:").toIntOrNull() ?: return@mapNotNull null
-                if (tmdbId <= 0) null else tmdbId to normalizedType
-            }
             .filterNot { (tmdbId, mediaType) ->
                 _resolvedIds.value.containsKey(lookupKey(tmdbId, mediaType))
             }
@@ -324,6 +337,7 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
 
     fun onQueryChanged(query: String) {
         _searchQuery.value = query
+        updateSuggestions(query)
         search(query)
     }
 
@@ -361,6 +375,7 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
             _actorResults.value = emptyList()
             _studioResults.value = emptyList()
             _collectionResults.value = emptyList()
+            _suggestions.value = emptyList()
             _isLoading.value = false
             return
         }
@@ -862,59 +877,324 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
             )
     }
 
-    /*
-     * Loads weekly trending titles for the idle (blank query) state. The
-     * repository short-caches the TMDB response, so re-entering the screen
-     * doesn't refetch.
+    // ------------------------------------------------------------------
+    // Keyboard suggestions
+    // ------------------------------------------------------------------
+
+    private val _suggestions =
+        MutableStateFlow<List<String>>(emptyList())
+
+    val suggestions: StateFlow<List<String>> =
+        _suggestions.asStateFlow()
+
+    /**
+     * Suggestion chips under the query field, best-first: recent searches
+     * completing the prefix, then live result names from the streaming
+     * search, then the curated keyword names. Capped so the row stays one
+     * scroll-free line on TV.
      */
-    fun loadTrending() {
-        if (_trendingResults.value.isNotEmpty()) return
-
-        viewModelScope.launch {
-            val raw =
-                runCatching {
-                    tmdbRepository.getTrendingTitles()
-                }
-                    .onFailure { e ->
-                        Log.e("KBStream", "Trending load failed", e)
-                    }
-                    .getOrDefault(emptyList())
-
-            _trendingResults.value =
-                raw.mapNotNull { (type, result) ->
-                    val name =
-                        result.name?.takeIf { it.isNotBlank() }
-                            ?: result.title?.takeIf { it.isNotBlank() }
-                            ?: return@mapNotNull null
-
-                    val id = "tmdb:${result.id}"
-                    val poster =
-                        result.posterPath
-                            ?.takeIf { it.isNotBlank() }
-                            ?.let { TmdbRepository.POSTER_BASE + it }
-
-                    SearchTitleResult(
-                        id = id,
-                        type = type,
-                        name = name,
-                        poster = poster,
-                        year = (
-                            result.releaseDate
-                                ?: result.firstAirDate
-                            )?.take(4)?.toIntOrNull(),
-                        rating = result.voteAverage?.takeIf { it > 0.0 },
-                        meta = MetaPreview(
-                            id = id,
-                            type = type,
-                            name = name,
-                            poster = poster
-                        )
-                    )
-                }
-                    .take(MAX_TRENDING_RESULTS)
-
-            resolveTmdbTitles(_trendingResults.value)
+    private fun updateSuggestions(query: String) {
+        val q = query.trim()
+        if (q.isEmpty()) {
+            _suggestions.value = emptyList()
+            return
         }
+        val lower = q.lowercase()
+
+        val recents = _recentSearches.value.filter {
+            it.lowercase().startsWith(lower) && !it.equals(q, ignoreCase = true)
+        }
+        val titles = _results.value
+            .map { it.name }
+            .filter {
+                it.isNotBlank() &&
+                    it.lowercase().startsWith(lower) &&
+                    !it.equals(q, ignoreCase = true)
+            }
+            .distinctBy { it.lowercase() }
+        val keywords = BROWSE_KEYWORD_NAMES
+            .filter { it.startsWith(lower) && !it.equals(q, ignoreCase = true) }
+            .map { it.replaceFirstChar { c -> c.uppercase() } }
+
+        _suggestions.value = (recents + titles + keywords)
+            .distinctBy { it.lowercase() }
+            .take(MAX_SUGGESTIONS)
+    }
+
+    /** A suggestion chip press runs the full search and records it as recent. */
+    fun onSuggestionClicked(suggestion: String) {
+        _searchQuery.value = suggestion
+        _suggestions.value = emptyList()
+        search(suggestion)
+        commitSearch(suggestion)
+    }
+
+    // ------------------------------------------------------------------
+    // Search browse browser (blank-query / no-results browsing)
+    // ------------------------------------------------------------------
+
+    /** One loaded rail of the browse browser. */
+    data class BrowseRail(
+        val key: String,
+        val title: String,
+        val items: List<StudioItem>,
+        val hasMore: Boolean,
+        val isLoadingMore: Boolean = false
+    )
+
+    /** What the browser is currently showing (null = sidebar/submenu level). */
+    data class BrowseSelection(
+        val categoryKey: String,
+        val categoryLabel: String,
+        val entryId: Int,
+        val entryName: String
+    )
+
+    private val _browseCategories =
+        MutableStateFlow(BROWSE_CATEGORIES)
+
+    val browseCategories: StateFlow<List<BrowseCategory>> =
+        _browseCategories.asStateFlow()
+
+    private val _browseSelection =
+        MutableStateFlow<BrowseSelection?>(null)
+
+    val browseSelection: StateFlow<BrowseSelection?> =
+        _browseSelection.asStateFlow()
+
+    private val _browseRails =
+        MutableStateFlow<List<BrowseRail>>(emptyList())
+
+    val browseRails: StateFlow<List<BrowseRail>> =
+        _browseRails.asStateFlow()
+
+    private val _browseSubmenuLoading =
+        MutableStateFlow(false)
+
+    val browseSubmenuLoading: StateFlow<Boolean> =
+        _browseSubmenuLoading.asStateFlow()
+
+    private var browseLoadJob: Job? = null
+    private var browseFetchFn: (suspend (mode: String, page: Int) -> TagRailPage)? = null
+    private val browsePageState = HashMap<String, Int>()
+    private var catalogResolveStarted = false
+
+    /**
+     * Sidebar selection: swap the submenu. Keyword/collection entries are
+     * runtime-resolved ids, so picking those categories kicks the (cached,
+     * once-per-session) resolution off.
+     */
+    fun selectBrowseCategory(key: String) {
+        browseLoadJob?.cancel()
+        _browseSelection.value = null
+        _browseRails.value = emptyList()
+        if (key == "keywords" || key == "collections") {
+            _browseSubmenuLoading.value = !catalogResolveStarted
+            if (!catalogResolveStarted) {
+                viewModelScope.launch { resolveCatalogEntries() }
+            }
+        } else {
+            _browseSubmenuLoading.value = false
+        }
+    }
+
+    fun clearBrowseSelection() {
+        browseLoadJob?.cancel()
+        _browseSelection.value = null
+        _browseRails.value = emptyList()
+    }
+
+    /** A submenu entry press: navigate away or load rails in the browser. */
+    fun onBrowseEntryClicked(categoryKey: String, entry: BrowseEntry) {
+        when (categoryKey) {
+            "genres" -> onOpenTagScreen?.invoke(entry.id, entry.name, false, "movie")
+            "keywords" -> onOpenTagScreen?.invoke(entry.id, entry.name, true, "movie")
+            "networks" -> onOpenStudioScreen?.invoke(entry.id, entry.name, true)
+            "studios" -> onOpenStudioScreen?.invoke(entry.id, entry.name, false)
+            "collections" -> onOpenCollectionScreen?.invoke(entry.id, entry.name)
+            "services" -> {
+                val service = BROWSE_SERVICES.getOrNull(entry.id) ?: return
+                loadServiceRails(service, entry.name)
+            }
+            "decades" -> loadDecadeRails(entry.id, entry.name)
+        }
+    }
+
+    /**
+     * Service rails: Originals (network/company discover) then Recent,
+     * Popular, Most Voted (watch-provider discover, US region).
+     */
+    private fun loadServiceRails(service: BrowseService, name: String) {
+        browseLoadJob?.cancel()
+        _browseSubmenuLoading.value = false
+        _browseSelection.value = BrowseSelection(
+            categoryKey = "services",
+            categoryLabel = "Services",
+            entryId = service.providerId ?: -1,
+            entryName = name
+        )
+        val definitions = buildList {
+            if (service.networkOrCompanyId != null) {
+                add("originals" to "Originals")
+            }
+            add("recent" to "Recent")
+            add("popular" to "Popular")
+            add("voted" to "Most Voted")
+        }
+        loadDiscoverRails(definitions) { mode, page ->
+            tmdbRepository.getBrowseRailPage(
+                mode = mode,
+                providerId = service.providerId,
+                networkOrCompanyId = service.networkOrCompanyId,
+                networkIsCompany = service.networkIsCompany,
+                page = page
+            )
+        }
+    }
+
+    /** Decade rails: Popular + Most Voted, movies and series merged. */
+    private fun loadDecadeRails(decadeStart: Int, name: String) {
+        browseLoadJob?.cancel()
+        _browseSubmenuLoading.value = false
+        _browseSelection.value = BrowseSelection(
+            categoryKey = "decades",
+            categoryLabel = "Decades",
+            entryId = decadeStart,
+            entryName = name
+        )
+        loadDiscoverRails(listOf("popular" to "Popular", "voted" to "Most Voted")) { mode, page ->
+            tmdbRepository.getDecadeRailPage(
+                decadeStart = decadeStart,
+                sortBy = if (mode == "voted") "vote_average.desc" else "popularity.desc",
+                page = page
+            )
+        }
+    }
+
+    private fun loadDiscoverRails(
+        definitions: List<Pair<String, String>>,
+        fetch: suspend (mode: String, page: Int) -> TagRailPage
+    ) {
+        val selection = _browseSelection.value ?: return
+        browseFetchFn = fetch
+        browsePageState.clear()
+        _browseRails.value = definitions.map { (mode, title) ->
+            BrowseRail(
+                key = browseRailKey(selection, mode),
+                title = title,
+                items = emptyList(),
+                hasMore = true
+            )
+        }
+        browseLoadJob = viewModelScope.launch {
+            definitions.map { (mode, _) ->
+                async { loadBrowseRail(mode, 1, fetch) }
+            }.awaitAll()
+        }
+    }
+
+    private fun browseRailKey(selection: BrowseSelection, mode: String): String =
+        "${selection.categoryKey}:${selection.entryId}:${selection.entryName}:$mode"
+
+    /** Loads (or appends) one page into its rail; safe on stale selections. */
+    private suspend fun loadBrowseRail(
+        mode: String,
+        page: Int,
+        fetch: suspend (String, Int) -> TagRailPage
+    ) {
+        val selection = _browseSelection.value ?: return
+        val railKey = browseRailKey(selection, mode)
+        val result = runCatching { fetch(mode, page) }
+            .onFailure { e -> Log.e("KBStream", "Browse rail load failed", e) }
+            .getOrNull() ?: return
+        // Selection changed while the request was in flight: drop it.
+        if (_browseSelection.value != selection) return
+
+        _browseRails.value = _browseRails.value.map { rail ->
+            if (rail.key != railKey) {
+                rail
+            } else {
+                rail.copy(
+                    items = if (page == 1) result.items else rail.items + result.items,
+                    hasMore = result.hasMore,
+                    isLoadingMore = false
+                )
+            }
+        }
+        browsePageState[railKey] = page + 1
+        resolveBrowseTitles(_browseRails.value)
+    }
+
+    /** End-of-rail trigger from the screen: append the next page. */
+    fun loadMoreBrowseRail(railKey: String) {
+        val fetch = browseFetchFn ?: return
+        val rail = _browseRails.value.firstOrNull { it.key == railKey } ?: return
+        if (!rail.hasMore || rail.isLoadingMore || rail.items.isEmpty()) return
+        val page = browsePageState[railKey] ?: return
+        val mode = railKey.substringAfterLast(':')
+
+        _browseRails.value = _browseRails.value.map {
+            if (it.key == railKey) it.copy(isLoadingMore = true) else it
+        }
+        viewModelScope.launch {
+            loadBrowseRail(mode, page, fetch)
+        }
+    }
+
+    /** Watched-badge resolution for browse rails (shared IMDB resolver). */
+    private fun resolveBrowseTitles(rails: List<BrowseRail>) {
+        resolveTmdbIds(
+            rails.asSequence()
+                .flatMap { it.items.asSequence() }
+                .mapNotNull { studioItem ->
+                    val mediaType = normalizedType(studioItem.mediaType)
+                        ?: return@mapNotNull null
+                    if (studioItem.item.id <= 0) null else studioItem.item.id to mediaType
+                }
+                .toList()
+        )
+    }
+
+    /**
+     * Resolves the runtime-id submenus once per session: keyword names via
+     * /search/keyword, collection names via /search/collection. Hand-picked
+     * ids would rot; a name lookup always returns TMDB's canonical id.
+     */
+    private suspend fun resolveCatalogEntries() {
+        if (catalogResolveStarted) return
+        catalogResolveStarted = true
+
+        val keywordEntries = coroutineScope {
+            BROWSE_KEYWORD_NAMES.map { name ->
+                async {
+                    runCatching {
+                        tmdbRepository.searchKeywords(name)
+                            .firstOrNull { it.name.equals(name, ignoreCase = true) }
+                            ?.let { BrowseEntry(it.id, name) }
+                    }.getOrNull()
+                }
+            }.awaitAll().filterNotNull()
+        }
+        val collectionEntries = coroutineScope {
+            BROWSE_COLLECTION_NAMES.map { name ->
+                async {
+                    runCatching {
+                        tmdbRepository.searchCollection(name)
+                            .firstOrNull()
+                            ?.let { BrowseEntry(it.id, name) }
+                    }.getOrNull()
+                }
+            }.awaitAll().filterNotNull()
+        }
+
+        _browseCategories.value = BROWSE_CATEGORIES.map { category ->
+            when (category.key) {
+                "keywords" -> category.copy(entries = keywordEntries)
+                "collections" -> category.copy(entries = collectionEntries)
+                else -> category
+            }
+        }
+        _browseSubmenuLoading.value = false
     }
 
     fun onResultOpened(result: SearchTitleResult) {
@@ -956,6 +1236,7 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         _actorResults.value = emptyList()
         _studioResults.value = emptyList()
         _collectionResults.value = emptyList()
+        _suggestions.value = emptyList()
         _isLoading.value = false
     }
 
@@ -1068,7 +1349,7 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
 
         /** Per-rail cap for a catalog-only addon's per-catalog search rail. */
         const val MAX_ADDON_CATALOG_RESULTS = 20
-        const val MAX_TRENDING_RESULTS = 20
+        const val MAX_SUGGESTIONS = 6
         const val SEARCH_DEBOUNCE_MS = 300L
     }
 }

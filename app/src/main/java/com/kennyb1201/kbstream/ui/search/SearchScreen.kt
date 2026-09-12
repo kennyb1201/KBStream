@@ -2,6 +2,8 @@ package com.kennyb1201.kbstream.ui.search
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -58,6 +60,8 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import androidx.tv.material3.Surface
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.data.tmdb.StudioItem
+import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
@@ -80,6 +84,12 @@ fun SearchScreen(
     onPersonClick: ((TmdbSearchPersonResult) -> Unit)? = null,
     onStudioClick: ((TmdbSearchStudioResult) -> Unit)? = null,
     onCollectionClick: ((TmdbSearchCollectionResult) -> Unit)? = null,
+    // Browse-browser entries that drill into existing discover screens
+    // (genres/keywords -> Tag, networks/studios -> Studio, collections ->
+    // Collection). Null = entries navigate nowhere (standalone previews).
+    onOpenTagScreen: ((Int, String, Boolean, String) -> Unit)? = null,
+    onOpenStudioScreen: ((Int, String, Boolean) -> Unit)? = null,
+    onOpenCollectionScreen: ((Int, String) -> Unit)? = null,
     // Hoisted by MainActivity (survives Search -> Detail -> Back) so Back
     // lands on the same title. Defaults keep previews/standalone use working.
     listState: LazyListState = rememberLazyListState(),
@@ -94,8 +104,12 @@ fun SearchScreen(
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val recentSearches by viewModel.recentSearches.collectAsStateWithLifecycle()
-    val trendingResults by viewModel.trendingResults.collectAsStateWithLifecycle()
     val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
+    val suggestions by viewModel.suggestions.collectAsStateWithLifecycle()
+    val browseCategories by viewModel.browseCategories.collectAsStateWithLifecycle()
+    val browseSelection by viewModel.browseSelection.collectAsStateWithLifecycle()
+    val browseRails by viewModel.browseRails.collectAsStateWithLifecycle()
+    val browseSubmenuLoading by viewModel.browseSubmenuLoading.collectAsStateWithLifecycle()
 
     // Add-on search rail title toggles (addon name / catalog type). These
     // apply ONLY to the addon search rails below — the built-in TMDB
@@ -127,7 +141,9 @@ fun SearchScreen(
     }
 
     LaunchedEffect(Unit) {
-        viewModel.loadTrending()
+        viewModel.onOpenTagScreen = onOpenTagScreen
+        viewModel.onOpenStudioScreen = onOpenStudioScreen
+        viewModel.onOpenCollectionScreen = onOpenCollectionScreen
     }
 
     // NOTE: no onDispose reset here — SearchViewModel is activity-scoped, so
@@ -177,6 +193,33 @@ fun SearchScreen(
                 )
             }
 
+            if (suggestions.isNotEmpty()) {
+                item(key = "suggestions") {
+                    Column {
+                        SectionHeader(title = "Suggestions")
+                        LazyRow(
+                            contentPadding = PaddingValues(
+                                top = 2.dp,
+                                bottom = 4.dp,
+                                start = SEARCH_RAIL_EDGE_PADDING,
+                                end = SEARCH_RAIL_EDGE_PADDING
+                            ),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(
+                                items = suggestions,
+                                key = { suggestion: String -> "suggestion:$suggestion" }
+                            ) { suggestion: String ->
+                                SearchChip(
+                                    label = suggestion,
+                                    onClick = { viewModel.onSuggestionClicked(suggestion) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             if (query.isBlank() && recentSearches.isNotEmpty()) {
                 item(key = "recent_section") {
                     Column {
@@ -212,59 +255,26 @@ fun SearchScreen(
                 }
             }
 
-            if (query.isBlank() && trendingResults.isNotEmpty()) {
-                item(key = "trending_section") {
-                    Column {
-                        SectionHeader(title = "Trending now")
-                        LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            contentPadding = PaddingValues(
-                                top = 2.dp,
-                                bottom = 2.dp,
-                                start = SEARCH_RAIL_EDGE_PADDING,
-                                end = SEARCH_RAIL_EDGE_PADDING
-                            )
-                        ) {
-                            items(
-                                items = trendingResults,
-                                key = { result: SearchTitleResult -> result.id }
-                            ) { result: SearchTitleResult ->
-                                val requester = remember(
-                                    result.id
-                                ) {
-                                    FocusRequester()
-                                }
-
-                                TitlePosterTile(
-                                    result = result,
-                                    watched = watchedTile(
-                                        result = result,
-                                        resolvedIds = resolvedIds,
-                                        watchedKeys = watchedKeys,
-                                        viewModel = viewModel
-                                    ),
-                                    onClick = {
-                                        onItemClick(result.meta)
-                                    },
-                                    onLongClick = {
-                                        lastPosterFocusRequester =
-                                            requester
-                                        menuResult = result
-                                    },
-                                    modifier = Modifier
-                                        .focusRequester(requester)
-                                )
-                            }
+            // Browse browser: fills the old trending spot on the blank
+            // state, and the no-results whitespace on failed searches.
+            if (query.isBlank() || (!isLoading && totalCount == 0)) {
+                item(key = "browse_browser") {
+                    SearchBrowseBrowser(
+                        viewModel = viewModel,
+                        categories = browseCategories,
+                        selection = browseSelection,
+                        rails = browseRails,
+                        submenuLoading = browseSubmenuLoading,
+                        resolvedIds = resolvedIds,
+                        watchedKeys = watchedKeys,
+                        onTileClick = { result ->
+                            viewModel.onResultOpened(result)
+                            onItemClick(result.meta)
+                        },
+                        onTileLongClick = { result, requester ->
+                            lastPosterFocusRequester = requester
+                            menuResult = result
                         }
-                    }
-                }
-            }
-
-            if (query.isBlank() && recentSearches.isEmpty() && trendingResults.isEmpty()) {
-                item(key = "empty_idle") {
-                    SearchMessagePanel(
-                        title = "Search",
-                        body = "Start typing to search across titles, actors, collections, and studios — or browse what's trending below."
                     )
                 }
             }
@@ -786,6 +796,206 @@ private fun SectionHeader(title: String) {
 // padding) keeps the ends of each rail inside the LazyRow's clip bounds so
 // focused poster borders + glow never get cut off at the first/last item.
 private val SEARCH_RAIL_EDGE_PADDING = 20.dp
+
+@Composable
+private fun SearchBrowseBrowser(
+    viewModel: SearchViewModel,
+    categories: List<BrowseCategory>,
+    selection: SearchViewModel.BrowseSelection?,
+    rails: List<SearchViewModel.BrowseRail>,
+    submenuLoading: Boolean,
+    resolvedIds: Map<String, String>,
+    watchedKeys: Set<String>,
+    onTileClick: (SearchTitleResult) -> Unit,
+    onTileLongClick: (SearchTitleResult, FocusRequester) -> Unit
+) {
+    var activeCategory by remember { mutableStateOf<BrowseCategory?>(null) }
+
+    Column(modifier = Modifier.padding(top = 8.dp)) {
+        SectionHeader(title = "Browse")
+
+        // Sidebar: one scrollable category row (the "separate categories"
+        // strip; selecting one reveals its submenu below).
+        Row(
+            modifier = Modifier
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = SEARCH_RAIL_EDGE_PADDING),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            categories.forEach { category ->
+                SearchChip(
+                    label = category.label,
+                    accent = activeCategory?.key == category.key,
+                    onClick = {
+                        viewModel.selectBrowseCategory(category.key)
+                        activeCategory = category
+                    }
+                )
+            }
+        }
+
+        val category = activeCategory
+        when {
+            // In-place catalog (service / decade): back chip + its rails.
+            selection != null -> {
+                Row(
+                    modifier = Modifier
+                        .horizontalScroll(rememberScrollState())
+                        .padding(top = 10.dp, start = SEARCH_RAIL_EDGE_PADDING),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    SearchChip(
+                        label = "\u2039 Browse",
+                        accent = false,
+                        onClick = {
+                            viewModel.clearBrowseSelection()
+                            activeCategory = null
+                        }
+                    )
+                    Text(
+                        text = selection.entryName,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = KBTextHi
+                    )
+                }
+
+                rails.forEach { rail ->
+                    BrowseRailRow(
+                        rail = rail,
+                        resolvedIds = resolvedIds,
+                        watchedKeys = watchedKeys,
+                        viewModel = viewModel,
+                        onTileClick = onTileClick,
+                        onTileLongClick = onTileLongClick
+                    )
+                }
+            }
+
+            // Submenu chips for the active category.
+            category != null -> {
+                if (submenuLoading) {
+                    Text(
+                        text = "Resolving ${category.label.lowercase()}...",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = KBTextLo,
+                        modifier = Modifier.padding(
+                            top = 12.dp,
+                            start = SEARCH_RAIL_EDGE_PADDING
+                        )
+                    )
+                } else if (category.entries.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .horizontalScroll(rememberScrollState())
+                            .padding(top = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        category.entries.forEach { entry ->
+                            SearchChip(
+                                label = entry.name,
+                                onClick = {
+                                    viewModel.onBrowseEntryClicked(
+                                        category.key,
+                                        entry
+                                    )
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BrowseRailRow(
+    rail: SearchViewModel.BrowseRail,
+    resolvedIds: Map<String, String>,
+    watchedKeys: Set<String>,
+    viewModel: SearchViewModel,
+    onTileClick: (SearchTitleResult) -> Unit,
+    onTileLongClick: (SearchTitleResult, FocusRequester) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .horizontalScroll(rememberScrollState())
+            .padding(top = 12.dp, bottom = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        if (rail.items.isEmpty()) {
+            Text(
+                text = if (rail.hasMore) "Loading..." else "Nothing here",
+                style = MaterialTheme.typography.bodySmall,
+                color = KBTextLo,
+                modifier = Modifier.padding(
+                    start = SEARCH_RAIL_EDGE_PADDING,
+                    top = 4.dp
+                )
+            )
+        }
+        rail.items.forEach { studioItem ->
+            val result = remember(studioItem.item.id) {
+                browseItemToResult(studioItem)
+            } ?: return@forEach
+            val requester = remember(studioItem.item.id) { FocusRequester() }
+
+            TitlePosterTile(
+                result = result,
+                watched = watchedTile(
+                    result = result,
+                    resolvedIds = resolvedIds,
+                    watchedKeys = watchedKeys,
+                    viewModel = viewModel
+                ),
+                onClick = { onTileClick(result) },
+                onLongClick = { onTileLongClick(result, requester) },
+                modifier = Modifier
+                    .focusRequester(requester)
+            )
+        }
+        if (rail.items.isNotEmpty() && rail.hasMore && !rail.isLoadingMore) {
+            SearchChip(
+                label = "More",
+                accent = false,
+                onClick = { viewModel.loadMoreBrowseRail(rail.key) },
+                modifier = Modifier.padding(top = 40.dp)
+            )
+        }
+    }
+}
+
+/** Discover payload -> the same tile/navigation shape search results use. */
+private fun browseItemToResult(item: StudioItem): SearchTitleResult? {
+    val name = item.item.title?.takeIf { it.isNotBlank() }
+        ?: item.item.name?.takeIf { it.isNotBlank() }
+        ?: return null
+    val type = when (item.mediaType.lowercase()) {
+        "movie" -> "movie"
+        "tv", "series" -> "series"
+        else -> return null
+    }
+    val id = "tmdb:${item.item.id}"
+    val poster = item.item.posterPath
+        ?.takeIf { it.isNotBlank() }
+        ?.let { TmdbRepository.POSTER_BASE + it }
+    return SearchTitleResult(
+        id = id,
+        type = type,
+        name = name,
+        poster = poster,
+        year = (item.item.releaseDate ?: item.item.firstAirDate)
+            ?.take(4)?.toIntOrNull(),
+        rating = item.item.voteAverage?.takeIf { it > 0.0 },
+        meta = MetaPreview(
+            id = id,
+            type = type,
+            name = name,
+            poster = poster
+        )
+    )
+}
 
 @Composable
 private fun SearchRail(

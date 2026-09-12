@@ -1032,6 +1032,16 @@ fun AppRoot() {
                         collection.name,
                         Screen.Search
                     )
+                },
+
+                onOpenTagScreen = { id, name, isKeyword, mediaType ->
+                    screen = Screen.Tag(id, name, isKeyword, mediaType, Screen.Search)
+                },
+                onOpenStudioScreen = { id, name, isNetwork ->
+                    screen = Screen.Studio(id, name, isNetwork, Screen.Search)
+                },
+                onOpenCollectionScreen = { id, name ->
+                    screen = Screen.Collection(id, name, Screen.Search)
                 }
             )
         }
