@@ -60,7 +60,9 @@ fun SettingsPanel(
     onDismiss: () -> Unit
 ) {
     val subtitleSizeOptions = listOf("Small", "Normal", "Large")
-    val subtitleBgOptions = listOf("None", "Semi", "Solid")
+    // "Text" paints the dark strip behind just the glyph runs (spans),
+    // unlike Semi/Solid which draw a padded box around the whole cue.
+    val subtitleBgOptions = listOf("None", "Semi", "Solid", "Text")
     val bufferModeOptions = listOf("Balanced", "Low Latency")
     val resizeModeLabels = listOf("Fit", "Zoom", "Fill")
 

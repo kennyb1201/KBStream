@@ -220,6 +220,7 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var btnSubBgNone: TextView
     private lateinit var btnSubBgSemi: TextView
     private lateinit var btnSubBgSolid: TextView
+    private lateinit var btnSubBgText: TextView
     private lateinit var btnOffsetMinus: TextView
     private lateinit var subtitleOffsetValue: TextView
     private lateinit var btnOffsetPlus: TextView
@@ -855,6 +856,7 @@ class NativePlayerActivity : ComponentActivity() {
         btnSubBgNone = findViewById(R.id.btn_sub_bg_none)
         btnSubBgSemi = findViewById(R.id.btn_sub_bg_semi)
         btnSubBgSolid = findViewById(R.id.btn_sub_bg_solid)
+        btnSubBgText = findViewById(R.id.btn_sub_bg_text)
         btnOffsetMinus = findViewById(R.id.btn_offset_minus)
         subtitleOffsetValue = findViewById(R.id.subtitle_offset_value)
         btnOffsetPlus = findViewById(R.id.btn_offset_plus)
@@ -1102,6 +1104,11 @@ class NativePlayerActivity : ComponentActivity() {
         }
         btnSubBgSolid.setOnClickListener {
             subtitleBackground = 2; AppPreferences.setDefaultSubtitleBackground(this, 2)
+            updateSubtitleSettings()
+            applySubtitleStyle()
+        }
+        btnSubBgText.setOnClickListener {
+            subtitleBackground = 3; AppPreferences.setDefaultSubtitleBackground(this, 3)
             updateSubtitleSettings()
             applySubtitleStyle()
         }
@@ -2905,7 +2912,7 @@ class NativePlayerActivity : ComponentActivity() {
         listOf(btnSubSmall to 0, btnSubNormal to 1, btnSubLarge to 2).forEach { (btn, idx) ->
             applyPillState(btn, subtitleSize == idx)
         }
-        listOf(btnSubBgNone to 0, btnSubBgSemi to 1, btnSubBgSolid to 2).forEach { (btn, idx) ->
+        listOf(btnSubBgNone to 0, btnSubBgSemi to 1, btnSubBgSolid to 2, btnSubBgText to 3).forEach { (btn, idx) ->
             applyPillState(btn, subtitleBackground == idx)
         }
         subtitleOffsetValue.text = "${subtitleOffsetMs}ms"
@@ -3015,19 +3022,41 @@ class NativePlayerActivity : ComponentActivity() {
                 subtitleText.background = null
                 return
             }
-            subtitleText.text = text
             val sizes = listOf(11f, 14f, 18f)
             subtitleText.setTextSize(TypedValue.COMPLEX_UNIT_SP, sizes[subtitleSize])
             when (subtitleBackground) {
                 1 -> {
+                    // Box: view-level background wraps the whole TextView
+                    // (grows with the longest line, padded on all sides).
+                    subtitleText.text = text
                     subtitleText.setBackgroundColor(0x80000000.toInt())
                     subtitleText.setPadding(16, 4, 16, 4)
                 }
                 2 -> {
+                    subtitleText.text = text
                     subtitleText.setBackgroundColor(0xE5000000.toInt())
                     subtitleText.setPadding(16, 4, 16, 4)
                 }
+                3 -> {
+                    // Text (letters-only): dark strip painted behind the
+                    // glyph runs themselves via spans — no box, no side
+                    // padding, and the gap between wrapped lines stays
+                    // clean. Matches the Nuvio look.
+                    subtitleText.background = null
+                    subtitleText.setPadding(0, 0, 0, 0)
+                    val spannable = android.text.SpannableString(text)
+                    spannable.setSpan(
+                        android.text.style.BackgroundColorSpan(
+                            0xB3000000.toInt()
+                        ),
+                        0,
+                        spannable.length,
+                        android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                    )
+                    subtitleText.text = spannable
+                }
                 else -> {
+                    subtitleText.text = text
                     subtitleText.background = null
                     subtitleText.setPadding(0, 0, 0, 0)
                 }

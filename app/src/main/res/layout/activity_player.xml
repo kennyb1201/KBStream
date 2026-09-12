@@ -29,7 +29,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom|center_horizontal"
-        android:layout_marginBottom="140dp"
+        android:layout_marginBottom="48dp"
         android:layout_marginStart="48dp"
         android:layout_marginEnd="48dp"
         android:gravity="center"
@@ -916,6 +916,20 @@
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="6dp"
                     android:text="Solid"
+                    android:textColor="#FFF3EFE4"
+                    android:textSize="11sp"
+                    android:focusable="true" />
+
+                <TextView
+                    android:id="@+id/btn_sub_bg_text"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp"
+                    android:background="@drawable/pill_chip_bg"
+                    android:fontFamily="@font/oswald_medium"
+                    android:paddingHorizontal="12dp"
+                    android:paddingVertical="6dp"
+                    android:text="Text"
                     android:textColor="#FFF3EFE4"
                     android:textSize="11sp"
                     android:focusable="true" />
