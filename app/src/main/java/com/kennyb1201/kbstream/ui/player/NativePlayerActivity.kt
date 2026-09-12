@@ -996,6 +996,25 @@ class NativePlayerActivity : ComponentActivity() {
         // Quick-press = 10s jump; holding (past 400ms) = accelerated scrubbing.
         seekbar.setOnKeyListener { _, keyCode, event ->
             when (keyCode) {
+                // Up from the seekbar lands on the FIRST cast member.
+                // Without this, the default focus search picks whichever
+                // actor the proximity algorithm guesses, which feels
+                // random. Only claims the key while cast items exist.
+                KeyEvent.KEYCODE_DPAD_UP -> {
+                    val firstCast = (0 until castRow.childCount)
+                        .map { castRow.getChildAt(it) }
+                        .firstOrNull {
+                            it.isFocusable && it.visibility == View.VISIBLE
+                        }
+                    if (firstCast == null) {
+                        false
+                    } else {
+                        if (event.action == KeyEvent.ACTION_DOWN) {
+                            firstCast.requestFocus()
+                        }
+                        true
+                    }
+                }
                 KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
                     when (event.action) {
                         KeyEvent.ACTION_DOWN -> {
