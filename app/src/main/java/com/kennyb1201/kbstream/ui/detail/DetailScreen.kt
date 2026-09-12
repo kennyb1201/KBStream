@@ -1470,11 +1470,21 @@ fun DetailScreen(
                                             ) {
                                                 false
                                             } else if (
-                                                type == "movie"
+                                                normalizedType == "movie"
                                             ) {
-                                                movieDetailsFocusRequester
-                                                    .requestFocus()
-                                                true
+                                                // On movies there is no episode
+                                                // section, so DOWN from tags goes
+                                                // straight into the people rail
+                                                // (its focusRestorer picks the
+                                                // first card). When the rail isn't
+                                                // composed (no cast at all) the
+                                                // request throws — fall through so
+                                                // default search can reach the rows
+                                                // further down the list.
+                                                runCatching {
+                                                    movieDetailsFocusRequester
+                                                        .requestFocus()
+                                                }.isSuccess
                                             } else if (
                                                 normalizedType == "series"
                                             ) {
@@ -2029,21 +2039,23 @@ fun DetailScreen(
 
                         if (peopleItems.isNotEmpty()) {
                             item(key = "peopleheader") {
+                                // Plain label, NOT focusable: the movie DOWN
+                                // path (keywords row) jumps straight into the
+                                // people rail instead. A focusable label here
+                                // used to be the only focusable node between
+                                // the tag rail and the people cards on movies,
+                                // so D-pad scrolling caught on invisible
+                                // "empty space" above the people row.
                                 Text(
                                     "PEOPLE",
                                     style =
                                         MaterialTheme.typography.titleSmall,
                                     color = KBTextLo,
-                                    modifier = Modifier
-                                        .padding(
-                                            start = 24.dp,
-                                            top = 14.dp,
-                                            bottom = 7.dp
-                                        )
-                                        .focusRequester(
-                                            movieDetailsFocusRequester
-                                        )
-                                        .focusable()
+                                    modifier = Modifier.padding(
+                                        start = 24.dp,
+                                        top = 14.dp,
+                                        bottom = 7.dp
+                                    )
                                 )
                             }
 
@@ -2059,6 +2071,13 @@ fun DetailScreen(
                                     modifier = Modifier
                                         .padding(
                                             bottom = 12.dp
+                                        )
+                                        // Attached BEFORE the group so
+                                        // requestFocus() redirects into it
+                                        // (focusRestorer then lands on the
+                                        // last-viewed or first card).
+                                        .focusRequester(
+                                            movieDetailsFocusRequester
                                         )
                                         .focusGroup()
                                         .focusRestorer()
