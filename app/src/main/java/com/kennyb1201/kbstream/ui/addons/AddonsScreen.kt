@@ -237,7 +237,7 @@ fun AddonsScreen(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 ActionButton(
-                    label = "HOME",
+                    label = "HOME / COLLECTIONS",
                     icon = Icons.Filled.List,
                     onClick = { showCatalogManager = true }
                 )
