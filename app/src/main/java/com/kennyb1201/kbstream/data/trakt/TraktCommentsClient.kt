@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.data.trakt
 
+import android.util.Log
 import com.kennyb1201.kbstream.data.tmdb.TmdbAuthorDetails
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
 import kotlinx.coroutines.Dispatchers
@@ -28,6 +29,8 @@ import java.util.concurrent.TimeUnit
  */
 object TraktCommentsClient {
 
+    private const val TAG = "TRAKT_COMMENTS"
+
     private val client = OkHttpClient.Builder()
         .callTimeout(8, TimeUnit.SECONDS)
         .build()
@@ -39,8 +42,8 @@ object TraktCommentsClient {
 
     private const val API_BASE = "https://api.trakt.tv"
 
-    /** Trakt comments page size is 10; two pages cap the request cost. */
-    private const val MAX_PAGES = 2
+    /** Trakt comments page size is 10; five pages = 50 top-liked comments. */
+    private const val MAX_PAGES = 5
 
     /**
      * Top-liked user comments/reviews for a movie or series, looked up by
@@ -63,10 +66,33 @@ object TraktCommentsClient {
                             .header("trakt-api-key", CLIENT_ID)
                             .header("trakt-api-version", "2")
                             .header("Accept", "application/json")
+                            // OkHttp's default okhttp/x.y.z User-Agent gets
+                            // challenged by Trakt's Cloudflare bot rules (403),
+                            // while the identical request with a normal
+                            // browser-style UA passes. Trakt's own official
+                            // apps send app UAs, but a browser UA is the only
+                            // variant that reliably clears the public API.
+                            .header(
+                                "User-Agent",
+                                "Mozilla/5.0 (Linux; Android 13) " +
+                                    "AppleWebKit/537.36 (KHTML, like Gecko) " +
+                                    "Chrome/124.0.0.0 Mobile Safari/537.36"
+                            )
                             .build()
                     ).execute().use { response ->
-                        if (!response.isSuccessful) null else response.body?.string()
+                        if (response.isSuccessful) {
+                            response.body?.string()
+                        } else {
+                            Log.w(
+                                TAG,
+                                "comments HTTP ${response.code} " +
+                                    "for $kind/$imdbId page=$page"
+                            )
+                            null
+                        }
                     }
+                }.onFailure {
+                    Log.w(TAG, "comments request failed: ${it.message}")
                 }.getOrNull() ?: return@withContext results
 
                 val arr = runCatching { JSONArray(body) }.getOrNull()
