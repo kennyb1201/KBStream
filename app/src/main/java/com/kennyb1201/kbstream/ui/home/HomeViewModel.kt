@@ -1340,6 +1340,18 @@ Log.d(
         }
     }
 
+    /**
+     * Simkl-backed cards from the currently displayed rail (historyRowId is
+     * null exactly for items built from the Simkl feed). During a refresh
+     * the local-first publish used to REPLACE the whole list, so every
+     * Simkl card vanished for the seconds-to-minutes the slow Simkl+TMDB
+     * re-merge needed after the watched-state caches were cleared on
+     * resume. Carrying them over keeps the rail stable: full list -> full
+     * list (locally refreshed) -> full list (enriched merge).
+     */
+    private fun previousSimklUpNextItems(): List<UpNextItem> =
+        _upNext.value.filter { it.historyRowId == null }
+
     private fun observeUpNext() {
 
         viewModelScope.launch {
@@ -1651,10 +1663,18 @@ Log.d(
                         // Publish local cards first: the enriched local rows
                         // are ready here, so the rail shows real content while
                         // the (potentially slow) Simkl network fetch runs.
+                        // MERGE with the Simkl cards still on screen instead of
+                        // replacing the list — replacing it made every Simkl
+                        // card vanish on each Home resume until the slow
+                        // re-merge finished. applyContinueWatchingDismissals
+                        // still filters anything the user removed, so a
+                        // removed title cannot linger through the carry-over.
                         if (localItems.isNotEmpty()) {
                             _upNext.value =
                                 applyContinueWatchingDismissals(
-                                    dedupeAndSortUpNext(localItems)
+                                    dedupeAndSortUpNext(
+                                        localItems + previousSimklUpNextItems()
+                                    )
                                 )
                         }
 
@@ -1673,24 +1693,18 @@ Log.d(
                                 isLatestUpNextRequest(requestVersion)
                             ) {
 
+                                // Simkl is unreachable: keep the PREVIOUS
+                                // Simkl cards on screen (stale data beats a
+                                // rail that empties out on every resume)
+                                // rather than dropping them. Removals are
+                                // still honored by applyContinueWatching
+                                // Dismissals.
                                 _upNext.value =
                                     applyContinueWatchingDismissals(
-                                        if (localItems.isNotEmpty()) {
-
-                                            dedupeAndSortUpNext(
-                                                localItems
-                                            )
-
-                                        } else {
-
-                                            // Simkl is unreachable and there
-                                            // is no local history - keep the
-                                            // previous list but still honor
-                                            // removals so a dismissed card
-                                            // cannot linger behind a failing
-                                            // feed.
-                                            _upNext.value
-                                        }
+                                        dedupeAndSortUpNext(
+                                            localItems +
+                                                previousSimklUpNextItems()
+                                        )
                                     )
                             }
 
