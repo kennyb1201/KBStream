@@ -86,41 +86,39 @@ fun ProfilePickerScreen(
                 .verticalScroll(rememberScrollState())
                 .focusGroup()
         ) {
-            val tiles: List<@Composable (FocusRequester?) -> Unit> = profiles.map { profile ->
-                { fr: FocusRequester? ->
-                    ProfileAvatarTile(
-                        name = profile.name,
-                        avatarIndex = profile.avatarIndex,
-                        customAvatarUrl = profile.customAvatarUrl ?: profile.avatarData,
-                        selected = active?.id == profile.id,
-                        focusRequester = fr,
-                        onClick = {
-                            ProfileManager.setActive(pickerContext, profile)
-                            onSelect()
-                        }
-                    )
-                }
-            } + listOf { fr: FocusRequester? ->
-                ProfileAvatarTile(
-                    name = "Manage",
-                    avatarIndex = -1,
-                    customAvatarUrl = null,
-                    selected = false,
-                    focusRequester = fr,
-                    onClick = onManage
+            val tiles = profiles.map { profile ->
+                PickerTile(
+                    name = profile.name,
+                    avatarIndex = profile.avatarIndex,
+                    customAvatarUrl = profile.customAvatarUrl ?: profile.avatarData,
+                    selected = active?.id == profile.id,
+                    onClick = {
+                        ProfileManager.setActive(pickerContext, profile)
+                        onSelect()
+                    }
                 )
-            }
+            } + PickerTile(
+                name = "Manage",
+                avatarIndex = -1,
+                customAvatarUrl = null,
+                selected = false,
+                onClick = onManage
+            )
 
-            var firstDone = false
-            tiles.chunked(PROFILES_PER_ROW).forEach { rowTiles ->
+            tiles.chunked(PROFILES_PER_ROW).forEachIndexed { rowIndex, rowTiles ->
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(24.dp),
                     modifier = Modifier.padding(bottom = 24.dp)
                 ) {
-                    rowTiles.forEach { tile ->
-                        val fr = if (!firstDone) firstRequester else null
-                        firstDone = true
-                        tile(fr)
+                    rowTiles.forEachIndexed { colIndex, tile ->
+                        ProfileAvatarTile(
+                            name = tile.name,
+                            avatarIndex = tile.avatarIndex,
+                            customAvatarUrl = tile.customAvatarUrl,
+                            selected = tile.selected,
+                            focusRequester = if (rowIndex == 0 && colIndex == 0) firstRequester else null,
+                            onClick = tile.onClick
+                        )
                     }
                 }
             }
@@ -129,6 +127,15 @@ fun ProfilePickerScreen(
 }
 
 private const val PROFILES_PER_ROW = 5
+
+/** Render spec for one picker tile — plain data, invoked inline per row. */
+private data class PickerTile(
+    val name: String,
+    val avatarIndex: Int,
+    val customAvatarUrl: String?,
+    val selected: Boolean,
+    val onClick: () -> Unit
+)
 
 @Composable
 private fun ProfileAvatarTile(
