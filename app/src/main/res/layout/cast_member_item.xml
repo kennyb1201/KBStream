@@ -1,49 +1,59 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Player-overlay cast card: horizontal tile (avatar left, name +
+     character right) so names never clip to a 68dp column and the
+     character name renders underneath instead of being ellipsized away.
+     Focusable for D-pad navigation. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="wrap_content"
     android:layout_height="wrap_content"
-    android:orientation="vertical"
-    android:gravity="center"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
     android:layout_marginEnd="10dp"
     android:focusable="true"
     android:focusableInTouchMode="true"
     android:clickable="true"
     android:background="@drawable/picker_item_bg"
-    android:padding="4dp"
+    android:paddingStart="8dp"
+    android:paddingEnd="12dp"
+    android:paddingVertical="6dp"
     android:nextFocusDown="@id/seekbar">
 
     <ImageView
         android:id="@+id/cast_member_image"
-        android:layout_width="44dp"
-        android:layout_height="44dp"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
         android:scaleType="centerCrop"
         android:contentDescription="Cast member photo"
         android:background="@drawable/circle_avatar_bg"
         android:clipToOutline="true" />
 
-    <TextView
-        android:id="@+id/cast_member_name"
+    <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
-        android:fontFamily="@font/oswald_medium"
-        android:textColor="@color/kb_text_hi"
-        android:textSize="9sp"
-        android:maxLines="1"
-        android:ellipsize="end"
-        android:maxWidth="68dp"
-        android:gravity="center" />
+        android:layout_marginStart="8dp"
+        android:orientation="vertical">
 
-    <TextView
-        android:id="@+id/cast_member_character"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:fontFamily="@font/oswald_medium"
-        android:textColor="@color/kb_text_lo"
-        android:textSize="8sp"
-        android:maxLines="1"
-        android:ellipsize="end"
-        android:maxWidth="72dp"
-        android:gravity="center"
-        android:visibility="gone" />
+        <TextView
+            android:id="@+id/cast_member_name"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="@font/oswald_medium"
+            android:textColor="@color/kb_text_hi"
+            android:textSize="12sp"
+            android:maxLines="2"
+            android:ellipsize="end"
+            android:maxWidth="120dp" />
+
+        <TextView
+            android:id="@+id/cast_member_character"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="@font/oswald_medium"
+            android:textColor="@color/kb_text_lo"
+            android:textSize="10sp"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:maxWidth="120dp"
+            android:visibility="gone" />
+    </LinearLayout>
 </LinearLayout>
