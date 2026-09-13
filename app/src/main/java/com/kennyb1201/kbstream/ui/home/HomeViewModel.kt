@@ -16,6 +16,7 @@ import com.kennyb1201.kbstream.data.simkl.SimklContinueWatchingItem
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
+import com.kennyb1201.kbstream.data.tmdb.TmdbEpisodeAirInfo
 import com.kennyb1201.kbstream.data.tmdb.TmdbHeroArtworkRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
@@ -51,6 +52,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -58,6 +62,9 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
 import java.time.OffsetDateTime
 import java.time.temporal.ChronoUnit
 import org.json.JSONObject
@@ -141,7 +148,33 @@ data class UpNextItem(
      * (the last episode of the last aired season). Takes precedence over
      * [isSeasonFinale] and renders as the "SERIES FINALE" tag.
      */
-    val isSeriesFinale: Boolean = false
+    val isSeriesFinale: Boolean = false,
+
+    /**
+     * TMDB "next episode to air" for this title (season, episode number
+     * and air date), captured from the same detail response the Continue
+     * Watching enrichment already fetches — so the Upcoming rail costs no
+     * extra network calls. Null when unknown / not a returning series.
+     */
+    val nextEpisodeAir: TmdbEpisodeAirInfo? = null
+)
+
+/**
+ * One row in the Home "Upcoming" rail: a show's next unaired episode,
+ * derived for free from the Continue Watching enrichment (the TMDB detail
+ * it already fetches carries next_episode_to_air). No extra network calls.
+ */
+data class UpcomingEpisode(
+    val id: String,
+    val parentId: String,
+    val parentType: String,
+    val title: String,
+    val poster: String?,
+    val backdrop: String?,
+    val season: Int,
+    val episode: Int,
+    val airDateEpochMs: Long,
+    val airDateLabel: String
 )
 
 private data class ResolvedHomeSeriesTarget(
@@ -303,6 +336,22 @@ class HomeViewModel(
 
     val upNext: StateFlow<List<UpNextItem>> =
         _upNext.asStateFlow()
+
+    /**
+     * Upcoming episodes derived from Continue Watching enrichment: one
+     * entry per in-progress show whose TMDB detail carries a future
+     * "next episode to air", sorted by air date. Re-published whenever
+     * [upNext] changes (enrichment, Simkl merge, dismissals).
+     */
+    val upcomingSchedule: StateFlow<List<UpcomingEpisode>> =
+        _upNext
+            .asStateFlow()
+            .map { items -> buildUpcomingSchedule(items) }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.Eagerly,
+                initialValue = emptyList()
+            )
 
     private val _isLoading =
         MutableStateFlow(true)
@@ -504,10 +553,8 @@ class HomeViewModel(
                             )
                             null
                         }
-                    }
-
-                    val resolvedAddonMeta = addonMetaDeferred.await()
-                    val resolvedTmdbDetail = tmdbDetailDeferred.await()
+                    }                        val resolvedAddonMeta = addonMetaDeferred.await()
+                        val resolvedTmdbDetail = tmdbDetailDeferred.await()
 
                     val resolvedTmdbId =
                         when {
@@ -1684,6 +1731,81 @@ Log.d(
     }
 
     /**
+     * Builds the Upcoming rail from the current Continue Watching items:
+     * one entry per show with a FUTURE "next episode to air", sorted by
+     * air date. Air dates at/past the current moment are excluded (the
+     * episode has aired -> it belongs in Continue Watching, not here).
+     */
+    private fun buildUpcomingSchedule(
+        items: List<UpNextItem>
+    ): List<UpcomingEpisode> {
+        val now = System.currentTimeMillis()
+        val seenParents = HashSet<String>()
+        val upcoming = ArrayList<UpcomingEpisode>()
+
+        for (item in items) {
+            val air = item.nextEpisodeAir ?: continue
+            val season = air.seasonNumber ?: continue
+            val episode = air.episodeNumber ?: continue
+            val parentId = item.parentId?.takeIf { it.isNotBlank() } ?: continue
+            val parentType = item.parentType?.takeIf { it.isNotBlank() } ?: continue
+            val epochMs = parseTmdbAirDate(air.airDate) ?: continue
+            if (epochMs <= now) continue
+            if (!seenParents.add(parentId)) continue
+
+            upcoming.add(
+                UpcomingEpisode(
+                    id = "upcoming:$parentId:s$season:e$episode",
+                    parentId = parentId,
+                    parentType = parentType,
+                    title = item.title,
+                    poster = item.poster,
+                    backdrop = item.backdrop,
+                    season = season,
+                    episode = episode,
+                    airDateEpochMs = epochMs,
+                    airDateLabel = formatAirDateLabel(air.airDate)
+                )
+            )
+        }
+
+        return upcoming.sortedBy { it.airDateEpochMs }
+    }
+
+    private fun parseTmdbAirDate(raw: String?): Long? {
+        val value = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        return try {
+            LocalDate.parse(value)
+                .atStartOfDay(ZoneId.systemDefault())
+                .toInstant()
+                .toEpochMilli()
+        } catch (_: DateTimeParseException) {
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun formatAirDateLabel(raw: String?): String {
+        val value = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return "Date TBA"
+        return try {
+            val date = LocalDate.parse(value)
+            val today = LocalDate.now(ZoneId.systemDefault())
+            val days = ChronoUnit.DAYS.between(today, date)
+            when {
+                days == 0L -> "Today"
+                days == 1L -> "Tomorrow"
+                days in 2..6 -> "In $days days"
+                else -> date.format(
+                    DateTimeFormatter.ofPattern("EEE, MMM d")
+                )
+            }
+        } catch (_: Exception) {
+            "Date TBA"
+        }
+    }
+
+    /**
      * Instant Continue Watching seed: publish a lightweight snapshot built
      * ONLY from the local watch-history rows (no TMDB enrichment, no Simkl
      * round-trip) so the rail renders the moment Home composes. The full
@@ -1845,6 +1967,11 @@ Log.d(
         var tmdbEpisodeTotals: ShowEpisodeTotals? = null
         var tmdbEpisodesRemaining: Int? = null
 
+        // "Next episode to air" captured from the TMDB detail resolved
+        // below; threaded onto the built UpNextItem so the Upcoming rail
+        // can show it without any extra network calls.
+        var capturedNextEpisodeAir: TmdbEpisodeAirInfo? = null
+
         // Finale flags derived from the shared-watched-state resolution
         // below; default false so movies / unresolvable titles stay plain
         // RESUME cards.
@@ -1901,6 +2028,10 @@ Log.d(
                     tmdbDetail?.backdropPath
                         ?.takeIf { it.isNotBlank() }
                         ?.let { "https://image.tmdb.org/t/p/w780$it" }
+
+                // Capture the show's next aired episode for the Upcoming
+                // rail — the detail response is already in hand here.
+                capturedNextEpisodeAir = tmdbDetail?.nextEpisodeToAir
 
                 val tmdbId = tmdbDetail?.id
 
@@ -2068,7 +2199,9 @@ Log.d(
                 localSeasonFinale,
 
             isSeriesFinale =
-                localSeriesFinale
+                localSeriesFinale,
+
+            nextEpisodeAir = capturedNextEpisodeAir
         )
             }
         }
@@ -2353,6 +2486,10 @@ var episodesTotal: Int? = null
         val needsTmdbLookup =
             true
 
+        // "Next episode to air" captured from the TMDB detail fetched
+        // below; threaded onto the built UpNextItem for the Upcoming rail.
+        var capturedNextAirInfo: TmdbEpisodeAirInfo? = null
+
         if (needsTmdbLookup) {
 
             val detail =
@@ -2371,6 +2508,10 @@ var episodesTotal: Int? = null
                 } catch (_: Exception) {
                     null
                 }
+
+            // Capture the next aired episode for the Upcoming rail — the
+            // detail response is already fetched here.
+            capturedNextAirInfo = detail?.nextEpisodeToAir
 
             if (
                 posterUrl.isNullOrBlank()
@@ -2707,6 +2848,8 @@ episodesTotal =
 
             isSeriesFinale =
                 targetIsSeriesFinale,
+
+            nextEpisodeAir = capturedNextAirInfo
 
             recencyTimestamp =
                 recencyTimestamp,

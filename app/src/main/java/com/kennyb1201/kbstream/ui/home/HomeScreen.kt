@@ -110,6 +110,7 @@ import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import com.kennyb1201.kbstream.ui.home.UpcomingEpisode
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
 import com.kennyb1201.kbstream.data.youtube.YoutubeChunkedDataSourceFactory
 import kotlinx.coroutines.delay
@@ -1308,6 +1309,96 @@ private fun homeRailTitle(
 }
 
 @Composable
+private fun UpcomingEpisodeCard(
+    upcoming: UpcomingEpisode,
+    onClick: () -> Unit,
+    onFocus: () -> Unit = {}
+) {
+    var focused by remember {
+        mutableStateOf(false)
+    }
+
+    PosterCard(
+        posterUrl = upcoming.backdrop ?: upcoming.poster,
+        contentDescription = upcoming.title,
+        isWatched = false,
+        onClick = onClick,
+        modifier = Modifier
+            .width(224.dp)
+            .height(146.dp)
+            .padding(end = HomeRailGap)
+            .onFocusChanged {
+                focused = it.isFocused
+                if (it.isFocused) {
+                    onFocus()
+                }
+            }
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color.Transparent,
+                                Color.Black.copy(alpha = 0.45f),
+                                KBVoid.copy(alpha = 0.95f)
+                            )
+                        )
+                    )
+            )
+
+            Text(
+                text = "S%02d · E%02d".format(
+                    upcoming.season,
+                    upcoming.episode
+                ),
+                color = Color.Black,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(6.dp)
+                    .background(
+                        color = KBAccent,
+                        shape = RoundedCornerShape(4.dp)
+                    )
+                    .padding(horizontal = 5.dp, vertical = 2.dp)
+            )
+
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = upcoming.title,
+                    color = KBTextHi,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                Text(
+                    text = upcoming.airDateLabel,
+                    color = if (focused) KBAccent else KBTextLo,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun SectionTitle(text: String) {
     Text(
         text = text,
@@ -1669,6 +1760,8 @@ fun HomeScreen(
     val rails by viewModel.rails.collectAsStateWithLifecycle()
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
     val upNext by viewModel.upNext.collectAsStateWithLifecycle()
+    val upcomingSchedule by
+        viewModel.upcomingSchedule.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val heroMeta by viewModel.heroMeta.collectAsStateWithLifecycle()
@@ -1842,8 +1935,14 @@ fun HomeScreen(
             cwIndex <= 1 && // hero spacer (+ CW row) still at/near the top
             railListState.firstVisibleItemScrollOffset > 0
         ) {
+            // Item layout: 0 = hero spacer, 1 = Continue Watching (only
+            // when present), 2 = Upcoming rail (only when it has entries),
+            // then the first catalog rail. Snap past the CW row AND the
+            // Upcoming rail so neither peeks under the hero.
+            val snapIndex =
+                if (upcomingSchedule.isNotEmpty()) 3 else 2
             homeScope.launch {
-                railListState.animateScrollToItem(index = 2)
+                railListState.animateScrollToItem(index = snapIndex)
             }
         }
     }
@@ -1860,8 +1959,9 @@ fun HomeScreen(
         // above the viewport. One D-pad notch only guarantees the newly
         // focused item is on screen, which used to leave a sliver of the CW
         // cards peeking under the hero. Item layout: 0 = hero spacer,
-        // 1 = Continue Watching (only when present), 2 = first rail — so the
-        // snap only applies when CW exists.
+        // 1 = Continue Watching (only when present), 2 = Upcoming rail
+        // (only when populated), then the first rail — so the snap only
+        // applies when CW exists.
         hideContinueWatchingSliver()
     }
 
@@ -2262,6 +2362,80 @@ fun HomeScreen(
                                                             "NEW SEASON"
                                                     }
                                             }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (upcomingSchedule.isNotEmpty()) {
+                    item(
+                        key = "upcoming_schedule"
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(
+                                start = TvSafeAreaHorizontal,
+                                top = 0.dp,
+                                bottom = 8.dp
+                            )
+                        ) {
+                            SectionTitle(
+                                "Upcoming"
+                            )
+
+                            LazyRow(
+                                contentPadding =
+                                    PaddingValues(
+                                        start =
+                                            RailHorizontalStartPadding,
+                                        end =
+                                            TvSafeAreaHorizontal,
+                                        top = 10.dp,
+                                        bottom = 12.dp
+                                    ),
+                                horizontalArrangement =
+                                    Arrangement.spacedBy(
+                                        0.dp
+                                    )
+                            ) {
+                                items(
+                                    items = upcomingSchedule,
+                                    key = { it.id }
+                                ) { upcoming ->
+                                    val heroItem =
+                                        UpNextItem(
+                                            id = upcoming.id,
+                                            title = upcoming.title,
+                                            poster = upcoming.poster,
+                                            badge = UpNextBadge.NEXT_UP,
+                                            backdrop = upcoming.backdrop,
+                                            parentId = upcoming.parentId,
+                                            parentType = upcoming.parentType
+                                        )
+
+                                    UpcomingEpisodeCard(
+                                        upcoming = upcoming,
+                                        onClick = {
+                                            // Details only: the episode
+                                            // has not aired yet, so there
+                                            // is nothing to resume.
+                                            openUpNext(
+                                                heroItem,
+                                                openDetailsOnly = true
+                                            )
+                                        },
+                                        onFocus = {
+                                            selectContinueWatchingHero(
+                                                MetaPreview(
+                                                    id = upcoming.parentId,
+                                                    type = upcoming.parentType,
+                                                    name = upcoming.title,
+                                                    poster = upcoming.poster
+                                                ),
+                                                heroItem
+                                            )
+                                        }
                                     )
                                 }
                             }
