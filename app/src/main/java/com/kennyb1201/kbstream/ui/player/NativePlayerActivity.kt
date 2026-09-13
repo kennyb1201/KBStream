@@ -3657,7 +3657,7 @@ class NativePlayerActivity : ComponentActivity() {
         // player, leaving Continue Watching stale until the next save.
         lifecycleScope.launch(Dispatchers.IO + NonCancellable) {
             runCatching {
-                val dao = WatchHistoryDatabase.getInstance(this@NativePlayerActivity).watchHistoryDao()
+                val dao = WatchHistoryDatabase.getInstanceScoped(this@NativePlayerActivity).watchHistoryDao()
                 val existing = dao.getById(historyId)
                 val entry = WatchHistoryEntity(
                     id = historyId, parentId = parentId, type = parentType,

@@ -53,7 +53,10 @@ object AppPreferences {
     private const val KEY_HIDE_UPCOMING = "home_rail_hide_upcoming"
     private const val KEY_LANDSCAPE_CARDS = "home_landscape_cards"
     private fun prefs(context: Context): SharedPreferences =
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        context.getSharedPreferences(
+            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, PREFS_NAME),
+            Context.MODE_PRIVATE
+        )
 
     // ── Buffer mode ──────────────────────────────────────────────────
     fun getDefaultBufferMode(context: Context): Int =

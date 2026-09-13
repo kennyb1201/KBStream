@@ -31,7 +31,7 @@ object BackupManager {
 
     /** Serializes current state and writes it to [uri]. Returns a summary. */
     suspend fun export(context: Context, uri: Uri): String {
-        val db = WatchHistoryDatabase.getInstance(context)
+        val db = WatchHistoryDatabase.getInstanceScoped(context)
         val history = db.watchHistoryDao().getAll()
         val watched = db.watchedStatusDao().getAll()
 
@@ -107,7 +107,7 @@ object BackupManager {
         restoreAddons(context, prefs?.optString("addons"))
         restoreWatchedOverrides(context, prefs?.optJSONArray("watchedOverrides"))
 
-        val db = WatchHistoryDatabase.getInstance(context)
+        val db = WatchHistoryDatabase.getInstanceScoped(context)
         db.withTransaction {
             db.watchHistoryDao().clearAll()
             db.watchedStatusDao().clearAll()

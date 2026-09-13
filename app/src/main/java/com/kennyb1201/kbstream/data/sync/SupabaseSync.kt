@@ -222,6 +222,31 @@ object SupabaseSync {
 
     private fun outboxId(row: OutboxRow) = "${row.table}|${row.keyColumn}|${row.key}"
 
+    /**
+     * Profile scoping: item keys are prefixed with the active profile id so
+     * profiles never see each other's rows (the account-level RLS keeps
+     * other accounts out; this keeps sibling profiles separated).
+     * "p:<profileId>:<originalKey>".
+     */
+    private fun scopedKey(originalKey: String): String {
+        val pid = com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id
+            ?: return originalKey
+        return "p:$pid:$originalKey"
+    }
+
+    private fun unscopedKey(storedKey: String): String =
+        if (storedKey.startsWith("p:")) {
+            storedKey.substringAfter("p:").substringAfter(':')
+        } else {
+            storedKey
+        }
+
+    private fun storedKeyMatchesActiveProfile(storedKey: String): Boolean {
+        val pid = com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id
+            ?: return !storedKey.startsWith("p:")
+        return storedKey.startsWith("p:$pid:")
+    }
+
     fun enqueueHistory(entity: WatchHistoryEntity) {
         if (!isSignedIn()) return
         val payload = buildJsonObject {
@@ -245,7 +270,7 @@ object SupabaseSync {
             put("isCompleted", entity.isCompleted)
             entity.completedAt?.let { put("completedAt", it) }
         }
-        val row = OutboxRow(TABLE_HISTORY, "item_id", entity.id, payload)
+        val row = OutboxRow(TABLE_HISTORY, "item_id", scopedKey(entity.id), payload)
         outbox[outboxId(row)] = row
         scheduleFlush()
     }
@@ -259,7 +284,7 @@ object SupabaseSync {
             put("isWatched", entity.isWatched)
             put("updatedAt", entity.updatedAt)
         }
-        val row = OutboxRow(TABLE_WATCHED, "item_key", entity.key, payload)
+        val row = OutboxRow(TABLE_WATCHED, "item_key", scopedKey(entity.key), payload)
         outbox[outboxId(row)] = row
         scheduleFlush()
     }
@@ -350,12 +375,14 @@ object SupabaseSync {
                 .select()
                 .decodeList<SyncRowDto>()
 
-            val db = WatchHistoryDatabase.getInstance(context)
+            val db = WatchHistoryDatabase.getInstanceScoped(context)
             var applied = 0
             for (row in rows) {
                 val remote = row.payload
                 val remoteUpdated = remote["updatedAt"]?.jsonPrimitive?.content?.toLongOrNull() ?: continue
-                val id = row.itemId ?: continue
+                val storedId = row.itemId ?: continue
+                if (!storedKeyMatchesActiveProfile(storedId)) continue
+                val id = unscopedKey(storedId)
 
                 val local = db.watchHistoryDao().getById(id)
                 val localUpdated = local?.updatedAt ?: 0L
@@ -407,12 +434,14 @@ object SupabaseSync {
                 .select()
                 .decodeList<SyncRowDto>()
 
-            val db = WatchHistoryDatabase.getInstance(context)
+            val db = WatchHistoryDatabase.getInstanceScoped(context)
             var applied = 0
             for (row in rows) {
                 val remote = row.payload
                 val remoteUpdated = remote["updatedAt"]?.jsonPrimitive?.content?.toLongOrNull() ?: continue
-                val key = row.itemKey ?: continue
+                val storedKey = row.itemKey ?: continue
+                if (!storedKeyMatchesActiveProfile(storedKey)) continue
+                val key = unscopedKey(storedKey)
 
                 val local = db.watchedStatusDao().getByKeys(listOf(key)).firstOrNull()
                 val localUpdated = local?.updatedAt ?: 0L
@@ -460,14 +489,14 @@ object SupabaseSync {
     // ── Push (initial seed / manual sync-now) ───────────────────────
 
     private suspend fun pushHistory(context: Context) {
-        val db = WatchHistoryDatabase.getInstance(context)
+        val db = WatchHistoryDatabase.getInstanceScoped(context)
         val all = db.watchHistoryDao().getAll()
         all.forEach { enqueueHistory(it) }
         flushOutbox()
     }
 
     private suspend fun pushWatched(context: Context) {
-        val db = WatchHistoryDatabase.getInstance(context)
+        val db = WatchHistoryDatabase.getInstanceScoped(context)
         val all = db.watchedStatusDao().getAll()
         all.forEach { enqueueWatched(it) }
         flushOutbox()
@@ -559,10 +588,12 @@ object SupabaseSync {
 
     private suspend fun applyHistoryRow(row: SyncRowDto) {
         val context = appContextRef?.get() ?: return
-        val db = WatchHistoryDatabase.getInstance(context)
+        val db = WatchHistoryDatabase.getInstanceScoped(context)
         val remote = row.payload
         val remoteUpdated = remote["updatedAt"]?.jsonPrimitive?.content?.toLongOrNull() ?: return
-        val id = row.itemId ?: return
+        val storedId = row.itemId ?: return
+        if (!storedKeyMatchesActiveProfile(storedId)) return
+        val id = unscopedKey(storedId)
 
         val local = db.watchHistoryDao().getById(id)
         val localUpdated = local?.updatedAt ?: 0L
@@ -596,10 +627,12 @@ object SupabaseSync {
 
     private suspend fun applyWatchedRow(row: SyncRowDto) {
         val context = appContextRef?.get() ?: return
-        val db = WatchHistoryDatabase.getInstance(context)
+        val db = WatchHistoryDatabase.getInstanceScoped(context)
         val remote = row.payload
         val remoteUpdated = remote["updatedAt"]?.jsonPrimitive?.content?.toLongOrNull() ?: return
-        val key = row.itemKey ?: return
+        val storedKey = row.itemKey ?: return
+        if (!storedKeyMatchesActiveProfile(storedKey)) return
+        val key = unscopedKey(storedKey)
 
         val local = db.watchedStatusDao().getByKeys(listOf(key)).firstOrNull()
         val localUpdated = local?.updatedAt ?: 0L

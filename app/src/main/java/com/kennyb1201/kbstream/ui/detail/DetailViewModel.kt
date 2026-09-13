@@ -56,7 +56,7 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
     private val addonManager = AddonManager.getInstance(application)
     private val tmdbRepository = TmdbRepository(application)
     private val simklRepository = SimklRepository.getInstance(application)
-    private val historyDao = WatchHistoryDatabase.getInstance(application).watchHistoryDao()
+    private val historyDao = WatchHistoryDatabase.getInstanceScoped(application).watchHistoryDao()
     private val watchHistoryRepository = WatchHistoryRepository(application)
     private val watchedStatusRepository = WatchedStatusRepository(application)
 

@@ -204,7 +204,7 @@ class HomeViewModel(
 
     private val historyDao =
         WatchHistoryDatabase
-            .getInstance(application)
+            .getInstanceScoped(application)
             .watchHistoryDao()
 
     private val simklRepository =

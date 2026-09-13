@@ -154,7 +154,10 @@ object StreamBadgeEngine {
     }
 
     private fun prefs(context: Context) =
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        context.getSharedPreferences(
+            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, PREFS_NAME),
+            Context.MODE_PRIVATE
+        )
 
     // ------------------------------------------------------------------
     // Matching

@@ -33,6 +33,13 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
         @Volatile
         private var instance: WatchHistoryDatabase? = null
 
+        // Profile-scoped instances: one open DB per active profile, closed
+        // when the profile switches.
+        @Volatile
+        private var profileInstance: WatchHistoryDatabase? = null
+        @Volatile
+        private var profileInstanceName: String? = null
+
         fun getInstance(context: Context): WatchHistoryDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -45,6 +52,47 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                     .build()
                     .also { instance = it }
             }
+
+        /**
+         * Profile-scoped DB: every profile gets its own isolated history.
+         * Call sites that store per-user data use this; the un-scoped
+         * [getInstance] remains for global caches (tmdb_json_cache).
+         */
+        fun getInstanceScoped(context: Context): WatchHistoryDatabase {
+            val dbName = com.kennyb1201.kbstream.data.sync.ProfileStorage.dbNameForActive(
+                context, "kbstream_watch_history"
+            )
+            if (profileInstanceName == dbName) {
+                return profileInstance ?: synchronized(this) {
+                    buildScoped(context, dbName).also {
+                        profileInstance = it; profileInstanceName = dbName
+                    }
+                }
+            }
+            synchronized(this) {
+                if (profileInstanceName == dbName && profileInstance != null) {
+                    return profileInstance!!
+                }
+                runCatching { profileInstance?.close() }
+                val db = buildScoped(context, dbName)
+                profileInstance = db
+                profileInstanceName = dbName
+                return db
+            }
+        }
+
+        private fun buildScoped(
+            context: Context,
+            dbName: String
+        ): WatchHistoryDatabase =
+            Room.databaseBuilder(
+                context.applicationContext,
+                WatchHistoryDatabase::class.java,
+                dbName
+            )
+                .addMigrations(MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+                .fallbackToDestructiveMigration()
+                .build()
 
         private val MIGRATION_8_9 = object : Migration(8, 9) {
             override fun migrate(db: SupportSQLiteDatabase) {

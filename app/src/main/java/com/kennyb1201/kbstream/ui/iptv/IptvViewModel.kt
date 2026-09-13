@@ -31,7 +31,13 @@ import kotlinx.coroutines.launch
 class IptvViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = IptvRepository(application.applicationContext)
-    private val prefs = application.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val prefs
+        get() = application.getSharedPreferences(
+            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
+                application, PREFS_NAME
+            ),
+            Context.MODE_PRIVATE
+        )
 
     private val _playlistUrl = MutableStateFlow(prefs.getString(KEY_PLAYLIST_URL, "").orEmpty())
     val playlistUrl: StateFlow<String> = _playlistUrl.asStateFlow()

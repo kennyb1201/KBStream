@@ -25,7 +25,7 @@ class WatchedStatusRepository(
         SimklRepository.getInstance(context)
 
     private val database =
-        WatchHistoryDatabase.getInstance(
+        WatchHistoryDatabase.getInstanceScoped(
             context
         )
 
@@ -57,11 +57,21 @@ class WatchedStatusRepository(
      * manually marked stays marked even after remote refreshes, and they
      * survive app restarts without a database migration.
      */
-    private val overridesPrefs =
-        context.getSharedPreferences(
-            "kbstream_watched_overrides",
-            Context.MODE_PRIVATE
-        )
+    private val overridesPrefs
+        get() = com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext
+            ?.let { appContext ->
+                appContext.getSharedPreferences(
+                    com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
+                        appContext,
+                        "kbstream_watched_overrides"
+                    ),
+                    Context.MODE_PRIVATE
+                )
+            }
+                ?: context.getSharedPreferences(
+                    "kbstream_watched_overrides",
+                    Context.MODE_PRIVATE
+                )
 
     /*
      * Only one preload may refresh SIMKL sets at a time. This avoids:

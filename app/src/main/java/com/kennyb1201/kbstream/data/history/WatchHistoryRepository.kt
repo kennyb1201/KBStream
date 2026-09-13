@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 
 class WatchHistoryRepository(context: Context) {
-    private val dao = WatchHistoryDatabase.getInstance(context).watchHistoryDao()
+    private val dao = WatchHistoryDatabase.getInstanceScoped(context).watchHistoryDao()
     private val repositoryScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     // 1. Hot StateFlow for all recent watch history items

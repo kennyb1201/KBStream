@@ -23,15 +23,36 @@ abstract class IptvDatabase : RoomDatabase() {
         private var INSTANCE: IptvDatabase? = null
 
         fun getInstance(context: Context): IptvDatabase {
-            return INSTANCE ?: synchronized(this) {
-                INSTANCE ?: Room.databaseBuilder(
+            val dbName = com.kennyb1201.kbstream.data.sync.ProfileStorage.dbNameForActive(
+                context, "iptv_epg.db"
+            )
+            if (dbName == "iptv_epg.db") {
+                // No active profile yet → legacy/global instance.
+                return INSTANCE ?: synchronized(this) {
+                    INSTANCE ?: Room.databaseBuilder(
+                        context.applicationContext,
+                        IptvDatabase::class.java,
+                        "iptv_epg.db"
+                    ).fallbackToDestructiveMigration()
+                        .build()
+                        .also { INSTANCE = it }
+                }
+            }
+            synchronized(this) {
+                if (scopedName == dbName && scopedInstance != null) return scopedInstance!!
+                runCatching { scopedInstance?.close() }
+                scopedInstance = Room.databaseBuilder(
                     context.applicationContext,
                     IptvDatabase::class.java,
-                    "iptv_epg.db"
+                    dbName
                 ).fallbackToDestructiveMigration()
                     .build()
-                    .also { INSTANCE = it }
+                scopedName = dbName
+                return scopedInstance!!
             }
         }
+
+        @Volatile private var scopedInstance: IptvDatabase? = null
+        @Volatile private var scopedName: String? = null
     }
 }

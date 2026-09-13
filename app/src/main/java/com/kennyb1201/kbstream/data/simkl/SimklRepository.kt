@@ -29,11 +29,13 @@ class SimklRepository(
     private val clientSecret =
         BuildConfig.SIMKL_CLIENT_SECRET
 
-    private val prefs =
-        context
+    private val prefs
+        get() = context
             ?.applicationContext
             ?.getSharedPreferences(
-                PREFS_NAME,
+                com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
+                    context.applicationContext, PREFS_NAME
+                ),
                 Context.MODE_PRIVATE
             )
 

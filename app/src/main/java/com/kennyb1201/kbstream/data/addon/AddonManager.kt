@@ -18,11 +18,21 @@ class AddonManager(
     context: Context
 ) {
 
-    private val prefs =
-        context.applicationContext.getSharedPreferences(
-            "kbstream_addons",
-            Context.MODE_PRIVATE
-        )
+    private val prefs
+        get() = com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext
+            ?.let { appContext ->
+                appContext.getSharedPreferences(
+                    com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
+                        appContext,
+                        "kbstream_addons"
+                    ),
+                    Context.MODE_PRIVATE
+                )
+            }
+                ?: context.applicationContext.getSharedPreferences(
+                    "kbstream_addons",
+                    Context.MODE_PRIVATE
+                )
 
     private val moshi =
         Moshi.Builder()

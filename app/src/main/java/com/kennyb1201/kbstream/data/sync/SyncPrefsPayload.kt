@@ -73,6 +73,7 @@ object PrefsPayloadBuilder {
     const val KEY_HOME_ORDER = "nuvio_home_order"
     const val KEY_COLLECTIONS = "nuvio_collections"
     const val KEY_BADGE_PACK = "badge_pack"
+    const val KEY_PROFILES = "profiles"
 
     fun buildAll(context: Context): List<Pair<String, JsonObject>> = listOf(
         KEY_DISPLAY_PREFS to buildDisplayPrefs(context),
@@ -82,7 +83,8 @@ object PrefsPayloadBuilder {
         KEY_WATCHED_OVERRIDES to buildWatchedOverrides(context),
         KEY_HOME_ORDER to buildHomeOrder(context),
         KEY_COLLECTIONS to buildCollections(context),
-        KEY_BADGE_PACK to buildBadgePack(context)
+        KEY_BADGE_PACK to buildBadgePack(context),
+        KEY_PROFILES to com.kennyb1201.kbstream.data.sync.ProfileManager.profilesSyncBlob(context)
     )
 
     fun buildBadgePack(context: Context): JsonObject {
@@ -198,6 +200,10 @@ object PrefsPayloadApplier {
             PrefsPayloadBuilder.KEY_HOME_ORDER -> applyHomeOrder(context, payload)
             PrefsPayloadBuilder.KEY_COLLECTIONS -> applyCollections(context, payload)
             PrefsPayloadBuilder.KEY_BADGE_PACK -> applyBadgePack(context, payload)
+            PrefsPayloadBuilder.KEY_PROFILES ->
+                com.kennyb1201.kbstream.data.sync.ProfileManager.applyProfilesPayload(
+                    context, payload
+                )
         }
     }
 

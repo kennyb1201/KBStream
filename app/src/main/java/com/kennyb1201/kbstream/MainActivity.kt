@@ -63,6 +63,8 @@ import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
 import com.kennyb1201.kbstream.ui.detail.DetailScreen
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
 import com.kennyb1201.kbstream.ui.home.CatalogGridScreen
+import com.kennyb1201.kbstream.ui.profiles.ProfileEditScreen
+import com.kennyb1201.kbstream.ui.profiles.ProfilePickerScreen
 import com.kennyb1201.kbstream.ui.home.HomeScreen
 import com.kennyb1201.kbstream.ui.iptv.GuideScreen
 import com.kennyb1201.kbstream.ui.iptv.IptvViewModel
@@ -153,6 +155,12 @@ sealed class Screen {
         val id: Int,
         val name: String,
         val returnTo: Screen = Home
+    ) : Screen()
+
+    object ProfilePicker : Screen()
+
+    data class ProfileEdit(
+        val editingProfileId: String? = null
     ) : Screen()
 
     /** Whole addon catalog browsed as a poster grid (from Home long-press). */
@@ -297,6 +305,10 @@ private fun encodeScreen(
                 put("returnTo", encodeScreen(screen.returnTo, depth + 1))
             }
         }
+        is Screen.ProfilePicker -> Unit
+        is Screen.ProfileEdit -> {
+            screen.editingProfileId?.let { put("editingProfileId", it) }
+        }
         is Screen.NuvioFolder -> {
             put("folderId", screen.folderId)
             if (depth < MAX_RETURN_DEPTH) {
@@ -389,6 +401,10 @@ private fun decodeScreen(
                 addonName = json.optString("addonName"),
                 returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
             )
+            "profilePicker" -> Screen.ProfilePicker
+            "profileEdit" -> Screen.ProfileEdit(
+                editingProfileId = json.optNullableString("editingProfileId")
+            )
             "nuvioFolder" -> Screen.NuvioFolder(
                 folderId = json.optString("folderId"),
                 returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
@@ -469,6 +485,8 @@ private fun decodeCast(array: JSONArray?): List<TmdbCastMember> {
 
 private fun Screen.typeName(): String = when (this) {
     is Screen.Home -> "home"
+    is Screen.ProfilePicker -> "profilePicker"
+    is Screen.ProfileEdit -> "profileEdit"
     is Screen.Addons -> "addons"
     is Screen.Search -> "search"
     is Screen.Simkl -> "simkl"
@@ -687,6 +705,16 @@ fun AppRoot() {
         mutableStateOf<Screen>(Screen.Home)
     }
 
+    // Profile gating: with profiles set up, launch into the picker so each
+    // session starts under the right identity. Fresh installs (no profiles)
+    // skip it and stay optional-profile.
+    LaunchedEffect(Unit) {
+        com.kennyb1201.kbstream.data.sync.ProfileManager.init(applicationContext)
+        if (com.kennyb1201.kbstream.data.sync.ProfileManager.hasProfiles(applicationContext)) {
+            screen = Screen.ProfilePicker
+        }
+    }
+
     // Guard against the autoplay loop: StreamsScreen auto-selects the top
     // stream once, which navigates to the player. When the user backs OUT of
     // the player, the return-to-streams navigation re-runs the streams loader,
@@ -804,7 +832,7 @@ fun AppRoot() {
             }
         }
 
-        val dao = WatchHistoryDatabase.getInstance(context).watchHistoryDao()
+        val dao = WatchHistoryDatabase.getInstanceScoped(context).watchHistoryDao()
         val entries = runCatching { dao.getAll() }.getOrDefault(emptyList())
         TvLauncherPublisher.sync(context, entries)
     }
@@ -867,6 +895,9 @@ fun AppRoot() {
             is Screen.NuvioFolder ->
                 current.returnTo
 
+            is Screen.ProfileEdit ->
+                Screen.ProfilePicker
+
             // Detail carries the screen it was opened from (Search, Home,
             // an actor page, ...), so Back returns there instead of always
             // bouncing to Home — clicking a Search result and pressing Back
@@ -922,6 +953,20 @@ fun AppRoot() {
     }
 
     when (val current = screen) {
+
+        is Screen.ProfilePicker -> {
+            ProfilePickerScreen(
+                onSelect = { screen = Screen.Home },
+                onManage = { screen = Screen.ProfileEdit() }
+            )
+        }
+
+        is Screen.ProfileEdit -> {
+            ProfileEditScreen(
+                editingProfileId = current.editingProfileId,
+                onDone = { screen = Screen.ProfilePicker }
+            )
+        }
 
         is Screen.Home -> {
 
