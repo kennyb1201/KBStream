@@ -684,7 +684,7 @@ class MainActivity : ComponentActivity() {
         exitGuardLatched = true
     }
 
-    override fun dispatchKeyEvent(event: android.view.KeyEvent?): Boolean {
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         if (exitGuardLatched) {
             // Consume everything: both DOWN and UP of any in-flight press.
             return true
@@ -955,7 +955,7 @@ fun AppRoot() {
                 // Latch the key guard, then finish after a settle window so
                 // any in-flight/duplicate key events die inside our window
                 // instead of reaching the launcher.
-                val activity = context as? android.app.Activity
+                val activity = context as? MainActivity
                 activity?.latchExitGuard()
                 searchListScope.launch {
                     delay(350)
