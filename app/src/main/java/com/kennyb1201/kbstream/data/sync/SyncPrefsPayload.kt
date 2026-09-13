@@ -288,7 +288,7 @@ object PrefsPayloadApplier {
         editor.apply()
     }
 
-    private fun applyAddons(context: Context, payload: JsonObject) {
+    private suspend fun applyAddons(context: Context, payload: JsonObject) {
         val addonsJson = (payload["installed_addons_json"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return
         if (addonsJson.isBlank()) return
 

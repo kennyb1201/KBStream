@@ -148,6 +148,18 @@ class SimklRepository(
         )
     }
 
+    /**
+     * Instance-level half of the profile-switch reset (called via the
+     * companion's [Companion.clearTransientCaches]): clears the completed-
+     * shows / completed-movies snapshots, which live per-instance.
+     */
+    fun clearWatchedCachesForProfileSwitch() {
+        cachedAllShowItems = null
+        cachedAllShowItemsFetchedAt = 0L
+        cachedCompletedMovieKeys = null
+        cachedCompletedMovieKeysFetchedAt = 0L
+    }
+
     fun clearAuth() {
         cachedContinueWatching =
             null
@@ -3146,14 +3158,14 @@ class SimklRepository(
          * after a switch these caches can belong to a DIFFERENT Simkl
          * account - the CW feed AND the completed-shows / completed-movies
          * sets must all go. Companion-level so ProfileManager can call it
-         * without an instance.
+         * without an instance; the instance-level caches are reached through
+         * the singleton [INSTANCE].
          */
         fun clearTransientCaches() {
             cachedContinueWatching = null
-            cachedAllShowItems = null
-            cachedAllShowItemsFetchedAt = 0L
-            cachedCompletedMovieKeys = null
-            cachedCompletedMovieKeysFetchedAt = 0L
+            INSTANCE?.let { instance ->
+                instance.clearWatchedCachesForProfileSwitch()
+            }
         }
     }
 }

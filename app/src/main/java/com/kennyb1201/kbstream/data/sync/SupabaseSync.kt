@@ -401,6 +401,25 @@ object SupabaseSync {
         }
     }
 
+    /**
+     * Republishes the TV-launcher Watch Next rows from the ACTIVE profile's
+     * history. Runs on [scope] because the DAO read is suspend and callers
+     * (ProfileManager's switch sequence) are non-suspend.
+     */
+    fun launchLauncherRepublish(context: Context) {
+        scope.launch {
+            runCatching {
+                val entries = com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+                    .getInstanceScoped(context)
+                    .watchHistoryDao()
+                    .getAll()
+                com.kennyb1201.kbstream.data.tv.TvLauncherPublisher.sync(context, entries)
+            }.onFailure { e ->
+                Log.w(TAG, "launcher republish failed: ${e.message}")
+            }
+        }
+    }
+
     private suspend fun pullHistory(context: Context) {
         val c = client ?: return
         try {

@@ -97,14 +97,7 @@ object ProfileManager {
             // its rows mirror the ACTIVE profile's continue-watching. Without
             // this republish the launcher keeps showing the profile you just
             // left until the new profile writes history.
-            runCatching {
-                com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
-                    .getInstanceScoped(appContext)
-                    .watchHistoryDao()
-                    .getAll()
-            }.onSuccess { entries ->
-                com.kennyb1201.kbstream.data.tv.TvLauncherPublisher.sync(appContext, entries)
-            }
+            SupabaseSync.launchLauncherRepublish(appContext)
         }
     }
 
