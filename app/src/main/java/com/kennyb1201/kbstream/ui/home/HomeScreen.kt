@@ -26,7 +26,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.kennyb1201.kbstream.data.tmdb.displayDescription
 import androidx.compose.material3.CircularProgressIndicator
@@ -1705,6 +1708,15 @@ fun HomeScreen(
         com.kennyb1201.kbstream.ui.nuvio.NuvioHomeSlots
             .buildMergedEntries(rails, nuvioState)
     }
+
+    // Infinite scroll identity for each rail, mirroring the ViewModel's
+    // railKeyOf() (addonName::catalogId::type) — the sentinel cards use this
+    // to request the rail's next catalog page.
+    val railKeys = remember(rails) {
+        rails.associate { rail ->
+            rail.addonName + "::" + rail.catalogId + "::" + rail.type to rail
+        }
+    }
     // The up-onto-topbar hook belongs to the first rail in DISPLAY order,
     // which a pinned collection can push away from rails[0].
     val firstDisplayedRailSourceIndex =
@@ -1736,6 +1748,7 @@ fun HomeScreen(
     var lastFocusedItemKey by remember {
         mutableStateOf<String?>(null)
     }
+
 
     // Seed hero = first focusable card: the first Continue Watching item
     // when that rail exists, else the first catalog poster. Keeps the hero
@@ -2351,7 +2364,18 @@ fun HomeScreen(
                                     )
                                 )
 
+                                val railRowState = rememberLazyListState()
+
+                                InfiniteRailPageHandler(
+                                    listState = railRowState,
+                                    itemCount = rail.items.size,
+                                    railKey = railKeys[rail.addonName + "::" +
+                                        rail.catalogId + "::" + rail.type],
+                                    onLoadMore = viewModel::loadMoreForRail
+                                )
+
                                 LazyRow(
+                                    state = railRowState,
                                     contentPadding = PaddingValues(
                                         start = RailHorizontalStartPadding,
                                         end = TvSafeAreaHorizontal,
@@ -2497,6 +2521,7 @@ fun HomeScreen(
                                         }
                                     }
                                 }
+
                             }
                                 }
                             }
@@ -2688,4 +2713,42 @@ private data class PosterMenuTarget(
     val meta: MetaPreview
 )
 
+/**
+ * Invisible card-sized sentinel that lives at the end of a rail's LazyRow.
+ * When the user scrolls far enough that this slot becomes the last visible
+ * item in the rail column, it requests the rail's next catalog page from
+ * the ViewModel (infinite scroll). Purely invisible — no visual footprint.
+ */
+/**
+ * Infinite scroll for Home rails — same pattern as the genres screen
+ * (InfiniteTagRailHandler): when the user scrolls within [threshold] items
+ * of the rail's end, ask the ViewModel for the catalog's next page. Keys
+ * off the rail's live item count so each append re-arms the check.
+ */
+@Composable
+private fun InfiniteRailPageHandler(
+    listState: LazyListState,
+    itemCount: Int,
+    railKey: String?,
+    onLoadMore: (String) -> Unit
+) {
+    LaunchedEffect(listState, itemCount, railKey) {
+        snapshotFlow {
+            val lastVisibleIndex =
+                listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            lastVisibleIndex to itemCount
+        }
+            .distinctUntilChanged()
+            .collect { (lastVisibleIndex, totalItems) ->
+                val threshold = 6
+                val shouldLoadMore =
+                    railKey != null &&
+                        totalItems > 0 &&
+                        lastVisibleIndex >= totalItems - threshold
 
+                if (shouldLoadMore) {
+                    onLoadMore(railKey!!)
+                }
+            }
+    }
+}

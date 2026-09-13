@@ -46,6 +46,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
@@ -1106,11 +1107,184 @@ Log.d(
     private var lastAppliedHideUpcoming: Boolean? = null
     private var lastAppliedLandscape: Boolean? = null
 
+    // Per-rail pagination bookkeeping, keyed by rail identity
+    // ("addonName::catalogId::type"). Volatile: loadMoreForRail can be called
+    // from the UI thread (HomeScreen scroll sentinel) and mutates the maps
+    // before launching the coroutine that fetches the page.
+    //  - loadingRails: in-flight page fetches (prevents duplicate requests)
+    //  - exhaustedRails: catalogs that returned a short/empty page (no more)
+    //  - railInfo: identity needed to build the next page URL (baseUrl, type,
+    //    filter toggles active when the rail was built)
+    private val loadingRails = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    private val exhaustedRails = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    private val railInfo = java.util.concurrent.ConcurrentHashMap<String, RailInfo>()
+
+    private data class RailInfo(
+        val addonName: String,
+        val catalogId: String,
+        val catalogType: String,
+        val catalogRawName: String,
+        val baseUrl: String,
+        val hideUpcoming: Boolean,
+        val landscapeCards: Boolean,
+        val pinned: Boolean
+    )
+
     fun refreshWatchedStatusForCurrentRails() {
 
         refreshWatchedStatus(
             _rails.value
         )
+    }
+
+    /**
+     * Infinite scroll: fetches the next page for the rail identified by
+     * [railKey] (built via [railKeyOf] on the UI) and appends the de-duped,
+     * filtered results to the existing rail in place. No-ops when that rail
+     * is already loading a page or the catalog reported it has no more
+     * items. Safe to call repeatedly from a scroll sentinel.
+     */
+    fun loadMoreForRail(railKey: String) {
+
+        val info =
+            railInfo[railKey]
+                ?: return
+
+        if (
+            !loadingRails.add(railKey)
+        ) {
+            return
+        }
+
+        if (
+            railKey in exhaustedRails
+        ) {
+            loadingRails.remove(railKey)
+            return
+        }
+
+        viewModelScope.launch {
+
+            try {
+
+                val currentPageSize =
+                    _rails.value
+                        .firstOrNull { rail ->
+                            railKeyOf(rail) == railKey
+                        }
+                        ?.items
+                        ?.size
+                        ?: 0
+
+                if (
+                    currentPageSize == 0
+                ) {
+                    return@launch
+                }
+
+                val skip =
+                    ((currentPageSize / PAGE_SIZE) + 1) * PAGE_SIZE
+
+                val metas =
+                    fetchCatalogThrottled(
+                        baseUrl = info.baseUrl,
+                        type = info.catalogType,
+                        catalogId = info.catalogId,
+                        skip = skip
+                    )
+
+                if (
+                    metas.size < PAGE_SIZE
+                ) {
+                    exhaustedRails.add(railKey)
+                }
+
+                if (
+                    metas.isEmpty()
+                ) {
+                    return@launch
+                }
+
+                val filtered =
+                    if (
+                        info.hideUpcoming
+                    ) {
+                        applyDigitalAvailabilityFilter(
+                            filterUpcoming(metas)
+                        )
+                    } else {
+                        metas
+                    }
+
+                if (
+                    filtered.isEmpty()
+                ) {
+                    return@launch
+                }
+
+                val newArt =
+                    if (
+                        info.landscapeCards
+                    ) {
+                        resolveLandscapeArt(filtered)
+                    } else {
+                        emptyMap()
+                    }
+
+                val existingIds =
+                    _rails.value
+                        .firstOrNull { rail ->
+                            railKeyOf(rail) == railKey
+                        }
+                        ?.items
+                        ?.mapTo(mutableSetOf()) { it.id }
+                        ?: mutableSetOf()
+
+                val deduped =
+                    filtered.filter { it.id !in existingIds }
+
+                if (
+                    deduped.isEmpty()
+                ) {
+                    // Page brought nothing new (dupes / filtered out):
+                    // treat as exhausted so the scroll trigger stops
+                    // re-requesting the same skip offset.
+                    exhaustedRails.add(railKey)
+                    return@launch
+                }
+
+                _rails.value =
+                    _rails.value.map { rail ->
+
+                        if (
+                            railKeyOf(rail) == railKey
+                        ) {
+                            rail.copy(
+                                items = rail.items + deduped,
+                                landscapeArt = rail.landscapeArt + newArt
+                            )
+                        } else {
+                            rail
+                        }
+                    }
+
+                refreshWatchedStatus(_rails.value)
+            } catch (
+                e: kotlinx.coroutines.CancellationException
+            ) {
+                throw e
+            } catch (e: Exception) {
+
+                Log.e(
+                    "HOME_RAILS",
+                    "page load failed rail=$railKey: ${e.message}",
+                    e
+                )
+            } finally {
+
+                loadingRails.remove(railKey)
+            }
+        }
     }
 
     fun watchedKey(
@@ -3933,6 +4107,12 @@ private suspend fun calculateEpisodesRemaining(
 
             railsRefreshMutex.withLock {
 
+                // Rebuilding rails invalidates pagination bookkeeping: rail
+                // identities are stable, but their item offsets are not.
+                railInfo.clear()
+                loadingRails.clear()
+                exhaustedRails.clear()
+
                 val pinned =
                     mutableListOf<Rail>()
 
@@ -3990,30 +4170,41 @@ private suspend fun calculateEpisodesRemaining(
                         }
                         .toList()
 
-                val loadedRails =
-                    coroutineScope {
+                // Progressive publication: each catalog rail lands in the
+                // UI the moment it resolves, in catalog order — the screen
+                // no longer waits for the slowest addon before painting.
+                val collected =
+                    java.util.Collections.synchronizedList(
+                        mutableListOf<Rail>()
+                    )
 
-                        pendingCatalogs
-                            .map { pending ->
+                coroutineScope {
 
-                                async {
-
-                                    loadCatalogRail(
-                                        pending,
-                                        hideUpcoming,
-                                        landscapeCards
-                                    )
+                    pendingCatalogs
+                        .map { pending ->
+                            async {
+                                loadCatalogRail(
+                                    pending,
+                                    hideUpcoming,
+                                    landscapeCards
+                                )?.let { rail ->
+                                    collected.add(rail)
+                                    _rails.update { current ->
+                                        val merged =
+                                            current + collected
+                                        merged.distinctBy { railKeyOf(it) }
+                                    }
                                 }
                             }
-                            .awaitAll()
-                            .filterNotNull()
-                    }
+                        }
+                        .awaitAll()
+                }
 
                 val finalRails =
-                    pinned + loadedRails
+                    pinned + collected
 
                 _rails.value =
-                    finalRails
+                    finalRails.distinctBy { railKeyOf(it) }
 
                 _isLoading.value =
                     false
@@ -4066,110 +4257,118 @@ private suspend fun calculateEpisodesRemaining(
         landscapeCards: Boolean
     ): Rail? {
 
-        return try {
-
-            val metas =
+        // First page is capped so Home paints every rail fast; the rest of
+        // the catalog streams in via loadMoreForRail as the user scrolls.
+        val metas =
+            try {
                 fetchCatalogThrottled(
+                    baseUrl = pending.baseUrl,
+                    type = pending.catalogType,
+                    catalogId = pending.catalogId,
+                    skip = 0,
+                    maxItems = INITIAL_RAIL_PAGE_SIZE
+                )
+            } catch (e: Exception) {
 
-                    baseUrl =
-                        pending.baseUrl,
-
-                    type =
-                        pending.catalogType,
-
-                    catalogId =
-                        pending.catalogId
+                Log.e(
+                    "HOME_RAILS",
+                    "catalog load failed " +
+                        "addon=${pending.addonName}, " +
+                        "catalog=${pending.catalogId}: " +
+                        e.message,
+                    e
                 )
 
-            if (
-                metas.isEmpty()
-            ) {
                 return null
             }
 
-            val filtered =
-                if (hideUpcoming) {
-                    applyDigitalAvailabilityFilter(
-                        filterUpcoming(metas)
-                    )
-                } else {
-                    metas
-                }
-
-            if (
-                filtered.isEmpty()
-            ) {
-                return null
-            }
-
-            Rail(
-
-                addonName =
-                    pending.addonName,
-
-                catalogName =
-                    formatCatalogName(
-                        pending.catalogRawName
-                    ),
-
-                type =
-                    pending.catalogType,
-
-                items =
-                    filtered,
-
-                catalogId =
-                    pending.catalogId,
-
-                baseUrl =
-                    pending.baseUrl,
-
-                landscapeArt =
-                    if (landscapeCards) {
-                        resolveLandscapeArt(
-                            filtered
-                        )
-                    } else {
-                        emptyMap()
-                    }
-            )
-
-        } catch (e: Exception) {
-
-            Log.e(
-                "HOME_RAILS",
-                "catalog load failed " +
-                    "addon=${pending.addonName}, " +
-                    "catalog=${pending.catalogId}: " +
-                    e.message,
-                e
-            )
-
-            null
+        if (
+            metas.isEmpty()
+        ) {
+            return null
         }
+
+        val filtered =
+            if (hideUpcoming) {
+                applyDigitalAvailabilityFilter(
+                    filterUpcoming(metas)
+                )
+            } else {
+                metas
+            }
+
+        if (
+            filtered.isEmpty()
+        ) {
+            return null
+        }
+
+        val rail =
+            Rail(
+                addonName = pending.addonName,
+                catalogName = formatCatalogName(
+                    pending.catalogRawName
+                ),
+                type = pending.catalogType,
+                items = filtered,
+                catalogId = pending.catalogId,
+                baseUrl = pending.baseUrl,
+                landscapeArt = if (landscapeCards) {
+                    resolveLandscapeArt(filtered)
+                } else {
+                    emptyMap()
+                }
+            )
+
+        railInfo[railKeyOf(rail)] =
+            RailInfo(
+                addonName = pending.addonName,
+                catalogId = pending.catalogId,
+                catalogType = pending.catalogType,
+                catalogRawName = pending.catalogRawName,
+                baseUrl = pending.baseUrl,
+                hideUpcoming = hideUpcoming,
+                landscapeCards = landscapeCards,
+                pinned = false
+            )
+
+        if (
+            metas.size < INITIAL_RAIL_PAGE_SIZE
+        ) {
+            exhaustedRails.add(railKeyOf(rail))
+        }
+
+        return rail
     }
 
     private suspend fun fetchCatalogThrottled(
         baseUrl: String,
         type: String,
-        catalogId: String
+        catalogId: String,
+        skip: Int = 0,
+        maxItems: Int = Int.MAX_VALUE
     ): List<MetaPreview> {
 
         return catalogRequestSemaphore
             .withPermit {
 
                 repository.getCatalog(
-
-                    baseUrl =
-                        baseUrl,
-
-                    type =
-                        type,
-
-                    catalogId =
-                        catalogId
-                )
+                    baseUrl = baseUrl,
+                    type = type,
+                    catalogId = catalogId,
+                    skip = skip
+                ).take(maxItems)
             }
+    }
+
+    /**
+     * Stable identity for a rail across pagination updates: same value as
+     * the LazyColumn key built in HomeScreen (minus the type prefix). Both
+     * sides must stay in sync.
+     */
+    private fun railKeyOf(rail: Rail): String {
+
+        return rail.addonName + "::" + rail.catalogId + "::" + rail.type
     }
 
     private fun formatCatalogName(
@@ -4201,94 +4400,109 @@ private suspend fun calculateEpisodesRemaining(
             .substringBefore("/manifest.json")
             .removeSuffix("/")
 
-        TOP_TODAY_CATALOGS
-            .forEach {
+        // Pinned rails load in parallel (previously sequential — with the
+        // request semaphore tightened this serialised the whole home load),
+        // preserving TOP_TODAY_CATALOGS order in the result list.
+        coroutineScope {
 
-                (
-                    catalogId,
-                    type,
-                    catalogName
-                ) ->
+            TOP_TODAY_CATALOGS
+                .map {
+                    (
+                        catalogId,
+                        type,
+                        catalogName
+                    ) ->
+                    async {
 
-                try {
+                        try {
 
-                    val metas =
-                        fetchCatalogThrottled(
+                            val metas =
+                                fetchCatalogThrottled(
+                                    baseUrl = baseUrl,
+                                    type = type,
+                                    catalogId = catalogId,
+                                    skip = 0,
+                                    maxItems = INITIAL_RAIL_PAGE_SIZE
+                                )
 
-                            baseUrl =
-                                baseUrl,
-
-                            type =
-                                type,
-
-                            catalogId =
-                                catalogId
-                        )
-
-                    if (
-                        metas.isNotEmpty()
-                    ) {
-
-                        // App-wide digital-release filter applies to the
-                        // pinned rails too (same toggle as addon rails).
-                        val filteredMetas =
-                            if (hideUpcoming) {
-                                applyDigitalAvailabilityFilter(metas)
-                            } else {
-                                metas
+                            if (
+                                metas.isEmpty()
+                            ) {
+                                return@async null
                             }
 
-                        if (
-                            filteredMetas.isNotEmpty()
-                        ) {
+                            // App-wide digital-release filter applies to the
+                            // pinned rails too (same toggle as addon rails).
+                            val filteredMetas =
+                                if (hideUpcoming) {
+                                    applyDigitalAvailabilityFilter(metas)
+                                } else {
+                                    metas
+                                }
 
-                            result +=
+                            if (
+                                filteredMetas.isEmpty()
+                            ) {
+                                return@async null
+                            }
+
+                            val rail =
                                 Rail(
-
-                                    addonName =
-                                        TOP_TODAY_ADDON_NAME,
-
-                                    catalogName =
-                                        formatCatalogName(
-                                            catalogName
-                                        ),
-
-                                    type =
-                                        type,
-
-                                    items =
-                                        filteredMetas,
-
-                                    catalogId =
-                                        catalogId,
-
-                                    baseUrl =
-                                        baseUrl,
-
-                                    landscapeArt =
-                                        if (landscapeCards) {
-                                            resolveLandscapeArt(
-                                                filteredMetas,
-                                                tmdbOnly = true
-                                            )
-                                        } else {
-                                            emptyMap()
-                                        }
+                                    addonName = TOP_TODAY_ADDON_NAME,
+                                    catalogName = formatCatalogName(catalogName),
+                                    type = type,
+                                    items = filteredMetas,
+                                    catalogId = catalogId,
+                                    baseUrl = baseUrl,
+                                    landscapeArt = if (landscapeCards) {
+                                        resolveLandscapeArt(
+                                            filteredMetas,
+                                            tmdbOnly = true
+                                        )
+                                    } else {
+                                        emptyMap()
+                                    }
                                 )
+
+                            railInfo[railKeyOf(rail)] =
+                                RailInfo(
+                                    addonName = TOP_TODAY_ADDON_NAME,
+                                    catalogId = catalogId,
+                                    catalogType = type,
+                                    catalogRawName = catalogName,
+                                    baseUrl = baseUrl,
+                                    hideUpcoming = hideUpcoming,
+                                    landscapeCards = landscapeCards,
+                                    pinned = true
+                                )
+
+                            if (
+                                metas.size < INITIAL_RAIL_PAGE_SIZE
+                            ) {
+                                exhaustedRails.add(railKeyOf(rail))
+                            }
+
+                            rail
+                        } catch (e: Exception) {
+
+                            Log.e(
+                                "HOME_RAILS",
+                                "pinned Top Today load failed " +
+                                    "catalog=$catalogId: " +
+                                    e.message,
+                                e
+                            )
+
+                            null
                         }
                     }
-
-                } catch (e: Exception) {
-
-                    Log.e(
-                        "HOME_RAILS",
-                        "pinned Top Today load failed " +
-                            "catalog=$catalogId: " +
-                            e.message,
-                        e
-                    )
                 }
-            }
+                .awaitAll()
+                .filterNotNull()
+                .forEach { rail ->
+                    result += rail
+                }
+        }
     }
 
     private fun refreshWatchedStatus(
@@ -4473,7 +4687,17 @@ private suspend fun calculateEpisodesRemaining(
             5
 
         private const val MAX_CONCURRENT_CATALOG_REQUESTS =
-            2
+            6
+
+        // Items fetched per catalog page: a short first page keeps the home
+        // load snappy; infinite scroll pulls the rest rail-by-rail.
+        private const val INITIAL_RAIL_PAGE_SIZE =
+            30
+
+        // Addon catalogs page in fixed 100-item batches (Stremio contract),
+        // so every skip must be a multiple of this.
+        private const val PAGE_SIZE =
+            100
 
         private const val UP_NEXT_DEBOUNCE_MS =
             100L
