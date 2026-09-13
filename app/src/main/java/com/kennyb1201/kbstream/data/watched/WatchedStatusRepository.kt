@@ -18,7 +18,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 class WatchedStatusRepository(
-    context: Context
+    private val context: Context
 ) {
 
     private val simklRepository =

@@ -9,7 +9,6 @@ import io.github.jan.supabase.gotrue.auth
 import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.Columns
-import io.github.jan.supabase.postgrest.result.decodeList
 import io.github.jan.supabase.realtime.Realtime
 import io.github.jan.supabase.realtime.channel
 import io.github.jan.supabase.realtime.postgresChangeFlow
@@ -152,7 +151,7 @@ object SupabaseSync {
             try {
                 c.auth.signInWith(io.github.jan.supabase.gotrue.providers.builtin.Email) {
                     this.email = email.trim()
-                    password = password
+                    this.password = password
                 }
                 persistSession(context, email.trim())
                 _authState.value = AuthState.SignedIn(email.trim())
@@ -173,7 +172,7 @@ object SupabaseSync {
             try {
                 c.auth.signUpWith(io.github.jan.supabase.gotrue.providers.builtin.Email) {
                     this.email = email.trim()
-                    password = password
+                    this.password = password
                 }
                 persistSession(context, email.trim())
                 _authState.value = AuthState.SignedIn(email.trim())

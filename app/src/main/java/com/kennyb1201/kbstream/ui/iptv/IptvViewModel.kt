@@ -28,13 +28,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-class IptvViewModel(application: Application) : AndroidViewModel(application) {
+class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
 
-    private val repository = IptvRepository(application.applicationContext)
+    private val repository = IptvRepository(app.applicationContext)
     private val prefs
-        get() = application.getSharedPreferences(
+        get() = app.getSharedPreferences(
             com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
-                application, PREFS_NAME
+                app, PREFS_NAME
             ),
             Context.MODE_PRIVATE
         )

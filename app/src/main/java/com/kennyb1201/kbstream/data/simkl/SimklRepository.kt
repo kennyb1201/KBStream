@@ -20,7 +20,7 @@ import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 
 class SimklRepository(
-    context: Context? = null
+    private val context: Context? = null
 ) {
 
     private val clientId =
@@ -30,14 +30,14 @@ class SimklRepository(
         BuildConfig.SIMKL_CLIENT_SECRET
 
     private val prefs
-        get() = context
-            ?.applicationContext
-            ?.getSharedPreferences(
+        get() = context?.applicationContext?.let { appContext ->
+            appContext.getSharedPreferences(
                 com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
-                    context.applicationContext, PREFS_NAME
+                    appContext, PREFS_NAME
                 ),
                 Context.MODE_PRIVATE
             )
+        }
 
     private val moshi =
         Moshi.Builder()

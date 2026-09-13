@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.sync
 
 import android.content.Context
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray

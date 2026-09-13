@@ -15,7 +15,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 
 class AddonManager(
-    context: Context
+    private val context: Context
 ) {
 
     private val prefs

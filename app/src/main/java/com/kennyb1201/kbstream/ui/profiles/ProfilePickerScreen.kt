@@ -1,6 +1,5 @@
 package com.kennyb1201.kbstream.ui.profiles
 
-import androidx.compose.foundation.Background
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
@@ -121,12 +120,15 @@ private fun ProfileAvatarTile(
         Surface(
             onClick = onClick,
             colors = ClickableSurfaceDefaults.colors(
-                container = Color.Transparent,
-                focusedContainer = Color.Transparent,
-                pressedContainer = Color.Transparent
+                containerColor = Color.Transparent,
+                focusedContainerColor = Color.Transparent,
+                pressedContainerColor = Color.Transparent
             ),
             border = ClickableSurfaceDefaults.border(
-                focusedBorder = BorderStroke(3.dp, KBAccent)
+                focusedBorder = androidx.tv.material3.Border(
+                    border = BorderStroke(3.dp, KBAccent),
+                    shape = CircleShape
+                )
             ),
             scale = ClickableSurfaceDefaults.scale(focusedScale = 1.06f),
             modifier = Modifier

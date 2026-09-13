@@ -104,8 +104,11 @@ fun ProfileEditScreen(
                         focusedScale = 1.1f
                     ),
                     border = androidx.tv.material3.ClickableSurfaceDefaults.border(
-                        focusedBorder = androidx.compose.foundation.BorderStroke(
-                            3.dp, if (selected) KBTextHi else KBAccent
+                        focusedBorder = androidx.tv.material3.Border(
+                            border = androidx.compose.foundation.BorderStroke(
+                                3.dp, if (selected) KBTextHi else KBAccent
+                            ),
+                            shape = CircleShape
                         )
                     )
                 ) {
