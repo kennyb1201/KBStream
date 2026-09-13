@@ -203,7 +203,10 @@ object PrefsPayloadApplier {
 
     private const val TAG = "SUPABASE_SYNC"
 
-    fun apply(context: Context, prefKey: String, payload: JsonObject) {
+    // Suspend: the addon applier serializes through AddonManager's apply
+    // mutex (shared with auto-update), which can suspend. Every caller is
+    // already inside SupabaseSync's coroutine scope.
+    suspend fun apply(context: Context, prefKey: String, payload: JsonObject) {
         when (prefKey) {
             PrefsPayloadBuilder.KEY_DISPLAY_PREFS -> applyDisplayPrefs(context, payload)
             PrefsPayloadBuilder.KEY_ADDONS -> applyAddons(context, payload)
@@ -294,13 +297,16 @@ object PrefsPayloadApplier {
         val localAddons = prefs.getString("installed_addons_json", null).orEmpty()
         if (addonsJson == localAddons) return
 
-        prefs.edit().putString("installed_addons_json", addonsJson).apply()
-
-        // Reload the manager so Home/Search rebuild with the synced catalog set.
-        runCatching {
-            com.kennyb1201.kbstream.data.addon.AddonManager.getInstance(context).refreshAddons()
-        }.onFailure {
-            android.util.Log.w(TAG, "addon reload after sync failed: ${it.message}")
+        // Serialize with auto-update applies through the manager's mutex:
+        // both paths replace/merge the full addon list, and unserialized
+        // writers would clobber each other's updates.
+        try {
+            com.kennyb1201.kbstream.data.addon.AddonManager.getInstance(context)
+                .applySyncedAddons(addonsJson)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "addon reload after sync failed: ${e.message}")
         }
     }
 

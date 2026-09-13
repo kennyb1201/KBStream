@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class AddonManager(
     private val context: Context
@@ -217,6 +219,11 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
 
             defaults
         }
+    }
+
+    /** Prefs-only write for the cloud path (no re-enqueue of cloud data). */
+    private fun saveToPrefsRaw(addonsJson: String) {
+        prefs.edit().putString(KEY, addonsJson).apply()
     }
 
     private fun saveToPrefs(
@@ -793,8 +800,11 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
      * frozen at install time until the user manually re-adds the addon.
      *
      * Behavior:
-     *  - Fetches run in parallel on [addonScope]; one failing manifest never
+     *  - Fetches run in PARALLEL on [addonScope]; one failing manifest never
      *    blocks or damages the others (offline-safe: failures are skipped).
+     *  - Applies run SEQUENTIALLY through [applyMutex]: each apply is a
+     *    read-modify-write of the addon list, so parallel applies would race
+     *    and the last writer would clobber the other addons' updates.
      *  - [updateAddonFromManifest] preserves global catalog order and the
      *    user's show/hide + custom-name settings for existing catalogs.
      *  - Unchanged manifests are detected BEFORE saving (version + catalog
@@ -803,6 +813,20 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
      *
      * Fire-and-forget: call from application startup or the periodic worker.
      */
+    private val applyMutex = Mutex()
+
+    /**
+     * Apply a cloud-synced addon set. Serialized through the same
+     * [applyMutex] as auto-update applies: both replace/merge the full addon
+     * list, and unserialized writers would clobber each other's updates.
+     */
+    suspend fun applySyncedAddons(addonsJson: String) {
+        applyMutex.withLock {
+            saveToPrefsRaw(addonsJson)
+            refreshAddons()
+        }
+    }
+
     fun refreshInstalledAddons() {
         val addons = getInstalledAddons()
         if (addons.isEmpty()) return
@@ -836,7 +860,9 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                     if (unchanged) {
                         Log.d(TAG_AUTO_UPDATE, "unchanged: ${addon.id}")
                     } else {
-                        updateAddonFromManifest(addon.manifestUrl, manifest)
+                        applyMutex.withLock {
+                            updateAddonFromManifest(addon.manifestUrl, manifest)
+                        }
                         Log.i(
                             TAG_AUTO_UPDATE,
                             "updated: ${addon.id} " +
