@@ -1,7 +1,6 @@
 package com.kennyb1201.kbstream.ui.profiles
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,7 +10,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -26,14 +27,19 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
+import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -43,7 +49,8 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 /**
  * Full-screen profile picker shown at launch when profiles exist. D-pad
  * between avatar circles; OK switches to that profile and enters Home.
- * "Manage" opens creation/editing.
+ * "Manage" opens creation/editing. Tiles wrap into rows of 5 so a large
+ * number of profiles still fits on screen.
  */
 @Composable
 fun ProfilePickerScreen(
@@ -72,38 +79,56 @@ fun ProfilePickerScreen(
             color = KBTextHi
         )
 
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(24.dp),
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier
                 .padding(top = 40.dp)
+                .verticalScroll(rememberScrollState())
                 .focusGroup()
         ) {
-            profiles.forEachIndexed { index, profile ->
-                val isRequester = index == 0
+            val tiles: List<@Composable (FocusRequester?) -> Unit> = profiles.map { profile ->
+                { fr: FocusRequester? ->
+                    ProfileAvatarTile(
+                        name = profile.name,
+                        avatarIndex = profile.avatarIndex,
+                        customAvatarUrl = profile.customAvatarUrl ?: profile.avatarData,
+                        selected = active?.id == profile.id,
+                        focusRequester = fr,
+                        onClick = {
+                            ProfileManager.setActive(pickerContext, profile)
+                            onSelect()
+                        }
+                    )
+                }
+            } + listOf { fr: FocusRequester? ->
                 ProfileAvatarTile(
-                    name = profile.name,
-                    avatarIndex = profile.avatarIndex,
-                    customAvatarUrl = profile.customAvatarUrl,
-                    selected = active?.id == profile.id,
-                    focusRequester = if (isRequester) firstRequester else null,
-                    onClick = {
-                        ProfileManager.setActive(pickerContext, profile)
-                        onSelect()
-                    }
+                    name = "Manage",
+                    avatarIndex = -1,
+                    customAvatarUrl = null,
+                    selected = false,
+                    focusRequester = fr,
+                    onClick = onManage
                 )
             }
 
-            ProfileAvatarTile(
-                name = "Manage",
-                avatarIndex = -1,
-                customAvatarUrl = null,
-                selected = false,
-                focusRequester = null,
-                onClick = onManage
-            )
+            var firstDone = false
+            tiles.chunked(PROFILES_PER_ROW).forEach { rowTiles ->
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(24.dp),
+                    modifier = Modifier.padding(bottom = 24.dp)
+                ) {
+                    rowTiles.forEach { tile ->
+                        val fr = if (!firstDone) firstRequester else null
+                        firstDone = true
+                        tile(fr)
+                    }
+                }
+            }
         }
     }
 }
+
+private const val PROFILES_PER_ROW = 5
 
 @Composable
 private fun ProfileAvatarTile(
@@ -115,6 +140,7 @@ private fun ProfileAvatarTile(
     onClick: () -> Unit
 ) {
     var focused by remember { mutableStateOf(false) }
+    val tileContext = androidx.compose.ui.platform.LocalContext.current
 
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Surface(
@@ -125,8 +151,8 @@ private fun ProfileAvatarTile(
                 pressedContainerColor = Color.Transparent
             ),
             border = ClickableSurfaceDefaults.border(
-                focusedBorder = androidx.tv.material3.Border(
-                    border = BorderStroke(3.dp, KBAccent),
+                focusedBorder = Border(
+                    border = androidx.compose.foundation.BorderStroke(3.dp, KBAccent),
                     shape = CircleShape
                 )
             ),
@@ -141,7 +167,24 @@ private fun ProfileAvatarTile(
                     .padding(12.dp),
                 contentAlignment = Alignment.Center
             ) {
-                if (avatarIndex >= 0) {
+                if (customAvatarUrl != null) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(tileContext)
+                            .data(customAvatarUrl)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = name,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .size(84.dp)
+                            .clip(CircleShape)
+                            .border(
+                                width = if (selected) 3.dp else 0.dp,
+                                color = KBTextHi,
+                                shape = CircleShape
+                            )
+                    )
+                } else if (avatarIndex >= 0) {
                     val (bg, fg) = ProfileManager.AVATAR_COLORS[
                         avatarIndex.coerceIn(0, ProfileManager.AVATAR_COUNT - 1)
                     ]

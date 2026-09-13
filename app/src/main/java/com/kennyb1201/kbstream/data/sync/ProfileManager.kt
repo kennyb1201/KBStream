@@ -33,7 +33,8 @@ object ProfileManager {
         val id: String,
         val name: String,
         val avatarIndex: Int = 0,      // 0..7 generic avatar
-        val customAvatarUrl: String? = null,
+        val customAvatarUrl: String? = null, // remote https URL (if ever used)
+        val avatarData: String? = null,      // uploaded avatar as data:image/jpeg;base64 — syncs with the blob
         val createdAt: Long = System.currentTimeMillis()
     )
 
@@ -103,6 +104,96 @@ object ProfileManager {
         }
     }
 
+    /** Explicitly sets (or clears) a profile's custom avatar URL. Clearing also drops uploaded data. */
+    fun setCustomAvatar(context: Context, profileId: String, url: String?) {
+        val updated = loadProfiles(context).map { p ->
+            when {
+                p.id != profileId -> p
+                url == null -> p.copy(customAvatarUrl = null, avatarData = null)
+                else -> p.copy(customAvatarUrl = url)
+            }
+        }
+        saveProfiles(context, updated)
+        _profiles.value = updated
+        pushProfilesBlob(context, updated)
+        if (_activeProfile.value?.id == profileId) {
+            _activeProfile.value = updated.firstOrNull { it.id == profileId }
+        }
+    }
+
+    /** Sets the uploaded-avatar payload (data URL) for a profile. */
+    fun setAvatarData(context: Context, profileId: String, dataUrl: String?) {
+        val updated = loadProfiles(context).map { p ->
+            if (p.id != profileId) p else p.copy(avatarData = dataUrl)
+        }
+        saveProfiles(context, updated)
+        _profiles.value = updated
+        pushProfilesBlob(context, updated)
+        if (_activeProfile.value?.id == profileId) {
+            _activeProfile.value = updated.firstOrNull { it.id == profileId }
+        }
+    }
+
+    /**
+     * Copies a picked image into a pending cache slot and returns a file://
+     * URL for preview. The file is NOT yet bound to a profile — call
+     * [finalizeAvatar] on save (also handles remote https URLs as-is).
+     */
+    fun importAvatarImage(context: Context, source: android.net.Uri): String? {
+        return runCatching {
+            val dir = java.io.File(context.cacheDir, "avatars_pending").apply { mkdirs() }
+            val tmp = java.io.File(dir, "pending_${System.currentTimeMillis()}")
+            context.contentResolver.openInputStream(source)?.use { input ->
+                tmp.outputStream().use { output -> input.copyTo(output) }
+            } ?: return null
+            if (tmp.length() == 0L) {
+                tmp.delete()
+                return null
+            }
+            android.net.Uri.fromFile(tmp).toString()
+        }.getOrNull()
+    }
+
+    /**
+     * Binds a pending avatar (or remote URL) to a profile on save.
+     * Local images are downscaled to a small square JPEG and stored as a
+     * base64 data URL directly on the profile — so the avatar syncs to
+     * every device inside the profiles blob (no file sharing needed).
+     */
+    fun finalizeAvatar(context: Context, profileId: String, pendingUrl: String?) {
+        when {
+            pendingUrl == null -> return
+            pendingUrl.startsWith("file://") -> {
+                val src = android.net.Uri.parse(pendingUrl).path?.let { java.io.File(it) }
+                if (src == null || !src.exists()) return
+                val dataUrl = encodeAvatarDataUrl(src)
+                src.delete()
+                if (dataUrl != null) setAvatarData(context, profileId, dataUrl)
+            }
+            else -> setCustomAvatar(context, profileId, pendingUrl)
+        }
+    }
+
+    /** Downscales to ≤192px and encodes as a JPEG data URL (≈10–20 KB). */
+    private fun encodeAvatarDataUrl(file: java.io.File): String? {
+        return runCatching {
+            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeFile(file.absolutePath, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+            var sample = 1
+            while (bounds.outWidth / (sample * 2) >= 192 && bounds.outHeight / (sample * 2) >= 192) sample *= 2
+            val bmp = android.graphics.BitmapFactory.decodeFile(
+                file.absolutePath,
+                android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+            ) ?: return null
+            val out = java.io.ByteArrayOutputStream()
+            bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, out)
+            bmp.recycle()
+            "data:image/jpeg;base64," +
+                android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
+        }.getOrNull()
+    }
+
     fun delete(context: Context, profileId: String) {
         val updated = loadProfiles(context).filterNot { it.id == profileId }
         saveProfiles(context, updated)
@@ -115,6 +206,11 @@ object ProfileManager {
         }
         context.deleteDatabase(ProfileStorage.dbName(profileId, "kbstream_watch_history"))
         context.deleteDatabase(ProfileStorage.dbName(profileId, "iptv_epg.db"))
+
+        // Remove any uploaded avatar files for this profile.
+        java.io.File(context.filesDir, "avatars").listFiles()
+            ?.filter { it.name == profileId || it.name.startsWith("$profileId.") }
+            ?.forEach { it.delete() }
 
         if (_activeProfile.value?.id == profileId) {
             _activeProfile.value = updated.firstOrNull()
@@ -166,6 +262,7 @@ object ProfileManager {
                             put("name", p.name)
                             put("avatarIndex", p.avatarIndex)
                             p.customAvatarUrl?.let { put("customAvatarUrl", it) }
+                            p.avatarData?.let { put("avatarData", it) }
                             put("createdAt", p.createdAt)
                         }
                     )
@@ -257,6 +354,7 @@ object ProfileManager {
                 name = str("name") ?: "Profile",
                 avatarIndex = (lng("avatarIndex") ?: 0L).toInt(),
                 customAvatarUrl = str("customAvatarUrl"),
+                avatarData = str("avatarData"),
                 createdAt = lng("createdAt") ?: 0L
             )
         }
