@@ -164,7 +164,29 @@ data class ManifestCatalog(
      * User-facing display-name override set from the catalog manager.
      * When null the manifest name is used.
      */
-    val customName: String? = null
+    val customName: String? = null,
+
+    /**
+     * Nuvio per-catalog home visibility hint (BingeCat, Ultra MAX, ...).
+     * Catalogs that are only reachable via search/person deep-links
+     * (director rails, "because you watched" seeds, ...) declare
+     * showInHome=false so hosts don't put them on the home screen.
+     * Null when the manifest doesn't declare it (treat as visible).
+     */
+    @Json(name = "showInHome")
+    val showInHomeHint: Boolean? = null,
+
+    /**
+     * Nuvio search-catalog marker. Search-placeholder catalogs are driven
+     * through the search extra and return nothing on a plain browse call,
+     * so they must never become Home rails by default.
+     */
+    @Json(name = "isSearch")
+    val isSearchCatalog: Boolean? = null,
+
+    /** Whether this catalog should appear on Home when first installed. */
+    val defaultShowOnHome: Boolean
+        get() = showInHomeHint ?: !(isSearchCatalog ?: false)
 ) {
     val displayName: String
         get() = customName ?: name
