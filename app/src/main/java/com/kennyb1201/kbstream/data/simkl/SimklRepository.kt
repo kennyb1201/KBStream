@@ -3139,5 +3139,15 @@ class SimklRepository(
         private var cachedContinueWatching:
             List<SimklContinueWatchingItem>? =
             null
+
+        /**
+         * Profile-switch isolation: drops the static continue-watching cache
+         * so a profile switch can't surface the previous profile's Simkl
+         * list. Companion-level so ProfileManager can call it without an
+         * instance.
+         */
+        fun clearTransientCaches() {
+            cachedContinueWatching = null
+        }
     }
 }

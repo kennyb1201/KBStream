@@ -9,6 +9,18 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 
 /**
+ * Prefs accessor resolved against the ACTIVE profile's namespace — the sync
+ * layer must read/write the same store the app reads/writes, otherwise cloud
+ * pushes and pulls would cross profiles (the "nuvio leak"). With no profiles
+ * this resolves to the legacy un-namespaced store, unchanged behavior.
+ */
+private fun scopedPrefs(context: Context, baseName: String) =
+    context.getSharedPreferences(
+        com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, baseName),
+        Context.MODE_PRIVATE
+    )
+
+/**
  * Builds and applies the keyed JSON blobs stored in sync_prefs.
  *
  * Sync scope (user request):
@@ -89,7 +101,7 @@ object PrefsPayloadBuilder {
     )
 
     fun buildBadgePack(context: Context): JsonObject {
-        val prefs = context.getSharedPreferences("kbstream_stream_badges", Context.MODE_PRIVATE)
+        val prefs = scopedPrefs(context, "kbstream_stream_badges")
         return buildJsonObject {
             put("updatedAt", System.currentTimeMillis())
             put("badge_pack_url", prefs.getString("badge_pack_url", null).orEmpty())
@@ -98,7 +110,7 @@ object PrefsPayloadBuilder {
     }
 
     fun buildHomeOrder(context: Context): JsonObject {
-        val prefs = context.getSharedPreferences("kbstream_nuvio_home_order", Context.MODE_PRIVATE)
+        val prefs = scopedPrefs(context, "kbstream_nuvio_home_order")
         return buildJsonObject {
             put("updatedAt", System.currentTimeMillis())
             put(
@@ -109,7 +121,7 @@ object PrefsPayloadBuilder {
     }
 
     fun buildCollections(context: Context): JsonObject {
-        val prefs = context.getSharedPreferences("kbstream_nuvio_collections", Context.MODE_PRIVATE)
+        val prefs = scopedPrefs(context, "kbstream_nuvio_collections")
         return buildJsonObject {
             put("updatedAt", System.currentTimeMillis())
             putJsonArray("profile_urls") {
@@ -123,7 +135,7 @@ object PrefsPayloadBuilder {
     }
 
     fun buildDisplayPrefs(context: Context): JsonObject {
-        val prefs = context.getSharedPreferences("kbstream_player_prefs", Context.MODE_PRIVATE)
+        val prefs = scopedPrefs(context, "kbstream_player_prefs")
         return buildJsonObject {
             put("updatedAt", System.currentTimeMillis())
             val all = prefs.all
@@ -145,7 +157,7 @@ object PrefsPayloadBuilder {
             put("updatedAt", System.currentTimeMillis())
             put(
                 "installed_addons_json",
-                context.getSharedPreferences("kbstream_addons", Context.MODE_PRIVATE)
+                scopedPrefs(context, "kbstream_addons")
                     .getString("installed_addons_json", null).orEmpty()
             )
         }
@@ -155,13 +167,13 @@ object PrefsPayloadBuilder {
             put("updatedAt", System.currentTimeMillis())
             put(
                 "access_token",
-                context.getSharedPreferences("simkl_auth", Context.MODE_PRIVATE)
+                scopedPrefs(context, "simkl_auth")
                     .getString("access_token", null).orEmpty()
             )
         }
 
     fun buildIptv(context: Context): JsonObject {
-        val prefs = context.getSharedPreferences("iptv_prefs", Context.MODE_PRIVATE)
+        val prefs = scopedPrefs(context, "iptv_prefs")
         return buildJsonObject {
             put("updatedAt", System.currentTimeMillis())
             put("playlist_url", prefs.getString("playlist_url", null).orEmpty())
@@ -177,7 +189,7 @@ object PrefsPayloadBuilder {
         buildJsonObject {
             put("updatedAt", System.currentTimeMillis())
             putJsonArray("overrides") {
-                context.getSharedPreferences("kbstream_watched_overrides", Context.MODE_PRIVATE)
+                scopedPrefs(context, "kbstream_watched_overrides")
                     .getStringSet("watched_overrides", emptySet()).orEmpty().forEach { add(it) }
             }
         }
@@ -216,7 +228,7 @@ object PrefsPayloadApplier {
         val packJson = str("badge_pack_json")
         if (packJson.isBlank()) return
 
-        val prefs = context.getSharedPreferences("kbstream_stream_badges", Context.MODE_PRIVATE)
+        val prefs = scopedPrefs(context, "kbstream_stream_badges")
         if (packJson == prefs.getString("badge_pack_json", null).orEmpty()) return
 
         prefs.edit()
@@ -227,7 +239,7 @@ object PrefsPayloadApplier {
 
     private fun applyHomeOrder(context: Context, payload: JsonObject) {
         val blob = (payload["home_order_json"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return
-        val prefs = context.getSharedPreferences("kbstream_nuvio_home_order", Context.MODE_PRIVATE)
+        val prefs = scopedPrefs(context, "kbstream_nuvio_home_order")
         val remoteUpdated = payloadUpdatedAt(payload)
         if (remoteUpdated != null && remoteUpdated < prefs.getLong("home_order_synced_at", 0L)) return
 
@@ -243,7 +255,7 @@ object PrefsPayloadApplier {
     private fun applyCollections(context: Context, payload: JsonObject) {
         val arr = payload["profile_urls"] as? kotlinx.serialization.json.JsonArray ?: return
         val urls = arr.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
-        val prefs = context.getSharedPreferences("kbstream_nuvio_collections", Context.MODE_PRIVATE)
+        val prefs = scopedPrefs(context, "kbstream_nuvio_collections")
         val joined = urls.joinToString("\n")
         if (joined == prefs.getString("profile_urls", null).orEmpty()) return
 
@@ -252,7 +264,7 @@ object PrefsPayloadApplier {
 
     private fun applyDisplayPrefs(context: Context, payload: JsonObject) {
         // Last-write-wins: skip applying an older blob over a newer local edit.
-        val prefs = context.getSharedPreferences("kbstream_player_prefs", Context.MODE_PRIVATE)
+        val prefs = scopedPrefs(context, "kbstream_player_prefs")
         val remoteUpdated = payloadUpdatedAt(payload)
         if (remoteUpdated != null && remoteUpdated < prefs.getLong("display_prefs_synced_at", 0L)) {
             return
@@ -277,7 +289,7 @@ object PrefsPayloadApplier {
         val addonsJson = (payload["installed_addons_json"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return
         if (addonsJson.isBlank()) return
 
-        val prefs = context.getSharedPreferences("kbstream_addons", Context.MODE_PRIVATE)
+        val prefs = scopedPrefs(context, "kbstream_addons")
         val remoteUpdated = payloadUpdatedAt(payload)
         val localAddons = prefs.getString("installed_addons_json", null).orEmpty()
         if (addonsJson == localAddons) return
@@ -296,7 +308,7 @@ object PrefsPayloadApplier {
         val token = (payload["access_token"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return
         if (token.isBlank()) return
 
-        val prefs = context.getSharedPreferences("simkl_auth", Context.MODE_PRIVATE)
+        val prefs = scopedPrefs(context, "simkl_auth")
         if (prefs.getString("access_token", null) == token) return
 
         prefs.edit().putString("access_token", token).apply()
@@ -306,7 +318,7 @@ object PrefsPayloadApplier {
     }
 
     private fun applyIptv(context: Context, payload: JsonObject) {
-        val prefs = context.getSharedPreferences("iptv_prefs", Context.MODE_PRIVATE)
+        val prefs = scopedPrefs(context, "iptv_prefs")
         val remoteUpdated = payloadUpdatedAt(payload)
         if (remoteUpdated != null && remoteUpdated < prefs.getLong("iptv_synced_at", 0L)) return
 
@@ -341,7 +353,7 @@ object PrefsPayloadApplier {
         val arr = payload["overrides"] as? kotlinx.serialization.json.JsonArray ?: return
         val set = arr.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }.toSet()
 
-        val prefs = context.getSharedPreferences("kbstream_watched_overrides", Context.MODE_PRIVATE)
+        val prefs = scopedPrefs(context, "kbstream_watched_overrides")
         prefs.edit().putStringSet("watched_overrides", set).apply()
     }
 

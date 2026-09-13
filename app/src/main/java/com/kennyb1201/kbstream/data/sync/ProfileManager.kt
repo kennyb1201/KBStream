@@ -69,6 +69,32 @@ object ProfileManager {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit().putString(KEY_ACTIVE, profile.id).apply()
         _activeProfile.value = profile
+        onActiveProfileChanged()
+    }
+
+    /**
+     * Profile-switch isolation: drop every in-memory cache that could hold
+     * the previous profile's data — history DB instance, watched-status
+     * caches, addon list, Simkl continue-watching cache — then re-pull the
+     * new profile's cloud rows. Without this, the first renders after a
+     * switch show stale data from the profile you just left (the nuvio leak).
+     */
+    private fun onActiveProfileChanged() {
+        runCatching {
+            com.kennyb1201.kbstream.data.history.WatchHistoryDatabase.closeScopedInstance()
+        }
+        runCatching { com.kennyb1201.kbstream.data.watched.WatchedStatusRepository.invalidateAllCaches() }
+        runCatching { com.kennyb1201.kbstream.data.addon.AddonManager.getInstance(appContextForSwitch()).refreshAddons() }
+        runCatching { com.kennyb1201.kbstream.data.simkl.SimklRepository.clearTransientCaches() }
+        com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
+            SupabaseSync.onProfileSwitched(appContext)
+        }
+    }
+
+    private fun appContextForSwitch(): android.content.Context {
+        val ctx = com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext
+        if (ctx != null) return ctx
+        error("ProfileManager not initialized")
     }
 
     fun create(context: Context, name: String, avatarIndex: Int): Profile {
@@ -312,6 +338,10 @@ object ProfileManager {
             ProfileStorage.copyLegacyIntoProfile(context, profile.id)
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit().putBoolean(KEY_MIGRATED, true).apply()
+            // create() already refreshed caches against the (then empty)
+            // namespace; re-run the switch sequence so the newly copied
+            // legacy data is what's actually loaded.
+            setActive(context, profile)
         }
         return profile
     }

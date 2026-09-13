@@ -158,6 +158,10 @@ object SupabaseSync {
                 _syncEnabled.value = true
                 startRealtime()
                 pullAll(context)
+                // Seed the cloud with this device's active-profile rows so
+                // other devices sync immediately (last-write-wins makes
+                // pushing on sign-in safe).
+                pushAll(context)
             } catch (e: Exception) {
                 Log.e(TAG, "signIn failed", e)
                 _authState.value = AuthState.Error(e.message ?: "Sign-in failed")
@@ -247,6 +251,12 @@ object SupabaseSync {
         return storedKey.startsWith("p:$pid:")
     }
 
+    /** Account-wide keys (the profiles list itself) bypass the profile filter. */
+    private fun storedKeyApplies(storedKey: String): Boolean {
+        if (storedKey == PrefsPayloadBuilder.KEY_PROFILES) return true
+        return storedKeyMatchesActiveProfile(storedKey)
+    }
+
     fun enqueueHistory(entity: WatchHistoryEntity) {
         if (!isSignedIn()) return
         val payload = buildJsonObject {
@@ -289,10 +299,20 @@ object SupabaseSync {
         scheduleFlush()
     }
 
-    /** Prefs/addons/Simkl/IPTV blobs. [prefKey] is a stable string like "player_display_prefs". */
+    /**
+     * Prefs/addons/Simkl/IPTV blobs. [prefKey] is a stable string like
+     * "display_prefs". Everything except the profiles list itself is stored
+     * profile-scoped ("p:<profileId>:<prefKey>") so sibling profiles never
+     * overwrite or read each other's settings in the cloud.
+     */
     fun enqueuePrefs(context: Context, prefKey: String, payload: JsonObject) {
         if (!isSignedIn()) return
-        val row = OutboxRow(TABLE_PREFS, "pref_key", prefKey, payload)
+        val stored = if (prefKey == PrefsPayloadBuilder.KEY_PROFILES) {
+            prefKey
+        } else {
+            scopedKey(prefKey)
+        }
+        val row = OutboxRow(TABLE_PREFS, "pref_key", stored, payload)
         outbox[outboxId(row)] = row
         scheduleFlush()
     }
@@ -365,6 +385,19 @@ object SupabaseSync {
             pushPrefsBlobs(context)
             flushOutbox()
             _lastSyncAtMs.value = System.currentTimeMillis()
+        }
+    }
+
+    /**
+     * Called on every profile switch. Outbox rows already carry the profile
+     * scope captured at enqueue time ("p:<oldProfile>:…"), so pending writes
+     * still land on the right cloud rows — they must NOT be dropped. The only
+     * required action is re-pulling the NEW profile's rows (history/watched/
+     * prefs) so the UI reflects the profile you switched to immediately.
+     */
+    fun onProfileSwitched(context: Context) {
+        if (isSignedIn()) {
+            pullAll(context)
         }
     }
 
@@ -477,9 +510,20 @@ object SupabaseSync {
                 .select()
                 .decodeList<SyncRowDto>()
 
+            // Pass 1: apply the account-wide profiles blob FIRST so the
+            // active profile exists before scoped rows are filtered — on a
+            // fresh device, every other row in this pull would otherwise be
+            // dropped because no profile was active when the filter ran.
+            rows.firstOrNull { it.prefKey == PrefsPayloadBuilder.KEY_PROFILES }?.let {
+                PrefsPayloadApplier.apply(context, PrefsPayloadBuilder.KEY_PROFILES, it.payload)
+            }
+            // Pass 2: apply the active profile's scoped rows (plus unscoped
+            // rows when no profiles exist — legacy/no-profiles mode).
             for (row in rows) {
-                val key = row.prefKey ?: continue
-                PrefsPayloadApplier.apply(context, key, row.payload)
+                val storedKey = row.prefKey ?: continue
+                if (storedKey == PrefsPayloadBuilder.KEY_PROFILES) continue
+                if (!storedKeyMatchesActiveProfile(storedKey)) continue
+                PrefsPayloadApplier.apply(context, unscopedKey(storedKey), row.payload)
             }
         } catch (e: Exception) {
             Log.w(TAG, "pullPrefs failed: ${e.message}")
@@ -577,7 +621,13 @@ object SupabaseSync {
                 when (table) {
                     TABLE_HISTORY -> applyHistoryRow(row)
                     TABLE_WATCHED -> applyWatchedRow(row)
-                    TABLE_PREFS -> PrefsPayloadApplier.apply(appContextRef?.get() ?: return@launch, row.prefKey ?: return@launch, row.payload)
+                    TABLE_PREFS -> {
+                        val context = appContextRef?.get() ?: return@launch
+                        val storedKey = row.prefKey ?: return@launch
+                        if (storedKeyApplies(storedKey)) {
+                            PrefsPayloadApplier.apply(context, unscopedKey(storedKey), row.payload)
+                        }
+                    }
                 }
                 _lastSyncAtMs.value = System.currentTimeMillis()
             } catch (e: Exception) {

@@ -94,6 +94,19 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                 .fallbackToDestructiveMigration()
                 .build()
 
+        /**
+         * Profile-switch isolation: closes the open profile-scoped DB so the
+         * next [getInstanceScoped] call reopens against the NEW active
+         * profile instead of returning the previous profile's instance.
+         */
+        fun closeScopedInstance() {
+            synchronized(this) {
+                runCatching { profileInstance?.close() }
+                profileInstance = null
+                profileInstanceName = null
+            }
+        }
+
         private val MIGRATION_8_9 = object : Migration(8, 9) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
