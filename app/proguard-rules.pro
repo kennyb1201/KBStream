@@ -54,3 +54,10 @@
 -dontwarn org.conscrypt.**
 -dontwarn org.bouncycastle.**
 -dontwarn org.openjsse.**
+
+# --- Ktor / SLF4J (HTTP layer pulled in by the Supabase sync SDK) ---
+# slf4j-api's LoggerFactory.bind() references org.slf4j.impl.StaticLoggerBinder
+# (and StaticMDCBinder / StaticMarkerBinder), which only exist in desktop
+# SLF4J 1.x runtime bindings (logback etc.). No Android build ever ships
+# them, and Ktor's Android engine never touches this code path at runtime.
+-dontwarn org.slf4j.**
