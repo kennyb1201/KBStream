@@ -2,16 +2,17 @@ package com.kennyb1201.kbstream.data.sync
 
 import android.content.Context
 import android.util.Log
-import io.github.jan_tennert.supabase.SupabaseClient
-import io.github.jan_tennert.supabase.createSupabaseClient
-import io.github.jan_tennert.supabase.gotrue.Auth
-import io.github.jan_tennert.supabase.gotrue.auth
-import io.github.jan_tennert.supabase.postgrest.Postgrest
-import io.github.jan_tennert.supabase.postgrest.from
-import io.github.jan_tennert.supabase.postgrest.query.Columns
-import io.github.jan_tennert.supabase.realtime.Realtime
-import io.github.jan_tennert.supabase.realtime.channel
-import io.github.jan_tennert.supabase.realtime.postgresChangeFlow
+import io.github.jan.supabase.SupabaseClient
+import io.github.jan.supabase.createSupabaseClient
+import io.github.jan.supabase.gotrue.Auth
+import io.github.jan.supabase.gotrue.auth
+import io.github.jan.supabase.postgrest.Postgrest
+import io.github.jan.supabase.postgrest.from
+import io.github.jan.supabase.postgrest.query.Columns
+import io.github.jan.supabase.postgrest.result.decodeList
+import io.github.jan.supabase.realtime.Realtime
+import io.github.jan.supabase.realtime.channel
+import io.github.jan.supabase.realtime.postgresChangeFlow
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -149,9 +150,9 @@ object SupabaseSync {
         _authState.value = AuthState.SigningIn
         scope.launch {
             try {
-                c.auth.signInWith(io.github.jan_tennert.supabase.gotrue.providers.builtin.Email) {
+                c.auth.signInWith(io.github.jan.supabase.gotrue.providers.builtin.Email) {
                     this.email = email.trim()
-                    pass = password
+                    password = password
                 }
                 persistSession(context, email.trim())
                 _authState.value = AuthState.SignedIn(email.trim())
@@ -170,9 +171,9 @@ object SupabaseSync {
         _authState.value = AuthState.SigningIn
         scope.launch {
             try {
-                c.auth.signUpWith(io.github.jan_tennert.supabase.gotrue.providers.builtin.Email) {
+                c.auth.signUpWith(io.github.jan.supabase.gotrue.providers.builtin.Email) {
                     this.email = email.trim()
-                    pass = password
+                    password = password
                 }
                 persistSession(context, email.trim())
                 _authState.value = AuthState.SignedIn(email.trim())
@@ -199,7 +200,7 @@ object SupabaseSync {
         }
     }
 
-    private fun persistSession(context: Context, email: String) {
+    private suspend fun persistSession(context: Context, email: String) {
         val c = client ?: return
         val refresh = c.auth.currentSessionOrNull()?.refreshToken
         context.getSharedPreferences(SYNC_PREFS, Context.MODE_PRIVATE)
@@ -522,7 +523,7 @@ object SupabaseSync {
     // ── Realtime ────────────────────────────────────────────────────
 
     private val realtimeChannels =
-        java.util.concurrent.CopyOnWriteArrayList<io.github.jan_tennert.supabase.realtime.RealtimeChannel>()
+        java.util.concurrent.CopyOnWriteArrayList<io.github.jan.supabase.realtime.RealtimeChannel>()
 
     private fun startRealtime() {
         val c = client ?: return
@@ -534,7 +535,7 @@ object SupabaseSync {
                 // channel subscribes (supabase-kt requirement).
                 listOf(TABLE_HISTORY, TABLE_WATCHED, TABLE_PREFS).forEach { table ->
                     val ch = c.channel("kbstream_$table")
-                    val changeFlow = ch.postgresChangeFlow<io.github.jan_tennert.supabase.realtime.PostgresAction>(
+                    val changeFlow = ch.postgresChangeFlow<io.github.jan.supabase.realtime.PostgresAction>(
                         schema = "public"
                     ) {
                         this.table = table
@@ -554,14 +555,14 @@ object SupabaseSync {
         }
     }
 
-    private fun onRemoteChange(action: io.github.jan_tennert.supabase.realtime.PostgresAction) {
+    private fun onRemoteChange(action: io.github.jan.supabase.realtime.PostgresAction) {
         // Remote rows arrive as JSON records; apply via the same merge rules.
         scope.launch {
             try {
                 val record = when (action) {
-                    is io.github.jan_tennert.supabase.realtime.PostgresAction.Update ->
+                    is io.github.jan.supabase.realtime.PostgresAction.Update ->
                         action.record as? JsonObject ?: return@launch
-                    is io.github.jan_tennert.supabase.realtime.PostgresAction.Insert ->
+                    is io.github.jan.supabase.realtime.PostgresAction.Insert ->
                         action.record as? JsonObject ?: return@launch
                     else -> return@launch
                 }
@@ -653,8 +654,11 @@ object SupabaseSync {
     }
 
     private fun stopRealtime() {
-        realtimeChannels.forEach { ch -> runCatching { ch.leave() } }
+        val channels = realtimeChannels.toList()
         realtimeChannels.clear()
+        scope.launch {
+            channels.forEach { ch -> runCatching { ch.unsubscribe() } }
+        }
     }
 
     // ── Helpers ─────────────────────────────────────────────────────
