@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.addon
 
 import android.content.Context
+import android.util.Log
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -13,6 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 
 class AddonManager(
     private val context: Context
@@ -767,6 +769,89 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
 }
 
     /**
+     * Launch-time auto-update entry point. No-ops unless at least
+     * [LAUNCH_REFRESH_MIN_INTERVAL_MS] has passed since the last attempt —
+     * the app process is frequently recreated (Fire TV aggressively kills
+     * backgrounded activities), and re-fetching every manifest on each
+     * recreation would be wasteful. The timestamp lives in the (scoped)
+     * addon prefs, so it naturally tracks the active profile's addon set.
+     */
+    fun maybeRefreshOnLaunch(context: Context) {
+        val now = System.currentTimeMillis()
+        val last = prefs.getLong(LAST_AUTO_REFRESH_KEY, 0L)
+        if (now - last < LAUNCH_REFRESH_MIN_INTERVAL_MS) return
+
+        prefs.edit().putLong(LAST_AUTO_REFRESH_KEY, now).apply()
+        refreshInstalledAddons()
+    }
+
+    /**
+     * Auto-update: re-fetch every installed add-on's manifest and apply it.
+     *
+     * Addon developers evolve their manifests (new catalogs, fixed stream
+     * config, renamed entries). Without this the installed snapshot stays
+     * frozen at install time until the user manually re-adds the addon.
+     *
+     * Behavior:
+     *  - Fetches run in parallel on [addonScope]; one failing manifest never
+     *    blocks or damages the others (offline-safe: failures are skipped).
+     *  - [updateAddonFromManifest] preserves global catalog order and the
+     *    user's show/hide + custom-name settings for existing catalogs.
+     *  - Unchanged manifests are detected BEFORE saving (version + catalog
+     *    set + resource set), so a no-op refresh does not dirty prefs, bump
+     *    [catalogOrderVersion], or enqueue a pointless sync upload.
+     *
+     * Fire-and-forget: call from application startup or the periodic worker.
+     */
+    fun refreshInstalledAddons() {
+        val addons = getInstalledAddons()
+        if (addons.isEmpty()) return
+
+        val repository = com.kennyb1201.kbstream.data.addon.AddonRepository()
+
+        addons.forEach { addon ->
+            addonScope.launch {
+                runCatching {
+                    val manifest = repository.fetchManifest(addon.manifestUrl)
+
+                    // Change detection: skip saving when nothing visible to
+                    // the user actually changed. id/name/version plus the
+                    // catalog (type,id,name) set and resource set cover the
+                    // fields the rest of the app renders.
+                    val catalogsChanged =
+                        manifest.catalogs.map { "${it.type}:${it.id}:${it.name}" }
+                            .toSet() !=
+                            addon.catalogs.map { "${it.type}:${it.id}:${it.name}" }
+                                .toSet()
+                    val resourcesChanged =
+                        manifest.resources.toSet() != addon.resources.toSet()
+                    val versionChanged =
+                        manifest.version != addon.version
+                    val nameChanged =
+                        manifest.name != addon.name
+
+                    val unchanged = !catalogsChanged && !resourcesChanged &&
+                        !versionChanged && !nameChanged
+
+                    if (unchanged) {
+                        Log.d(TAG_AUTO_UPDATE, "unchanged: ${addon.id}")
+                    } else {
+                        updateAddonFromManifest(addon.manifestUrl, manifest)
+                        Log.i(
+                            TAG_AUTO_UPDATE,
+                            "updated: ${addon.id} " +
+                                "(catalogs=${manifest.catalogs.size}, " +
+                                "version=${manifest.version ?: "?"})"
+                        )
+                    }
+                }.onFailure {
+                    Log.w(TAG_AUTO_UPDATE, "refresh failed for ${addon.id}: ${it.message}")
+                }
+            }
+        }
+    }
+
+    /**
      * Rebuild one global sequence:
      *
      * 0
@@ -928,6 +1013,16 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
 
         private const val KEY =
             "installed_addons_json"
+
+        private const val TAG_AUTO_UPDATE =
+            "ADDON_AUTO_UPDATE"
+
+        private const val LAST_AUTO_REFRESH_KEY =
+            "last_addon_auto_refresh_ms"
+
+        /** Minimum gap between launch-time manifest refresh attempts. */
+        private const val LAUNCH_REFRESH_MIN_INTERVAL_MS =
+            6L * 60L * 60L * 1000L
 
         @Volatile
         private var INSTANCE: AddonManager? = null

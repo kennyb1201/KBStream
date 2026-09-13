@@ -10,6 +10,7 @@ import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import coil3.svg.SvgDecoder
 import coil3.request.crossfade
+import com.kennyb1201.kbstream.work.AddonManifestRefreshWorker
 import com.kennyb1201.kbstream.work.SimklSyncWorker
 import io.sentry.android.core.SentryAndroid
 import java.util.concurrent.TimeUnit
@@ -25,6 +26,14 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
         com.kennyb1201.kbstream.data.sync.SupabaseSync.init(this)
         initCrashReporting()
         scheduleSimklPeriodicSync()
+        scheduleAddonManifestRefresh()
+        // Launch-time auto-update: picks up addon manifest changes on the
+        // first launch after any restart. Throttled internally so frequent
+        // app relaunches don't spam every manifest URL; runs on a background
+        // scope, so startup is never blocked. The daily worker covers
+        // long-running installs that stay alive for days.
+        com.kennyb1201.kbstream.data.addon.AddonManager.getInstance(this)
+            .maybeRefreshOnLaunch(this)
     }
 
     /**
@@ -74,7 +83,26 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
         )
     }
 
+    private fun scheduleAddonManifestRefresh() {
+        val request = PeriodicWorkRequestBuilder<AddonManifestRefreshWorker>(
+            24, TimeUnit.HOURS
+        )
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build()
+            )
+            .build()
+
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            ADDON_REFRESH_WORK_NAME,
+            ExistingPeriodicWorkPolicy.KEEP,
+            request
+        )
+    }
+
     companion object {
         const val SIMKL_SYNC_WORK_NAME = "simkl_periodic_sync"
+        const val ADDON_REFRESH_WORK_NAME = "addon_manifest_refresh"
     }
 }
