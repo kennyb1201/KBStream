@@ -47,6 +47,7 @@ import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -227,7 +228,7 @@ fun ProfileEditScreen(
                             modifier = Modifier
                                 .size(56.dp)
                                 .clip(CircleShape)
-                                .background(Color(0xFF1D2530))
+                                .background(KBSurfaceRaised)
                                 .border(
                                     width = 1.dp,
                                     color = KBAccent.copy(alpha = 0.5f),
@@ -356,7 +357,8 @@ fun ProfileEditScreen(
             if (editing != null && profiles.size > 1) {
                 ProfileActionButton(
                     label = "Delete",
-                    enabled = true
+                    enabled = true,
+                    danger = true
                 ) {
                     ProfileManager.delete(context, editing.id)
                     onDone()
@@ -408,11 +410,14 @@ private fun ProfileChip(
     }
 }
 
-/** TV-focusable action button (mirrors SyncSection's SyncActionButton). */
+/** TV-focusable action button (mirrors SyncSection's SyncActionButton).
+ *  [danger] tints the label KBDanger (destructive-action affordance, same
+ *  convention as PosterContextMenu's destructive rows). */
 @Composable
 private fun ProfileActionButton(
     label: String,
     enabled: Boolean,
+    danger: Boolean = false,
     onClick: () -> Unit
 ) {
     if (enabled) {
@@ -421,6 +426,7 @@ private fun ProfileActionButton(
                 text = label,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
+                color = if (danger) KBDanger else Color.Unspecified,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
             )
         }

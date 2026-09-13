@@ -87,6 +87,8 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBRust
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -1018,7 +1020,7 @@ private fun SetupPanel(
         if (!error.isNullOrBlank()) {
             Text(
                 text = error,
-                color = Color(0xFFFF8A80),
+                color = KBDanger,
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 12.dp)
             )
@@ -1027,7 +1029,7 @@ private fun SetupPanel(
         if (!guideError.isNullOrBlank()) {
             Text(
                 text = guideError,
-                color = Color(0xFFFFB74D),
+                color = KBRust,
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 8.dp)
             )

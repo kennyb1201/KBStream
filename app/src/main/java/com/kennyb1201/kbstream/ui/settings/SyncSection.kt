@@ -13,7 +13,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -29,6 +28,7 @@ import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
+import com.kennyb1201.kbstream.ui.theme.KBDanger
 
 /**
  * Settings → Sync section: Supabase-backed cross-device sync.
@@ -107,7 +107,7 @@ fun SyncSection() {
             if (state is SupabaseSync.AuthState.Error) {
                 Text(
                     text = state.message,
-                    color = Color(0xFFE57373)
+                    color = KBDanger
                 )
             }
 

@@ -360,7 +360,12 @@ object ProfileManager {
      * profile's namespace from the legacy (un-namespaced) stores.
      */
     fun createAndMigrateLegacy(context: Context, name: String, avatarIndex: Int): Profile {
-        val hadLegacy = hadLegacyData(context)
+        // KEY_MIGRATED gate: only the FIRST profile adopts the legacy
+        // snapshot. Without this, every later profile would also receive a
+        // copy of the frozen pre-profile history (a cross-profile leak).
+        val alreadyMigrated = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_MIGRATED, false)
+        val hadLegacy = !alreadyMigrated && hadLegacyData(context)
         val profile = create(context, name, avatarIndex)
 
         if (hadLegacy) {
@@ -384,7 +389,8 @@ object ProfileManager {
         val legacyKeys = listOf(
             "kbstream_player_prefs", "kbstream_addons", "kbstream_watched_overrides",
             "kbstream_nuvio_home_order", "kbstream_nuvio_collections",
-            "kbstream_stream_badges", "iptv_prefs", "simkl_auth"
+            "kbstream_stream_badges", "iptv_prefs", "simkl_auth",
+            "iptv_guide_preferences", "simkl_sync", "search_prefs"
         )
         return legacyKeys.any {
             context.getSharedPreferences(it, Context.MODE_PRIVATE).all.isNotEmpty()

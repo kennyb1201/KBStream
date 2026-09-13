@@ -20,7 +20,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -35,6 +34,7 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import com.kennyb1201.kbstream.ui.theme.KBRust
 
 @Composable
 fun SimklConnectScreen(
@@ -329,7 +329,7 @@ private fun SimklStatusLine(message: String) {
 private fun SimklErrorLine(message: String) {
     Text(
         text = message,
-        color = Color(0xFFFFB74D),
+        color = KBRust,
         style = MaterialTheme.typography.bodyMedium
     )
 }

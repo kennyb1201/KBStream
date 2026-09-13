@@ -108,6 +108,11 @@ import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBSuccess
+import com.kennyb1201.kbstream.ui.theme.KBPlum
+import com.kennyb1201.kbstream.ui.theme.KBRust
+import com.kennyb1201.kbstream.ui.theme.KBSteel
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
@@ -1363,7 +1368,7 @@ private fun UpcomingEpisodeCard(
                         .align(Alignment.TopStart)
                         .padding(6.dp)
                         .background(
-                            color = Color(0xFF6A1B9A),
+                            color = KBPlum,
                             shape = RoundedCornerShape(4.dp)
                         )
                         .padding(horizontal = 5.dp, vertical = 2.dp)
@@ -2324,14 +2329,10 @@ fun HomeScreen(
                                         badgeColor =
                                             when {
                                                 item.isSeriesFinale ->
-                                                    Color(
-                                                        0xFFB71C1C
-                                                    )
+                                                    KBDanger
 
                                                 item.isSeasonFinale ->
-                                                    Color(
-                                                        0xFFD84315
-                                                    )
+                                                    KBRust
 
                                                 else ->
                                                     when (
@@ -2341,19 +2342,13 @@ fun HomeScreen(
                                                             KBAccent
 
                                                         UpNextBadge.NEXT_UP ->
-                                                            Color(
-                                                                0xFF2E5BFF
-                                                            )
+                                                            KBSteel
 
                                                         UpNextBadge.NEW_EPISODE ->
-                                                            Color(
-                                                                0xFF2E7D32
-                                                            )
+                                                            KBSuccess
 
                                                         UpNextBadge.NEW_SEASON ->
-                                                            Color(
-                                                                0xFF6A1B9A
-                                                            )
+                                                            KBPlum
                                                     }
                                             },
                                         badgeText =

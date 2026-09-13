@@ -45,6 +45,7 @@ import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 
 /**
  * Full-screen profile picker shown at launch when profiles exist. D-pad
@@ -219,7 +220,7 @@ private fun ProfileAvatarTile(
                         modifier = Modifier
                             .size(84.dp)
                             .clip(CircleShape)
-                            .background(Color(0xFF1D2530)),
+                            .background(KBSurfaceRaised),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(

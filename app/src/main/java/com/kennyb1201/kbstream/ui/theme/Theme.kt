@@ -21,6 +21,12 @@ val KBTextHi = Color(0xFFF3EFE4)
 val KBTextLo = Color(0xFF8891A0)
 val KBDanger = Color(0xFFB0453C)
 val KBSuccess = Color(0xFF3DBB6A)
+// Semantic badge companions (muted, same screening-room palette): season
+// finales, next-up, new seasons on Up-Next cards. Raw Material-palette
+// literals previously used here clashed with the brass accent.
+val KBRust = Color(0xFFA8542E)   // burnt sienna — season finale
+val KBSteel = Color(0xFF3E5C76)  // desaturated navy — next up
+val KBPlum = Color(0xFF6E4E7E)   // muted aubergine — new season
 
 val CardShape = RoundedCornerShape(12.dp())
 private fun Int.dp() = androidx.compose.ui.unit.Dp(this.toFloat())
