@@ -8,6 +8,7 @@ import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.VideoEntry
+import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
@@ -51,14 +52,19 @@ fun computeEpisodeWatched(
     return key in watchedKeys
 }
 
-class DetailViewModel(application: Application) : AndroidViewModel(application) {
+class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
     private val repository = AddonRepository()
-    private val addonManager = AddonManager.getInstance(application)
-    private val tmdbRepository = TmdbRepository(application)
-    private val simklRepository = SimklRepository.getInstance(application)
-    private val historyDao = WatchHistoryDatabase.getInstanceScoped(application).watchHistoryDao()
-    private val watchHistoryRepository = WatchHistoryRepository(application)
-    private val watchedStatusRepository = WatchedStatusRepository(application)
+    private val addonManager = AddonManager.getInstance(app)
+    private val tmdbRepository = TmdbRepository(app)
+    private val simklRepository = SimklRepository.getInstance(app)
+    // Resolved per access: the scoped DB instance is bound to the ACTIVE
+    // profile. Capturing the DAO once meant a Detail page opened before a
+    // profile switch kept writing resume/watch progress into the previous
+    // profile's (closed) database after the switch.
+    private val historyDao: WatchHistoryDao
+        get() = WatchHistoryDatabase.getInstanceScoped(app).watchHistoryDao()
+    private val watchHistoryRepository = WatchHistoryRepository(app)
+    private val watchedStatusRepository = WatchedStatusRepository(app)
 
     private val _meta = MutableStateFlow<Meta?>(null)
     val meta: StateFlow<Meta?> = _meta.asStateFlow()

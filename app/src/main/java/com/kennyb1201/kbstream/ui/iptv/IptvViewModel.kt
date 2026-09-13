@@ -166,6 +166,48 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         }
         startGuideClockRefresh()
         restoreCachedPlaylist()
+        observeProfileSwitches()
+    }
+
+    /**
+     * Profile-switch reset: the ViewModel is created once (activity store)
+     * and survives switches, but its source config is per-profile (scoped
+     * prefs) and its in-memory playlist/EPG state belongs to whichever
+     * profile loaded it. Without this, after a switch the guide shows the
+     * previous profile's channels and actions persist into the wrong
+     * profile's prefs.
+     */
+    private fun observeProfileSwitches() {
+        viewModelScope.launch {
+            var first = true
+            com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile
+                .collect {
+                    if (first) {
+                        first = false
+                        return@collect
+                    }
+                    loadJob?.cancel()
+                    importJob?.cancel()
+                    refreshJob?.cancel()
+
+                    // Re-read the incoming profile's scoped config.
+                    _playlistUrl.value = prefs.getString(KEY_PLAYLIST_URL, "").orEmpty()
+                    _epgUrl.value = prefs.getString(KEY_EPG_URL, "").orEmpty()
+                    _playlistName.value = prefs.getString(KEY_PLAYLIST_NAME, "").orEmpty()
+                    _hiddenChannelIds.value =
+                        prefs.getStringSet(KEY_HIDDEN_CHANNEL_IDS, emptySet()).orEmpty().toSet()
+
+                    // Drop the previous profile's in-memory content.
+                    _playlist.value = null
+                    _guideItemsByChannelId.value = emptyMap()
+                    _guideChannelIds.value = emptySet()
+                    _pendingGuideChannelIds.value = emptySet()
+                    loadedGuideSourceKey = null
+                    _guideRefreshTick.value += 1
+
+                    restoreCachedPlaylist()
+                }
+        }
     }
 
     /**

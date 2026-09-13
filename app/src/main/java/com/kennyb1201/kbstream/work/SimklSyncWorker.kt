@@ -14,8 +14,11 @@ class SimklSyncWorker(
 
     override suspend fun doWork(): Result {
         val watchedStatusRepository = WatchedStatusRepository(applicationContext)
+        // Scoped: refresh targets are per-profile watched data. With no
+        // profiles this resolves to the same legacy/global DB, so behavior
+        // is unchanged there.
         val watchedStatusDao = WatchHistoryDatabase
-            .getInstance(applicationContext)
+            .getInstanceScoped(applicationContext)
             .watchedStatusDao()
 
         return try {
