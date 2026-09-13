@@ -62,6 +62,7 @@ import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
 import com.kennyb1201.kbstream.ui.detail.DetailScreen
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
+import com.kennyb1201.kbstream.ui.home.CatalogGridScreen
 import com.kennyb1201.kbstream.ui.home.HomeScreen
 import com.kennyb1201.kbstream.ui.iptv.GuideScreen
 import com.kennyb1201.kbstream.ui.iptv.IptvViewModel
@@ -151,6 +152,13 @@ sealed class Screen {
     data class Collection(
         val id: Int,
         val name: String,
+        val returnTo: Screen = Home
+    ) : Screen()
+
+    /** Whole addon catalog browsed as a poster grid (from Home long-press). */
+    data class CatalogGrid(
+        val title: String,
+        val addonName: String,
         val returnTo: Screen = Home
     ) : Screen()
 
@@ -282,6 +290,13 @@ private fun encodeScreen(
                 put("returnTo", encodeScreen(screen.returnTo, depth + 1))
             }
         }
+        is Screen.CatalogGrid -> {
+            put("title", screen.title)
+            put("addonName", screen.addonName)
+            if (depth < MAX_RETURN_DEPTH) {
+                put("returnTo", encodeScreen(screen.returnTo, depth + 1))
+            }
+        }
         is Screen.NuvioFolder -> {
             put("folderId", screen.folderId)
             if (depth < MAX_RETURN_DEPTH) {
@@ -367,6 +382,11 @@ private fun decodeScreen(
             "collection" -> Screen.Collection(
                 id = json.optInt("id"),
                 name = json.optString("name"),
+                returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
+            )
+            "catalogGrid" -> Screen.CatalogGrid(
+                title = json.optString("title"),
+                addonName = json.optString("addonName"),
                 returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
             )
             "nuvioFolder" -> Screen.NuvioFolder(
@@ -460,6 +480,7 @@ private fun Screen.typeName(): String = when (this) {
     is Screen.Decade -> "decade"
     is Screen.Tag -> "tag"
     is Screen.Collection -> "collection"
+    is Screen.CatalogGrid -> "catalogGrid"
     is Screen.NuvioFolder -> "nuvioFolder"
     is Screen.Streams -> "streams"
     is Screen.Player -> "player"
@@ -840,6 +861,9 @@ fun AppRoot() {
             is Screen.Collection ->
                 current.returnTo
 
+            is Screen.CatalogGrid ->
+                current.returnTo
+
             is Screen.NuvioFolder ->
                 current.returnTo
 
@@ -983,6 +1007,14 @@ fun AppRoot() {
                         folderId = folderId,
                         returnTo = Screen.Home
                     )
+                },
+
+                onOpenCatalogGrid = { rail ->
+                    screen = Screen.CatalogGrid(
+                        title = rail.catalogName,
+                        addonName = rail.addonName,
+                        returnTo = Screen.Home
+                    )
                 }
             )
         }
@@ -992,6 +1024,23 @@ fun AppRoot() {
                 onBack = { screen = Screen.Home },
                 onOpenAddons = { screen = Screen.Addons },
                 onOpenSimkl = { screen = Screen.Simkl }
+            )
+        }
+
+        is Screen.CatalogGrid -> {
+            CatalogGridScreen(
+                title = current.title,
+                addonName = current.addonName,
+                onItemClick = { meta ->
+                    screen = Screen.Detail(
+                        meta.type,
+                        meta.id,
+                        returnTo = current
+                    )
+                },
+                onBack = {
+                    screen = stableBackDestination(current.returnTo)
+                }
             )
         }
 
