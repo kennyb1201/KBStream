@@ -564,8 +564,10 @@ class HomeViewModel(
                             )
                             null
                         }
-                    }                        val resolvedAddonMeta = addonMetaDeferred.await()
-                        val resolvedTmdbDetail = tmdbDetailDeferred.await()
+                    }
+
+                    val resolvedAddonMeta = addonMetaDeferred.await()
+                    val resolvedTmdbDetail = tmdbDetailDeferred.await()
 
                     val resolvedTmdbId =
                         when {
@@ -2883,7 +2885,7 @@ episodesTotal =
             isSeriesFinale =
                 targetIsSeriesFinale,
 
-            nextEpisodeAir = capturedNextAirInfo
+            nextEpisodeAir = capturedNextAirInfo,
 
             recencyTimestamp =
                 recencyTimestamp,
