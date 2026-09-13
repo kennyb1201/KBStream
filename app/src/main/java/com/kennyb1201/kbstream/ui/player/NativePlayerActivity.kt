@@ -434,6 +434,10 @@ class NativePlayerActivity : ComponentActivity() {
     private var startPositionMs = 0L
     private var fromActorReturn = false
 
+    /// Set when the paused-overlay for an actor-return session has been
+    /// shown once, so STATE_READY never re-triggers it mid-session.
+    private var actorReturnOverlayShown = false
+
     /// True once playback has actually started during this player session.
     /// Gates the full splash overlay: it appears on every fresh source load
     /// (each switchToSource resets it), but never on mid-playback rebuffers
@@ -1801,7 +1805,10 @@ class NativePlayerActivity : ComponentActivity() {
 
                 if (!isLiveChannel && carryPositionMs > 0L) seekTo(carryPositionMs)
                 setPlaybackSpeed(playbackSpeed)
-                playWhenReady = true
+                // Returning from the actor screen lands back on the player
+                // with the saved position: resume PAUSED with the controls
+                // overlay up instead of auto-playing the video.
+                playWhenReady = !fromActorReturn
                 // Tunneled playback is skipped on live channels: HLS live
                 // manifests (discontinuities, rolling window) are the classic
                 // tunnel black-video-with-audio case on Fire TV/Android TV.
@@ -1819,7 +1826,7 @@ class NativePlayerActivity : ComponentActivity() {
                         .setTunnelingEnabled(true).build()
                     Log.i("PLAYER_TUNNEL", "Tunneled via TrackSelector")
                 }
-                playWhenReady = true
+                playWhenReady = !fromActorReturn
             }
 
             player.addListener(createPlayerListener())
@@ -1941,6 +1948,9 @@ class NativePlayerActivity : ComponentActivity() {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             if (isPlaying) {
                 hasPlayedOnce = true
+                // Actual playback resumed: the actor-return pause session
+                // is over, so later buffering rebuffers use normal paths.
+                fromActorReturn = false
                 hideSplash()
                 armStallWatchdog()
                 if (controlsVisible && !showSettingsPanel && !isPickerShowing) {
@@ -1976,6 +1986,15 @@ class NativePlayerActivity : ComponentActivity() {
                     subtitleCueHandler?.updateFromPosition()
                     armBlackVideoWatchdog()
                     armStallWatchdog()
+                    // Actor-return session: the surface is prepared and
+                    // paused (frame at the resume position on screen) —
+                    // bring up the controls overlay exactly as if the user
+                    // had just paused, instead of silently auto-playing.
+                    if (fromActorReturn && !actorReturnOverlayShown) {
+                        actorReturnOverlayShown = true
+                        exoPlayer?.playWhenReady = false
+                        showControls()
+                    }
                 }
                 Player.STATE_ENDED -> {
                     onPlaybackEnded()
@@ -3868,6 +3887,11 @@ class NativePlayerActivity : ComponentActivity() {
         currentAudioUrl = stream.audioUrl
         currentSourceIndex = sources.indexOfFirst { it.url == newUrl }
         retryAttempt = 0; retryExhausted = false; errorMessageStr = null; forceTextureViewFallback = false; languagesAutoSelected = false
+        // A manual source switch is a fresh, actively-playing load — drop
+        // the actor-return pause semantics so the new source starts
+        // playing like any other switch.
+        fromActorReturn = false
+        actorReturnOverlayShown = true
         // A source switch is a fresh load, not a mid-playback rebuffer: reset
         // the first-play latch so the full splash (backdrop + pulsing
         // clearlogo) shows during the load instead of the small spinner. The
