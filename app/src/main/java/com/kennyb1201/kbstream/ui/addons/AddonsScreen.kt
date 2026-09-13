@@ -479,7 +479,9 @@ fun AddonsScreen(
                 )
             },
             onRemoveCollectionProfile = { url ->
-                viewModel.removeCollectionProfileUrl(url)
+                // Destructive: require an explicit confirm instead of the
+                // old single-OK-removes-it behavior.
+                pendingCollectionRemoveUrl = url
             },
             onToggle = { config, show ->
                 viewModel.setCatalogShowOnHome(
@@ -1648,6 +1650,10 @@ private fun CatalogManagerDialog(
 ) {
     BackHandler(onBack = onDismiss)
 
+    // Destructive-action guard: OK on a collection source chip only ARMS
+    // removal; a confirm dialog (cancel-focused) completes it.
+    var pendingCollectionRemoveUrl by remember { mutableStateOf<String?>(null) }
+
     // Focus pinning for the reorder arrows: a move relocates the pressed
     // row (items are keyed by identity) and off-screen relocations dispose
     // the focused button, throwing D-pad focus back to the header. After
@@ -1839,7 +1845,7 @@ private fun CatalogManagerDialog(
                     }
                 }
                 Text(
-                    text = "Press OK on a source to remove it",
+                    text = "Press OK on a source, then confirm, to remove it",
                     color = KBTextLo.copy(alpha = 0.6f),
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.padding(top = 3.dp)
@@ -1924,6 +1930,77 @@ private fun CatalogManagerDialog(
                         )
                     }
                 }
+            }
+        }
+    }
+
+    // Collection-source removal confirm. Rendered above the manager dialog
+    // so BACK and focus stay in the right place; CANCEL takes initial
+    // focus, so the accidental double-OK (chip OK, then dialog OK) can't
+    // delete — you must deliberately move to REMOVE.
+    pendingCollectionRemoveUrl?.let { url ->
+        ConfirmRemoveCollectionDialog(
+            url = url,
+            onDismiss = { pendingCollectionRemoveUrl = null },
+            onConfirm = {
+                pendingCollectionRemoveUrl = null
+                onRemoveCollectionProfile(url)
+            }
+        )
+    }
+}
+
+@Composable
+private fun ConfirmRemoveCollectionDialog(
+    url: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    BackHandler {
+        focusManager.clearFocus()
+        keyboardController?.hide()
+        onDismiss()
+    }
+
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        // Initial focus lands on CANCEL (first requestable node) so a
+        // panicked double-OK cannot confirm the deletion.
+        val cancelRequester = remember { FocusRequester() }
+        LaunchedEffect(Unit) { cancelRequester.requestFocus() }
+
+        Column(
+            modifier = Modifier
+                .width(620.dp)
+                .background(KBSurface, RoundedCornerShape(18.dp))
+                .border(1.dp, KBDanger.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
+                .padding(22.dp)
+        ) {
+            Text(
+                text = "REMOVE COLLECTION SOURCE?",
+                color = KBDanger,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = "Remove ${url.substringAfterLast('/').ifBlank { url }}? " +
+                    "Its collection rail disappears from Home until re-added.",
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.padding(top = 18.dp)
+            ) {
+                ActionButton(
+                    label = "CANCEL",
+                    onClick = onDismiss,
+                    modifier = Modifier.focusRequester(cancelRequester)
+                )
+                ActionButton(label = "REMOVE", onClick = onConfirm)
             }
         }
     }
