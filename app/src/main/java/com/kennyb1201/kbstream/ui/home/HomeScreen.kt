@@ -1646,6 +1646,7 @@ fun HomeScreen(
     onOpenGuide: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
     onOpenNuvioFolder: (String) -> Unit = {},
+    onOpenCatalogGrid: (Rail) -> Unit = {},
     viewModel: HomeViewModel =
         androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
@@ -2484,7 +2485,8 @@ fun HomeScreen(
                                                             requester
                                                         posterMenu =
                                                             PosterMenuTarget(
-                                                                meta
+                                                                meta,
+                                                                rail
                                                             )
                                                     },
                                                     modifier = posterModifier
@@ -2503,7 +2505,8 @@ fun HomeScreen(
                                                             requester
                                                         posterMenu =
                                                             PosterMenuTarget(
-                                                                meta
+                                                                meta,
+                                                                rail
                                                             )
                                                     },
                                                     modifier = posterModifier,
@@ -2670,6 +2673,13 @@ fun HomeScreen(
                 title = target.meta.name,
                 actions = listOf(
                     PosterContextAction(
+                        label = "Open in Grid",
+                        description = "Browse this whole catalog as a poster grid"
+                    ) {
+                        posterMenu = null
+                        target.rail?.let(onOpenCatalogGrid)
+                    },
+                    PosterContextAction(
                         label = "Go to Details",
                         description = "Open this title's detail page"
                     ) {
@@ -2707,10 +2717,12 @@ fun HomeScreen(
 }
 
 /**
- * Target for the long-press menu on a regular poster rail card.
+ * Target for the long-press menu on a regular poster rail card. Carries the
+ * owning rail so "Open in Grid" can browse the whole catalog.
  */
 private data class PosterMenuTarget(
-    val meta: MetaPreview
+    val meta: MetaPreview,
+    val rail: Rail? = null
 )
 
 /**

@@ -1137,6 +1137,224 @@ Log.d(
         )
     }
 
+    // ---- Catalog grid ("Open in Grid" from a rail's long-press menu) ----
+
+    /** Full-catalog grid state: one addon catalog browsed as a poster grid. */
+    data class CatalogGridState(
+        val title: String,
+        val addonName: String,
+        val items: List<MetaPreview> = emptyList(),
+        val isLoading: Boolean = true,
+        val isLoadingMore: Boolean = false,
+        val hasMore: Boolean = true,
+        val error: String? = null
+    )
+
+    private val _catalogGrid =
+        MutableStateFlow<CatalogGridState?>(null)
+
+    val catalogGrid: StateFlow<CatalogGridState?> =
+        _catalogGrid.asStateFlow()
+
+    // Grid pagination mirrors the rail bookkeeping but is independent: the
+    // grid keeps paging past the rail's current offset.
+    private var gridNextSkip = 0
+    private var gridLoadJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Route-based variant: reopens the grid for a catalog identified by its
+     * Home rail title + addon name (survives process restoration). No-op if
+     * that catalog is already open.
+     */
+    fun openCatalogInGrid(title: String, addonName: String) {
+
+        val current =
+            _catalogGrid.value
+
+        if (
+            current != null &&
+            current.title == title &&
+            current.addonName == addonName
+        ) {
+            return
+        }
+
+        val rail =
+            _rails.value.firstOrNull { rail ->
+                rail.catalogName == title &&
+                    rail.addonName == addonName
+            }
+                ?: return
+
+        openCatalogInGrid(rail)
+    }
+
+    /**
+     * Opens the catalog behind a Home rail as a full-screen poster grid.
+     * Seeds with the rail's already-loaded items (instant paint), then
+     * fetches the next page in the background.
+     */
+    fun openCatalogInGrid(rail: Rail) {
+
+        val info =
+            railInfo[railKeyOf(rail)]
+
+        gridLoadJob?.cancel()
+
+        val seeded =
+            CatalogGridState(
+                title = rail.catalogName,
+                addonName = rail.addonName,
+                items = rail.items
+            )
+
+        _catalogGrid.value =
+            seeded
+
+        if (
+            info == null
+        ) {
+            // Rail came from a code path without pagination info
+            // (e.g. Continue Watching); nothing further to page.
+            _catalogGrid.value =
+                seeded.copy(
+                    isLoading = false,
+                    hasMore = false
+                )
+            return
+        }
+
+        gridNextSkip =
+            ((rail.items.size / PAGE_SIZE) + 1) * PAGE_SIZE
+
+        gridLoadJob =
+            fetchGridPage(info)
+    }
+
+    fun loadMoreGridItems() {
+
+        val state =
+            _catalogGrid.value
+                ?: return
+
+        if (
+            state.isLoading ||
+            state.isLoadingMore ||
+            !state.hasMore
+        ) {
+            return
+        }
+
+        val info =
+            railInfo.values.firstOrNull { info ->
+                formatCatalogName(info.catalogRawName) == state.title &&
+                    info.addonName == state.addonName
+            }
+                ?: return
+
+        gridLoadJob =
+            fetchGridPage(info)
+    }
+
+    fun closeCatalogGrid() {
+
+        gridLoadJob?.cancel()
+        gridLoadJob = null
+        _catalogGrid.value = null
+    }
+
+    private fun fetchGridPage(
+        info: RailInfo
+    ): kotlinx.coroutines.Job {
+
+        _catalogGrid.value =
+            _catalogGrid.value?.copy(
+                isLoadingMore = true
+            )
+
+        return viewModelScope.launch {
+
+            try {
+
+                val metas =
+                    fetchCatalogThrottled(
+                        baseUrl = info.baseUrl,
+                        type = info.catalogType,
+                        catalogId = info.catalogId,
+                        skip = gridNextSkip
+                    )
+
+                if (
+                    metas.size < PAGE_SIZE
+                ) {
+                    _catalogGrid.value =
+                        _catalogGrid.value?.copy(
+                            hasMore = false
+                        )
+                }
+
+                val filtered =
+                    if (
+                        info.hideUpcoming
+                    ) {
+                        applyDigitalAvailabilityFilter(
+                            filterUpcoming(metas)
+                        )
+                    } else {
+                        metas
+                    }
+
+                val existing =
+                    _catalogGrid.value?.items
+                        .orEmpty()
+                        .mapTo(mutableSetOf()) { it.id }
+
+                val deduped =
+                    filtered.filter { it.id !in existing }
+
+                if (
+                    deduped.isEmpty()
+                ) {
+                    _catalogGrid.value =
+                        _catalogGrid.value?.copy(
+                            hasMore = false,
+                            isLoadingMore = false
+                        )
+                    return@launch
+                }
+
+                _catalogGrid.value =
+                    _catalogGrid.value?.copy(
+                        items = _catalogGrid.value?.items
+                            .orEmpty() + deduped,
+                        isLoading = false,
+                        isLoadingMore = false
+                    )
+
+                gridNextSkip += PAGE_SIZE
+            } catch (
+                e: kotlinx.coroutines.CancellationException
+            ) {
+                throw e
+            } catch (e: Exception) {
+
+                Log.e(
+                    "HOME_GRID",
+                    "grid page load failed: ${e.message}",
+                    e
+                )
+
+                _catalogGrid.value =
+                    _catalogGrid.value?.copy(
+                        isLoading = false,
+                        isLoadingMore = false,
+                        hasMore = false,
+                        error = e.message
+                    )
+            }
+        }
+    }
+
     /**
      * Infinite scroll: fetches the next page for the rail identified by
      * [railKey] (built via [railKeyOf] on the UI) and appends the de-duped,
@@ -4112,6 +4330,7 @@ private suspend fun calculateEpisodesRemaining(
                 railInfo.clear()
                 loadingRails.clear()
                 exhaustedRails.clear()
+                closeCatalogGrid()
 
                 val pinned =
                     mutableListOf<Rail>()
