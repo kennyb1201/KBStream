@@ -3,7 +3,16 @@ package com.kennyb1201.kbstream.data.history
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "watch_history")
+@Entity(
+    tableName = "watch_history",
+    indices = [
+        // Hot path: getResumeForParent / getInProgressForParent /
+        // getCompletedForParent all filter by parentId on every Detail
+        // screen load and Up Next build. Without the index SQLite scans
+        // the whole table.
+        androidx.room.Index("parentId")
+    ]
+)
 data class WatchHistoryEntity(
     @PrimaryKey val id: String,
     val parentId: String,

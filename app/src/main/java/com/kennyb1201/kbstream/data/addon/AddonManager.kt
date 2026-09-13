@@ -234,7 +234,6 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
     fun saveInstalledAddons(
         addons: List<InstalledAddon>
     ) {
-
         val normalized =
             normalizeGlobalCatalogOrder(
                 addons
@@ -244,6 +243,15 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
 
         _installedAddons.value =
             normalized
+
+        // Cross-device sync: push the full addon set (small JSON blob).
+        com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+                appContext,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_ADDONS,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildAddons(appContext)
+            )
+        }
     }
 
     fun removeAddon(

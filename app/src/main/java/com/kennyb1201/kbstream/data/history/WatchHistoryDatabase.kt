@@ -20,7 +20,7 @@ import com.kennyb1201.kbstream.data.cache.WatchedStatusEntity
         ImdbResolutionEntity::class,
         TmdbJsonCacheEntity::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 abstract class WatchHistoryDatabase : RoomDatabase() {
@@ -40,11 +40,20 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                     WatchHistoryDatabase::class.java,
                     "kbstream_watch_history"
                 )
-                    .addMigrations(MIGRATION_6_7, MIGRATION_7_8)
+                    .addMigrations(MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
                     .fallbackToDestructiveMigration()
                     .build()
                     .also { instance = it }
             }
+
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_watch_history_parentId` " +
+                        "ON `watch_history` (`parentId`)"
+                )
+            }
+        }
 
         private val MIGRATION_6_7 = object : Migration(6, 7) {
             override fun migrate(db: SupportSQLiteDatabase) {

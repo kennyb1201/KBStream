@@ -543,6 +543,15 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
             .putString(KEY_EPG_URL, _epgUrl.value)
             .putString(KEY_PLAYLIST_NAME, _playlistName.value)
             .apply()
+
+        // Cross-device sync: share the IPTV source config.
+        com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+                appContext,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_IPTV,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildIptv(appContext)
+            )
+        }
     }
 
     private data class GuideRequest(

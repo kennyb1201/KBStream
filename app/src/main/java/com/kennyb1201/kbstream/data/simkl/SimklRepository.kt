@@ -3051,6 +3051,16 @@ class SimklRepository(
                 token
             )
             ?.apply()
+
+        // Cross-device sync: share the Simkl session so other devices come
+        // up already connected.
+        com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+                appContext,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_SIMKL_AUTH,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildSimklAuth(appContext)
+            )
+        }
     }
 
     private fun saveWatchedActivityAll(

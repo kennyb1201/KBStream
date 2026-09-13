@@ -5,6 +5,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("com.google.devtools.ksp")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("org.jetbrains.kotlin.plugin.serialization")
 }
 
 val localProps = Properties()
@@ -33,6 +34,16 @@ val omdbApiKey = localProps.getProperty("OMDB_API_KEY")
     ?: System.getenv("OMDB_API_KEY")
     ?: ""
 
+val supabaseUrl = localProps.getProperty("SUPABASE_URL")
+    ?: System.getenv("SUPABASE_URL")
+    ?: ""
+
+val supabaseAnonKey = localProps.getProperty("SUPABASE_ANON_KEY")
+    ?: localProps.getProperty("SUPABASE_PUBLISHABLE_KEY")
+    ?: System.getenv("SUPABASE_ANON_KEY")
+    ?: System.getenv("SUPABASE_PUBLISHABLE_KEY")
+    ?: ""
+
 val releaseStoreFile = System.getenv("KBSTREAM_STORE_FILE")
 val releaseStorePassword = System.getenv("KBSTREAM_STORE_PASSWORD")
 val releaseKeyAlias = System.getenv("KBSTREAM_KEY_ALIAS")
@@ -54,6 +65,8 @@ android {
         buildConfigField("String", "SIMKL_CLIENT_SECRET", "\"$simklClientSecret\"")
         buildConfigField("String", "SENTRY_DSN", "\"$sentryDsn\"")
         buildConfigField("String", "OMDB_API_KEY", "\"$omdbApiKey\"")
+        buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
+        buildConfigField("String", "SUPABASE_ANON_KEY", "\"$supabaseAnonKey\"")
     }
     buildFeatures {
         compose = true
@@ -125,6 +138,14 @@ dependencies {
 
     // Crash reporting (Sentry)
     implementation("io.sentry:sentry-android:7.19.0")
+
+    // Supabase (cross-device sync): auth + Postgres REST + realtime channels.
+    implementation(platform("io.github.jan-tennert.supabase:bom:2.6.1"))
+    implementation("io.github.jan-tennert.supabase:gotrue-kt")
+    implementation("io.github.jan-tennert.supabase:postgrest-kt")
+    implementation("io.github.jan-tennert.supabase:realtime-kt")
+    implementation("io.ktor:ktor-client-android:2.3.12")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
     implementation("androidx.media3:media3-exoplayer:1.9.0")
     implementation("androidx.media3:media3-exoplayer-hls:1.9.0")

@@ -84,6 +84,7 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_AUTO_PLAY_NEXT, false)
 
     fun setAutoPlayNext(context: Context, enabled: Boolean) {
+        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_AUTO_PLAY_NEXT, enabled).apply()
     }
 
@@ -100,6 +101,7 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_USE_STREAM_RANKER, true)
 
     fun setUseStreamRanker(context: Context, enabled: Boolean) {
+        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_USE_STREAM_RANKER, enabled).apply()
     }
 
@@ -328,6 +330,7 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_HERO_TRAILER_AUTOPLAY, true)
 
     fun setHeroTrailerAutoplay(context: Context, enabled: Boolean) {
+        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_HERO_TRAILER_AUTOPLAY, enabled).apply()
     }
 
@@ -338,6 +341,7 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_HERO_TRAILER_MUTED, false)
 
     fun setHeroTrailerMuted(context: Context, enabled: Boolean) {
+        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_HERO_TRAILER_MUTED, enabled).apply()
     }
 
@@ -346,6 +350,7 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_USE_24H_CLOCK, false)
 
     fun setUse24HourClock(context: Context, enabled: Boolean) {
+        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_USE_24H_CLOCK, enabled).apply()
     }
 
@@ -354,6 +359,7 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_SHOW_CATALOG_TYPE, false)
 
     fun setHomeRailShowCatalogType(context: Context, enabled: Boolean) {
+        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_SHOW_CATALOG_TYPE, enabled).apply()
     }
 
@@ -362,6 +368,7 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_SHOW_ADDON_NAME, false)
 
     fun setHomeRailShowAddonName(context: Context, enabled: Boolean) {
+        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_SHOW_ADDON_NAME, enabled).apply()
     }
 
@@ -373,6 +380,7 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_SEARCH_SHOW_CATALOG_TYPE, false)
 
     fun setSearchRailShowCatalogType(context: Context, enabled: Boolean) {
+        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_SEARCH_SHOW_CATALOG_TYPE, enabled).apply()
     }
 
@@ -381,6 +389,7 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_SEARCH_SHOW_ADDON_NAME, false)
 
     fun setSearchRailShowAddonName(context: Context, enabled: Boolean) {
+        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_SEARCH_SHOW_ADDON_NAME, enabled).apply()
     }
 
@@ -392,6 +401,7 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_POSTER_CAPTION_TITLE, true)
 
     fun setPosterCaptionTitle(context: Context, enabled: Boolean) {
+        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_POSTER_CAPTION_TITLE, enabled).apply()
     }
 
@@ -399,6 +409,7 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_POSTER_CAPTION_YEAR, true)
 
     fun setPosterCaptionYear(context: Context, enabled: Boolean) {
+        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_POSTER_CAPTION_YEAR, enabled).apply()
     }
 
@@ -406,6 +417,7 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_POSTER_CAPTION_RATING, true)
 
     fun setPosterCaptionRating(context: Context, enabled: Boolean) {
+        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_POSTER_CAPTION_RATING, enabled).apply()
     }
 
@@ -417,6 +429,7 @@ object AppPreferences {
         prefs(context).getString(KEY_OMDB_API_KEY, "")?.trim().orEmpty()
 
     fun setOmdbApiKey(context: Context, key: String) {
+        syncDisplayPrefsBlob(context)
         prefs(context).edit().putString(KEY_OMDB_API_KEY, key.trim()).apply()
     }
 
@@ -425,6 +438,7 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_HIDE_UPCOMING, false)
 
     fun setHomeRailHideUpcoming(context: Context, enabled: Boolean) {
+        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_HIDE_UPCOMING, enabled).apply()
     }
 
@@ -433,6 +447,21 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_LANDSCAPE_CARDS, false)
 
     fun setHomeLandscapeCards(context: Context, enabled: Boolean) {
+        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_LANDSCAPE_CARDS, enabled).apply()
+    }
+
+    /**
+     * Cross-device sync: called by every setter of a SYNCED pref. Debounced
+     * inside SupabaseSync (outbox coalescing), so spamming toggles is cheap.
+     */
+    internal fun syncDisplayPrefsBlob(context: Context) {
+        com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+                appContext,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_DISPLAY_PREFS,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildDisplayPrefs(appContext)
+            )
+        }
     }
 }

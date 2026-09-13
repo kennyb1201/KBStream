@@ -1029,6 +1029,24 @@ class WatchedStatusRepository(
             true
         )
 
+        // Cross-device sync: push the mark immediately (last-write-wins).
+        com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueueWatched(
+                com.kennyb1201.kbstream.data.cache.WatchedStatusEntity(
+                    key = key,
+                    imdbId = normalizedId,
+                    mediaType = normalizedType,
+                    isWatched = true,
+                    updatedAt = now
+                )
+            )
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+                appContext,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_WATCHED_OVERRIDES,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildWatchedOverrides(appContext)
+            )
+        }
+
         Log.d(
             "WATCHED_REPO",
             "Local watched override added: $key"
@@ -1166,6 +1184,24 @@ class WatchedStatusRepository(
             key,
             false
         )
+
+        // Cross-device sync: push the unmark (isWatched=false wins by ts).
+        com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueueWatched(
+                com.kennyb1201.kbstream.data.cache.WatchedStatusEntity(
+                    key = key,
+                    imdbId = normalizedId,
+                    mediaType = normalizedType,
+                    isWatched = false,
+                    updatedAt = now
+                )
+            )
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+                appContext,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_WATCHED_OVERRIDES,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildWatchedOverrides(appContext)
+            )
+        }
 
         Log.d(
             "WATCHED_REPO",

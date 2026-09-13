@@ -400,6 +400,14 @@ class HomeViewModel(
 
         heroResolveJob = viewModelScope.launch {
             try {
+                // Dwell before any network work: scrolling a rail with the
+                // D-pad fires one focus event per card. Without this pause
+                // every transitively-focused title launched a full meta +
+                // detail + artwork chain before being cancelled, wasting
+                // requests and starving the ones that mattered. Focus that
+                // survives 250ms is a deliberate stop — resolve it fully.
+                delay(HERO_RESOLVE_DWELL_MS)
+
                 coroutineScope {
                     val addonMetaDeferred = async {
     val resolvedBaseUrl =
@@ -4940,6 +4948,9 @@ private suspend fun calculateEpisodesRemaining(
     }
 
     companion object {
+
+        // Dwell before hero network resolution kicks in (see resolveHeroMeta).
+        private const val HERO_RESOLVE_DWELL_MS = 250L
 
         private const val NEW_RELEASE_WINDOW_DAYS =
             7

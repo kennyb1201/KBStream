@@ -166,6 +166,8 @@ fun SettingsScreen(
         // ── INTEGRATIONS ────────────────────────────────────────
         SectionHeader("INTEGRATIONS")
 
+        com.kennyb1201.kbstream.ui.settings.SyncSection()
+
         NavigationRow(
             label = "Add-ons",
             description = "Manage add-ons, import collections, and arrange the home screen",
@@ -1053,7 +1055,7 @@ fun SettingsScreen(
 // ── Helper composables ──────────────────────────────────────────
 
 @Composable
-private fun SectionHeader(title: String) {
+internal fun SectionHeader(title: String) {
     Text(
         text = title,
         color = KBAccent,

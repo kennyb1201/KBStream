@@ -29,6 +29,7 @@ class WatchHistoryRepository(context: Context) {
         )
 
     suspend fun upsert(entry: WatchHistoryEntity) {
+        com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueueHistory(entry)
         dao.upsert(entry)
     }
 

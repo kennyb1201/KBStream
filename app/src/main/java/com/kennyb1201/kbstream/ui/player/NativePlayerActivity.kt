@@ -3670,6 +3670,7 @@ class NativePlayerActivity : ComponentActivity() {
                     completedAt = if (isCompleted) existing?.completedAt ?: now else null
                 )
                 dao.upsert(entry)
+                com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueueHistory(entry)
                 // Mirror the in-app Continue Watching rail to the TV
                 // launcher (Watch Next) so in-progress titles show up on
                 // the home screen. Self-healing full reconcile: finished or

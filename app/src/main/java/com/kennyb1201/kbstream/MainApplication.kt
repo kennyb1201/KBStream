@@ -20,6 +20,9 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
         super.onCreate()
         com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext =
             applicationContext
+        com.kennyb1201.kbstream.data.sync.SupabaseSync.appContextRef =
+            java.lang.ref.WeakReference(applicationContext)
+        com.kennyb1201.kbstream.data.sync.SupabaseSync.init(this)
         initCrashReporting()
         scheduleSimklPeriodicSync()
     }
