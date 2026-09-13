@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -720,7 +721,15 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize()
                 ) {
                     Box(
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier
+                            .fillMaxSize()
+                            // Insets-based IME handling app-wide: with
+                            // adjustResize, every screen's fields (sign-in,
+                            // OMDb key, addon URLs, profile names) stay above
+                            // the keyboard via insets — no legacy window pan,
+                            // which landed the scroll at the column bottom when
+                            // the keyboard dismissed.
+                            .imePadding()
                     ) {
                         AppRoot()
                     }

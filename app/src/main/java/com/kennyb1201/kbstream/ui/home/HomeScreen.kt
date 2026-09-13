@@ -1942,29 +1942,32 @@ fun HomeScreen(
     }
 
     /**
-     * The Continue Watching row sits between the hero and the catalog
-     * rails. When the viewport rests between item boundaries, the bottom
-     * few pixels of the CW cards peek out right under the hero — very
-     * visible against the dark background. Whenever the user is on a
-     * catalog rail (not the CW row itself), snap the list so the CW row is
-     * fully above the viewport. Called from [selectHero] (focus moved onto
-     * a rail) and from a snapshot effect that also covers the case where
-     * the CW row appears/changes after focus is already on a rail — a
-     * single focus event cannot catch that.
+     * The Continue Watching and Upcoming rows sit between the hero and the
+     * catalog rails. When the viewport rests between item boundaries, the
+     * bottom few pixels of those cards peek out right under the hero — very
+     * visible against the dark background. Snap the list so BOTH rows are
+     * fully above the viewport whenever focus sits on a catalog rail (not
+     * on those rows themselves). Called from [selectHero] (focus moved onto
+     * a rail) and from a snapshot effect that also covers the case where a
+     * row appears/changes after focus is already on a rail — a single focus
+     * event cannot catch that.
      */
     fun hideContinueWatchingSliver() {
-        if (upNext.isEmpty()) return
+        // Item layout: 0 = hero spacer, then Continue Watching (only when
+        // it has entries), then Upcoming (only when populated), then the
+        // first catalog rail. Any interstitial row partially scrolled under
+        // the hero is a sliver, so snap past whichever rows are present —
+        // computed from presence so it also works when Continue Watching
+        // is empty and only the Upcoming rail exists.
+        val snapIndex =
+            1 +
+                (if (upNext.isNotEmpty()) 1 else 0) +
+                (if (upcomingSchedule.isNotEmpty()) 1 else 0)
         val cwIndex = railListState.firstVisibleItemIndex
         if (
-            cwIndex <= 1 && // hero spacer (+ CW row) still at/near the top
+            cwIndex < snapIndex && // rows still under the hero
             railListState.firstVisibleItemScrollOffset > 0
         ) {
-            // Item layout: 0 = hero spacer, 1 = Continue Watching (only
-            // when present), 2 = Upcoming rail (only when it has entries),
-            // then the first catalog rail. Snap past the CW row AND the
-            // Upcoming rail so neither peeks under the hero.
-            val snapIndex =
-                if (upcomingSchedule.isNotEmpty()) 3 else 2
             homeScope.launch {
                 railListState.animateScrollToItem(index = snapIndex)
             }
@@ -1989,6 +1992,15 @@ fun HomeScreen(
         hideContinueWatchingSliver()
     }
 
+    /**
+     * Focus landed on a card inside the Continue Watching OR Upcoming rows
+     * (both drive the hero's episode/progress view, and both are rows the
+     * sliver guard must never scroll away while the user is on them). The
+     * Upcoming cards set this too, which is what exempts them from the
+     * catalog-rail snap: focusing an Upcoming card scrolls only far enough
+     * to bring it on screen, leaving the CW sliver above it — correct,
+     * since the user is deliberately on the rows under the hero.
+     */
     fun selectContinueWatchingHero(
         item: MetaPreview,
         upNextItem: UpNextItem
@@ -2008,14 +2020,15 @@ fun HomeScreen(
         nuvioViewModel.load()
     }
 
-    // Continuous Continue Watching sliver guard: the CW row can appear or
+    // Continuous rail-sliver guard: the CW/Upcoming rows can appear or
     // change after focus already sits on a catalog rail (instant snapshot
     // landing, Simkl merge, rail rebuild) with no focus event firing, so
     // re-run the snap whenever the data or scroll position changes. Skipped
-    // while the user is actually on the CW row so their own view of it is
+    // while the user is actually on one of those rows so their own view is
     // never scrolled away.
     LaunchedEffect(
         upNext,
+        upcomingSchedule,
         railListState.firstVisibleItemIndex,
         railListState.firstVisibleItemScrollOffset
     ) {
