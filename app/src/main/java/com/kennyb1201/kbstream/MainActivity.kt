@@ -310,8 +310,12 @@ private fun encodeScreen(
         is Screen.ProfilePicker -> Unit
         is Screen.ProfileEdit -> {
             screen.editingProfileId?.let { put("editingProfileId", it) }
-            if (depth < MAX_RETURN_DEPTH) {
-                put("returnTo", encodeScreen(screen.returnTo, depth + 1))
+            // returnTo is nullable (picker path has none) — only encode a
+            // real destination so decode can distinguish "absent" from Home.
+            screen.returnTo?.let { target ->
+                if (depth < MAX_RETURN_DEPTH) {
+                    put("returnTo", encodeScreen(target, depth + 1))
+                }
             }
         }
         is Screen.NuvioFolder -> {
@@ -409,7 +413,10 @@ private fun decodeScreen(
             "profilePicker" -> Screen.ProfilePicker
             "profileEdit" -> Screen.ProfileEdit(
                 editingProfileId = json.optNullableString("editingProfileId"),
-                returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
+                // Absent key -> null (picker path); decodeScreen(null) would
+                // wrongly default to Home.
+                returnTo = json.optJSONObject("returnTo")
+                    ?.let { decodeScreen(it, depth + 1) }
             )
             "nuvioFolder" -> Screen.NuvioFolder(
                 folderId = json.optString("folderId"),

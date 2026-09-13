@@ -386,7 +386,10 @@ private fun ProfileChip(
 ) {
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(18.dp),
+        // tv-material3 clickable Surface wants a ClickableSurfaceShape,
+        // not a foundation Shape (non-clickable Surfaces do take Shape —
+        // hence the disabled-pill usages elsewhere compile fine).
+        shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(18.dp)),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.06f),
         colors = ClickableSurfaceDefaults.colors(
             containerColor = if (selected) KBAccent.copy(alpha = 0.25f) else KBSurfaceRaised,

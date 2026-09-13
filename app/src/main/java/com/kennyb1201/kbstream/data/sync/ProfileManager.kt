@@ -85,7 +85,7 @@ object ProfileManager {
                 .closeScopedInstanceForSwitch()
         }
         runCatching {
-            com.kennyb1201.kbstream.data.iptv.IptvDatabase
+            com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
                 .closeScopedInstanceForSwitch()
         }
         runCatching { com.kennyb1201.kbstream.data.watched.WatchedStatusRepository.invalidateAllCaches() }
@@ -235,7 +235,7 @@ object ProfileManager {
                 .closeScopedInstanceForSwitch()
         }
         runCatching {
-            com.kennyb1201.kbstream.data.iptv.IptvDatabase
+            com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
                 .closeScopedInstanceForSwitch()
         }
 

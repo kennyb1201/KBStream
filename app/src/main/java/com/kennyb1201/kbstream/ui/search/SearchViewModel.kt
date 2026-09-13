@@ -66,25 +66,25 @@ data class AddonResultGroup(
     val catalogType: String? = null
 )
 
-class SearchViewModel(application: Application) : AndroidViewModel(application) {
+class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private val repository = AddonRepository()
 
     private val addonManager =
-        AddonManager.getInstance(application)
+        AddonManager.getInstance(app)
 
     private val tmdbRepository =
-        TmdbRepository(application)
+        TmdbRepository(app)
 
     private val watchedStatusRepository =
-        WatchedStatusRepository(application)
+        WatchedStatusRepository(app)
 
     // Recent searches are per-profile (search history is part of a
     // profile's viewing footprint - same isolation as watch history).
     private val prefs
-        get() = application.getSharedPreferences(
+        get() = app.getSharedPreferences(
             com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
-                application, PREFS_NAME
+                app, PREFS_NAME
             ),
             Context.MODE_PRIVATE
         )
