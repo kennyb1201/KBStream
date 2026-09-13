@@ -2270,7 +2270,11 @@ fun HomeScreen(
                 }
 
                 when {
-                    isLoading -> {
+                    // Full-screen spinner only when there is nothing to show
+                    // yet: a rebuild with existing rails keeps them visible
+                    // (rails stream in progressively on top of the old list
+                    // instead of flashing a loader on every refresh).
+                    isLoading && rails.isEmpty() -> {
                         item(key = "loading") {
                             Box(
                                 modifier = Modifier

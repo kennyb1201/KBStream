@@ -43,6 +43,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -184,6 +185,7 @@ private sealed interface SimklUpNextResult {
     ) : SimklUpNextResult
 }
 
+@OptIn(FlowPreview::class)
 class HomeViewModel(
     application: Application
 ) : AndroidViewModel(application) {
@@ -725,17 +727,30 @@ Log.d(
 
     private fun observeAddonChanges() {
         viewModelScope.launch {
-            addonManager.installedAddons.collectLatest {
-                // Rebuild rails immediately when addon/catalog settings change
-                // (reorder, show/hide, add/remove) without clearing the catalog
-                // cache, so the new order/visibility shows up right away from
-                // the in-memory cache instead of a slow full network refetch.
-                // The manual REFRESH paths still pass clearCatalogCache = true.
-                loadRailsInternal(
-                    forceRefresh = true,
-                    clearCatalogCache = false
-                )
-            }
+            // Skip the initial emission (init's loadRails() already covers
+            // it — without this, Home loaded every catalog TWICE on cold
+            // start) and debounce bursts so rapid addon edits (reorder,
+            // toggle several catalogs) coalesce into one rebuild instead of
+            // serially refetching the whole home per change.
+            var first = true
+            addonManager.installedAddons
+                .debounce(300)
+                .collectLatest {
+                    if (first) {
+                        first = false
+                        return@collectLatest
+                    }
+                    // Rebuild rails immediately when addon/catalog settings
+                    // change (reorder, show/hide, add/remove) without
+                    // clearing the catalog cache, so the new order/visibility
+                    // shows up right away from the in-memory cache instead of
+                    // a slow full network refetch. The manual REFRESH paths
+                    // still pass clearCatalogCache = true.
+                    loadRailsInternal(
+                        forceRefresh = true,
+                        clearCatalogCache = false
+                    )
+                }
         }
     }
 
@@ -4408,10 +4423,37 @@ private suspend fun calculateEpisodesRemaining(
                                     landscapeCards
                                 )?.let { rail ->
                                     collected.add(rail)
+                                    // Append just this rail right after the
+                                    // last catalog rail currently shown, so
+                                    // rails appear progressively in catalog
+                                    // order without republishing the whole
+                                    // batch (the earlier shared-list append
+                                    // made rails jump/duplicate visually).
                                     _rails.update { current ->
-                                        val merged =
-                                            current + collected
-                                        merged.distinctBy { railKeyOf(it) }
+                                        val without =
+                                            current.filterNot { existing ->
+                                                railKeyOf(existing) == railKeyOf(rail)
+                                            }
+                                        if (
+                                            without.isEmpty()
+                                        ) {
+                                            listOf(rail)
+                                        } else {
+                                            val lastCatalogIdx =
+                                                without.indexOfLast { existing ->
+                                                    railKeyOf(existing) in
+                                                        collected.map { railKeyOf(it) }
+                                                }
+                                            if (
+                                                lastCatalogIdx < 0
+                                            ) {
+                                                without + rail
+                                            } else {
+                                                without.subList(0, lastCatalogIdx + 1) +
+                                                    listOf(rail) +
+                                                    without.subList(lastCatalogIdx + 1, without.size)
+                                            }
+                                        }
                                     }
                                 }
                             }

@@ -18,6 +18,8 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
 
     override fun onCreate() {
         super.onCreate()
+        com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext =
+            applicationContext
         initCrashReporting()
         scheduleSimklPeriodicSync()
     }

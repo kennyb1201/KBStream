@@ -16,6 +16,17 @@ import kotlinx.coroutines.delay
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
+/**
+ * Application context handed over by MainApplication.onCreate so file-scope
+ * singletons (the shared OkHttp client and its disk cache) can resolve
+ * cache storage without leaking an Activity context.
+ */
+object AppContextHolder {
+
+    @Volatile
+    var appContext: android.content.Context? = null
+}
+
 // One process-wide OkHttp client for Stremio add-on traffic: every
 // AddonRepository instance used to build its own, so Search, Detail,
 // Streams, Home and the subtitle fetcher each paid fresh TCP+TLS
@@ -40,6 +51,20 @@ private val sharedAddonClient: OkHttpClient by lazy {
                 // catalogs that are probed in parallel; the default 5
                 // requests-per-host cap would queue them into 3 waves.
                 maxRequestsPerHost = 12
+            }
+        )
+        // HTTP disk cache: catalog responses survive app restarts, so a warm
+        // Home can paint from disk instantly instead of refetching every
+        // catalog over the network on a cold start (the in-memory catalog
+        // cache above only lives for the current process). Skipped when the
+        // app context isn't attached yet (unit tests) — caching is purely an
+        // optimization, never a startup dependency.
+        .cache(
+            AppContextHolder.appContext?.let { appContext ->
+                okhttp3.Cache(
+                    java.io.File(appContext.cacheDir, "addon_http_cache"),
+                    20L * 1024 * 1024
+                )
             }
         )
         .connectTimeout(
