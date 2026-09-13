@@ -70,14 +70,54 @@ object PrefsPayloadBuilder {
     const val KEY_SIMKL_AUTH = "simkl_auth"
     const val KEY_IPTV = "iptv_config"
     const val KEY_WATCHED_OVERRIDES = "watched_overrides"
+    const val KEY_HOME_ORDER = "nuvio_home_order"
+    const val KEY_COLLECTIONS = "nuvio_collections"
+    const val KEY_BADGE_PACK = "badge_pack"
 
     fun buildAll(context: Context): List<Pair<String, JsonObject>> = listOf(
         KEY_DISPLAY_PREFS to buildDisplayPrefs(context),
         KEY_ADDONS to buildAddons(context),
         KEY_SIMKL_AUTH to buildSimklAuth(context),
         KEY_IPTV to buildIptv(context),
-        KEY_WATCHED_OVERRIDES to buildWatchedOverrides(context)
+        KEY_WATCHED_OVERRIDES to buildWatchedOverrides(context),
+        KEY_HOME_ORDER to buildHomeOrder(context),
+        KEY_COLLECTIONS to buildCollections(context),
+        KEY_BADGE_PACK to buildBadgePack(context)
     )
+
+    fun buildBadgePack(context: Context): JsonObject {
+        val prefs = context.getSharedPreferences("kbstream_stream_badges", Context.MODE_PRIVATE)
+        return buildJsonObject {
+            put("updatedAt", System.currentTimeMillis())
+            put("badge_pack_url", prefs.getString("badge_pack_url", null).orEmpty())
+            put("badge_pack_json", prefs.getString("badge_pack_json", null).orEmpty())
+        }
+    }
+
+    fun buildHomeOrder(context: Context): JsonObject {
+        val prefs = context.getSharedPreferences("kbstream_nuvio_home_order", Context.MODE_PRIVATE)
+        return buildJsonObject {
+            put("updatedAt", System.currentTimeMillis())
+            put(
+                "home_order_json",
+                prefs.getString("home_order_json", null).orEmpty()
+            )
+        }
+    }
+
+    fun buildCollections(context: Context): JsonObject {
+        val prefs = context.getSharedPreferences("kbstream_nuvio_collections", Context.MODE_PRIVATE)
+        return buildJsonObject {
+            put("updatedAt", System.currentTimeMillis())
+            putJsonArray("profile_urls") {
+                prefs.getString("profile_urls", null).orEmpty()
+                    .split('\n')
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .forEach { add(it) }
+            }
+        }
+    }
 
     fun buildDisplayPrefs(context: Context): JsonObject {
         val prefs = context.getSharedPreferences("kbstream_player_prefs", Context.MODE_PRIVATE)
@@ -155,7 +195,52 @@ object PrefsPayloadApplier {
             PrefsPayloadBuilder.KEY_SIMKL_AUTH -> applySimklAuth(context, payload)
             PrefsPayloadBuilder.KEY_IPTV -> applyIptv(context, payload)
             PrefsPayloadBuilder.KEY_WATCHED_OVERRIDES -> applyWatchedOverrides(context, payload)
+            PrefsPayloadBuilder.KEY_HOME_ORDER -> applyHomeOrder(context, payload)
+            PrefsPayloadBuilder.KEY_COLLECTIONS -> applyCollections(context, payload)
+            PrefsPayloadBuilder.KEY_BADGE_PACK -> applyBadgePack(context, payload)
         }
+    }
+
+    private fun applyBadgePack(context: Context, payload: JsonObject) {
+        fun str(key: String): String =
+            (payload[key] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+
+        val url = str("badge_pack_url")
+        val packJson = str("badge_pack_json")
+        if (packJson.isBlank()) return
+
+        val prefs = context.getSharedPreferences("kbstream_stream_badges", Context.MODE_PRIVATE)
+        if (packJson == prefs.getString("badge_pack_json", null).orEmpty()) return
+
+        prefs.edit()
+            .putString("badge_pack_url", url)
+            .putString("badge_pack_json", packJson)
+            .apply()
+    }
+
+    private fun applyHomeOrder(context: Context, payload: JsonObject) {
+        val blob = (payload["home_order_json"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return
+        val prefs = context.getSharedPreferences("kbstream_nuvio_home_order", Context.MODE_PRIVATE)
+        val remoteUpdated = payloadUpdatedAt(payload)
+        if (remoteUpdated != null && remoteUpdated < prefs.getLong("home_order_synced_at", 0L)) return
+
+        val local = prefs.getString("home_order_json", null).orEmpty()
+        if (blob == local) return
+
+        prefs.edit()
+            .putString("home_order_json", blob)
+            .putLong("home_order_synced_at", remoteUpdated ?: System.currentTimeMillis())
+            .apply()
+    }
+
+    private fun applyCollections(context: Context, payload: JsonObject) {
+        val arr = payload["profile_urls"] as? kotlinx.serialization.json.JsonArray ?: return
+        val urls = arr.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
+        val prefs = context.getSharedPreferences("kbstream_nuvio_collections", Context.MODE_PRIVATE)
+        val joined = urls.joinToString("\n")
+        if (joined == prefs.getString("profile_urls", null).orEmpty()) return
+
+        prefs.edit().putString("profile_urls", joined).apply()
     }
 
     private fun applyDisplayPrefs(context: Context, payload: JsonObject) {

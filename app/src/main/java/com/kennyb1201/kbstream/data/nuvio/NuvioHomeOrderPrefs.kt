@@ -76,6 +76,14 @@ object NuvioHomeOrderPrefs {
     }
 
     fun save(context: Context, value: NuvioHomeOrder) {
+        com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+                appContext,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_HOME_ORDER,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildHomeOrder(appContext)
+            )
+        }
+
         prefs(context).edit()
             .putString(KEY_BLOB, adapter.toJson(value) ?: "{}")
             .apply()

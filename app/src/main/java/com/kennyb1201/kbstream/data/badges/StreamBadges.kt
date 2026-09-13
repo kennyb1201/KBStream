@@ -99,6 +99,15 @@ object StreamBadgeEngine {
             .putString(KEY_PACK_URL, url.trim())
             .putString(KEY_PACK_JSON, normalized)
             .apply()
+
+        // Cross-device sync: share the imported badge pack.
+        com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+                appContext,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_BADGE_PACK,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildBadgePack(appContext)
+            )
+        }
         return true
     }
 

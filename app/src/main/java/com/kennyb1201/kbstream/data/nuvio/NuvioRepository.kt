@@ -314,6 +314,13 @@ object NuvioProfilePrefs {
         val current = getProfileUrls(context)
         if (current.any { it.equals(clean, ignoreCase = true) }) return false
         prefs(context).edit().putString(KEY_URLS, (current + clean).joinToString("\n")).apply()
+        com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+                appContext,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_COLLECTIONS,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildCollections(appContext)
+            )
+        }
         return true
     }
 
@@ -322,6 +329,13 @@ object NuvioProfilePrefs {
         prefs(context).edit()
             .putString(KEY_URLS, remaining.joinToString("\n"))
             .apply()
+        com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+                appContext,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_COLLECTIONS,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildCollections(appContext)
+            )
+        }
     }
 
     fun getLastRefreshMs(context: Context): Long =
