@@ -1710,14 +1710,6 @@ fun HomeScreen(
             .buildMergedEntries(rails, nuvioState)
     }
 
-    // Infinite scroll identity for each rail, mirroring the ViewModel's
-    // railKeyOf() (addonName::catalogId::type) — the sentinel cards use this
-    // to request the rail's next catalog page.
-    val railKeys = remember(rails) {
-        rails.associate { rail ->
-            rail.addonName + "::" + rail.catalogId + "::" + rail.type to rail
-        }
-    }
     // The up-onto-topbar hook belongs to the first rail in DISPLAY order,
     // which a pinned collection can push away from rails[0].
     val firstDisplayedRailSourceIndex =
@@ -2370,8 +2362,8 @@ fun HomeScreen(
                                 InfiniteRailPageHandler(
                                     listState = railRowState,
                                     itemCount = rail.items.size,
-                                    railKey = railKeys[rail.addonName + "::" +
-                                        rail.catalogId + "::" + rail.type],
+                                    railKey = rail.addonName + "::" +
+                                        rail.catalogId + "::" + rail.type,
                                     onLoadMore = viewModel::loadMoreForRail
                                 )
 
