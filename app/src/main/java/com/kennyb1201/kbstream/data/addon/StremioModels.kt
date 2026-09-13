@@ -182,14 +182,14 @@ data class ManifestCatalog(
      * so they must never become Home rails by default.
      */
     @Json(name = "isSearch")
-    val isSearchCatalog: Boolean? = null,
+    val isSearchCatalog: Boolean? = null
+) {
+    val displayName: String
+        get() = customName ?: name
 
     /** Whether this catalog should appear on Home when first installed. */
     val defaultShowOnHome: Boolean
         get() = showInHomeHint ?: !(isSearchCatalog ?: false)
-) {
-    val displayName: String
-        get() = customName ?: name
 }
 
 @JsonClass(generateAdapter = true)
