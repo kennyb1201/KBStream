@@ -93,6 +93,7 @@ import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 sealed class Screen {
@@ -669,6 +670,28 @@ private fun PulsingClearLogo(
 
 class MainActivity : ComponentActivity() {
 
+    /// Latched by the exit dialog: while true, every key event is consumed
+    /// here at the Activity level for a short settle window before
+    /// finishAndRemoveTask() runs. Without this, stray key events from the
+    /// EXIT press (IR remotes double-fire, held-key autorepeat) leak to the
+    /// TV launcher after finish() and activate whatever icon is focused
+    /// there — the "random app opens" bug. Activity-level dispatch covers
+    /// all windows (including dialogs), unlike Compose modifier guards.
+    @Volatile
+    private var exitGuardLatched = false
+
+    fun latchExitGuard() {
+        exitGuardLatched = true
+    }
+
+    override fun dispatchKeyEvent(event: android.view.KeyEvent?): Boolean {
+        if (exitGuardLatched) {
+            // Consume everything: both DOWN and UP of any in-flight press.
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onCreate(
         savedInstanceState: Bundle?
     ) {
@@ -929,7 +952,15 @@ fun AppRoot() {
             onDismiss = { confirmExit = false },
             onConfirm = {
                 confirmExit = false
-                (context as? android.app.Activity)?.finish()
+                // Latch the key guard, then finish after a settle window so
+                // any in-flight/duplicate key events die inside our window
+                // instead of reaching the launcher.
+                val activity = context as? android.app.Activity
+                activity?.latchExitGuard()
+                searchListScope.launch {
+                    delay(350)
+                    activity?.finishAndRemoveTask()
+                }
             }
         )
     }
