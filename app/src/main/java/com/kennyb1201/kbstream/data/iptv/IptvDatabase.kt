@@ -54,5 +54,19 @@ abstract class IptvDatabase : RoomDatabase() {
 
         @Volatile private var scopedInstance: IptvDatabase? = null
         @Volatile private var scopedName: String? = null
+
+        /**
+         * Closes the CURRENT scoped DB but leaves a tombstone in
+         * [scopedName] so a caller that resolved the old profile's name
+         * cannot race in and rebuild/reopen the closed profile's EPG
+         * database after the switch (mirrors WatchHistoryDatabase).
+         */
+        fun closeScopedInstanceForSwitch() {
+            synchronized(this) {
+                runCatching { scopedInstance?.close() }
+                scopedInstance = null
+                // Keep scopedName as the tombstone; do not clear it.
+            }
+        }
     }
 }

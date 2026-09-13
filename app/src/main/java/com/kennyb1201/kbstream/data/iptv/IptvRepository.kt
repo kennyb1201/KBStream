@@ -26,9 +26,13 @@ class IptvRepository(
     private val client: OkHttpClient = IptvHttpClient.create(),
     private val m3uParser: M3uParser = M3uParser()
 ) {
-    private val db = IptvDatabase.getInstance(context)
-    private val dao = db.iptvDao()
-    private val xmltvImporter = XmltvImporter(dao)
+    // DB/DAO rebind per access: IptvDatabase.getInstance resolves the ACTIVE
+    // profile's scoped DB file. Capturing the DAO once pinned this repository
+    // to whatever profile was active at construction - after a switch, reads
+    // and imports would land in the previous profile's EPG database.
+    private val db: IptvDatabase get() = IptvDatabase.getInstance(context)
+    private val dao: com.kennyb1201.kbstream.data.iptv.db.IptvDao get() = db.iptvDao()
+    private val xmltvImporter: XmltvImporter get() = XmltvImporter(dao)
 
     private val guideSnapshotMutex = Mutex()
     private val guideSnapshots = ConcurrentHashMap<String, GuideSnapshot>()

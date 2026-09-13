@@ -10,8 +10,14 @@ class EpgRefreshWorker(
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result {
+        // WorkManager fires outside any profile context, so resolve the
+        // ACTIVE profile's scoped store at run time - otherwise the worker
+        // would always read the legacy/global config even after profiles
+        // exist (and could import the wrong account's EPG into a scoped DB).
         val prefs = applicationContext.getSharedPreferences(
-            "iptv_prefs",
+            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
+                applicationContext, "iptv_prefs"
+            ),
             Context.MODE_PRIVATE
         )
 

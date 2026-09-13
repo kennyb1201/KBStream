@@ -314,10 +314,12 @@ class HomeViewModel(
     // layer guarantees the card stays hidden until there is NEWER watch
     // activity for the same title (a fresh local resume row or a new Simkl
     // pause), which then un-hides it automatically.
-    private val dismissalPrefs: SharedPreferences =
-        getApplication<Application>()
+    private val dismissalPrefs: SharedPreferences
+        get() = getApplication<Application>()
             .getSharedPreferences(
-                PREFS_DISMISSED_UPNEXT,
+                com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
+                    getApplication(), PREFS_DISMISSED_UPNEXT
+                ),
                 Context.MODE_PRIVATE
             )
 
@@ -762,6 +764,8 @@ Log.d(
 
         observeUpNext()
 
+        observeProfileSwitches()
+
         // Instant Continue Watching: seed the rail from the warm watch
         // history right away so the UI has cards the moment Home renders;
         // the full enriched pipeline in observeUpNext replaces this
@@ -790,6 +794,50 @@ Log.d(
                 _watchedKeys.value =
                     current
             }
+        }
+    }
+
+    /**
+     * Profile-switch cleanup for the ViewModel's profile-bound in-memory
+     * state. The singleton layers (watch history DB handle, watched-status
+     * caches, addon list, Simkl cache) are reset by ProfileManager itself;
+     * this clears what lives HERE: dismissal map, watched-key set, hero
+     * state, up-next list, and the rails (rebuilt from the incoming
+     * profile's own addon/catalog configuration).
+     */
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
+    private fun observeProfileSwitches() {
+        viewModelScope.launch {
+            var first = true
+            com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile
+                .collect { profile ->
+                    if (first) {
+                        // Skip the initial emission: init already loads
+                        // against whatever profile was active at creation.
+                        first = false
+                        return@collect
+                    }
+                    // Note: profile may be null transiently during a switch
+                    // (all profiles deleted); still refresh - the stores then
+                    // resolve to the legacy namespace, which is the correct
+                    // post-switch target.
+                    Log.d("HOME_VM", "profile switched -> ${profile?.id ?: "legacy"}")
+
+                    dismissedContinueWatching.clear()
+                    dismissedContinueWatching.putAll(loadDismissedContinueWatching())
+
+                    _watchedKeys.value = emptySet()
+
+                    _heroMeta.value = null
+                    _heroTmdbDetail.value = null
+                    _heroBackdropUrl.value = null
+                    _heroLogoUrl.value = null
+                    _heroTrailerKey.value = null
+                    heroResolveJob?.cancel()
+
+                    refreshAllHomeData()
+                    refreshUpNext()
+                }
         }
     }
 

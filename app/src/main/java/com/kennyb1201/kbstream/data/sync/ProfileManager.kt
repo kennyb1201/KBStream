@@ -84,6 +84,10 @@ object ProfileManager {
             com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
                 .closeScopedInstanceForSwitch()
         }
+        runCatching {
+            com.kennyb1201.kbstream.data.iptv.IptvDatabase
+                .closeScopedInstanceForSwitch()
+        }
         runCatching { com.kennyb1201.kbstream.data.watched.WatchedStatusRepository.invalidateAllCaches() }
         runCatching { com.kennyb1201.kbstream.data.addon.AddonManager.getInstance(appContextForSwitch()).refreshAddons() }
         runCatching { com.kennyb1201.kbstream.data.simkl.SimklRepository.clearTransientCaches() }
@@ -222,6 +226,19 @@ object ProfileManager {
     }
 
     fun delete(context: Context, profileId: String) {
+        // Close scoped DB handles FIRST: Room keeps the file locked while
+        // open, and deleteDatabase on an open DB silently fails - leaving
+        // the deleted profile's history on disk (a privacy leak). Next
+        // access simply rebuilds the surviving profile's instance.
+        runCatching {
+            com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+                .closeScopedInstanceForSwitch()
+        }
+        runCatching {
+            com.kennyb1201.kbstream.data.iptv.IptvDatabase
+                .closeScopedInstanceForSwitch()
+        }
+
         val updated = loadProfiles(context).filterNot { it.id == profileId }
         saveProfiles(context, updated)
         _profiles.value = updated
@@ -240,8 +257,19 @@ object ProfileManager {
             ?.forEach { it.delete() }
 
         if (_activeProfile.value?.id == profileId) {
-            _activeProfile.value = updated.firstOrNull()
-            updated.firstOrNull()?.let { setActive(context, it) }
+            val next = updated.firstOrNull()
+            _activeProfile.value = next
+            if (next != null) {
+                setActive(context, next)
+            } else {
+                // Deleted the LAST profile: persist the cleared active id
+                // and run the same cache-reset sequence a switch performs,
+                // so UI state (watched caches, addons, Simkl, scoped DB
+                // handles) can't keep serving the deleted profile's data.
+                context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .edit().remove(KEY_ACTIVE).apply()
+                onActiveProfileChanged()
+            }
         }
     }
 
@@ -441,7 +469,7 @@ object ProfileStorage {
             "kbstream_player_prefs", "kbstream_addons", "kbstream_watched_overrides",
             "kbstream_nuvio_home_order", "kbstream_nuvio_collections",
             "kbstream_stream_badges", "iptv_prefs", "simkl_auth",
-            "iptv_guide_preferences", "simkl_sync"
+            "iptv_guide_preferences", "simkl_sync", "search_prefs"
         )
         legacyPrefs.forEach { base ->
             val src = context.getSharedPreferences(base, Context.MODE_PRIVATE)

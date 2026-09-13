@@ -79,9 +79,13 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
     private val watchedStatusRepository =
         WatchedStatusRepository(application)
 
-    private val prefs =
-        application.getSharedPreferences(
-            PREFS_NAME,
+    // Recent searches are per-profile (search history is part of a
+    // profile's viewing footprint - same isolation as watch history).
+    private val prefs
+        get() = application.getSharedPreferences(
+            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
+                application, PREFS_NAME
+            ),
             Context.MODE_PRIVATE
         )
 

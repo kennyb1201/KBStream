@@ -29,6 +29,18 @@ object BackupManager {
     private const val ADDON_PREFS = "kbstream_addons"
     private const val WATCHED_OVERRIDES_PREFS = "kbstream_watched_overrides"
 
+    /**
+     * Backups are per-profile artifacts: every prefs path resolves through
+     * ProfileStorage, so with an active profile the export contains that
+     * profile's data and the import writes into that profile's stores. With
+     * no profiles these resolve to the legacy/global names unchanged.
+     */
+    private fun scopedPrefs(context: Context, baseName: String) =
+        context.getSharedPreferences(
+            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, baseName),
+            Context.MODE_PRIVATE
+        )
+
     /** Serializes current state and writes it to [uri]. Returns a summary. */
     suspend fun export(context: Context, uri: Uri): String {
         val db = WatchHistoryDatabase.getInstanceScoped(context)
@@ -41,15 +53,15 @@ object BackupManager {
             put("exportedAt", System.currentTimeMillis())
             put("prefs", JSONObject().apply {
                 put("player", JSONObject().apply {
-                    context.getSharedPreferences(PLAYER_PREFS, Context.MODE_PRIVATE)
+                    scopedPrefs(context, PLAYER_PREFS)
                         .all.forEach { (key, value) ->
                             put(key, value)
                         }
                 })
-                put("addons", context.getSharedPreferences(ADDON_PREFS, Context.MODE_PRIVATE)
+                put("addons", scopedPrefs(context, ADDON_PREFS)
                     .getString("installed_addons_json", null))
                 put("watchedOverrides", JSONArray().apply {
-                    context.getSharedPreferences(WATCHED_OVERRIDES_PREFS, Context.MODE_PRIVATE)
+                    scopedPrefs(context, WATCHED_OVERRIDES_PREFS)
                         .getStringSet("watched_overrides", emptySet())
                         .orEmpty()
                         .forEach { put(it) }
@@ -133,7 +145,7 @@ object BackupManager {
         json: JSONObject?
     ) {
         if (json == null) return
-        val editor = context.getSharedPreferences(prefsName, Context.MODE_PRIVATE).edit()
+        val editor = scopedPrefs(context, prefsName).edit()
         val keys = json.keys()
         while (keys.hasNext()) {
             val key = keys.next()
@@ -150,7 +162,7 @@ object BackupManager {
     }
 
     private fun restoreAddons(context: Context, addonsJson: String?) {
-        context.getSharedPreferences(ADDON_PREFS, Context.MODE_PRIVATE)
+        scopedPrefs(context, ADDON_PREFS)
             .edit()
             .putString("installed_addons_json", addonsJson)
             .apply()
@@ -166,7 +178,7 @@ object BackupManager {
                 arr.optString(i).takeIf { it.isNotBlank() }?.let { set.add(it) }
             }
         }
-        context.getSharedPreferences(WATCHED_OVERRIDES_PREFS, Context.MODE_PRIVATE)
+        scopedPrefs(context, WATCHED_OVERRIDES_PREFS)
             .edit()
             .putStringSet("watched_overrides", set)
             .apply()

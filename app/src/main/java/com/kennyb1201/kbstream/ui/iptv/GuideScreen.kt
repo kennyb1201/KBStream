@@ -131,14 +131,25 @@ fun GuideScreen(
     val groupChipFocusRequesters = remember { mutableMapOf<String, FocusRequester>() }
     val latestOnPlayChannel by rememberUpdatedState(onPlayChannel)
     val appContext = androidx.compose.ui.platform.LocalContext.current.applicationContext
-    val guidePreferences = remember(appContext) {
-        appContext.getSharedPreferences("iptv_guide_preferences", Context.MODE_PRIVATE)
+    // Per-profile scoping: favorites/hidden groups belong to the active
+    // profile's playlist (a different profile can stream a different M3U,
+    // so channel IDs are not interchangeable). Also re-keyed on the active
+    // profile so a switch reloads the incoming profile's sets.
+    val activeProfileId by com.kennyb1201.kbstream.data.sync.ProfileManager
+        .activeProfile.collectAsState()
+    val guidePreferences = remember(appContext, activeProfileId) {
+        appContext.getSharedPreferences(
+            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
+                appContext, "iptv_guide_preferences"
+            ),
+            Context.MODE_PRIVATE
+        )
     }
-    var favorites by remember {
+    var favorites by remember(activeProfileId) {
         mutableStateOf(guidePreferences.getStringSet("favorites", emptySet())?.toSet().orEmpty())
     }
     
-    var hiddenGroups by remember {
+    var hiddenGroups by remember(activeProfileId) {
         mutableStateOf(guidePreferences.getStringSet("hidden_groups", emptySet())?.toSet().orEmpty())
     }
     var menuItem by remember { mutableStateOf<IptvChannelWithEpg?>(null) }
@@ -149,10 +160,14 @@ fun GuideScreen(
     // group/channel you were on instead of "All" + top of the list. The
     // pending* fields are consumed once by the membership effect below the
     // moment the restored channel's list content first exists.
-    val savedGroup = guidePreferences.getString("last_group", null)
-    val savedChannelKey = guidePreferences.getString("last_channel", null)
-    var pendingChannelKey by remember { mutableStateOf<String?>(savedChannelKey) }
-    var pendingFocusChannel by remember { mutableStateOf(!savedChannelKey.isNullOrBlank()) }
+    val savedGroup = remember(activeProfileId) {
+        guidePreferences.getString("last_group", null)
+    }
+    val savedChannelKey = remember(activeProfileId) {
+        guidePreferences.getString("last_channel", null)
+    }
+    var pendingChannelKey by remember(activeProfileId) { mutableStateOf<String?>(savedChannelKey) }
+    var pendingFocusChannel by remember(activeProfileId) { mutableStateOf(!savedChannelKey.isNullOrBlank()) }
     var membershipBump by remember { mutableStateOf(0) }
     var digitEntry by remember { mutableStateOf("") }
     // Set when Up is pressed from the channel list's top row. The
@@ -190,7 +205,7 @@ fun GuideScreen(
             addAll(seenGroups)
         }
     }
-    var selectedGroup by remember { mutableStateOf(savedGroup?.takeIf { it.isNotBlank() } ?: "All") }
+    var selectedGroup by remember(activeProfileId) { mutableStateOf(savedGroup?.takeIf { it.isNotBlank() } ?: "All") }
     val groupedChannels = remember(unhiddenChannels, selectedGroup, favorites) {
         when (selectedGroup) {
             "All" -> unhiddenChannels
