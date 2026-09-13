@@ -151,6 +151,9 @@ fun AddonsScreen(
     var showAddPanel by remember { mutableStateOf(false) }
     var showRenamePanel by remember { mutableStateOf(false) }
     var showRemoveConfirm by remember { mutableStateOf(false) }
+    // Destructive-action guard for collection sources: OK on a chip only
+    // ARMS removal; the confirm dialog below completes it.
+    var pendingCollectionRemoveUrl by remember { mutableStateOf<String?>(null) }
     var filterQuery by remember { mutableStateOf("") }
     var showFilterDialog by remember { mutableStateOf(false) }
     var filterDraft by remember { mutableStateOf("") }
@@ -436,6 +439,21 @@ fun AddonsScreen(
                 viewModel.removeAddon(selectedAddon.id)
                 selectedId = null
                 showRemoveConfirm = false
+            }
+        )
+    }
+
+    // Collection-source removal confirm (armed by OK on a source chip in
+    // the Catalog Manager). Sits at the same level as the add-on remove
+    // dialog; CANCEL takes initial focus so an accidental double-OK can't
+    // delete — you must deliberately move to REMOVE.
+    pendingCollectionRemoveUrl?.let { url ->
+        ConfirmRemoveCollectionDialog(
+            url = url,
+            onDismiss = { pendingCollectionRemoveUrl = null },
+            onConfirm = {
+                pendingCollectionRemoveUrl = null
+                viewModel.removeCollectionProfileUrl(url)
             }
         )
     }
@@ -1650,10 +1668,6 @@ private fun CatalogManagerDialog(
 ) {
     BackHandler(onBack = onDismiss)
 
-    // Destructive-action guard: OK on a collection source chip only ARMS
-    // removal; a confirm dialog (cancel-focused) completes it.
-    var pendingCollectionRemoveUrl by remember { mutableStateOf<String?>(null) }
-
     // Focus pinning for the reorder arrows: a move relocates the pressed
     // row (items are keyed by identity) and off-screen relocations dispose
     // the focused button, throwing D-pad focus back to the header. After
@@ -1932,21 +1946,6 @@ private fun CatalogManagerDialog(
                 }
             }
         }
-    }
-
-    // Collection-source removal confirm. Rendered above the manager dialog
-    // so BACK and focus stay in the right place; CANCEL takes initial
-    // focus, so the accidental double-OK (chip OK, then dialog OK) can't
-    // delete — you must deliberately move to REMOVE.
-    pendingCollectionRemoveUrl?.let { url ->
-        ConfirmRemoveCollectionDialog(
-            url = url,
-            onDismiss = { pendingCollectionRemoveUrl = null },
-            onConfirm = {
-                pendingCollectionRemoveUrl = null
-                onRemoveCollectionProfile(url)
-            }
-        )
     }
 }
 
