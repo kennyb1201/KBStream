@@ -161,7 +161,8 @@ sealed class Screen {
     object ProfilePicker : Screen()
 
     data class ProfileEdit(
-        val editingProfileId: String? = null
+        val editingProfileId: String? = null,
+        val returnTo: Screen? = null
     ) : Screen()
 
     /** Whole addon catalog browsed as a poster grid (from Home long-press). */
@@ -309,6 +310,9 @@ private fun encodeScreen(
         is Screen.ProfilePicker -> Unit
         is Screen.ProfileEdit -> {
             screen.editingProfileId?.let { put("editingProfileId", it) }
+            if (depth < MAX_RETURN_DEPTH) {
+                put("returnTo", encodeScreen(screen.returnTo, depth + 1))
+            }
         }
         is Screen.NuvioFolder -> {
             put("folderId", screen.folderId)
@@ -404,7 +408,8 @@ private fun decodeScreen(
             )
             "profilePicker" -> Screen.ProfilePicker
             "profileEdit" -> Screen.ProfileEdit(
-                editingProfileId = json.optNullableString("editingProfileId")
+                editingProfileId = json.optNullableString("editingProfileId"),
+                returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
             )
             "nuvioFolder" -> Screen.NuvioFolder(
                 folderId = json.optString("folderId"),
@@ -919,7 +924,13 @@ fun AppRoot() {
                 current.returnTo
 
             is Screen.ProfileEdit ->
-                Screen.ProfilePicker
+                if (current.returnTo != null) {
+                    stableBackDestination(current.returnTo)
+                } else {
+                    // Opened from the picker's Manage tile (or restored state
+                    // without a returnTo): Back belongs to the picker.
+                    Screen.ProfilePicker
+                }
 
             // Detail carries the screen it was opened from (Search, Home,
             // an actor page, ...), so Back returns there instead of always
@@ -995,7 +1006,13 @@ fun AppRoot() {
         is Screen.ProfileEdit -> {
             ProfileEditScreen(
                 editingProfileId = current.editingProfileId,
-                onDone = { screen = Screen.ProfilePicker }
+                onDone = {
+                    screen = if (current.returnTo != null) {
+                        current.returnTo
+                    } else {
+                        Screen.ProfilePicker
+                    }
+                }
             )
         }
 
@@ -1099,7 +1116,10 @@ fun AppRoot() {
             SettingsScreen(
                 onBack = { screen = Screen.Home },
                 onOpenAddons = { screen = Screen.Addons },
-                onOpenSimkl = { screen = Screen.Simkl }
+                onOpenSimkl = { screen = Screen.Simkl },
+                onOpenProfiles = {
+                    screen = Screen.ProfileEdit(returnTo = Screen.Settings)
+                }
             )
         }
 

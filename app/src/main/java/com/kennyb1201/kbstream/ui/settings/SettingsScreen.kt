@@ -61,7 +61,8 @@ import kotlinx.coroutines.launch
 fun SettingsScreen(
     onBack: () -> Unit,
     onOpenAddons: () -> Unit = {},
-    onOpenSimkl: () -> Unit = {}
+    onOpenSimkl: () -> Unit = {},
+    onOpenProfiles: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val focusRequester = remember { FocusRequester() }
@@ -167,6 +168,12 @@ fun SettingsScreen(
         SectionHeader("INTEGRATIONS")
 
         com.kennyb1201.kbstream.ui.settings.SyncSection()
+
+        NavigationRow(
+            label = "Profiles",
+            description = "Create, rename, and switch viewing profiles",
+            onClick = onOpenProfiles
+        )
 
         NavigationRow(
             label = "Add-ons",

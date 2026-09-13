@@ -3,21 +3,19 @@ package com.kennyb1201.kbstream.ui.profiles
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -40,12 +38,17 @@ import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
+import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.sync.ProfileManager
+import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBSurface
+import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
@@ -53,7 +56,8 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 /**
  * Create/edit profiles: name field, custom uploaded avatar, 8 generic
  * avatar colors, delete. TV-first: D-pad through controls, on-screen
- * keyboard via OutlinedTextField.
+ * keyboard via KBTextField; opened from the picker's Manage tile or
+ * Settings → Profiles (manage-mode chip row picks the target profile).
  */
 @Composable
 fun ProfileEditScreen(
@@ -62,26 +66,34 @@ fun ProfileEditScreen(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val profiles by ProfileManager.profiles.collectAsState()
-    val editing = profiles.firstOrNull { it.id == editingProfileId }
 
-    var name by remember(editingProfileId) {
+    // Manage mode: when opened with a null id (Settings entry point or the
+    // picker's Manage tile), an internal chip row switches between editing
+    // an existing profile and creating a new one. With no profiles yet the
+    // screen stays the plain "New profile" form.
+    var effectiveEditId by remember(editingProfileId) {
+        mutableStateOf<String?>(editingProfileId)
+    }
+    val editing = profiles.firstOrNull { it.id == effectiveEditId }
+
+    var name by remember(effectiveEditId) {
         mutableStateOf(editing?.name.orEmpty())
     }
-    var avatarIndex by remember(editingProfileId) {
+    var avatarIndex by remember(effectiveEditId) {
         mutableStateOf(editing?.avatarIndex ?: 0)
     }
     // Picked-but-not-yet-saved avatar (file:// cache URL). Rendered
     // immediately; bound to the profile on Save via finalizeAvatar().
-    var pendingAvatarUrl by remember(editingProfileId) {
+    var pendingAvatarUrl by remember(effectiveEditId) {
         mutableStateOf<String?>(null)
     }
     // Manually typed remote avatar URL (https://…). Takes precedence on save.
-    var avatarUrlInput by remember(editingProfileId) {
+    var avatarUrlInput by remember(effectiveEditId) {
         mutableStateOf("")
     }
     // Tracks whether the custom photo is in effect; selecting a color tile
     // flips this off so a color choice actually replaces the photo on save.
-    var useCustomAvatar by remember(editingProfileId) {
+    var useCustomAvatar by remember(effectiveEditId) {
         mutableStateOf(editing?.customAvatarUrl != null || editing?.avatarData != null)
     }
 
@@ -111,6 +123,40 @@ fun ProfileEditScreen(
             .padding(48.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        // Manage-mode header row: chips to pick which profile to edit or
+        // start a new one. Only shown when opened WITHOUT a specific id
+        // (the picker's per-tile edit path passes an id and skips this).
+        if (editingProfileId == null && profiles.isNotEmpty()) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier
+                    .padding(top = 20.dp)
+                    .focusGroup()
+            ) {
+                profiles.forEach { p ->
+                    ProfileChip(
+                        label = p.name,
+                        selected = effectiveEditId == p.id,
+                        onClick = {
+                            effectiveEditId = p.id
+                        }
+                    )
+                }
+                ProfileChip(
+                    label = "+ New",
+                    selected = effectiveEditId == null,
+                    onClick = {
+                        effectiveEditId = null
+                        name = ""
+                        avatarIndex = 0
+                        pendingAvatarUrl = null
+                        avatarUrlInput = ""
+                        useCustomAvatar = false
+                    }
+                )
+            }
+        }
+
         Text(
             text = if (editing == null) "New profile" else "Edit profile",
             style = MaterialTheme.typography.headlineSmall,
@@ -118,15 +164,14 @@ fun ProfileEditScreen(
             color = KBTextHi
         )
 
-        OutlinedTextField(
+        KBTextField(
             value = name,
             onValueChange = { name = it },
-            label = { Text("Name") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+            placeholder = "Profile name",
+            focusRequester = nameRequester,
             modifier = Modifier
+                .fillMaxWidth(0.6f)
                 .padding(top = 24.dp)
-                .focusRequester(nameRequester)
         )
 
         // Avatar row: custom upload tile first, then the 8 generic colors
@@ -238,7 +283,7 @@ fun ProfileEditScreen(
         }
 
         // Remote avatar URL — type or paste a direct link to an image.
-        OutlinedTextField(
+        KBTextField(
             value = avatarUrlInput,
             onValueChange = {
                 avatarUrlInput = it
@@ -247,75 +292,74 @@ fun ProfileEditScreen(
                     useCustomAvatar = true
                 }
             },
-            label = { Text("Avatar image URL (optional)") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-            modifier = Modifier.padding(top = 16.dp)
+            placeholder = "Avatar image URL (optional)",
+            keyboardType = KeyboardType.Uri,
+            modifier = Modifier
+                .fillMaxWidth(0.6f)
+                .padding(top = 16.dp)
         )
 
         Row(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.padding(top = 32.dp)
         ) {
-            Button(
-                onClick = {
-                    // Precedence: typed URL > uploaded image > color/clear.
-                    val typedUrl = avatarUrlInput.trim().takeIf { it.startsWith("http") }
-                    if (editing == null) {
-                        val created = ProfileManager.createAndMigrateLegacy(context, name, avatarIndex)
-                        when {
-                            typedUrl != null ->
-                                ProfileManager.finalizeAvatar(context, created.id, typedUrl)
-                            pendingAvatarUrl != null ->
-                                ProfileManager.finalizeAvatar(context, created.id, pendingAvatarUrl)
-                        }
-                    } else {
-                        ProfileManager.rename(context, editing.id, name, avatarIndex)
-                        when {
-                            typedUrl != null ->
-                                ProfileManager.finalizeAvatar(context, editing.id, typedUrl)
-                            pendingAvatarUrl != null ->
-                                ProfileManager.finalizeAvatar(context, editing.id, pendingAvatarUrl)
-                            !useCustomAvatar &&
-                                (editing.customAvatarUrl != null || editing.avatarData != null) ->
-                                ProfileManager.setCustomAvatar(context, editing.id, null)
-                        }
-                    }
-                    onDone()
-                },
-                enabled = name.isNotBlank(),
-                colors = ButtonDefaults.buttonColors(containerColor = KBAccent)
+            ProfileActionButton(
+                label = "Save",
+                enabled = name.isNotBlank()
             ) {
-                Text("Save", color = Color.Black)
+                // Precedence: typed URL > uploaded image > color/clear.
+                val typedUrl = avatarUrlInput.trim().takeIf { it.startsWith("http") }
+                if (editing == null) {
+                    val created = ProfileManager.createAndMigrateLegacy(context, name, avatarIndex)
+                    when {
+                        typedUrl != null ->
+                            ProfileManager.finalizeAvatar(context, created.id, typedUrl)
+                        pendingAvatarUrl != null ->
+                            ProfileManager.finalizeAvatar(context, created.id, pendingAvatarUrl)
+                    }
+                } else {
+                    ProfileManager.rename(context, editing.id, name, avatarIndex)
+                    when {
+                        typedUrl != null ->
+                            ProfileManager.finalizeAvatar(context, editing.id, typedUrl)
+                        pendingAvatarUrl != null ->
+                            ProfileManager.finalizeAvatar(context, editing.id, pendingAvatarUrl)
+                        !useCustomAvatar &&
+                            (editing.customAvatarUrl != null || editing.avatarData != null) ->
+                            ProfileManager.setCustomAvatar(context, editing.id, null)
+                    }
+                }
+                onDone()
             }
 
-            OutlinedButton(onClick = onDone) {
-                Text("Cancel", color = KBTextHi)
+            ProfileActionButton(
+                label = "Cancel",
+                enabled = true
+            ) {
+                onDone()
             }
 
             if (shownCustomUrl != null) {
-                OutlinedButton(
-                    onClick = {
-                        pendingAvatarUrl = null
-                        avatarUrlInput = ""
-                        useCustomAvatar = false
-                        editing?.let {
-                            ProfileManager.setCustomAvatar(context, it.id, null)
-                        }
-                    }
+                ProfileActionButton(
+                    label = "Remove photo",
+                    enabled = true
                 ) {
-                    Text("Remove photo", color = KBTextLo)
+                    pendingAvatarUrl = null
+                    avatarUrlInput = ""
+                    useCustomAvatar = false
+                    editing?.let {
+                        ProfileManager.setCustomAvatar(context, it.id, null)
+                    }
                 }
             }
 
             if (editing != null && profiles.size > 1) {
-                OutlinedButton(
-                    onClick = {
-                        ProfileManager.delete(context, editing.id)
-                        onDone()
-                    }
+                ProfileActionButton(
+                    label = "Delete",
+                    enabled = true
                 ) {
-                    Text("Delete", color = Color(0xFFE57373))
+                    ProfileManager.delete(context, editing.id)
+                    onDone()
                 }
             }
         }
@@ -326,6 +370,74 @@ fun ProfileEditScreen(
                     "moved into this profile so nothing is lost.",
                 color = KBTextLo,
                 modifier = Modifier.padding(top = 16.dp)
+            )
+        }
+    }
+}
+
+/** Chip-style selector for the manage-mode "which profile" row. */
+@Composable
+private fun ProfileChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(18.dp),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.06f),
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = if (selected) KBAccent.copy(alpha = 0.25f) else KBSurfaceRaised,
+            contentColor = if (selected) KBTextHi else KBTextLo,
+            focusedContainerColor = KBAccent.copy(alpha = 0.45f),
+            focusedContentColor = KBTextHi
+        ),
+        border = ClickableSurfaceDefaults.border(
+            focusedBorder = Border(
+                border = BorderStroke(2.dp, KBAccent),
+                shape = RoundedCornerShape(18.dp)
+            )
+        )
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
+        )
+    }
+}
+
+/** TV-focusable action button (mirrors SyncSection's SyncActionButton). */
+@Composable
+private fun ProfileActionButton(
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    if (enabled) {
+        KBCard(onClick = onClick) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
+            )
+        }
+    } else {
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            colors = SurfaceDefaults.colors(
+                containerColor = KBSurface.copy(alpha = 0.50f),
+                contentColor = KBTextLo.copy(alpha = 0.50f)
+            )
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = KBTextLo.copy(alpha = 0.50f),
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
             )
         }
     }
