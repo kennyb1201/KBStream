@@ -3141,13 +3141,19 @@ class SimklRepository(
             null
 
         /**
-         * Profile-switch isolation: drops the static continue-watching cache
-         * so a profile switch can't surface the previous profile's Simkl
-         * list. Companion-level so ProfileManager can call it without an
-         * instance.
+         * Profile-switch isolation: drops every in-memory watched-state
+         * snapshot. Simkl auth is per-profile (scoped simkl_auth prefs), so
+         * after a switch these caches can belong to a DIFFERENT Simkl
+         * account - the CW feed AND the completed-shows / completed-movies
+         * sets must all go. Companion-level so ProfileManager can call it
+         * without an instance.
          */
         fun clearTransientCaches() {
             cachedContinueWatching = null
+            cachedAllShowItems = null
+            cachedAllShowItemsFetchedAt = 0L
+            cachedCompletedMovieKeys = null
+            cachedCompletedMovieKeysFetchedAt = 0L
         }
     }
 }
