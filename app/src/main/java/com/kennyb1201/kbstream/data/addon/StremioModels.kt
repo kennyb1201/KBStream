@@ -22,10 +22,25 @@ data class MetaPreview(
     // "2026" or a full date like "2026-12-25"); used by the Home
     // digital-release filter and the search-tile year caption.
     val releaseInfo: String? = null,
+
+    // Some catalogs (AIOMetadata) ship a numeric `year` instead of a string
+    // `releaseInfo` on their search previews. Parsed as Any because it can be
+    // an int, a string, or absent; normalized into [yearOrNull] so callers
+    // never see the raw variant.
+    val year: Any? = null,
     // IMDb rating when the addon includes it in catalog/search previews
     // (Cinemeta does); powers the search-tile star-rating caption.
     @Json(name = "imdbRating") val imdbRating: String? = null
-)
+) {
+    /**
+     * Release year from whichever field the catalog filled: the standard
+     * string `releaseInfo` or AIOMetadata's numeric `year`.
+     */
+    val yearOrNull: Int?
+        get() = releaseInfo?.take(4)?.toIntOrNull()
+            ?: (year as? Number)?.toInt()
+            ?: (year as? String)?.trim()?.take(4)?.toIntOrNull()
+}
 
 @JsonClass(generateAdapter = true)
 data class CatalogResponse(
