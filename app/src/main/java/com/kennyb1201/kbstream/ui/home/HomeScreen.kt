@@ -99,6 +99,7 @@ import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.tmdb.movieStatusTag
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
+import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.LandscapeCard
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.nuvio.NuvioHomeCollectionRail
@@ -1351,24 +1352,42 @@ private fun UpcomingEpisodeCard(
                     )
             )
 
-            Text(
-                text = "S%02d · E%02d".format(
-                    upcoming.season,
-                    upcoming.episode
-                ),
-                color = Color.Black,
-                fontSize = 9.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(6.dp)
-                    .background(
-                        color = KBAccent,
-                        shape = RoundedCornerShape(4.dp)
-                    )
-                    .padding(horizontal = 5.dp, vertical = 2.dp)
-            )
+            if (upcoming.isSeasonPremiere) {
+                Text(
+                    text = "NEW SEASON",
+                    color = KBTextHi,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(6.dp)
+                        .background(
+                            color = Color(0xFF6A1B9A),
+                            shape = RoundedCornerShape(4.dp)
+                        )
+                        .padding(horizontal = 5.dp, vertical = 2.dp)
+                )
+            } else {
+                Text(
+                    text = "S%02d · E%02d".format(
+                        upcoming.season,
+                        upcoming.episode
+                    ),
+                    color = Color.Black,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(6.dp)
+                        .background(
+                            color = KBAccent,
+                            shape = RoundedCornerShape(4.dp)
+                        )
+                        .padding(horizontal = 5.dp, vertical = 2.dp)
+                )
+            }
 
             Column(
                 modifier = Modifier
@@ -2479,14 +2498,22 @@ fun HomeScreen(
 
                     rails.isEmpty() -> {
                         item(key = "empty") {
-                            Text(
-                                text =
-                                    "No catalogs available. Add an addon to get started.",
-                                modifier =
-                                    Modifier.padding(
-                                        24.dp
-                                    )
-                            )
+                            // Clicking (OK on the remote) retries the
+                            // rail build immediately - no need to leave
+                            // Home or poke a setting when a cold-start
+                            // load failed.
+                            KBCard(
+                                onClick = {
+                                    viewModel.refreshRailsOnly()
+                                },
+                                modifier = Modifier
+                                    .padding(24.dp)
+                            ) {
+                                Text(
+                                    text =
+                                        "No catalogs available. Press OK to retry, or add an addon to get started."
+                                )
+                            }
                         }
                     }
 
@@ -2527,13 +2554,13 @@ fun HomeScreen(
                                     ) {
                                         SectionTitle(
                                             homeRailTitle(
-                                        catalogName = rail.catalogName,
-                                        addonName = rail.addonName,
-                                        type = rail.type,
-                                        showType = showRailType,
-                                        showAddon = showRailAddon
-                                    )
-                                )
+                                                catalogName = rail.catalogName,
+                                                addonName = rail.addonName,
+                                                type = rail.type,
+                                                showType = showRailType,
+                                                showAddon = showRailAddon
+                                            )
+                                        )
 
                                 val railRowState = rememberLazyListState()
 

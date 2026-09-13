@@ -10,6 +10,7 @@ import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
 import com.kennyb1201.kbstream.data.simkl.SimklContinueWatchingItem
@@ -56,6 +57,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
@@ -174,7 +176,9 @@ data class UpcomingEpisode(
     val season: Int,
     val episode: Int,
     val airDateEpochMs: Long,
-    val airDateLabel: String
+    val airDateLabel: String,
+    /** True when E01 — renders the card's badge as "NEW SEASON". */
+    val isSeasonPremiere: Boolean = false
 )
 
 private data class ResolvedHomeSeriesTarget(
@@ -235,9 +239,16 @@ class HomeViewModel(
     private val watchHistoryRepository =
         WatchHistoryRepository(application)
 
-    private val historyDao =
-        WatchHistoryDatabase
-            .getInstanceScoped(application)
+    // Resolved per access, not captured at construction: getInstanceScoped
+    // binds the Room instance to the ACTIVE profile's database file. Holding
+    // one DAO across a profile switch (or a first-profile creation, which
+    // closes the scoped DB) left Home reading the previous profile's closed
+    // history DB - continue watching went stale/local-only until Home was
+    // fully rebuilt. Every read below re-resolves, so a switch is picked up
+    // on the very next query/subscription.
+    private val historyDao: WatchHistoryDao
+        get() = WatchHistoryDatabase
+            .getInstanceScoped(getApplication())
             .watchHistoryDao()
 
     private val simklRepository =
@@ -1162,7 +1173,13 @@ Log.d(
                 (lastAppliedLandscape != null &&
                     currentLandscape != lastAppliedLandscape)
 
-        if (needsRebuild) {
+        // Coming back to an empty Home (cold start failed, user backed out
+        // of the empty state, process was restored) must always retry the
+        // build - otherwise the user is stuck staring at "No catalogs
+        // available" until they find some setting to poke.
+        val railsEmpty = _rails.value.isEmpty()
+
+        if (needsRebuild || railsEmpty) {
 
             viewModelScope.launch {
 
@@ -1740,6 +1757,10 @@ Log.d(
         items: List<UpNextItem>
     ): List<UpcomingEpisode> {
         val now = System.currentTimeMillis()
+        val startOfToday = LocalDate.now(ZoneId.systemDefault())
+            .atStartOfDay(ZoneId.systemDefault())
+            .toInstant()
+            .toEpochMilli()
         val seenParents = HashSet<String>()
         val upcoming = ArrayList<UpcomingEpisode>()
 
@@ -1750,7 +1771,10 @@ Log.d(
             val parentId = item.parentId?.takeIf { it.isNotBlank() } ?: continue
             val parentType = item.parentType?.takeIf { it.isNotBlank() } ?: continue
             val epochMs = parseTmdbAirDate(air.airDate) ?: continue
-            if (epochMs <= now) continue
+            // Air dates carry no time (midnight), so compare against the
+            // start of today: an episode airing later today still shows
+            // (labelled "Today"); anything before today has aired.
+            if (epochMs < startOfToday) continue
             if (!seenParents.add(parentId)) continue
 
             upcoming.add(
@@ -1764,7 +1788,8 @@ Log.d(
                     season = season,
                     episode = episode,
                     airDateEpochMs = epochMs,
-                    airDateLabel = formatAirDateLabel(air.airDate)
+                    airDateLabel = formatAirDateLabel(air.airDate),
+                    isSeasonPremiere = episode == 1
                 )
             )
         }
@@ -1889,16 +1914,25 @@ Log.d(
     private fun previousSimklUpNextItems(): List<UpNextItem> =
         _upNext.value.filter { it.historyRowId == null }
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private fun observeUpNext() {
 
         viewModelScope.launch {
 
+            // Key the subscription on active-profile + refresh trigger, and
+            // RE-RESOLVE the Room flow every cycle (flatMapLatest): a Room
+            // flow is bound to the DB instance it was created from, so the
+            // old captured-Flow design kept listening to the previous
+            // profile's closed database after a switch / first-profile
+            // creation. Re-subscribing picks up the active profile's DB -
+            // including cloud rows pulled by SupabaseSync.onProfileSwitched.
             combine(
-                watchHistoryRepository.continueWatchingParents,
+                com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile,
                 _refreshTrigger
-            ) { history, _ ->
-                history
-            }
+            ) { _, _ -> }
+                .flatMapLatest {
+                    watchHistoryRepository.continueWatchingParentsFlow()
+                }
                 .debounce(UP_NEXT_DEBOUNCE_MS)
                 .collect { history ->
 
@@ -4449,6 +4483,14 @@ private suspend fun calculateEpisodesRemaining(
         }
     }
 
+    /**
+     * Remaining auto-retries for an all-failed cold-start rail build (see the
+     * retry block inside [loadRailsInternal]). A successful non-empty build
+     * resets the budget; each all-failed attempt consumes one so a device
+     * that boots with no network stops instead of retrying forever.
+     */
+    private var railLoadRetriesLeft = RAIL_LOAD_RETRY_MAX_ATTEMPTS
+
     private suspend fun loadRailsInternal(
         forceRefresh: Boolean,
         clearCatalogCache: Boolean = forceRefresh
@@ -4617,6 +4659,44 @@ private suspend fun calculateEpisodesRemaining(
 
                 _rails.value =
                     finalRails.distinctBy { railKeyOf(it) }
+
+                // Cold-start resilience: when every catalog fetch fails
+                // simultaneously (network not yet up when the TV launcher
+                // restores the app, DNS briefly unresolved, Wi-Fi still
+                // associating) Home used to stay empty until some other
+                // event (opening the home manager, toggling a setting)
+                // happened to fire a rebuild. Detect the all-failed build
+                // and retry the whole load a couple of times with backoff.
+                if (
+                    finalRails.isEmpty() &&
+                    pendingCatalogs.isNotEmpty() &&
+                    !forceRefresh &&
+                    railLoadRetriesLeft > 0
+                ) {
+                    railLoadRetriesLeft -= 1
+                    val backoffMs =
+                        RAIL_LOAD_RETRY_BASE_DELAY_MS *
+                            (RAIL_LOAD_RETRY_MAX_ATTEMPTS - railLoadRetriesLeft)
+
+                    Log.w(
+                        "HOME_RAILS",
+                        "rail load produced 0 rails from " +
+                            "${pendingCatalogs.size} catalogs - retrying in ${backoffMs}ms " +
+                            "($railLoadRetriesLeft retries left)"
+                    )
+
+                    _isLoading.value = true
+                    delay(backoffMs)
+                    loadRailsInternal(
+                        forceRefresh = false,
+                        clearCatalogCache = true
+                    )
+                    return
+                }
+
+                if (finalRails.isNotEmpty()) {
+                    railLoadRetriesLeft = RAIL_LOAD_RETRY_MAX_ATTEMPTS
+                }
 
                 _isLoading.value =
                     false
@@ -5134,6 +5214,11 @@ private suspend fun calculateEpisodesRemaining(
 
         private const val PERIODIC_SIMKL_REFRESH_MS =
             15 * 60 * 1000L
+
+        /** Cold-start rail retry tuning: 2 retries at +4s / +8s. */
+        private const val RAIL_LOAD_RETRY_MAX_ATTEMPTS = 2
+
+        private const val RAIL_LOAD_RETRY_BASE_DELAY_MS = 4_000L
 
         private const val TOP_TODAY_ADDON_NAME =
             "TMDB Top Today"

@@ -43,6 +43,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -90,6 +91,7 @@ fun KBTextField(
     modifier: Modifier = Modifier,
     focusRequester: FocusRequester? = null,
     keyboardType: KeyboardType = KeyboardType.Text,
+    visualTransformation: VisualTransformation = VisualTransformation.None,
     leading: (@Composable () -> Unit)? = null,
     onDone: (() -> Unit)? = null,
     onFocusChanged: ((Boolean) -> Unit)? = null
@@ -117,6 +119,7 @@ fun KBTextField(
             imeAction = ImeAction.Done,
             keyboardType = keyboardType
         ),
+        visualTransformation = visualTransformation,
         keyboardActions = KeyboardActions(onDone = { finishEditing() }),
         decorationBox = { innerTextField ->
             Row(

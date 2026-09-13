@@ -1,32 +1,38 @@
 package com.kennyb1201.kbstream.data.history
 
 import android.content.Context
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.Flow
 
-class WatchHistoryRepository(context: Context) {
-    private val dao = WatchHistoryDatabase.getInstanceScoped(context).watchHistoryDao()
-    private val repositoryScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+class WatchHistoryRepository(private val appContext: Context) {
 
-    // 1. Hot StateFlow for all recent watch history items
-    val recentHistory: StateFlow<List<WatchHistoryEntity>> = dao.observeRecent()
-        .stateIn(
-            scope = repositoryScope,
-            started = SharingStarted.WhileSubscribed(5000),
-            initialValue = emptyList()
-        )
+    // Resolved per access: the scoped Room instance is bound to the ACTIVE
+    // profile's database file. Capturing one DAO at construction kept this
+    // repository attached to the profile that was active when it was built -
+    // after a profile switch (or first-profile creation, which closes the
+    // scoped DB) reads/writes hit the closed or previous profile's DB. With
+    // per-access resolution every call rebinds to the active profile.
+    private val dao: WatchHistoryDao
+        get() = WatchHistoryDatabase
+            .getInstanceScoped(appContext)
+            .watchHistoryDao()
 
-    // 2. Hot StateFlow for Continue Watching parent items (ideal for Home and Up Next rails)
-    val continueWatchingParents: StateFlow<List<WatchHistoryEntity>> = dao.observeContinueWatchingParents()
-        .stateIn(
-            scope = repositoryScope,
-            started = SharingStarted.WhileSubscribed(5000),
-            initialValue = emptyList()
-        )
+    // 1. Recent history rows as a flow factory (same per-access rebinding
+    //    rationale as [continueWatchingParentsFlow] - no caller in the app
+    //    currently subscribes, kept for API parity).
+    fun recentHistoryFlow(): Flow<List<WatchHistoryEntity>> =
+        dao.observeRecent()
+
+    // 2. Continue Watching parents as a FLOW FACTORY, not a captured
+    //    StateFlow: Room flows are bound to the DAO (and thus to the DB
+    //    file) that created them. A captured StateFlow kept the Home
+    //    pipeline subscribed to the previous profile's DB after a profile
+    //    switch or first-profile creation (which closes the scoped
+    //    instance) - continue watching then went stale/local-only until a
+    //    full rebuild. Each call re-resolves the active profile's DAO, and
+    //    flatMapLatest on the caller side re-subscribes whenever the
+    //    upstream profile-change signal fires.
+    fun continueWatchingParentsFlow(): Flow<List<WatchHistoryEntity>> =
+        dao.observeContinueWatchingParents()
 
     suspend fun upsert(entry: WatchHistoryEntity) {
         com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueueHistory(entry)

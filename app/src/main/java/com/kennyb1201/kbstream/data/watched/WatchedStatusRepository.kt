@@ -3,6 +3,8 @@ package com.kennyb1201.kbstream.data.watched
 import android.content.Context
 import android.util.Log
 import com.kennyb1201.kbstream.data.cache.WatchedStatusEntity
+import com.kennyb1201.kbstream.data.cache.WatchedStatusDao
+import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import kotlinx.coroutines.CoroutineScope
@@ -24,16 +26,19 @@ class WatchedStatusRepository(
     private val simklRepository =
         SimklRepository.getInstance(context)
 
-    private val database =
-        WatchHistoryDatabase.getInstanceScoped(
-            context
-        )
+    // Resolved per access (see WatchHistoryRepository for the full story):
+    // the scoped Room instance is bound to the ACTIVE profile's DB file, so
+    // captured DAOs kept serving the previous profile after a switch or a
+    // first-profile creation closed the scoped instance.
+    private val historyDao: WatchHistoryDao
+        get() = WatchHistoryDatabase
+            .getInstanceScoped(context)
+            .watchHistoryDao()
 
-    private val historyDao =
-        database.watchHistoryDao()
-
-    private val watchedStatusDao =
-        database.watchedStatusDao()
+    private val watchedStatusDao: WatchedStatusDao
+        get() = WatchHistoryDatabase
+            .getInstanceScoped(context)
+            .watchedStatusDao()
 
     private val repositoryScope =
         CoroutineScope(

@@ -81,7 +81,8 @@ object ProfileManager {
      */
     private fun onActiveProfileChanged() {
         runCatching {
-            com.kennyb1201.kbstream.data.history.WatchHistoryDatabase.closeScopedInstance()
+            com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+                .closeScopedInstanceForSwitch()
         }
         runCatching { com.kennyb1201.kbstream.data.watched.WatchedStatusRepository.invalidateAllCaches() }
         runCatching { com.kennyb1201.kbstream.data.addon.AddonManager.getInstance(appContextForSwitch()).refreshAddons() }
@@ -335,13 +336,18 @@ object ProfileManager {
         val profile = create(context, name, avatarIndex)
 
         if (hadLegacy) {
+            // Copy the legacy (un-namespaced) stores into the new profile's
+            // namespace BEFORE anything binds against it - copyLegacyIntoProfile
+            // runs while the new profile is already active, so the copied rows
+            // are immediately the ones the scoped stores resolve.
             ProfileStorage.copyLegacyIntoProfile(context, profile.id)
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit().putBoolean(KEY_MIGRATED, true).apply()
-            // create() already refreshed caches against the (then empty)
-            // namespace; re-run the switch sequence so the newly copied
-            // legacy data is what's actually loaded.
-            setActive(context, profile)
+            // setActive() already ran inside create(); re-run the switch
+            // sequence so every singleton (watch history DB handle, watched
+            // caches, addon list, Simkl CW cache, sync pull) rebinds against
+            // the profile that now holds the migrated data.
+            onActiveProfileChanged()
         }
         return profile
     }

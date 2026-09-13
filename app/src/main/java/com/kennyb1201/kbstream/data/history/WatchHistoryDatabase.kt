@@ -107,6 +107,24 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Closes the CURRENT scoped DB but leaves a tombstone in
+         * [profileInstanceName] so a caller that captured the old DB name
+         * (e.g. an in-flight Continue Watching subscription from the
+         * profile that was just left) cannot race in and rebuild/reopen
+         * the closed profile's database after the switch. Any legitimate
+         * caller - which resolved the NEW profile's name via
+         * [getInstanceScoped] AFTER the switch - gets a fresh instance
+         * because [profileInstance] is null.
+         */
+        fun closeScopedInstanceForSwitch() {
+            synchronized(this) {
+                runCatching { profileInstance?.close() }
+                profileInstance = null
+                // Keep profileInstanceName as the tombstone; do not clear it.
+            }
+        }
+
         private val MIGRATION_8_9 = object : Migration(8, 9) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
