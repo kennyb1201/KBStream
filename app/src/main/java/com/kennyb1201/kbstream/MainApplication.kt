@@ -39,6 +39,14 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
     override fun newImageLoader(context: android.content.Context): ImageLoader {
         return ImageLoader.Builder(context)
             .crossfade(true)
+            // TV browsing shows hundreds of posters/backdrops; a generous
+            // memory cache keeps tiles resident so re-scrolling a rail never
+            // re-decodes (the default is a small fraction of free RAM).
+            .memoryCache(
+                coil3.memory.MemoryCache.Builder()
+                    .maxSizePercent(context, 0.30)
+                    .build()
+            )
             // Nuvio badge packs commonly ship .svg chip art; without this
             // decoder those badges silently fail to render (blank chips).
             .components { add(SvgDecoder.Factory()) }

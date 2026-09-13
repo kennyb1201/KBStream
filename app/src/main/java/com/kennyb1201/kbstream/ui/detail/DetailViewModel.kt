@@ -295,6 +295,19 @@ class DetailViewModel(application: Application) : AndroidViewModel(application) 
 
                 // 1. Await structural and history components first so watched data is guaranteed ready
                 val tmdbDetailResult = tmdbDeferred.await()
+
+                // Paint first, refine second: publish the TMDB detail the
+                // moment it lands so the hero/poster/overview render
+                // immediately, instead of waiting for the Simkl round-trip
+                // and the serial addon-meta probes below. Watched badges and
+                // the resume row merge in afterwards when those resolve —
+                // they write to their own state flows, so nothing is lost.
+                tmdbDetailResult.onSuccess { earlyDetail ->
+                    if (earlyDetail != null && _tmdbDetail.value == null) {
+                        _tmdbDetail.value = earlyDetail
+                    }
+                }
+
                 val localResume = resumeDeferred.await().getOrNull()
 
                 // Simkl cloud-session fallback: when local history has no

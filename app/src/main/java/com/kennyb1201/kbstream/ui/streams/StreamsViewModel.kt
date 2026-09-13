@@ -55,7 +55,17 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             _debug.value = emptyList()
 
             val debugLines = mutableListOf<String>()
-            val streams = fetch(contentType, streamId, debugLines)
+
+            // Streams appear as each addon answers; the final ranked/badged
+            // list replaces the raw accumulation when every addon finished.
+            val streams = fetch(
+                contentType,
+                streamId,
+                debugLines,
+                onAddonResult = { incoming ->
+                    _streams.value = _streams.value + incoming
+                }
+            )
 
             _debug.value = debugLines
             _streams.value = streams
@@ -82,7 +92,8 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
     private suspend fun fetch(
         contentType: String,
         streamId: String,
-        debugLines: MutableList<String>
+        debugLines: MutableList<String>,
+        onAddonResult: ((List<Stream>) -> Unit)? = null
     ): List<Stream> {
         if (contentType == "channel") {
             val directStream = Stream(
@@ -123,6 +134,12 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                         val returnedMsg = "${addon.name}: returned ${result.size} streams"
                         Log.e(TAG, returnedMsg)
                         debugLines.add(returnedMsg)
+
+                        // Progressive publish: hand this addon's streams to
+                        // the caller the moment they land instead of holding
+                        // the picker empty until the slowest addon answers
+                        // (15s timeout).
+                        onAddonResult?.invoke(result)
 
                         AddonLoadResult.Success(addon.name, result)
                     } catch (e: Exception) {
