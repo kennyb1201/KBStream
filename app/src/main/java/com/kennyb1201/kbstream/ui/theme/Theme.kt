@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.theme
 
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -12,10 +13,28 @@ import androidx.tv.material3.Typography
 import androidx.tv.material3.darkColorScheme
 import com.kennyb1201.kbstream.R
 
-// Color tokens -- a private screening room, not another dark-mode SaaS panel
-val KBVoid = Color(0xFF0A0E14)
-val KBSurface = Color(0xFF141A24)
-val KBSurfaceRaised = Color(0xFF1D2530)
+// Base palette -- a private screening room, not another dark-mode SaaS panel.
+// The public KBVoid / KBSurface / KBSurfaceRaised tokens below are state-backed
+// so the AMOLED toggle can swap them app-wide without touching call sites:
+// reads inside composables are snapshot-tracked, so flipping the toggle
+// recomposes every screen that paints one of these colors.
+private val KBVoidDefault = Color(0xFF0A0E14)
+private val KBSurfaceDefault = Color(0xFF141A24)
+private val KBSurfaceRaisedDefault = Color(0xFF1D2530)
+private val KBVoidAmoled = Color(0xFF000000)
+private val KBSurfaceAmoled = Color(0xFF06080B)
+private val KBSurfaceRaisedAmoled = Color(0xFF0D1117)
+
+/** Backing state for the AMOLED black toggle. Init from prefs at app start. */
+val kbAmoledBlackState = mutableStateOf(false)
+
+val KBVoid: Color
+    get() = if (kbAmoledBlackState.value) KBVoidAmoled else KBVoidDefault
+val KBSurface: Color
+    get() = if (kbAmoledBlackState.value) KBSurfaceAmoled else KBSurfaceDefault
+val KBSurfaceRaised: Color
+    get() = if (kbAmoledBlackState.value) KBSurfaceRaisedAmoled else KBSurfaceRaisedDefault
+
 val KBAccent = Color(0xFFE8A33D) // brass / projector-bulb warmth -- the one accent
 val KBTextHi = Color(0xFFF3EFE4)
 val KBTextLo = Color(0xFF8891A0)
@@ -37,7 +56,7 @@ val OswaldFamily = FontFamily(
     Font(R.font.oswald_bold, FontWeight.Bold)
 )
 
-private val KBStreamColorScheme = darkColorScheme(
+private val KBStreamColorScheme get() = darkColorScheme(
     primary = KBAccent,
     background = KBVoid,
     surface = KBSurface,

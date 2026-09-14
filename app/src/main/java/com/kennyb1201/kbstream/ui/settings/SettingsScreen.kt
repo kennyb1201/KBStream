@@ -92,6 +92,7 @@ fun SettingsScreen(
     var captionRating by remember { mutableStateOf(AppPreferences.getPosterCaptionRating(context)) }
     var railHideUpcoming by remember { mutableStateOf(AppPreferences.getHomeRailHideUpcoming(context)) }
     var landscapeCards by remember { mutableStateOf(AppPreferences.getHomeLandscapeCards(context)) }
+    var amoledBlack by remember { mutableStateOf(AppPreferences.getAmoledBlack(context)) }
     var clearingHistory by remember { mutableStateOf(false) }
     var historyClearedAt by remember { mutableStateOf<Long?>(null) }
     var showClearHistoryConfirm by remember { mutableStateOf(false) }
@@ -648,6 +649,18 @@ fun SettingsScreen(
 
         // ── INTERFACE ─────────────────────────────────────────
         SectionHeader("INTERFACE")
+
+        ToggleRow(
+            label = "AMOLED Black",
+            description = "True-black backgrounds for OLED/AMOLED screens — pixels turn fully off, saving power and boosting contrast. Applies instantly.",
+            checked = amoledBlack,
+            onToggle = {
+                amoledBlack = it
+                AppPreferences.setAmoledBlack(context, it)
+            }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
 
         ToggleRow(
             label = "Hero Trailer Autoplay",

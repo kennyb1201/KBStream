@@ -357,6 +357,22 @@ object AppPreferences {
         prefs(context).edit().putBoolean(KEY_USE_24H_CLOCK, enabled).apply()
     }
 
+    // ── AMOLED black theme ─────────────────────────────────────
+    private const val KEY_AMOLED_BLACK = "amoled_black"
+
+    /** Reads the pref AND mirrors it into the theme's live state. */
+    fun getAmoledBlack(context: Context): Boolean {
+        val value = prefs(context).getBoolean(KEY_AMOLED_BLACK, false)
+        com.kennyb1201.kbstream.ui.theme.kbAmoledBlackState.value = value
+        return value
+    }
+
+    fun setAmoledBlack(context: Context, enabled: Boolean) {
+        com.kennyb1201.kbstream.ui.theme.kbAmoledBlackState.value = enabled
+        prefs(context).edit().putBoolean(KEY_AMOLED_BLACK, enabled).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
     // ── Home rail titles: show catalog type ───────────────────────────
     fun getHomeRailShowCatalogType(context: Context): Boolean =
         prefs(context).getBoolean(KEY_SHOW_CATALOG_TYPE, false)
