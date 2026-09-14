@@ -52,6 +52,7 @@ object PrefsPayloadBuilder {
         "poster_caption_rating",
         "home_rail_hide_upcoming",
         "home_landscape_cards",
+        "amoled_black",                      // AMOLED theme toggle (pure display pref)
         "omdb_api_key"
     )
 
@@ -292,6 +293,16 @@ object PrefsPayloadApplier {
         }
         editor.putLong("display_prefs_synced_at", remoteUpdated ?: System.currentTimeMillis())
         editor.apply()
+
+        // The AMOLED toggle backs onto a live theme state, not just the prefs
+        // file - a remote blob applied here must mirror into it so a synced
+        // device repaints immediately (setContent only seeds it at launch).
+        if (payload.containsKey("amoled_black")) {
+            val raw = (payload["amoled_black"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+            if (raw == "true" || raw == "false") {
+                com.kennyb1201.kbstream.ui.theme.kbAmoledBlackState.value = raw == "true"
+            }
+        }
     }
 
     private suspend fun applyAddons(context: Context, payload: JsonObject) {

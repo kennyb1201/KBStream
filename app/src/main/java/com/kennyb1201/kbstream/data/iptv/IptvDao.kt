@@ -129,6 +129,31 @@ interface IptvDao {
         }
     }
 
+    @Query("SELECT EXISTS(SELECT 1 FROM epg_channels WHERE sourceUrl = :sourceUrl LIMIT 1)")
+    suspend fun hasChannelsForSource(sourceUrl: String): Boolean
+
+    @Query("UPDATE epg_channels SET sourceUrl = :newUrl WHERE sourceUrl = :oldUrl")
+    suspend fun rekeyChannelsSource(oldUrl: String, newUrl: String)
+
+    @Query("UPDATE epg_programs SET sourceUrl = :newUrl WHERE sourceUrl = :oldUrl")
+    suspend fun rekeyProgramsSource(oldUrl: String, newUrl: String)
+
+    /**
+     * Atomic import promotion: a successful parse staged rows under a
+     * temporary source key; this moves them onto the real one inside a
+     * single transaction, so readers never observe an empty or partially
+     * imported guide. Re-keying is a plain UPDATE on the sourceUrl column
+     * (no row reload into memory), and the live rows were already cleared
+     * inside this same transaction so the composite keys never collide.
+     */
+    @Transaction
+    suspend fun swapStagedGuideIntoLive(sourceUrl: String, stagingUrl: String) {
+        clearGuideBySource(sourceUrl)
+
+        rekeyChannelsSource(oldUrl = stagingUrl, newUrl = sourceUrl)
+        rekeyProgramsSource(oldUrl = stagingUrl, newUrl = sourceUrl)
+    }
+
     @Query(
         """
         SELECT *

@@ -57,6 +57,13 @@ class XmltvImporter(
 ) {
     var xmlInput: InputStream? = null
 
+    // Rows are parsed into a STAGING source key first and only promoted to
+    // the real source URL once the whole document parsed successfully.
+    // Previously the live guide was cleared BEFORE parsing, so a truncated
+    // download / malformed XML mid-stream left the user with an EMPTY guide
+    // until the next successful refresh.
+    val stagingUrl = "$sourceUrl@importing"
+
     try {
         dateParseFailureLogsRemaining = MAX_DATE_PARSE_FAILURE_LOGS
 
@@ -64,7 +71,11 @@ class XmltvImporter(
         Log.i(TAG, "IMPORT START source=$sourceUrl")
         Log.i(TAG, "IMPORT WINDOW start=$windowStartMs end=$windowEndMs")
 
-        dao.clearGuideBySource(sourceUrl)
+        // Clear any stale rows left by a previously failed attempt, and
+        // remember whether the live guide still has rows at all (a first
+        // import has nothing to protect).
+        dao.clearGuideBySource(stagingUrl)
+        val hadLiveGuide = dao.hasChannelsForSource(sourceUrl)
 
         val bufferedInput = if (input is BufferedInputStream) input else BufferedInputStream(input)
         bufferedInput.mark(2)
@@ -99,7 +110,7 @@ class XmltvImporter(
             if (eventType == XmlPullParser.START_TAG) {
                 when (parser.name) {
                     "channel" -> {
-                        readChannel(parser, sourceUrl)?.let { channel ->
+                        readChannel(parser, stagingUrl)?.let { channel ->
                             channelBatch.add(channel)
                             parsedChannels++
                         }
@@ -118,7 +129,7 @@ class XmltvImporter(
 
                         readProgram(
                             parser = parser,
-                            sourceUrl = sourceUrl,
+                            sourceUrl = stagingUrl,
                             windowStartMs = windowStartMs,
                             windowEndMs = windowEndMs
                         )?.let { program ->
@@ -143,13 +154,41 @@ class XmltvImporter(
         flushChannels(channelBatch)
         flushPrograms(programBatch)
 
+        // Full document parsed: atomically swap the staged rows into the
+        // live guide. @Transaction — the old guide is never briefly absent
+        // while reads land between the delete and the re-key.
+        val swapped = try {
+            dao.swapStagedGuideIntoLive(
+                sourceUrl = sourceUrl,
+                stagingUrl = stagingUrl
+            )
+            true
+        } catch (cancellation: kotlinx.coroutines.CancellationException) {
+            // Never swallow structured cancellation: rethrow so the caller's
+            // scope teardown still cancels cleanly.
+            throw cancellation
+        } catch (swapError: Throwable) {
+            Log.e(TAG, "IMPORT SWAP FAILED source=$sourceUrl", swapError)
+            false
+        }
+
         val elapsedMs = System.currentTimeMillis() - startedAt
         Log.i(
             TAG,
             "IMPORT END channels=$parsedChannels parsedPrograms=$parsedPrograms " +
-                "keptPrograms=$keptPrograms elapsedMs=$elapsedMs source=$sourceUrl"
+                "keptPrograms=$keptPrograms swapped=$swapped " +
+                "hadLiveGuide=$hadLiveGuide elapsedMs=$elapsedMs source=$sourceUrl"
         )
+
+        if (!swapped) {
+            // Nothing was promoted; surface the failure so the caller's retry
+            // logic still sees the import as unsuccessful.
+            error("guide swap failed for source=$sourceUrl")
+        }
     } catch (error: Throwable) {
+        // The staged rows may be half-written; they live under the staging
+        // key and are swept at the start of the next attempt, so the live
+        // guide (if any) is untouched by a failed import.
         Log.e(TAG, "IMPORT FAILED source=$sourceUrl", error)
         throw error
     } finally {
