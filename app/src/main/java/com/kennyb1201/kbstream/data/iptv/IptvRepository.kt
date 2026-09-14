@@ -19,6 +19,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import org.json.JSONObject
 
 /** A fully-aired program with a resolved catch-up (DVR) playback URL. */
 data class CatchupProgram(
@@ -28,7 +29,6 @@ data class CatchupProgram(
     val endUtcMillis: Long,
     val url: String
 )
-import org.json.JSONObject
 
 class IptvRepository(
     context: Context,
