@@ -186,7 +186,9 @@ fun TmdbKeywords?.list(): List<TmdbKeyword> =
 data class TmdbEpisodeAirInfo(
     @Json(name = "season_number") val seasonNumber: Int? = null,
     @Json(name = "episode_number") val episodeNumber: Int? = null,
-    @Json(name = "air_date") val airDate: String? = null
+    @Json(name = "air_date") val airDate: String? = null,
+    /** Episode title ("Lights Out"), when TMDB has one for the unaired ep. */
+    val name: String? = null
 )
 
 @JsonClass(generateAdapter = true)

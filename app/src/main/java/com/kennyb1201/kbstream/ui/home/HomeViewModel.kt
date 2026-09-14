@@ -114,6 +114,12 @@ data class UpNextItem(
     val backdrop: String? = null,
     val clearLogo: String? = null,
 
+    // Upcoming-rail items only: the relative air-date label ("Today",
+    // "In 5 days") and the absolute calendar date ("Mon, Sep 15") so the
+    // hero can say "Airs Tomorrow" with the real date underneath.
+    val airDateLabel: String? = null,
+    val airDateFull: String? = null,
+
     val subtitle: String? = null,
     val progressPercent: Float? = null,
     val streamUrl: String? = null,
@@ -177,6 +183,10 @@ data class UpcomingEpisode(
     val episode: Int,
     val airDateEpochMs: Long,
     val airDateLabel: String,
+    /** Episode title from TMDB, when available for the unaired episode. */
+    val episodeTitle: String? = null,
+    /** Absolute calendar date ("Mon, Sep 15") for the hero's date line. */
+    val airDateFull: String = "",
     /** True when E01 — renders the card's badge as "NEW SEASON". */
     val isSeasonPremiere: Boolean = false
 )
@@ -1839,6 +1849,13 @@ Log.d(
                     episode = episode,
                     airDateEpochMs = epochMs,
                     airDateLabel = formatAirDateLabel(air.airDate),
+                    episodeTitle = air.name?.takeIf { it.isNotBlank() },
+                    airDateFull = try {
+                        LocalDate.parse(air.airDate)
+                            .format(DateTimeFormatter.ofPattern("EEE, MMM d"))
+                    } catch (_: Exception) {
+                        ""
+                    },
                     isSeasonPremiere = episode == 1
                 )
             )

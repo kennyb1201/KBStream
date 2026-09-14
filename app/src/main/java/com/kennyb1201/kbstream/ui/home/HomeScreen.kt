@@ -885,6 +885,12 @@ private fun HomeHero(
                     item.isSeasonFinale ->
                         "Season Finale"
 
+                    // Upcoming-rail items carry their relative air-date
+                    // label — the hero says "Airs Today" / "Airs In 5 days"
+                    // instead of the generic "Next Up".
+                    item.airDateLabel != null ->
+                        "Airs ${item.airDateLabel}"
+
                     else ->
                         when (item.badge) {
                             UpNextBadge.CONTINUE_WATCHING ->
@@ -1215,6 +1221,21 @@ continueTimeLeft?.let { label ->
         modifier = Modifier.padding(top = 5.dp)
     )
             }
+
+            // Upcoming-rail items: the real calendar date under the
+            // "Airs …" label ("Mon, Sep 15"), styled like the other
+            // hero detail lines.
+            continueWatchingItem?.airDateFull
+                ?.takeIf { it.isNotBlank() }
+                ?.let { fullDate ->
+                    Text(
+                        text = fullDate,
+                        color = KBTextHi.copy(alpha = 0.70f),
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        modifier = Modifier.padding(top = 5.dp)
+                    )
+                }
             }
 
             if (continueWatchingItem != null) {
@@ -1357,6 +1378,8 @@ private fun UpcomingEpisodeCard(
                     )
             )
 
+            // Top chip: the AIR DATE (or NEW SEASON flag) — the thing that
+            // makes this card "upcoming".
             if (upcoming.isSeasonPremiere) {
                 Text(
                     text = "NEW SEASON",
@@ -1375,10 +1398,7 @@ private fun UpcomingEpisodeCard(
                 )
             } else {
                 Text(
-                    text = "S%02d · E%02d".format(
-                        upcoming.season,
-                        upcoming.episode
-                    ),
+                    text = upcoming.airDateLabel.uppercase(),
                     color = Color.Black,
                     fontSize = 9.sp,
                     fontWeight = FontWeight.Bold,
@@ -1394,6 +1414,7 @@ private fun UpcomingEpisodeCard(
                 )
             }
 
+            // Bottom block: show title, then season/episode + episode title.
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
@@ -1409,14 +1430,43 @@ private fun UpcomingEpisodeCard(
                     overflow = TextOverflow.Ellipsis
                 )
 
-                Text(
-                    text = upcoming.airDateLabel,
-                    color = if (focused) KBAccent else KBTextLo,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                val seLabel = "S%02d · E%02d".format(
+                    upcoming.season,
+                    upcoming.episode
                 )
+                // Same stack order as the Continue Watching card:
+                // show title -> S·E line -> episode title line.
+                Text(
+                    text = seLabel,
+                    color = if (focused) {
+                        KBTextHi.copy(alpha = 0.78f)
+                    } else {
+                        KBTextLo
+                    },
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+
+                upcoming.episodeTitle
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { episodeTitle ->
+                        Text(
+                            text = episodeTitle,
+                            color = if (focused) {
+                                KBTextHi.copy(alpha = 0.88f)
+                            } else {
+                                KBTextLo
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 1.dp)
+                        )
+                    }
             }
         }
     }
@@ -2438,7 +2488,14 @@ fun HomeScreen(
                                             badge = UpNextBadge.NEXT_UP,
                                             backdrop = upcoming.backdrop,
                                             parentId = upcoming.parentId,
-                                            parentType = upcoming.parentType
+                                            parentType = upcoming.parentType,
+                                            // Hero renders "Airs <label>" +
+                                            // the calendar date for these.
+                                            airDateLabel = upcoming.airDateLabel,
+                                            airDateFull = upcoming.airDateFull,
+                                            season = upcoming.season,
+                                            episode = upcoming.episode,
+                                            episodeTitle = upcoming.episodeTitle
                                         )
 
                                     UpcomingEpisodeCard(
