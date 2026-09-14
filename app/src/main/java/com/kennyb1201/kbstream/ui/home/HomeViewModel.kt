@@ -1837,6 +1837,14 @@ Log.d(
             if (epochMs < startOfToday) continue
             if (!seenParents.add(parentId)) continue
 
+            val airLabel = formatAirDateLabel(air.airDate)
+            val airFull = try {
+                LocalDate.parse(air.airDate)
+                    .format(DateTimeFormatter.ofPattern("EEE, MMM d"))
+            } catch (_: Exception) {
+                ""
+            }
+
             upcoming.add(
                 UpcomingEpisode(
                     id = "upcoming:$parentId:s$season:e$episode",
@@ -1848,14 +1856,12 @@ Log.d(
                     season = season,
                     episode = episode,
                     airDateEpochMs = epochMs,
-                    airDateLabel = formatAirDateLabel(air.airDate),
+                    airDateLabel = airLabel,
                     episodeTitle = air.name?.takeIf { it.isNotBlank() },
-                    airDateFull = try {
-                        LocalDate.parse(air.airDate)
-                            .format(DateTimeFormatter.ofPattern("EEE, MMM d"))
-                    } catch (_: Exception) {
-                        ""
-                    },
+                    // Only kept when the label is relative ("In 5 days");
+                    // beyond a week the label IS the full date and the hero
+                    // would render the same date twice.
+                    airDateFull = airFull.takeIf { it != airLabel } ?: "",
                     isSeasonPremiere = episode == 1
                 )
             )

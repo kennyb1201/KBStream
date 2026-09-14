@@ -1013,6 +1013,10 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
      * once-per-session) resolution off.
      */
     fun selectBrowseCategory(key: String) {
+        // Manually switching categories invalidates any armed return chip
+        // from another category — it could otherwise re-grab focus the
+        // next time that submenu opens.
+        if (browseReturnChip?.first != key) browseReturnChip = null
         _selectedBrowseCategoryKey.value = key
         if (key == "keywords" || key == "collections") {
             _browseSubmenuLoading.value = !catalogResolveStarted
@@ -1151,6 +1155,10 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     fun exitSearch() {
         commitSearch()
         resetSearchState()
+        // A return chip armed by a browse click that never got its Back
+        // restore (user top-nav'd away from the discover screen) must not
+        // steal focus the next time Search is entered.
+        browseReturnChip = null
     }
 
     private fun loadRecentSearches() {
