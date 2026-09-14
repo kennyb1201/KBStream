@@ -1076,8 +1076,13 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             BROWSE_COLLECTION_NAMES.map { name ->
                 async {
                     runCatching {
-                        tmdbRepository.searchCollection(name)
-                            .firstOrNull()
+                        // Prefer the exact-name hit: TMDB's search ranking
+                        // drifts over time and first-hit can resolve to an
+                        // unrelated collection ("The Lord of the Rings
+                        // Collection" once resolved to a making-of doc).
+                        val results = tmdbRepository.searchCollection(name)
+                        (results.firstOrNull { it.name.equals(name, ignoreCase = true) }
+                            ?: results.firstOrNull())
                             ?.let { BrowseEntry(it.id, name) }
                     }.getOrNull()
                 }

@@ -843,10 +843,18 @@ private fun SearchBrowseBrowser(
                     )
                 )
             } else if (category.entries.isNotEmpty()) {
+                // Same edge padding as the category strip / poster rails:
+                // without it the first and last submenu chips' borders clip
+                // against the screen edge (padding lives inside the scroll
+                // so it travels with the content).
                 Row(
                     modifier = Modifier
                         .horizontalScroll(rememberScrollState())
-                        .padding(top = 10.dp),
+                        .padding(
+                            top = 10.dp,
+                            start = SEARCH_RAIL_EDGE_PADDING,
+                            end = SEARCH_RAIL_EDGE_PADDING
+                        ),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     category.entries.forEachIndexed { entryIndex, entry ->
