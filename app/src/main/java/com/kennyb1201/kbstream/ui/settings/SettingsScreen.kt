@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import android.content.ActivityNotFoundException
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -142,6 +143,33 @@ fun SettingsScreen(
                 backupStatus = runCatching {
                     BackupManager.import(context, uri)
                 }.getOrElse { "Import failed: ${it.message}" }
+            }
+        }
+    }
+
+    val importGetContentLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            backupScope.launch {
+                backupStatus = runCatching {
+                    BackupManager.import(context, uri)
+                }.getOrElse { "Import failed: ${it.message}" }
+            }
+        }
+    }
+
+    fun launchImportBackup() {
+        val mimeTypes = arrayOf("application/json", "text/plain", "application/octet-stream")
+        try {
+            importLauncher.launch(mimeTypes)
+        } catch (_: ActivityNotFoundException) {
+            try {
+                importGetContentLauncher.launch("*/*")
+            } catch (_: ActivityNotFoundException) {
+                backupStatus =
+                    "No file picker on this device — import your backup on a " +
+                        "phone/tablet, or move the file to a cloud URL"
             }
         }
     }
@@ -409,9 +437,7 @@ fun SettingsScreen(
             label = "Import Backup",
             description = "Restore from a KBStream backup file",
             onClick = {
-                importLauncher.launch(
-                    arrayOf("application/json", "text/plain", "application/octet-stream")
-                )
+                launchImportBackup()
             }
         )
 

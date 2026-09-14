@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.player
 
 import android.app.PictureInPictureParams
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -19,6 +20,7 @@ import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
+import android.widget.Toast
 import android.widget.ImageView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
@@ -719,26 +721,55 @@ class NativePlayerActivity : ComponentActivity() {
     // Scopes
     private var scope: CoroutineScope? = null
 
+    // Subtitle file import. TV ROMs (Fire TV, some Google TVs) ship without
+    // the system DocumentsUI picker, so SAF can throw
+    // ActivityNotFoundException at launch time. Fall back to a generic
+    // GET_CONTENT picker before giving up with an explanatory toast.
+    private fun launchExternalSubtitlePicker() {
+        val mimeTypes = arrayOf("text/plain", "text/*", "application/octet-stream")
+        try {
+            externalSubtitlePicker.launch(mimeTypes)
+        } catch (_: ActivityNotFoundException) {
+            try {
+                externalSubtitleGetContentPicker.launch("*/*")
+            } catch (_: ActivityNotFoundException) {
+                Toast.makeText(
+                    this,
+                    "No file picker on this device — use the URL import instead",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
     private val externalSubtitlePicker = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
-        if (uri != null) {
-            try {
-                contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-            } catch (_: SecurityException) {
-                // Some providers do not offer persistable permissions; the current
-                // playback session can still use the granted URI permission.
-            }
-            externalSubtitleUri = uri
-            loadExternalSubtitleCues(uri)
-            carryPositionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
-            recreatePlayer()
+        handleExternalSubtitleUri(uri)
     }
 
-}
+    private val externalSubtitleGetContentPicker = registerForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        handleExternalSubtitleUri(uri)
+    }
+
+    private fun handleExternalSubtitleUri(uri: Uri?) {
+        if (uri == null) return
+        try {
+            contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        } catch (_: SecurityException) {
+            // Some providers do not offer persistable permissions; the current
+            // playback session can still use the granted URI permission.
+        }
+        externalSubtitleUri = uri
+        loadExternalSubtitleCues(uri)
+        carryPositionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
+        recreatePlayer()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -3430,7 +3461,7 @@ class NativePlayerActivity : ComponentActivity() {
                     label = "OPEN SUBTITLE FILE",
                     isSelected = externalSubtitleUri != null,
                     onClick = {
-                        externalSubtitlePicker.launch(arrayOf("text/plain", "text/*", "application/octet-stream"))
+                        launchExternalSubtitlePicker()
                         dismissPicker()
                     }
                 )

@@ -461,19 +461,45 @@ fun AddonsScreen(
     val collectionsState by viewModel.collections.collectAsState()
     val homeOrderVersion by viewModel.homeOrderVersion.collectAsState()
     var collectionUrlInput by remember { mutableStateOf("") }
+    // Collections profile file import. TV ROMs (Fire TV, some Google TVs)
+    // ship without the system DocumentsUI picker, so SAF can throw
+    // ActivityNotFoundException at launch time. We try SAF first, then a
+    // generic GET_CONTENT, and if neither resolves we surface TV-specific
+    // guidance instead of the system "no app to do this" toast.
+    fun readCollectionJson(uri: Uri) {
+        val json = runCatching {
+            context.contentResolver.openInputStream(uri)
+                ?.bufferedReader(Charsets.UTF_8)
+                ?.use { it.readText() }
+        }.getOrNull()
+        if (json != null) {
+            viewModel.importCollectionProfileJson(json)
+        } else {
+            viewModel.onCollectionImportFileError()
+        }
+    }
+
     val collectionFilePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
-        if (uri != null) {
-            val json = runCatching {
-                context.contentResolver.openInputStream(uri)
-                    ?.bufferedReader(Charsets.UTF_8)
-                    ?.use { it.readText() }
-            }.getOrNull()
-            if (json != null) {
-                viewModel.importCollectionProfileJson(json)
-            } else {
-                viewModel.onCollectionImportFileError()
+        if (uri != null) readCollectionJson(uri)
+    }
+
+    val collectionFileGetContent = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) readCollectionJson(uri)
+    }
+
+    fun launchCollectionFilePicker() {
+        val mimeTypes = arrayOf("application/json", "text/plain", "application/octet-stream")
+        try {
+            collectionFilePicker.launch(mimeTypes)
+        } catch (_: ActivityNotFoundException) {
+            try {
+                collectionFileGetContent.launch("*/*")
+            } catch (_: ActivityNotFoundException) {
+                viewModel.onCollectionImportNoFilePicker()
             }
         }
     }
@@ -491,11 +517,7 @@ fun AddonsScreen(
                     collectionUrlInput = ""
                 }
             },
-            onPickCollectionFile = {
-                collectionFilePicker.launch(
-                    arrayOf("application/json", "text/plain", "application/octet-stream")
-                )
-            },
+            onPickCollectionFile = { launchCollectionFilePicker() },
             onRemoveCollectionProfile = { url ->
                 // Destructive: require an explicit confirm instead of the
                 // old single-OK-removes-it behavior.

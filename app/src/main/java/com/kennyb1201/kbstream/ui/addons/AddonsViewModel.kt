@@ -272,6 +272,20 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
+    /**
+     * TV devices (Fire TV, some Google TVs) ship without the system file
+     * picker, so there is nothing for SAF to launch. Tell the user the
+     * supported import paths instead of Android's "you don't have an app
+     * to do this" toast.
+     */
+    fun onCollectionImportNoFilePicker() {
+        _collections.value = _collections.value.copy(
+            statusMessage =
+                "No file picker on this device — paste an https:// URL above, " +
+                    "or import on your phone/tablet then sync"
+        )
+    }
+
     fun removeCollectionProfileUrl(url: String) {
         val context = getApplication<Application>()
         NuvioProfilePrefs.removeProfileUrl(context, url)
