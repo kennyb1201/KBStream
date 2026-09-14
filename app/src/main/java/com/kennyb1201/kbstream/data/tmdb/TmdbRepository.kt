@@ -70,7 +70,17 @@ class TmdbRepository(context: Context) {
     // Caps parallel TMDB availability lookups for the digital-release filter.
     private val availabilitySemaphore = Semaphore(permits = 6)
 
-    private val minVoteCount = 50
+    // Vote floors per rail kind. RECENT is light (newest-first, just skip
+    // no-title junk); POPULAR and TOP RATED use 10 so smaller catalogs
+    // (Tubi, Pluto, Crunchyroll, keywords, mid-size studios) keep real rows
+    // instead of starving to empty.
+    private val minVoteCount = 10
+
+    /** TOP-RATED / "Most Voted" rail floor (sort is vote_count.desc). */
+    private val minTopRatedVoteCount = 10
+
+    /** RECENT-rail floor: newest-first with only junk filtered out. */
+    private val minRecentVoteCount = 5
     private val today: String
         get() = LocalDate.now().toString()
 
@@ -484,6 +494,10 @@ class TmdbRepository(context: Context) {
         if (apiKey.isBlank()) return null
         val isTv = mediaType.lowercase() == "tv"
         val yearRange = filters?.yearRange()
+        // Explicit date bounds (e.g. the rolling RECENT window) — only used
+        // when no year range is set, so decade/decade-style year filters win.
+        val dateGte = yearRange?.first ?: filters?.releaseDateGte
+        val dateLte = yearRange?.second ?: filters?.releaseDateLte
         return runCatching {
             if (isTv) {
                 api.discoverTvGeneric(
@@ -505,8 +519,8 @@ class TmdbRepository(context: Context) {
                     voteCountGte = filters?.voteCountGte,
                     voteAverageGte = filters?.voteAverageGte,
                     voteAverageLte = filters?.voteAverageLte,
-                    firstAirDateGte = yearRange?.first,
-                    firstAirDateLte = yearRange?.second
+                    firstAirDateGte = dateGte,
+                    firstAirDateLte = dateLte
                 )
             } else {
                 api.discoverMovieGeneric(
@@ -528,8 +542,8 @@ class TmdbRepository(context: Context) {
                     voteCountGte = filters?.voteCountGte,
                     voteAverageGte = filters?.voteAverageGte,
                     voteAverageLte = filters?.voteAverageLte,
-                    primaryReleaseDateGte = yearRange?.first,
-                    primaryReleaseDateLte = yearRange?.second
+                    primaryReleaseDateGte = dateGte,
+                    primaryReleaseDateLte = dateLte
                 )
             }.results
         }.getOrNull()
@@ -723,8 +737,44 @@ class TmdbRepository(context: Context) {
             StudioSection("TRENDING NOW", toItems({ api.getTrending(apiKey) }, "movie")),
             StudioSection("POPULAR MOVIES", toItems({ api.getPopularMovies(apiKey) }, "movie")),
             StudioSection("POPULAR SERIES", toItems({ api.getPopularTv(apiKey) }, "series")),
-            StudioSection("TOP RATED MOVIES", toItems({ api.getTopRatedMovies(apiKey) }, "movie")),
-            StudioSection("TOP RATED SERIES", toItems({ api.getTopRatedTv(apiKey) }, "series"))
+            // "Most voted", not TMDB's /top_rated endpoints: those sort by
+            // vote AVERAGE and surface obscure 10-vote 10/10 titles (heavily
+            // anime). vote_count.desc with a floor is what people expect from
+            // a "Top Rated" rail.
+            StudioSection(
+                "TOP RATED MOVIES",
+                toItems(
+                    {
+                        discoverNuvio(
+                            mediaType = "movie",
+                            sortBy = "vote_count.desc",
+                            filters = com.kennyb1201.kbstream.data.nuvio.NuvioFilters(
+                                voteCountGte = minTopRatedVoteCount,
+                                releaseDateLte = today
+                            )
+                        )?.let { TmdbDiscoverResponse(results = it) }
+                            ?: TmdbDiscoverResponse()
+                    },
+                    "movie"
+                )
+            ),
+            StudioSection(
+                "TOP RATED SERIES",
+                toItems(
+                    {
+                        discoverNuvio(
+                            mediaType = "tv",
+                            sortBy = "vote_count.desc",
+                            filters = com.kennyb1201.kbstream.data.nuvio.NuvioFilters(
+                                voteCountGte = minTopRatedVoteCount,
+                                releaseDateLte = today
+                            )
+                        )?.let { TmdbDiscoverResponse(results = it) }
+                            ?: TmdbDiscoverResponse()
+                    },
+                    "series"
+                )
+            )
         ).filter { it.items.isNotEmpty() }
     }
 
@@ -870,7 +920,7 @@ class TmdbRepository(context: Context) {
                     genreId,
                     apiKey,
                     "primary_release_date.desc",
-                    minVoteCount,
+                    minRecentVoteCount,
                     releaseDateLte = today,
                     page = page
                 ).results
@@ -891,8 +941,8 @@ class TmdbRepository(context: Context) {
                 api.discoverMovieByGenre(
                     genreId,
                     apiKey,
-                    "vote_average.desc",
-                    100,
+                    "vote_count.desc",
+                    minTopRatedVoteCount,
                     releaseDateLte = today,
                     page = page
                 ).results
@@ -903,7 +953,7 @@ class TmdbRepository(context: Context) {
                     genreId,
                     apiKey,
                     "first_air_date.desc",
-                    minVoteCount,
+                    minRecentVoteCount,
                     firstAirDateLte = today,
                     page = page
                 ).results
@@ -924,8 +974,8 @@ class TmdbRepository(context: Context) {
                 api.discoverTvByGenre(
                     genreId,
                     apiKey,
-                    "vote_average.desc",
-                    100,
+                    "vote_count.desc",
+                    minTopRatedVoteCount,
                     firstAirDateLte = today,
                     page = page
                 ).results
@@ -960,7 +1010,7 @@ class TmdbRepository(context: Context) {
                     keywordId,
                     apiKey,
                     "primary_release_date.desc",
-                    minVoteCount,
+                    minRecentVoteCount,
                     releaseDateLte = today,
                     page = page
                 ).results
@@ -981,8 +1031,8 @@ class TmdbRepository(context: Context) {
                 api.discoverMovieByKeyword(
                     keywordId,
                     apiKey,
-                    "vote_average.desc",
-                    100,
+                    "vote_count.desc",
+                    minTopRatedVoteCount,
                     releaseDateLte = today,
                     page = page
                 ).results
@@ -993,7 +1043,7 @@ class TmdbRepository(context: Context) {
                     keywordId,
                     apiKey,
                     "first_air_date.desc",
-                    minVoteCount,
+                    minRecentVoteCount,
                     firstAirDateLte = today,
                     page = page
                 ).results
@@ -1014,8 +1064,8 @@ class TmdbRepository(context: Context) {
                 api.discoverTvByKeyword(
                     keywordId,
                     apiKey,
-                    "vote_average.desc",
-                    100,
+                    "vote_count.desc",
+                    minTopRatedVoteCount,
                     firstAirDateLte = today,
                     page = page
                 ).results
@@ -1050,7 +1100,7 @@ class TmdbRepository(context: Context) {
                     networkId,
                     apiKey,
                     "first_air_date.desc",
-                    minVoteCount,
+                    minRecentVoteCount,
                     firstAirDateLte = today,
                     page = page
                 ).results
@@ -1071,8 +1121,8 @@ class TmdbRepository(context: Context) {
                 api.discoverByNetwork(
                     networkId,
                     apiKey,
-                    "vote_average.desc",
-                    100,
+                    "vote_count.desc",
+                    minTopRatedVoteCount,
                     firstAirDateLte = today,
                     page = page
                 ).results
@@ -1107,7 +1157,7 @@ class TmdbRepository(context: Context) {
                     companyId = companyId,
                     apiKey = apiKey,
                     sortBy = "primary_release_date.desc",
-                    voteCountGte = minVoteCount,
+                    voteCountGte = minRecentVoteCount,
                     releaseDateLte = today,
                     page = page
                 ).results
@@ -1128,8 +1178,8 @@ class TmdbRepository(context: Context) {
                 api.discoverMovieByCompany(
                     companyId = companyId,
                     apiKey = apiKey,
-                    sortBy = "vote_average.desc",
-                    voteCountGte = 100,
+                    sortBy = "vote_count.desc",
+                    voteCountGte = minTopRatedVoteCount,
                     releaseDateLte = today,
                     page = page
                 ).results
@@ -1140,7 +1190,7 @@ class TmdbRepository(context: Context) {
                     companyId = companyId,
                     apiKey = apiKey,
                     sortBy = "first_air_date.desc",
-                    voteCountGte = minVoteCount,
+                    voteCountGte = minRecentVoteCount,
                     firstAirDateLte = today,
                     page = page
                 ).results
@@ -1161,8 +1211,8 @@ class TmdbRepository(context: Context) {
                 api.discoverTvByCompany(
                     companyId = companyId,
                     apiKey = apiKey,
-                    sortBy = "vote_average.desc",
-                    voteCountGte = 100,
+                    sortBy = "vote_count.desc",
+                    voteCountGte = minTopRatedVoteCount,
                     firstAirDateLte = today,
                     page = page
                 ).results
@@ -1217,10 +1267,16 @@ class TmdbRepository(context: Context) {
         val yearRange = "$decadeStart-$decadeEnd"
         val isTv = mediaType.equals("tv", ignoreCase = true)
 
-        // "Most Voted" sorts by vote_average, which without a floor surfaces
-        // obscure 8.5-rated shorts with 12 votes; "Popular" (popularity.desc)
-        // only needs a light floor to skip no-title entries.
-        val voteFloor = if (sortBy.startsWith("vote_average")) 500 else 100
+        // TOP RATED sorts by vote COUNT ("most voted"): vote_average
+        // surfaces obscure 8.5-rated shorts with 12 votes (heavily anime);
+        // vote_count surfaces what people actually voted on. Floors are
+        // light so mid-size catalogs keep real rails; "Popular"
+        // (popularity.desc) needs just enough to skip no-title entries.
+        val voteFloor = if (sortBy.startsWith("vote_count")) {
+            minTopRatedVoteCount
+        } else {
+            minVoteCount
+        }
         val filters = com.kennyb1201.kbstream.data.nuvio.NuvioFilters(
             year = yearRange,
             voteCountGte = voteFloor
@@ -1263,21 +1319,24 @@ class TmdbRepository(context: Context) {
     ): TagRailPage {
         if (apiKey.isBlank()) return TagRailPage(emptyList(), false)
         val isTv = mediaType.equals("tv", ignoreCase = true)
-        val currentYear = java.time.LocalDate.now().year.toString()
 
         // Recent sorts by release date, which differs per media type; a
         // vote floor keeps "recent" from surfacing announced-but-unreleased
-        // entries (they have almost no votes yet).
+        // entries (they have almost no votes yet). "voted" sorts by
+        // vote COUNT (not average): average surfaces obscure 10-vote
+        // foreign/anime titles; count is what "most voted" means and is
+        // anime-resistant without the language filter. RECENT has NO year
+        // cap — newest first, whatever the service's catalog holds.
         val sortBy = when (mode) {
             "recent" -> if (isTv) "first_air_date.desc" else "primary_release_date.desc"
-            "voted" -> "vote_average.desc"
+            "voted" -> "vote_count.desc"
             else -> "popularity.desc"
         }
         val voteFloor = when (mode) {
-            "recent" -> 20
-            "popular" -> 100
-            "voted" -> 500
-            else -> 10
+            "recent" -> minRecentVoteCount
+            "popular" -> minVoteCount
+            "voted" -> minTopRatedVoteCount
+            else -> minRecentVoteCount
         }
 
         val base = com.kennyb1201.kbstream.data.nuvio.NuvioFilters(
@@ -1302,10 +1361,12 @@ class TmdbRepository(context: Context) {
             base.copy(
                 withWatchProviders = providerId?.toString(),
                 watchRegion = "US",
-                year = if (mode == "recent") currentYear else null
+                // Same released-content cap as the genre/keyword/company rails:
+                // a floor of 5 doesn't stop a heavily-anticipated unreleased
+                // blockbuster (thousands of pre-release votes) from topping RECENT.
+                releaseDateLte = today
             )
         }
-
         val items = runCatching {
             discoverNuvio(
                 mediaType = if (isTv) "tv" else "movie",
@@ -1360,7 +1421,7 @@ class TmdbRepository(context: Context) {
         }
         val sortBy = when (parts.getOrNull(1)?.uppercase()) {
             "POPULAR" -> "popularity.desc"
-            "TOP RATED" -> "vote_average.desc"
+            "TOP RATED" -> "vote_count.desc"
             else -> return TagRailPage(emptyList(), false)
         }
 
@@ -1468,7 +1529,7 @@ class TmdbRepository(context: Context) {
             }
         }.getOrDefault(emptyList())
 
-        suspend fun pickBestLogo(logos: List<TmdbCompanyLogo>): String? =
+        fun rankLogos(logos: List<TmdbCompanyLogo>): List<TmdbCompanyLogo> =
             logos.filter { !it.filePath.isNullOrBlank() }
                 .sortedWith(
                     compareByDescending<TmdbCompanyLogo> { it.iso6391 == "en" }
@@ -1476,17 +1537,61 @@ class TmdbRepository(context: Context) {
                         .thenByDescending { it.voteAverage ?: 0.0 }
                         .thenByDescending { it.width ?: 0 }
                 )
-                .firstOrNull()
-                ?.filePath
-                ?.let { TmdbRepository.LOGO_BASE + it }
+
+        /**
+         * True when the logo is a solid filled badge — a near-square mark
+         * with most of its bounding box opaque (ABC's top-voted logo is a
+         * filled disc). White-tinted on the dark header these read as an
+         * anonymous circle, so the picker skips them when a letterform
+         * option exists. Downloads a w185 thumbnail (a few KB) only for the
+         * top-ranked candidate; any failure returns false (keep the pick).
+         */
+        suspend fun isSolidBadge(filePath: String): Boolean = runCatching {
+            // Network + decode must stay off the caller's (Main) dispatcher.
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val request = okhttp3.Request.Builder()
+                    .url("https://image.tmdb.org/t/p/w185$filePath")
+                    .build()
+                TmdbRepository.sharedOkHttpClient().newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) return@withContext false
+                    val bytes = response.body?.bytes() ?: return@withContext false
+                    val bitmap = android.graphics.BitmapFactory.decodeByteArray(
+                        bytes, 0, bytes.size
+                    ) ?: return@withContext false
+                    val pixels = IntArray(bitmap.width * bitmap.height)
+                    bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+                    if (pixels.isEmpty()) return@withContext false
+                    var opaque = 0
+                    for (pixel in pixels) {
+                        if (((pixel ushr 24) and 0xFF) > 200) opaque++
+                    }
+                    val coverage = opaque.toFloat() / pixels.size
+                    val aspect = bitmap.width.toFloat() / bitmap.height
+                    coverage > 0.80f && aspect in 0.70f..1.40f
+                }
+            }
+        }.getOrDefault(false)
+
+        suspend fun pickSmartLogo(company: Boolean): String? {
+            val ranked = rankLogos(fetchLogos(company))
+            val best = ranked.firstOrNull() ?: return null
+            val path = if (isSolidBadge(best.filePath!!)) {
+                ranked.firstOrNull { candidate ->
+                    candidate.filePath != null && !isSolidBadge(candidate.filePath)
+                }?.filePath ?: best.filePath
+            } else {
+                best.filePath
+            }
+            return path?.let { TmdbRepository.LOGO_BASE + it }
+        }
 
         if (isNetwork) {
             // Primary: the network's own logos. Fallback: same id as a company
             // (some entries exist in both spaces).
-            return pickBestLogo(fetchLogos(company = false))
-                ?: pickBestLogo(fetchLogos(company = true))
+            return pickSmartLogo(company = false)
+                ?: pickSmartLogo(company = true)
         }
-        return pickBestLogo(fetchLogos(company = true))
+        return pickSmartLogo(company = true)
     }
 
     /** Company/network metadata (description, headquarters, origin country). */

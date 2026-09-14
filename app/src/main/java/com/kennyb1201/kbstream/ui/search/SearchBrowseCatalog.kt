@@ -141,26 +141,28 @@ val BROWSE_KEYWORD_NAMES = listOf(
 // ---------------------------------------------------------------------------
 
 val BROWSE_NETWORKS = listOf(
-    BrowseEntry(213, "Netflix"),
-    BrowseEntry(132, "Prime Video"),
-    BrowseEntry(2739, "Disney+"),
-    BrowseEntry(2552, "Apple TV+"),
-    BrowseEntry(49, "HBO"),
-    BrowseEntry(453, "Hulu"),
-    BrowseEntry(4330, "Paramount+"),
-    BrowseEntry(3186, "Peacock"),
+    // Plain network pages (series rails only). Services above already carry
+    // the big streamers, so the network list here intentionally excludes
+    // Netflix/Prime/Disney+/Apple TV+/HBO/Hulu/Paramount+/Peacock — those
+    // duplicates only ever rendered series-only pages next to the full
+    // service pages.
+    // ids verified live against TMDB /network/{id}:
+    //  2=ABC, 6=NBC, 16=CBS, 19=FOX, 33=MTV (was mislabeled BBC Two),
+    //  43=National Geographic (was mislabeled Starz), 4=BBC One,
+    //  47=Comedy Central, 13=Nickelodeon, 56=Cartoon Network, 71=The CW,
+    //  174=AMC, 80=Adult Swim, 75=ABC Family.
     BrowseEntry(2, "ABC"),
     BrowseEntry(6, "NBC"),
     BrowseEntry(16, "CBS"),
     BrowseEntry(19, "FOX"),
+    BrowseEntry(33, "MTV"),
+    BrowseEntry(43, "National Geographic"),
     BrowseEntry(4, "BBC One"),
-    BrowseEntry(33, "BBC Two"),
     BrowseEntry(47, "Comedy Central"),
     BrowseEntry(13, "Nickelodeon"),
     BrowseEntry(56, "Cartoon Network"),
     BrowseEntry(71, "The CW"),
     BrowseEntry(174, "AMC"),
-    BrowseEntry(43, "Starz"),
     BrowseEntry(80, "Adult Swim"),
     BrowseEntry(75, "ABC Family")
 )
@@ -197,10 +199,18 @@ val BROWSE_STUDIOS = listOf(
 // ---------------------------------------------------------------------------
 // Streaming services. providerId drives the Recent / Popular / Most Voted
 // rails (watch-provider discover with watch_region "US");
-// networkOrCompanyId drives the "Originals" rail (network discover for
-// TV-first services, company discover for movie studios). Provider ids from
-// TMDB's watch-provider registry (Netflix=8, Prime=9, Disney+=337,
-// Apple TV+=350, Max=384/1899, Hulu=15, Paramount+=531, Peacock=386, ...).
+// networkOrCompanyId drives the "Originals" rail AND the header logo/detail
+// (network discover for TV-first services, company discover for movie
+// studios). ALL ids below verified live against TMDB:
+//  - providers: Netflix=8, Prime=9, Disney+=337, Apple TV+=350,
+//    HBO Max=1899 (384 is dead), Hulu=15, Paramount+=2303 ("Paramount Plus
+//    Premium"; 531 is dead), Peacock=386, Starz=43, Tubi=73, Pluto=300,
+//    Crunchyroll=283. Showtime has NO provider id any more (folded into
+//    Paramount Plus Premium), so it runs as a plain network page.
+//  - networks: Netflix=213, Prime Video=1024 (132 is Oxygen!),
+//    Disney+=2739, Apple TV+=2552, HBO Max=3186, Hulu=453, Paramount+=4330,
+//    Peacock=3353 (3186 is HBO Max!), Starz=318 (43 is National
+//    Geographic!), Showtime=67, Tubi=5187, Pluto TV=3245, Crunchyroll=1112.
 // ---------------------------------------------------------------------------
 
 val BROWSE_SERVICES = listOf(
@@ -213,7 +223,7 @@ val BROWSE_SERVICES = listOf(
     BrowseService(
         "Prime Video",
         providerId = 9,
-        networkOrCompanyId = 132,
+        networkOrCompanyId = 1024,
         networkIsCompany = false
     ),
     BrowseService(
@@ -230,8 +240,8 @@ val BROWSE_SERVICES = listOf(
     ),
     BrowseService(
         "HBO Max",
-        providerId = 384,
-        networkOrCompanyId = 49,
+        providerId = 1899,
+        networkOrCompanyId = 3186,
         networkIsCompany = false
     ),
     BrowseService(
@@ -242,45 +252,49 @@ val BROWSE_SERVICES = listOf(
     ),
     BrowseService(
         "Paramount+",
-        providerId = 531,
+        providerId = 2303,
         networkOrCompanyId = 4330,
         networkIsCompany = false
     ),
     BrowseService(
         "Peacock",
         providerId = 386,
-        networkOrCompanyId = 3186,
+        networkOrCompanyId = 3353,
         networkIsCompany = false
     ),
     BrowseService(
         "Starz",
         providerId = 43,
-        networkOrCompanyId = 43,
+        networkOrCompanyId = 318,
         networkIsCompany = false
     ),
+    // Showtime's watch-provider id no longer exists in TMDB's US registry
+    // (the content moved under Paramount Plus Premium), so it opens as a
+    // plain network page (series rails) instead of showing empty rails.
     BrowseService(
         "Showtime",
-        providerId = 37,
-        networkOrCompanyId = 88,
+        providerId = null,
+        networkOrCompanyId = 67,
         networkIsCompany = false
     ),
-    // Free/fast services: no curated originals id — provider rails only.
+    // Free/fast services now carry their (network) originals id so the
+    // header gets a real clear-logo instead of falling back to text.
     BrowseService(
         "Tubi",
         providerId = 73,
-        networkOrCompanyId = null,
+        networkOrCompanyId = 5187,
         networkIsCompany = false
     ),
     BrowseService(
         "Pluto TV",
         providerId = 300,
-        networkOrCompanyId = null,
+        networkOrCompanyId = 3245,
         networkIsCompany = false
     ),
     BrowseService(
         "Crunchyroll",
         providerId = 283,
-        networkOrCompanyId = null,
+        networkOrCompanyId = 1112,
         networkIsCompany = false
     )
 )
