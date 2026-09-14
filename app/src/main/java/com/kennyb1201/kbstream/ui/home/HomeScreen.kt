@@ -2112,6 +2112,31 @@ fun HomeScreen(
         focusedItem = item
         focusedFolder = null
         focusedContinueWatchingItem = upNextItem
+
+        // Focusing an UPCOMING card while the Continue Watching row is still
+        // partially scrolled under the hero leaves its bottom sliver (and
+        // the progress bar) peeking below the hero. The user is now on the
+        // row BELOW Continue Watching, so snap it fully above the viewport —
+        // same intent as hideContinueWatchingSliver, but landing with the
+        // Upcoming row at the top instead of skipping past it. CW cards
+        // themselves never trigger this: the user is deliberately on that
+        // row and their view must not be scrolled away.
+        if (upNextItem.id.startsWith("upcoming:")) {
+            // Item layout: 0 = hero spacer, 1 = Continue Watching (only
+            // when present), then the Upcoming row.
+            val upcomingIndex = 1 + (if (upNext.isNotEmpty()) 1 else 0)
+            val atOrAboveUpcoming =
+                railListState.firstVisibleItemIndex < upcomingIndex ||
+                    (
+                        railListState.firstVisibleItemIndex == upcomingIndex &&
+                            railListState.firstVisibleItemScrollOffset > 0
+                        )
+            if (atOrAboveUpcoming) {
+                homeScope.launch {
+                    railListState.animateScrollToItem(index = upcomingIndex)
+                }
+            }
+        }
     }
 
     // Re-apply rail display settings changed in Settings while we were away
