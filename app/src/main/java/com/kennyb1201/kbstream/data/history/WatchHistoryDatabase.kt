@@ -20,7 +20,7 @@ import com.kennyb1201.kbstream.data.cache.WatchedStatusEntity
         ImdbResolutionEntity::class,
         TmdbJsonCacheEntity::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = false
 )
 abstract class WatchHistoryDatabase : RoomDatabase() {
@@ -47,7 +47,10 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                     WatchHistoryDatabase::class.java,
                     "kbstream_watch_history"
                 )
-                    .addMigrations(MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+                    .addMigrations(
+                        MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+                        MIGRATION_9_10
+                    )
                     .fallbackToDestructiveMigration()
                     .build()
                     .also { instance = it }
@@ -90,7 +93,10 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                 WatchHistoryDatabase::class.java,
                 dbName
             )
-                .addMigrations(MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+                .addMigrations(
+                    MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+                    MIGRATION_9_10
+                )
                 .fallbackToDestructiveMigration()
                 .build()
 
@@ -131,6 +137,17 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                     "CREATE INDEX IF NOT EXISTS `index_watch_history_parentId` " +
                         "ON `watch_history` (`parentId`)"
                 )
+            }
+        }
+
+        // v10: the TMDB detail JSON cached before the episode-title field
+        // (TmdbEpisodeAirInfo.name) was added parses back without episode
+        // titles, and its 30-day TTL would keep hiding them on the Upcoming
+        // rail. Purge only the cache table; watch history stays intact and
+        // rows re-enrich from the live API.
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DELETE FROM `tmdb_json_cache`")
             }
         }
 

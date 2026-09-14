@@ -164,7 +164,10 @@ data class UpNextItem(
      * Watching enrichment already fetches — so the Upcoming rail costs no
      * extra network calls. Null when unknown / not a returning series.
      */
-    val nextEpisodeAir: TmdbEpisodeAirInfo? = null
+    val nextEpisodeAir: TmdbEpisodeAirInfo? = null,
+
+    /** TMDB show id when enrichment resolved one, for episode-title fallback. */
+    val tmdbId: Int? = null
 )
 
 /**
@@ -1813,7 +1816,7 @@ Log.d(
      * air date. Air dates at/past the current moment are excluded (the
      * episode has aired -> it belongs in Continue Watching, not here).
      */
-    private fun buildUpcomingSchedule(
+    private suspend fun buildUpcomingSchedule(
         items: List<UpNextItem>
     ): List<UpcomingEpisode> {
         val now = System.currentTimeMillis()
@@ -1857,7 +1860,18 @@ Log.d(
                     episode = episode,
                     airDateEpochMs = epochMs,
                     airDateLabel = airLabel,
-                    episodeTitle = air.name?.takeIf { it.isNotBlank() },
+                    // TMDB's next_episode_to_air summary sometimes ships
+                    // without a title even when the season detail HAS one;
+                    // backfill from the cached season episodes before
+                    // giving up (Simkl tracks watched state, it has no
+                    // unaired-episode metadata, so TMDB is the only source).
+                    episodeTitle = air.name?.takeIf { it.isNotBlank() }
+                        ?: fallbackUpcomingEpisodeTitle(
+                            tmdbId = item.tmdbId,
+                            season = season,
+                            episode = episode,
+                            imdbId = parentId
+                        ),
                     // Only kept when the label is relative ("In 5 days");
                     // beyond a week the label IS the full date and the hero
                     // would render the same date twice.
@@ -1868,6 +1882,27 @@ Log.d(
         }
 
         return upcoming.sortedBy { it.airDateEpochMs }
+    }
+
+    /**
+     * Backfills a missing next-episode title from the TMDB season detail
+     * (memory/disk cached). Returns null when anything is unavailable so
+     * the card just renders the S·E line.
+     */
+    private suspend fun fallbackUpcomingEpisodeTitle(
+        tmdbId: Int?,
+        season: Int,
+        episode: Int,
+        imdbId: String
+    ): String? {
+        if (tmdbId == null || tmdbId <= 0) return null
+        return runCatching {
+            tmdbRepository.getSeasonEpisodes(tmdbId, season, imdbId)
+                .firstOrNull { it.episodeNumber == episode }
+                ?.name
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+        }.getOrNull()
     }
 
     private fun parseTmdbAirDate(raw: String?): Long? {
@@ -2079,6 +2114,10 @@ Log.d(
         // can show it without any extra network calls.
         var capturedNextEpisodeAir: TmdbEpisodeAirInfo? = null
 
+        // TMDB show id resolved with the detail (for the Upcoming title
+        // fallback, which looks the next episode up in the season cache).
+        var capturedTmdbId: Int? = null
+
         // Finale flags derived from the shared-watched-state resolution
         // below; default false so movies / unresolvable titles stay plain
         // RESUME cards.
@@ -2139,6 +2178,7 @@ Log.d(
                 // Capture the show's next aired episode for the Upcoming
                 // rail — the detail response is already in hand here.
                 capturedNextEpisodeAir = tmdbDetail?.nextEpisodeToAir
+                capturedTmdbId = tmdbDetail?.id
 
                 val tmdbId = tmdbDetail?.id
 
@@ -2308,7 +2348,9 @@ Log.d(
             isSeriesFinale =
                 localSeriesFinale,
 
-            nextEpisodeAir = capturedNextEpisodeAir
+            nextEpisodeAir = capturedNextEpisodeAir,
+
+            tmdbId = capturedTmdbId
         )
             }
         }
@@ -2597,6 +2639,9 @@ var episodesTotal: Int? = null
         // below; threaded onto the built UpNextItem for the Upcoming rail.
         var capturedNextAirInfo: TmdbEpisodeAirInfo? = null
 
+        // TMDB show id resolved with the detail (Upcoming title fallback).
+        var capturedTmdbId: Int? = null
+
         if (needsTmdbLookup) {
 
             val detail =
@@ -2619,6 +2664,7 @@ var episodesTotal: Int? = null
             // Capture the next aired episode for the Upcoming rail — the
             // detail response is already fetched here.
             capturedNextAirInfo = detail?.nextEpisodeToAir
+            capturedTmdbId = detail?.id
 
             if (
                 posterUrl.isNullOrBlank()
@@ -2957,6 +3003,8 @@ episodesTotal =
                 targetIsSeriesFinale,
 
             nextEpisodeAir = capturedNextAirInfo,
+
+            tmdbId = capturedTmdbId,
 
             recencyTimestamp =
                 recencyTimestamp,
