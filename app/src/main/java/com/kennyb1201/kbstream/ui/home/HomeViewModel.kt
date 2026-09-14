@@ -4643,8 +4643,10 @@ private suspend fun calculateEpisodesRemaining(
         _isLoading.value =
             _rails.value.isEmpty()
 
-        _error.value =
-            null
+        // Keep any previous error on screen until THIS attempt succeeds or
+        // fails - the old code nulled it up front, so any automatic reload
+        // (launch refresh, addon change, resume) instantly erased the
+        // message before the user could read it. It "flashed" on open.
 
         if (clearCatalogCache) {
             repository.clearCatalogCache()
@@ -4780,6 +4782,12 @@ private suspend fun calculateEpisodesRemaining(
 
                 _rails.value =
                     finalRails.distinctBy { railKeyOf(it) }
+
+                // Success: NOW clear any stale error (was previously done at
+                // attempt START, which wiped the message before it could be
+                // read - the "flashing error" on open).
+                _error.value =
+                    null
 
                 // Cold-start resilience: when every catalog fetch fails
                 // simultaneously (network not yet up when the TV launcher

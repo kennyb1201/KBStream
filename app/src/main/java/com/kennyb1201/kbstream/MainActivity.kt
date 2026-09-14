@@ -887,10 +887,14 @@ fun AppRoot() {
 
     // "Back to exit" confirmation: on Home, Back opens an exit prompt instead
     // of finishing the Activity immediately, so an accidental press can't drop
-    // the user out of the app. Cancelling an in-flight auto-play keeps
-    // priority over the prompt.
+    // the user out of the app. The profile picker gets the same treatment —
+    // it is the app's entry screen, so Back there must EXIT, not push the
+    // user into a profile. Cancelling an in-flight auto-play keeps priority
+    // over the prompt.
     var confirmExit by remember { mutableStateOf(false) }
-    val interceptBack = screen == Screen.Home && pendingAutoPlay == null
+    val interceptBack =
+        (screen == Screen.Home || screen is Screen.ProfilePicker) &&
+            pendingAutoPlay == null
 
     BackHandler {
         if (interceptBack) {
@@ -951,6 +955,13 @@ fun AppRoot() {
                     // without a returnTo): Back belongs to the picker.
                     Screen.ProfilePicker
                 }
+
+            // Unreachable (interceptBack routes the picker to the exit
+            // prompt), but the entry screen must never navigate INTO Home —
+            // kept explicit so a future else-branch reshuffle can't regress
+            // "Back on Who's Watching exits the app".
+            is Screen.ProfilePicker ->
+                Screen.ProfilePicker
 
             // Detail carries the screen it was opened from (Search, Home,
             // an actor page, ...), so Back returns there instead of always

@@ -34,10 +34,18 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The action's default package set includes the legacy `tools`
+          # package, which Google removed from the SDK repository (runs fail
+          # with "Failed to find package 'tools'"). platform-tools is the
+          # only extra needed here; AGP fetches platforms/build-tools during
+          # the build once licenses are accepted (default input).
+          packages: platform-tools
 
       - name: Restore release keystore
         run: |
           echo "${{ secrets.KBSTREAM_KEYSTORE_BASE64 }}" | base64 --decode > app/kbstream-release.jks
+          test -s app/kbstream-release.jks || echo "::warning::KBSTREAM_KEYSTORE_BASE64 secret is empty - the signed release step will be skipped or fail"
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
