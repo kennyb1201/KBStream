@@ -28,18 +28,21 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
+import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -83,9 +86,14 @@ fun ProfilePickerScreen(
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier
-                .padding(top = 40.dp)
                 .verticalScroll(rememberScrollState())
                 .focusGroup()
+                // Spacing lives INSIDE the scroll viewport: the focused
+                // tile scales 1.06x, and padding placed before
+                // verticalScroll() puts the clip edge right at the first
+                // row — cutting off the top of the focus ring. Inside, the
+                // ring grows into scrollable space instead.
+                .padding(top = 40.dp, bottom = 12.dp)
         ) {
             val tiles = profiles.map { profile ->
                 PickerTile(
@@ -223,10 +231,11 @@ private fun ProfileAvatarTile(
                             .background(KBSurfaceRaised),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = "✎",
-                            fontSize = 30.sp,
-                            color = KBTextLo
+                        Icon(
+                            painter = painterResource(R.drawable.ic_profile_manage),
+                            contentDescription = "Manage profiles",
+                            tint = KBTextLo,
+                            modifier = Modifier.size(30.dp)
                         )
                     }
                 }
