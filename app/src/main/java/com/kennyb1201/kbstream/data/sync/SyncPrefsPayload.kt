@@ -179,6 +179,12 @@ object PrefsPayloadBuilder {
             put("playlist_url", prefs.getString("playlist_url", null).orEmpty())
             put("playlist_name", prefs.getString("playlist_name", null).orEmpty())
             put("epg_url", prefs.getString("epg_url", null).orEmpty())
+            putJsonArray("extra_playlist_urls") {
+                prefs.getString("extra_playlist_urls", "").orEmpty()
+                    .split('\n', ';')
+                    .mapNotNull { it.trim().takeIf(String::isNotBlank) }
+                    .forEach { add(it) }
+            }
             putJsonArray("hidden_channel_ids") {
                 prefs.getStringSet("hidden_channel_ids", emptySet()).orEmpty().forEach { add(it) }
             }
@@ -334,11 +340,21 @@ object PrefsPayloadApplier {
         val playlistUrl = str("playlist_url")
         val playlistName = str("playlist_name")
         val epgUrl = str("epg_url")
+        val extraPlaylistUrls = (payload["extra_playlist_urls"] as? kotlinx.serialization.json.JsonArray)
+            ?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
+            .orEmpty()
+            .filter { it.isNotBlank() }
 
         val editor = prefs.edit()
         if (playlistUrl.isNotBlank()) editor.putString("playlist_url", playlistUrl)
         if (playlistName.isNotBlank()) editor.putString("playlist_name", playlistName)
         if (epgUrl.isNotBlank()) editor.putString("epg_url", epgUrl)
+        // Extra sources: the array replaces the local list wholesale (a
+        // device that removed a source should propagate the removal), but
+        // only when the key is present — older payloads keep local edits.
+        if (payload.containsKey("extra_playlist_urls")) {
+            editor.putString("extra_playlist_urls", extraPlaylistUrls.joinToString("\n"))
+        }
         (payload["hidden_channel_ids"] as? kotlinx.serialization.json.JsonArray)?.let { arr ->
             val set = arr.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }.toSet()
             editor.putStringSet("hidden_channel_ids", set)

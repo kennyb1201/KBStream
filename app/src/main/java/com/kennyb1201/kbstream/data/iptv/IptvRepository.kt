@@ -19,6 +19,15 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+
+/** A fully-aired program with a resolved catch-up (DVR) playback URL. */
+data class CatchupProgram(
+    val title: String,
+    val description: String?,
+    val startUtcMillis: Long,
+    val endUtcMillis: Long,
+    val url: String
+)
 import org.json.JSONObject
 
 class IptvRepository(
@@ -661,6 +670,60 @@ class IptvRepository(
 
     private fun normalizeGuideKey(value: String): String =
         value.trim().lowercase(Locale.US)
+
+    /**
+     * Catch-up entries for one channel: the channel's last programs that
+     * have fully aired (newest first), each carrying a resolved DVR URL
+     * template built from the channel's M3U catch-up attributes. Channels
+     * without catch-up attributes resolve to an empty list — the guide then
+     * renders the section as unavailable instead of silently dead entries.
+     */
+    suspend fun getRecentCatchupPrograms(
+        channel: IptvChannel,
+        epgUrl: String,
+        count: Int = 12,
+        windowDays: Int = 7
+    ): List<CatchupProgram> = withContext(Dispatchers.IO) {
+        val template = channel.catchupSource
+            ?: channel.catchup
+            ?: return@withContext emptyList()
+
+        val guideUrl = epgUrl.trim()
+        if (guideUrl.isBlank()) return@withContext emptyList()
+
+        val now = System.currentTimeMillis()
+        val epgChannelId = channel.tvgId?.trim().orEmpty()
+        if (epgChannelId.isBlank()) return@withContext emptyList()
+
+        val rows = dao.getRecentProgramsForChannels(
+            sourceUrl = guideUrl,
+            channelIds = listOf(epgChannelId),
+            nowMillis = now,
+            windowStart = now - windowDays * 86_400_000L,
+            perChannelLimit = count
+        )
+
+        rows.mapNotNull { row ->
+            // Only fully-aired programs are seekable on provider DVR.
+            if (row.endUtcMillis > now) return@mapNotNull null
+            if (!CatchupUrls.withinDvrWindow(channel.catchupDays, row.startUtcMillis, now)) {
+                return@mapNotNull null
+            }
+            val url = CatchupUrls.build(
+                template = template,
+                startUtcMillis = row.startUtcMillis,
+                endUtcMillis = row.endUtcMillis,
+                nowUtcMillis = now
+            ) ?: return@mapNotNull null
+            CatchupProgram(
+                title = row.title,
+                description = row.description.takeIf { it.isNotBlank() },
+                startUtcMillis = row.startUtcMillis,
+                endUtcMillis = row.endUtcMillis,
+                url = url
+            )
+        }
+    }
 
     private data class ResolvedEpgMatch(
         val epgChannel: XmltvChannel?,

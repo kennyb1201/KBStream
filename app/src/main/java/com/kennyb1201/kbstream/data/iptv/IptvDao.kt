@@ -194,6 +194,45 @@ interface IptvDao {
                 endUtcMillis,
                 ROW_NUMBER() OVER (
                     PARTITION BY channelId
+                    ORDER BY startUtcMillis DESC
+                ) AS rowNumber
+            FROM epg_programs
+            WHERE sourceUrl = :sourceUrl
+              AND endUtcMillis <= :nowMillis
+              AND endUtcMillis > :windowStart
+              AND channelId IN (:channelIds)
+        )
+        WHERE rowNumber <= :perChannelLimit
+        ORDER BY channelId ASC, startUtcMillis DESC
+        """
+    )
+    suspend fun getRecentProgramsForChannels(
+        sourceUrl: String,
+        channelIds: List<String>,
+        nowMillis: Long,
+        windowStart: Long,
+        perChannelLimit: Int
+    ): List<EpgProgramRow>
+
+    @Query(
+        """
+        SELECT
+            channelId,
+            title,
+            description,
+            category,
+            startUtcMillis,
+            endUtcMillis
+        FROM (
+            SELECT
+                channelId,
+                title,
+                description,
+                category,
+                startUtcMillis,
+                endUtcMillis,
+                ROW_NUMBER() OVER (
+                    PARTITION BY channelId
                     ORDER BY startUtcMillis ASC
                 ) AS rowNumber
             FROM epg_programs

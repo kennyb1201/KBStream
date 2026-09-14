@@ -61,6 +61,9 @@ import androidx.media3.exoplayer.video.VideoRendererEventListener
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.badges.StreamBadge
+import com.kennyb1201.kbstream.data.iptv.LiveChannelZapRegistry
+import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
+import com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
 import com.kennyb1201.kbstream.ui.player.PickerAdapter.Companion.bindBadgeRow
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
@@ -77,10 +80,12 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import okhttp3.OkHttpClient
 import org.json.JSONArray
 import org.json.JSONObject
-import java.util.ArrayList
 import java.util.concurrent.TimeUnit
 
 private const val TAG = "NativePlayer"
@@ -95,6 +100,16 @@ private val RETRY_BACKOFF_MS = listOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 3
 private val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 private const val CONTROLS_HIDE_DELAY_MS = 6_000L
 private const val NEXT_UP_COUNTDOWN_SECONDS = 5
+
+// Zap banner: how long the channel-info overlay stays on screen after the
+// last CH+/CH− press, and how much EPG lookahead a single lookup loads.
+private const val ZAP_BANNER_VISIBLE_MS = 5_000L
+private const val ZAP_EPG_LOOKAHEAD_MS = 6L * 60L * 60L * 1000L
+private const val ZAP_EPG_ROW_LIMIT = 4
+// Repaint a cached banner instantly, but still re-query the guide if the
+// snapshot is older than this — otherwise the NOW row and progress bar
+// slowly drift out of sync during a long viewing session.
+private const val ZAP_EPG_TTL_MS = 60_000L
 
 /**
  * Decouples the video and audio extension policies, which stock
@@ -405,6 +420,211 @@ class NativePlayerActivity : ComponentActivity() {
 
     // History
     private var isLiveChannel = false
+
+    // Zap banner (CH+/CH- channel info overlay) — bound in bindViews(),
+    // populated by showZapBanner() during a live-channel zap.
+    private var zapBanner: View? = null
+    private var zapLogo: ImageView? = null
+    private var zapChannelLabel: TextView? = null
+    private var zapChannelName: TextView? = null
+    private var zapNowTitle: TextView? = null
+    private var zapNowMeta: TextView? = null
+    private var zapNowProgress: ProgressBar? = null
+    private var zapNextTitle: TextView? = null
+    private val zapHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val zapBannerHideRunnable = Runnable {
+        // Defensive: after onDestroy the callback can still sit in the
+        // looper queue for a few seconds; touching the detached view is
+        // harmless but pointless, so skip it once the activity is gone.
+        if (!isDestroyed) zapBanner?.visibility = View.GONE
+    }
+
+    /**
+     * Now/next programs for one channel, resolved from the imported guide
+     * (same Room DB the guide screen reads). Null fields = no EPG.
+     * [fetchedAtMillis] drives freshness: entries older than the TTL are
+     * repainted instantly (no flash) but refreshed async in the background.
+     */
+    private data class ZapEpgInfo(
+        val now: EpgProgramRow?,
+        val next: EpgProgramRow?,
+        val fetchedAtMillis: Long = 0L
+    )
+
+    // Zap state: which lineup entry is playing, and the per-channel EPG row
+    // cache so repeated CH presses render instantly. (channelId, epgUrl).
+    private var zapChannelIndex = -1
+    private val zapEpgCache = HashMap<String, ZapEpgInfo>()
+    private var zapEpgCacheLimit = 64
+
+    private val zapTimeFormat by lazy {
+        SimpleDateFormat("h:mm a", Locale.getDefault())
+    }
+
+    /** Move to the channel [delta] positions away in the guide lineup. */
+    private fun zapByOffset(delta: Int) {
+        if (LiveChannelZapRegistry.size() == 0) return
+
+        // Establish the anchor once per player session: the entry whose id
+        // (or stream URL) matches what we were launched with.
+        if (zapChannelIndex < 0) {
+            zapChannelIndex = LiveChannelZapRegistry.indexOfChannel(parentId)
+                .takeIf { it >= 0 }
+                ?: LiveChannelZapRegistry.indexOfStreamUrl(currentUrl)
+        }
+        if (zapChannelIndex < 0) return
+
+        val target = LiveChannelZapRegistry.offsetChannel(zapChannelIndex, delta) ?: return
+        val targetIndex = LiveChannelZapRegistry.indexOfChannel(target.channelId)
+        if (targetIndex < 0) return
+        zapChannelIndex = targetIndex
+
+        // Always show the banner immediately with cached/known info — the
+        // EPG row fills in async a moment later. Rapid-fire zapping re-shows
+        // it and re-reads the (now cached) row.
+        showZapBanner(target)
+
+        streamHeaders = target.headers
+        if (target.streamUrl != currentUrl) {
+            val zapStream = Stream(
+                name = target.name,
+                title = target.name,
+                url = target.streamUrl,
+                audioUrl = null
+            )
+            // Replace the source list with the zapped channel only — keeps
+            // currentSourceIndex valid so the auto-retry ladder recovers
+            // THIS channel instead of silently falling back to the old one.
+            sources = listOf(zapStream)
+            switchToSource(zapStream)
+        }
+    }
+
+    /**
+     * Transient channel-info banner: channel identity + the NOW program
+     * (with a progress bar) and NEXT. EPG data comes from the same Room DB
+     * the guide uses, keyed off the channel's resolved guide id.
+     */
+    private fun showZapBanner(channel: LiveChannelZapRegistry.ZapChannel) {
+        val banner = zapBanner ?: return
+
+        zapChannelLabel?.text = if (channel.chno?.isNotBlank() == true) {
+            "CH ${channel.chno}  •  LIVE"
+        } else {
+            "LIVE"
+        }
+        zapChannelName?.text = channel.name
+        if (channel.logoUrl.isNullOrBlank()) {
+            zapLogo?.setImageDrawable(null)
+        } else {
+            zapLogo?.load(channel.logoUrl)
+        }
+
+        val epgUrl = channel.epgUrl?.trim().orEmpty()
+        val cacheKey = channel.channelId + "|" + epgUrl
+        val cached = zapEpgCache[cacheKey]
+
+        // Synchronous paint with whatever we already know.
+        applyZapEpg(cached)
+        banner.visibility = View.VISIBLE
+
+        // Reset the auto-hide timer so rapid zapping never hides the banner
+        // mid-press.
+        zapHandler.removeCallbacks(zapBannerHideRunnable)
+        zapHandler.postDelayed(zapBannerHideRunnable, ZAP_BANNER_VISIBLE_MS)
+
+        scope?.launch {
+            val now = System.currentTimeMillis()
+            val isFresh = cached != null && now - cached.fetchedAtMillis < ZAP_EPG_TTL_MS
+            val noSource = epgUrl.isBlank() || channel.epgChannelId.isNullOrBlank()
+            val info = if (isFresh || noSource) {
+                cached ?: ZapEpgInfo(now = null, next = null, fetchedAtMillis = now)
+            } else {
+                withContext(Dispatchers.IO) {
+                    loadZapEpg(epgUrl, channel.epgChannelId!!)
+                }
+            }
+            zapEpgCache[cacheKey] = info
+            trimZapEpgCache()
+            // Only apply if the banner is still showing THIS channel — a
+            // slow DB read must never overwrite a newer zap. Both the
+            // playing URL and the channel name must match (names are not
+            // guaranteed unique across playlist groups).
+            if (zapBanner?.visibility == View.VISIBLE &&
+                zapChannelName?.text?.toString() == channel.name &&
+                currentUrl == channel.streamUrl
+            ) {
+                applyZapEpg(info)
+            }
+        }
+    }
+
+    /** Queries the guide DB for the channel's current + next program. */
+    private suspend fun loadZapEpg(epgUrl: String, epgChannelId: String): ZapEpgInfo {
+        return try {
+            val dao = IptvDatabase.getInstance(applicationContext).iptvDao()
+            val now = System.currentTimeMillis()
+            // Full variant (not the Lite one): it returns the real
+            // category/description columns, which the banner shows.
+            val rows = dao.getProgramsForChannelsInWindow(
+                sourceUrl = epgUrl,
+                channelIds = listOf(epgChannelId),
+                windowStart = now,
+                windowEnd = now + ZAP_EPG_LOOKAHEAD_MS,
+                perChannelLimit = ZAP_EPG_ROW_LIMIT
+            )
+            ZapEpgInfo(
+                now = rows.firstOrNull { row ->
+                    now >= row.startUtcMillis && now < row.endUtcMillis
+                },
+                next = rows.firstOrNull { row -> row.startUtcMillis >= now },
+                fetchedAtMillis = now
+            )
+        } catch (t: Throwable) {
+            Log.w(TAG, "ZAP EPG lookup failed: ${t.message}")
+            ZapEpgInfo(now = null, next = null, fetchedAtMillis = System.currentTimeMillis())
+        }
+    }
+
+    /** Paints one EPG snapshot into the banner views. */
+    private fun applyZapEpg(info: ZapEpgInfo?) {
+        val now = info?.now
+        if (now == null) {
+            // Distinguish "still loading" from "this channel has no guide":
+            // the async lookup paints the real state within a beat.
+            zapNowTitle?.text = if (info == null) "…" else "No guide data"
+            zapNowMeta?.text = ""
+            zapNowProgress?.visibility = View.GONE
+            zapNextTitle?.text = ""
+            return
+        }
+
+        zapNowTitle?.text = now.title
+        zapNowMeta?.text = buildString {
+            append(zapTimeFormat.format(Date(now.startUtcMillis)))
+            append(" – ")
+            append(zapTimeFormat.format(Date(now.endUtcMillis)))
+            now.category?.takeIf { it.isNotBlank() }?.let { append("  •  ").append(it) }
+        }
+
+        val span = (now.endUtcMillis - now.startUtcMillis).coerceAtLeast(1L)
+        val elapsed = (System.currentTimeMillis() - now.startUtcMillis)
+            .coerceIn(0L, span)
+        zapNowProgress?.visibility = View.VISIBLE
+        zapNowProgress?.max = 1000
+        zapNowProgress?.progress = ((elapsed * 1000L) / span).toInt()
+
+        zapNextTitle?.text = info?.next?.let { next ->
+            "Next  " + zapTimeFormat.format(Date(next.startUtcMillis)) + "  " + next.title
+        } ?: ""
+    }
+
+    private fun trimZapEpgCache() {
+        val overflow = zapEpgCache.size - zapEpgCacheLimit
+        if (overflow > 0) {
+            zapEpgCache.keys.take(overflow).forEach(zapEpgCache::remove)
+        }
+    }
     private var parentId = ""
     private var parentType = ""
     private var season: Int? = null
@@ -762,6 +982,14 @@ class NativePlayerActivity : ComponentActivity() {
         subtitleText = findViewById(R.id.custom_subtitle_text)
         p5VideoGlesView = findViewById(R.id.p5_video_gles_view)
         liveBadge = findViewById(R.id.live_badge)
+        zapBanner = findViewById(R.id.zap_banner)
+        zapLogo = findViewById(R.id.zap_logo)
+        zapChannelLabel = findViewById(R.id.zap_channel_label)
+        zapChannelName = findViewById(R.id.zap_channel_name)
+        zapNowTitle = findViewById(R.id.zap_now_title)
+        zapNowMeta = findViewById(R.id.zap_now_meta)
+        zapNowProgress = findViewById(R.id.zap_now_progress)
+        zapNextTitle = findViewById(R.id.zap_next_title)
         bufferingSpinner = findViewById(R.id.buffering_spinner)
         reconnectingContainer = findViewById(R.id.reconnecting_container)
         reconnectingText = findViewById(R.id.reconnecting_text)
@@ -1382,6 +1610,14 @@ class NativePlayerActivity : ComponentActivity() {
             KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { exoPlayer?.seekForward(); return true }
             KeyEvent.KEYCODE_MEDIA_REWIND -> { exoPlayer?.seekBack(); return true }
             KeyEvent.KEYCODE_MEDIA_STOP -> { finish(); return true }
+            // CH+/CH- channel zapping — live channels only. Banner shows
+            // channel identity + NOW/NEXT so you can see where you landed.
+            KeyEvent.KEYCODE_CHANNEL_UP -> {
+                if (isLiveChannel) { zapByOffset(+1); return true }
+            }
+            KeyEvent.KEYCODE_CHANNEL_DOWN -> {
+                if (isLiveChannel) { zapByOffset(-1); return true }
+            }
         }
         return super.onKeyDown(keyCode, event)
     }

@@ -67,6 +67,7 @@ import com.kennyb1201.kbstream.ui.home.CatalogGridScreen
 import com.kennyb1201.kbstream.ui.profiles.ProfileEditScreen
 import com.kennyb1201.kbstream.ui.profiles.ProfilePickerScreen
 import com.kennyb1201.kbstream.ui.home.HomeScreen
+import com.kennyb1201.kbstream.data.iptv.LiveChannelZapRegistry
 import com.kennyb1201.kbstream.ui.iptv.GuideScreen
 import com.kennyb1201.kbstream.ui.iptv.IptvViewModel
 import com.kennyb1201.kbstream.ui.onboarding.OnboardingPrefs
@@ -1287,6 +1288,30 @@ fun AppRoot() {
                             ?: channelWithEpg
                                 .epgChannel
                                 ?.iconUrl
+
+                    // Publish the guide's filtered/ordered lineup so the
+                    // player can zap between live channels with CH+/CH− and
+                    // show an EPG info banner. Kept in lockstep with every
+                    // launch so edits in the guide are reflected next time.
+                    LiveChannelZapRegistry.set(
+                        iptvViewModel.visibleChannels.value.map { item ->
+                            LiveChannelZapRegistry.ZapChannel(
+                                channelId = item.channel.id
+                                    .ifBlank { item.channel.streamUrl },
+                                name = item.channel.displayName
+                                    .ifBlank { "Live Channel" },
+                                streamUrl = item.channel.streamUrl,
+                                logoUrl = item.channel.logoUrl
+                                    ?: item.epgChannel?.iconUrl,
+                                headers = item.channel.headers,
+                                chno = item.channel.tvgChno?.trim()
+                                    ?.takeIf { it.isNotBlank() },
+                                epgChannelId = item.epgChannel?.id,
+                                epgUrl = iptvViewModel.epgUrl.value.trim()
+                                    .takeIf { it.isNotBlank() }
+                            )
+                        }
+                    )
 
                     val directSource =
                         Stream(

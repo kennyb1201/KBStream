@@ -126,6 +126,7 @@ fun GuideScreen(
     val playlistUrl by viewModel.playlistUrl.collectAsState()
     val epgUrl by viewModel.epgUrl.collectAsState()
     val playlistName by viewModel.playlistName.collectAsState()
+    val extraPlaylistUrls by viewModel.extraPlaylistUrls.collectAsState()
 
     val channelListState = rememberLazyListState()
     val firstChannelFocusRequester = remember { FocusRequester() }
@@ -157,6 +158,11 @@ fun GuideScreen(
     var menuItem by remember { mutableStateOf<IptvChannelWithEpg?>(null) }
     
     var moveFocusToChannelList by remember { mutableStateOf(false) }
+
+    // Channel search: D-pad SEARCH/MENU (or the header button) opens a
+    // text overlay that filters the channel list live.
+    var showSearch by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
 
     // Last-viewed persistence: reopening the guide drops you back on the
     // group/channel you were on instead of "All" + top of the list. The
@@ -196,9 +202,10 @@ fun GuideScreen(
     }
 }
     val hiddenChannelIds by viewModel.hiddenChannelIds.collectAsState()
-    val groups = remember(unhiddenChannels, favorites) {
+    val groups = remember(unhiddenChannels, favorites, recentChannelKeys) {
         buildList {
             add("All")
+            if (recentChannelKeys.isNotEmpty()) add("Recent")
             if (unhiddenChannels.any { favoriteKey(it) in favorites }) add("Favorites")
             val seenGroups = LinkedHashSet<String>()
             unhiddenChannels.forEach { item ->
@@ -208,10 +215,16 @@ fun GuideScreen(
         }
     }
     var selectedGroup by remember(activeProfileId) { mutableStateOf(savedGroup?.takeIf { it.isNotBlank() } ?: "All") }
-    val groupedChannels = remember(unhiddenChannels, selectedGroup, favorites) {
+    val groupedChannels = remember(unhiddenChannels, selectedGroup, favorites, recentChannelKeys) {
         when (selectedGroup) {
             "All" -> unhiddenChannels
             "Favorites" -> unhiddenChannels.filter { favoriteKey(it) in favorites }
+            "Recent" -> {
+                // Newest-first over the persisted play order; keys that no
+                // longer resolve (channel removed/hidden) drop out.
+                val byKey = unhiddenChannels.associateBy(::channelKey)
+                recentChannelKeys.mapNotNull(byKey::get)
+            }
             else -> unhiddenChannels.filter { it.channel.groupTitle?.trim() == selectedGroup }
         }
     }
@@ -253,6 +266,21 @@ fun GuideScreen(
         }
     }
 
+    // Recently-played channels: a queue of channel keys updated on PLAY
+    // (not mere focus), newest first, capped at 8. Rendered as a
+    // "RECENT" group at the front of the groups strip.
+    var recentChannelKeys by remember(activeProfileId) {
+        mutableStateOf(
+            guidePreferences.getStringSet("recent_channels", emptySet())
+                ?.toSet().orEmpty().toList().take(8)
+        )
+    }
+    LaunchedEffect(recentChannelKeys) {
+        guidePreferences.edit()
+            .putStringSet("recent_channels", recentChannelKeys.toSet())
+            .apply()
+    }
+
     fun resolveChannelNumber(entry: String) {
         if (entry.isBlank()) return
         val target = unhiddenChannels.firstOrNull { it.channel.tvgChno?.trim() == entry } ?: return
@@ -274,6 +302,25 @@ fun GuideScreen(
         showSetup = false
     }
     BackHandler(enabled = showSetup && playlist != null, onBack = dismissSetup)
+    val dismissSearch = {
+        showSearch = false
+        searchQuery = ""
+    }
+    BackHandler(enabled = showSearch, onBack = dismissSearch)
+
+    // Live-filtered channel list for the search overlay: case-insensitive
+    // contains on display name and channel number.
+    val searchResults = remember(searchQuery, unhiddenChannels) {
+        val q = searchQuery.trim()
+        when {
+            q.isBlank() -> emptyList()
+            else -> unhiddenChannels.filter { item ->
+                item.channel.displayName.contains(q, ignoreCase = true) ||
+                    item.channel.name.contains(q, ignoreCase = true) ||
+                    item.channel.tvgChno?.trim() == q
+            }.take(40)
+        }
+    }
 
 LaunchedEffect(defaultPlaylistUrl, defaultEpgUrl, defaultPlaylistName) {
     if (
@@ -503,6 +550,7 @@ LaunchedEffect(channelListState, groupedChannelIds) {
             playlistUrl = playlistUrl,
             epgUrl = epgUrl,
             playlistName = playlistName,
+            extraPlaylistUrls = extraPlaylistUrls,
             isLoading = isLoading,
             isImportingGuide = isImportingGuide,
             error = error,
@@ -512,6 +560,7 @@ LaunchedEffect(channelListState, groupedChannelIds) {
             onPlaylistUrlChanged = viewModel::onPlaylistUrlChanged,
             onEpgUrlChanged = viewModel::onEpgUrlChanged,
             onPlaylistNameChanged = viewModel::onPlaylistNameChanged,
+            onExtraPlaylistUrlsChanged = viewModel::onExtraPlaylistUrlsChanged,
             onLoad = { viewModel.load() },
             onReload = { viewModel.load() },
             onImportGuide = { viewModel.importGuide() },
@@ -520,6 +569,7 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                 viewModel.onPlaylistUrlChanged("")
                 viewModel.onEpgUrlChanged("")
                 viewModel.onPlaylistNameChanged("")
+                viewModel.onExtraPlaylistUrlsChanged("")
                 showSetup = true
             },
             modifier = panelModifier
@@ -537,8 +587,17 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                 // never while the setup form, hidden-items manager, or
                 // channel menu is up, so digits keep reaching those controls.
                 val digitsAllowed = playlist != null && !showSetup &&
-                    menuItem == null && !showHiddenManager
+                    menuItem == null && !showHiddenManager && !showSearch
                 if (!digitsAllowed) return@onPreviewKeyEvent false
+
+                // Remote search button opens the channel-search overlay.
+                when (event.nativeKeyEvent.keyCode) {
+                    KeyEvent.KEYCODE_SEARCH,
+                    KeyEvent.KEYCODE_PROG_YELLOW -> {
+                        showSearch = true
+                        return@onPreviewKeyEvent true
+                    }
+                }
 
                 val code = event.nativeKeyEvent.keyCode
                 val digit = when (code) {
@@ -587,7 +646,8 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                         title = playlist?.name?.ifBlank { "IPTV" } ?: "IPTV",
                         channelCount = groupedChannels.size,
                         selectedGroup = selectedGroup,
-                        onSetupClick = { showSetup = !showSetup }
+                        onSetupClick = { showSetup = !showSetup },
+                        onSearchClick = { showSearch = true }
                     )
 
                     Spacer(modifier = Modifier.height(14.dp))
@@ -678,6 +738,12 @@ Spacer(modifier = Modifier.height(14.dp))
                                             selected = selectedChannelIndex == index,
                                             onClick = {
                                                 selectedChannelId = item.channel.id
+                                                // Track into the Recent group
+                                                // (newest first, capped).
+                                                recentChannelKeys =
+                                                    (listOf(channelKey(item)) + recentChannelKeys)
+                                                        .distinct()
+                                                        .take(8)
                                                 latestOnPlayChannel?.invoke(item)
                                             },
                                             onFocused = {
@@ -797,6 +863,25 @@ Spacer(modifier = Modifier.height(14.dp))
                             }
                         }
                     }
+                }
+
+                if (showSearch) {
+                    ChannelSearchDialog(
+                        query = searchQuery,
+                        results = searchResults,
+                        channelKey = ::channelKey,
+                        onQueryChanged = { searchQuery = it },
+                        onPlay = { item ->
+                            selectedChannelId = item.channel.id
+                            recentChannelKeys =
+                                (listOf(channelKey(item)) + recentChannelKeys)
+                                    .distinct()
+                                    .take(8)
+                            latestOnPlayChannel?.invoke(item)
+                            dismissSearch()
+                        },
+                        onDismiss = ::dismissSearch
+                    )
                 }
 
                 if (showSetup && playlist != null) {
@@ -928,6 +1013,7 @@ private fun SetupPanel(
     playlistUrl: String,
     epgUrl: String,
     playlistName: String,
+    extraPlaylistUrls: String,
     isLoading: Boolean,
     isImportingGuide: Boolean,
     error: String?,
@@ -937,6 +1023,7 @@ private fun SetupPanel(
     onPlaylistUrlChanged: (String) -> Unit,
     onEpgUrlChanged: (String) -> Unit,
     onPlaylistNameChanged: (String) -> Unit,
+    onExtraPlaylistUrlsChanged: (String) -> Unit,
     onLoad: () -> Unit,
     onReload: () -> Unit,
     onImportGuide: () -> Unit,
@@ -998,6 +1085,33 @@ private fun SetupPanel(
             onValueChange = onEpgUrlChanged,
             modifier = Modifier.fillMaxWidth()
         )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Optional extra M3U sources, one per line: "<url>|<name>" to give
+        // a source a display name. Merged into the lineup after the
+        // primary playlist loads; a source that fails to load is skipped
+        // without taking down the rest.
+        Text(
+            text = "Extra playlists (optional) — one URL per line",
+            color = KBTextLo,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = 2.dp)
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            KBTextField(
+                value = extraPlaylistUrls,
+                onValueChange = onExtraPlaylistUrlsChanged,
+                placeholder = "http://host/other.m3u|Name",
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            KBPasteChip(onPaste = { onExtraPlaylistUrlsChanged(it) })
+        }
 
         Spacer(modifier = Modifier.height(12.dp))
 
@@ -1131,6 +1245,7 @@ private fun GuideHeader(
     channelCount: Int,
     selectedGroup: String,
     onSetupClick: () -> Unit,
+    onSearchClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -1161,6 +1276,16 @@ private fun GuideHeader(
         }
 
         Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (onSearchClick != null) {
+                KBCard(onClick = onSearchClick) {
+                    Text(
+                        text = "SEARCH",
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)
+                    )
+                }
+            }
             KBCard(onClick = onSetupClick) {
                 Text(
                     text = "SETUP",

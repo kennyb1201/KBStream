@@ -1076,6 +1076,98 @@
         </LinearLayout>
     </ScrollView>
 
+    <!-- Zap banner: transient channel-info overlay shown when the user
+         changes channels with CH+/CH- during live TV. Shows logo, channel
+         number/name, the NOW program with progress, and NEXT. Auto-hides. -->
+    <LinearLayout
+        android:id="@+id/zap_banner"
+        android:layout_width="560dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:layout_margin="26dp"
+        android:background="@drawable/panel_bg"
+        android:orientation="horizontal"
+        android:padding="16dp"
+        android:visibility="gone">
+
+        <ImageView
+            android:id="@+id/zap_logo"
+            android:layout_width="64dp"
+            android:layout_height="64dp"
+            android:scaleType="fitCenter"
+            android:contentDescription="Channel logo" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="16dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/zap_channel_label"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="@font/oswald_medium"
+                android:textColor="@color/kb_accent"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/zap_channel_name"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:ellipsize="end"
+                android:fontFamily="@font/oswald_semibold"
+                android:maxLines="1"
+                android:textColor="@color/kb_text_hi"
+                android:textSize="19sp" />
+
+            <TextView
+                android:id="@+id/zap_now_title"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:ellipsize="end"
+                android:fontFamily="@font/oswald_medium"
+                android:maxLines="1"
+                android:textColor="@color/kb_text_hi"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/zap_now_meta"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:ellipsize="end"
+                android:fontFamily="@font/oswald_medium"
+                android:maxLines="1"
+                android:textColor="@color/kb_text_lo"
+                android:textSize="11sp" />
+
+            <ProgressBar
+                android:id="@+id/zap_now_progress"
+                style="@android:style/Widget.ProgressBar.Horizontal"
+                android:layout_width="match_parent"
+                android:layout_height="3dp"
+                android:layout_marginTop="6dp"
+                android:max="1000"
+                android:progressTint="@color/kb_accent"
+                android:progressBackgroundTint="#338891A0" />
+
+            <TextView
+                android:id="@+id/zap_next_title"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:ellipsize="end"
+                android:fontFamily="@font/oswald_medium"
+                android:maxLines="1"
+                android:textColor="@color/kb_text_lo"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </LinearLayout>
+
     <!-- Scrim behind panels (clickable to dismiss) -->
     <View
         android:id="@+id/scrim"

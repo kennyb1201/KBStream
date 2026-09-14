@@ -48,6 +48,22 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     private val _playlistName = MutableStateFlow(prefs.getString(KEY_PLAYLIST_NAME, "").orEmpty())
     val playlistName: StateFlow<String> = _playlistName.asStateFlow()
 
+    /**
+     * Additional M3U sources (newline-separated URLs) merged into the
+     * lineup alongside the primary playlist. Each entry may also carry a
+     * "|name" suffix ("<url>|<display name>"). EPG matching for merged
+     * channels keys off each playlist's own URL in the cache tables.
+     */
+    private val _extraPlaylistUrls = MutableStateFlow(
+        prefs.getString(KEY_EXTRA_PLAYLIST_URLS, "").orEmpty()
+    )
+    val extraPlaylistUrls: StateFlow<String> = _extraPlaylistUrls.asStateFlow()
+
+    fun onExtraPlaylistUrlsChanged(value: String) {
+        _extraPlaylistUrls.value = value
+        saveInputs()
+    }
+
     private val _playlist = MutableStateFlow<IptvPlaylist?>(null)
     val playlist: StateFlow<IptvPlaylist?> = _playlist.asStateFlow()
 
@@ -67,6 +83,34 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         prefs.getStringSet(KEY_HIDDEN_CHANNEL_IDS, emptySet()).orEmpty().toSet()
     )
     val hiddenChannelIds: StateFlow<Set<String>> = _hiddenChannelIds.asStateFlow()
+
+    /** Past programs with playable DVR URLs for the selected channel. */
+    private val _catchupPrograms = MutableStateFlow<List<com.kennyb1201.kbstream.data.iptv.CatchupProgram>>(emptyList())
+    val catchupPrograms: StateFlow<List<com.kennyb1201.kbstream.data.iptv.CatchupProgram>> =
+        _catchupPrograms.asStateFlow()
+
+    private var catchupJob: Job? = null
+
+    /**
+     * Loads the catch-up (DVR) list for [channel]. An empty result means
+     * the channel carries no catch-up attributes or has no EPG history —
+     * the UI hides the section rather than showing dead entries.
+     */
+    fun loadCatchupPrograms(channel: IptvChannel) {
+        catchupJob?.cancel()
+        catchupJob = viewModelScope.launch {
+            _catchupPrograms.value = try {
+                repository.getRecentCatchupPrograms(
+                    channel = channel,
+                    epgUrl = _epgUrl.value.trim()
+                )
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                Log.w(TAG, "CATCHUP LOAD FAILED channel=${channel.id}: ${t.message}")
+                emptyList()
+            }
+        }
+    }
 
     private val _guideRefreshTick = MutableStateFlow(0)
 
@@ -194,6 +238,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                     _playlistUrl.value = prefs.getString(KEY_PLAYLIST_URL, "").orEmpty()
                     _epgUrl.value = prefs.getString(KEY_EPG_URL, "").orEmpty()
                     _playlistName.value = prefs.getString(KEY_PLAYLIST_NAME, "").orEmpty()
+                    _extraPlaylistUrls.value = prefs.getString(KEY_EXTRA_PLAYLIST_URLS, "").orEmpty()
                     _hiddenChannelIds.value =
                         prefs.getStringSet(KEY_HIDDEN_CHANNEL_IDS, emptySet()).orEmpty().toSet()
 
@@ -380,7 +425,10 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             try {
                 val cachedPlaylist = repository.loadCachedPlaylist(url, name)
                 if (cachedPlaylist != null) {
-                    applyPlaylist(cachedPlaylist)
+                    // Extras must survive app restarts too — otherwise the
+                    // cached restore shows only the primary playlist until
+                    // the user manually reloads.
+                    applyPlaylist(mergeWithExtraPlaylists(cachedPlaylist))
                     Log.w(TAG, "CACHE RESTORE HIT channels=${cachedPlaylist.channels.size} source=$url")
                     refreshIfNeeded()
                 } else {
@@ -414,7 +462,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             _error.value = null
             try {
                 val loadedPlaylist = repository.loadPlaylist(url, name)
-                applyPlaylist(loadedPlaylist)
+                applyPlaylist(mergeWithExtraPlaylists(loadedPlaylist))
                 markUpdated(KEY_PLAYLIST_UPDATED_AT)
                 Log.d(TAG, "PLAYLIST LOAD SUCCESS channels=${loadedPlaylist.channels.size} source=$url")
             } catch (t: Throwable) {
@@ -426,6 +474,57 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                 _isLoading.value = false
             }
         }
+    }
+
+    /**
+     * Parses the extra-playlist textarea and merges every additional M3U
+     * into [primary]'s channel list. Failures are non-fatal: a merged
+     * source that cannot load logs and is skipped so the primary playlist
+     * still comes up. Channel ids are namespaced by source URL to keep
+     * dedupe/EPG-match keys stable across providers.
+     */
+    private suspend fun mergeWithExtraPlaylists(primary: IptvPlaylist): IptvPlaylist {
+        val entries = _extraPlaylistUrls.value
+            .split('\n', ';')
+            .mapNotNull { raw ->
+                val trimmed = raw.trim()
+                if (trimmed.isBlank()) null else trimmed
+            }
+        if (entries.isEmpty()) return primary
+
+        var added = 0
+        val extraChannelLists = mutableListOf<List<IptvChannel>>()
+        for (entry in entries) {
+            val parts = entry.split('|', limit = 2)
+            val extraUrl = parts[0].trim()
+            val extraName = parts.getOrNull(1)?.trim()?.takeIf { it.isNotBlank() }
+            if (extraUrl.isBlank() || extraUrl.equals(primary.sourceUrl?.trim(), ignoreCase = true)) {
+                continue
+            }
+            try {
+                val extra = repository.loadPlaylist(extraUrl, extraName)
+                extraChannelLists += extra.channels.map { ch ->
+                    // Prefix ids with the source hash so two providers that
+                    // both emit "channel_1" don't collide (dedupe + EPG keys).
+                    val ns = (extraUrl.hashCode().toUInt() and 0xFFFFFFu).toString(16)
+                    if (ch.id.isBlank()) ch else ch.copy(id = "x$ns:${ch.id}")
+                }
+                added += extra.channels.size
+            } catch (t: Throwable) {
+                // Failures are non-fatal: the primary playlist still loads.
+                if (t is CancellationException) throw t
+                Log.w(TAG, "EXTRA PLAYLIST SKIPPED source=$extraUrl error=${t.message}")
+            }
+        }
+        if (added == 0) return primary
+
+        Log.d(TAG, "EXTRA PLAYLIST MERGE added=$added sources=${extraChannelLists.size}")
+        return primary.copy(
+            channels = (extraChannelLists + listOf(primary.channels))
+                .flatten()
+                .distinctBy { it.id },
+            name = primary.name
+        )
     }
 
     fun importGuide() {
@@ -463,7 +562,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         val url = _playlistUrl.value.trim()
         val name = _playlistName.value.trim().ifBlank { null }
         if (url.isBlank() || _isImportingGuide.value) return
-        val refreshedPlaylist = repository.loadPlaylist(url, name)
+        val refreshedPlaylist = mergeWithExtraPlaylists(repository.loadPlaylist(url, name))
         applyPlaylist(refreshedPlaylist)
         markUpdated(KEY_PLAYLIST_UPDATED_AT)
         Log.d(TAG, "BACKGROUND PLAYLIST REFRESH END channels=${refreshedPlaylist.channels.size}")
@@ -590,6 +689,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             .putString(KEY_PLAYLIST_URL, _playlistUrl.value)
             .putString(KEY_EPG_URL, _epgUrl.value)
             .putString(KEY_PLAYLIST_NAME, _playlistName.value)
+            .putString(KEY_EXTRA_PLAYLIST_URLS, _extraPlaylistUrls.value)
             .apply()
 
         // Cross-device sync: share the IPTV source config.
@@ -616,6 +716,8 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         const val KEY_PLAYLIST_URL = "playlist_url"
         const val KEY_EPG_URL = "epg_url"
         const val KEY_PLAYLIST_NAME = "playlist_name"
+        const val KEY_EXTRA_PLAYLIST_URLS = "extra_playlist_urls"
+        const val KEY_PLAYLIST_APPLIED_URL = "playlist_applied_url"
         const val KEY_HIDDEN_CHANNEL_IDS = "hidden_channel_ids"
         const val KEY_PLAYLIST_UPDATED_AT = "playlist_updated_at"
         const val KEY_EPG_UPDATED_AT = "epg_updated_at"
