@@ -63,7 +63,7 @@ class NuvioContentLoader(context: android.content.Context) {
                             val items = loadSource(source)
                             NuvioRail(
                                 sourceId = source.id ?: "${folder.id}:$index",
-                                title = source.displayLabel(),
+                                title = railTitleFor(source),
                                 providerLabel = source.providerLabel(),
                                 items = items
                             )
@@ -73,6 +73,46 @@ class NuvioContentLoader(context: android.content.Context) {
                     .filter { it.items.isNotEmpty() }
             }
         }
+
+    /**
+     * Rail title matching Home's "AddonName · CatalogName" format. Nuvio
+     * exports often omit source.name, which previously left addon rails
+     * titled with the generic provider label ("Add-on"); those resolve the
+     * addon manifest's catalog display name instead.
+     */
+    private fun railTitleFor(source: NuvioSource): String {
+        source.name?.takeIf { it.isNotBlank() }?.let { return it }
+        source.title?.takeIf { it.isNotBlank() }?.let { return it }
+
+        if (source.provider?.lowercase() != "addon") {
+            return source.providerLabel()
+        }
+
+        val addonId = source.addonId ?: return source.providerLabel()
+        val catalogId = source.catalogId ?: return source.providerLabel()
+        val type = normalizeAddonType(source.type)
+
+        val addon = AddonManager.getInstance(appContext)
+            .getInstalledAddons()
+            .firstOrNull { it.id == addonId }
+            ?: return source.providerLabel()
+
+        val catalog = addon.catalogs.firstOrNull {
+            it.id == catalogId &&
+                (type == null || it.type.equals(type, ignoreCase = true))
+        }
+
+        val catalogName = catalog?.displayName?.takeIf { it.isNotBlank() }
+            ?: return addon.displayName
+
+        return if (addon.displayName.isNotBlank() &&
+            !addon.displayName.equals(catalogName, ignoreCase = true)
+        ) {
+            "${addon.displayName} · $catalogName"
+        } else {
+            catalogName
+        }
+    }
 
     /**
      * Merged "All" tab for showAllTab folders: union of every source's items,

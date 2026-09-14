@@ -4,13 +4,30 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kennyb1201.kbstream.data.addon.Meta
+import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.nuvio.NuvioContentItem
 import com.kennyb1201.kbstream.data.nuvio.NuvioContentLoader
 import com.kennyb1201.kbstream.data.nuvio.NuvioFolder
+import com.kennyb1201.kbstream.data.nuvio.NuvioFilters
 import com.kennyb1201.kbstream.data.nuvio.NuvioRail
+import com.kennyb1201.kbstream.data.tmdb.HeroArtwork
+import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
+import com.kennyb1201.kbstream.data.tmdb.TmdbDiscoverItem
+import com.kennyb1201.kbstream.data.tmdb.TmdbHeroArtworkRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tmdb.alternatePosterPath
+import com.kennyb1201.kbstream.data.tmdb.displayDescription
+import com.kennyb1201.kbstream.data.tmdb.displayRating
+import com.kennyb1201.kbstream.data.tmdb.displayRuntime
+import com.kennyb1201.kbstream.data.tmdb.director
+import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -19,6 +36,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 /** Per-rail load-more state, mirroring StudioScreen's paging model. */
 data class NuvioRailPagingState(
@@ -27,14 +46,15 @@ data class NuvioRailPagingState(
 )
 
 /**
- * Loads one Nuvio folder: every source becomes a rail; the hero shows the
- * folder's hosted backdrop art (falling back to the first rail's first
- * item's backdrop) exactly like Nuvio's "follow home layout".
+ * Loads one Nuvio folder: every source becomes a rail; the hero mirrors
+ * Home's exactly (TMDB meta + clearlogo/backdrop artwork + inline trailer)
+ * so a FOLLOW_LAYOUT folder is a true replica of the home screen.
  */
 class NuvioFolderViewModel(application: Application) : AndroidViewModel(application) {
 
     private val contentLoader = NuvioContentLoader(application)
     private val tmdbRepository = TmdbRepository(application)
+    private val heroArtworkRepository = TmdbHeroArtworkRepository(application)
     private val watchedStatusRepository = WatchedStatusRepository(application)
     private val repository =
         com.kennyb1201.kbstream.data.nuvio.NuvioRepository(application)
@@ -92,6 +112,233 @@ class NuvioFolderViewModel(application: Application) : AndroidViewModel(applicat
         initialValue = emptySet()
     )
 
+    // ------------------------------------------------------------------
+    // Home-identical hero: TMDB detail + hero artwork + trailer for the
+    // focused item, mirroring HomeViewModel.resolveHeroMeta (250ms dwell +
+    // cancel-on-refocus) so folder screens behave exactly like Home.
+    // ------------------------------------------------------------------
+    private var heroResolveJob: Job? = null
+
+    // The focused item as a Home-style preview: published immediately on
+    // focus so the hero shows the item's own art while TMDB enrichment runs.
+    private val _heroPreview = MutableStateFlow<MetaPreview?>(null)
+    val heroPreview: StateFlow<MetaPreview?> = _heroPreview.asStateFlow()
+
+    private val _heroMeta = MutableStateFlow<Meta?>(null)
+    val heroMeta: StateFlow<Meta?> = _heroMeta.asStateFlow()
+
+    private val _heroTmdbDetail = MutableStateFlow<TmdbDetail?>(null)
+    val heroTmdbDetail: StateFlow<TmdbDetail?> = _heroTmdbDetail.asStateFlow()
+
+    private val _heroBackdropUrl = MutableStateFlow<String?>(null)
+    val heroBackdropUrl: StateFlow<String?> = _heroBackdropUrl.asStateFlow()
+
+    private val _heroLogoUrl = MutableStateFlow<String?>(null)
+    val heroLogoUrl: StateFlow<String?> = _heroLogoUrl.asStateFlow()
+
+    private val _heroTrailerKey = MutableStateFlow<String?>(null)
+    val heroTrailerKey: StateFlow<String?> = _heroTrailerKey.asStateFlow()
+
+    fun resolveHero(item: NuvioContentItem) {
+        heroResolveJob?.cancel()
+
+        val type = normalizeType(item.type) ?: "movie"
+        _heroPreview.value = MetaPreview(
+            id = item.id,
+            type = type,
+            name = item.title ?: "",
+            poster = item.posterUrl,
+            background = item.backdropUrl,
+            description = item.overview
+        )
+        _heroMeta.value = null
+        _heroTmdbDetail.value = null
+        _heroBackdropUrl.value = null
+        _heroLogoUrl.value = null
+        _heroTrailerKey.value = null
+
+        heroResolveJob = viewModelScope.launch {
+            try {
+                // Same 250ms dwell as Home: D-pad scrolling fires one focus
+                // event per card, and a resolve per transitively-focused
+                // title would starve the network. Focus that survives the
+                // dwell is a deliberate stop — resolve it fully.
+                delay(HERO_RESOLVE_DWELL_MS)
+
+                coroutineScope {
+                    val tmdbDetailDeferred = async {
+                        runCatching {
+                            when {
+                                item.tmdbId != null && item.tmdbId > 0 ->
+                                    tmdbRepository.getDetailByTmdbId(item.tmdbId, type)
+
+                                item.id.startsWith("tt", ignoreCase = true) ->
+                                    tmdbRepository.fetchEnrichedMetaCached(item.id, type)
+
+                                else -> null
+                            }
+                        }.getOrNull()
+                    }
+
+                    val artworkDeferred = async {
+                        val tmdbId = item.tmdbId?.takeIf { it > 0 }
+                            ?: tmdbDetailDeferred.await()?.id
+                        if (tmdbId == null || tmdbId <= 0) {
+                            return@async null
+                        }
+                        runCatching {
+                            heroArtworkRepository.resolve(
+                                id = "tmdb:$tmdbId",
+                                type = type,
+                                tmdbId = tmdbId
+                            )
+                        }.getOrNull()
+                    }
+
+                    val detail = tmdbDetailDeferred.await()
+                    val artwork = artworkDeferred.await()
+
+                    val resolvedBackdrop =
+                        artwork?.backdropUrl?.takeIf { it.isNotBlank() }
+                            ?: detail?.backdropPath?.takeIf { it.isNotBlank() }
+                                ?.let { TmdbRepository.BACKDROP_BASE + it }
+                            ?: item.backdropUrl?.takeIf { it.isNotBlank() }
+                            // Poster fallback for backdrop-less titles: prefer
+                            // an ALTERNATE TMDB poster so the hero doesn't
+                            // show the exact image the focused card shows.
+                            ?: detail?.alternatePosterPath()?.takeIf { it.isNotBlank() }
+                                ?.let { "https://image.tmdb.org/t/p/original$it" }
+                            ?: item.posterUrl
+
+                    val resolvedLogo =
+                        artwork?.logoUrl?.takeIf { it.isNotBlank() }
+
+                    _heroTmdbDetail.value = detail
+                    _heroBackdropUrl.value = resolvedBackdrop
+                    _heroLogoUrl.value = resolvedLogo
+                    _heroMeta.value = detail?.let { tmdb ->
+                        Meta(
+                            id = item.id,
+                            type = type,
+                            name = tmdb.name?.trim()?.takeIf { it.isNotEmpty() }
+                                ?: tmdb.title?.trim()?.takeIf { it.isNotEmpty() }
+                                ?: item.title ?: "",
+                            poster = tmdb.posterPath?.takeIf { it.isNotBlank() }
+                                ?.let { TmdbRepository.POSTER_BASE + it }
+                                ?: item.posterUrl,
+                            background = resolvedBackdrop,
+                            logo = resolvedLogo,
+                            description = tmdb.displayDescription(),
+                            releaseInfo = tmdb.releaseYear(),
+                            imdbRating = tmdb.displayRating(),
+                            runtime = tmdb.displayRuntime(),
+                            genres = tmdb.genres
+                                .map { it.name.trim() }
+                                .filter { it.isNotEmpty() }
+                                .takeIf { it.isNotEmpty() },
+                            cast = tmdb.credits?.cast
+                                ?.map { it.name.trim() }
+                                ?.filter { it.isNotEmpty() }
+                                ?.distinct()
+                                ?.take(12)
+                                ?.takeIf { it.isNotEmpty() },
+                            director = tmdb.credits?.director()
+                                ?.name?.trim()?.takeIf { it.isNotEmpty() }
+                                ?.let(::listOf)
+                        )
+                    }
+                    _heroTrailerKey.value = detail?.videos?.results
+                        ?.asSequence()
+                        ?.filter { video ->
+                            video.site.equals("YouTube", ignoreCase = true) &&
+                                video.type.equals("Trailer", ignoreCase = true) &&
+                                video.key.isNotBlank()
+                        }
+                        ?.firstOrNull()
+                        ?.key
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Expected when focus moves before enrichment finishes; the
+                // newly-focused item's own job takes over. Same as Home.
+                throw e
+            } catch (e: Exception) {
+                Log.w("NUVIO_FOLDER_HERO", "Hero enrichment failed: ${e.message}")
+                _heroMeta.value = null
+                _heroTmdbDetail.value = null
+                _heroBackdropUrl.value = null
+                _heroLogoUrl.value = null
+                _heroTrailerKey.value = null
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Landscape-card artwork (backdrop + clearlogo) for folder rails while
+    // the global "Landscape Cards" toggle is on — same model as Home.
+    // ------------------------------------------------------------------
+    private val landscapeArtSemaphore = Semaphore(permits = 6)
+    private var lastLandscapeWanted: Boolean? = null
+
+    private val _landscapeArt = MutableStateFlow<Map<String, HeroArtwork>>(emptyMap())
+    val landscapeArt: StateFlow<Map<String, HeroArtwork>> = _landscapeArt.asStateFlow()
+
+    /**
+     * Resolve landscape art for the folder's TMDB-backed items while the
+     * toggle is on. Safe to call on every rails change: already-resolved
+     * items are skipped, so repeated calls only fetch newly appended pages
+     * (or fetch nothing when nothing is new). Calling with `false` clears
+     * the map.
+     */
+    fun ensureLandscapeArt(wanted: Boolean) {
+        if (!wanted) {
+            if (lastLandscapeWanted != false) {
+                lastLandscapeWanted = false
+                _landscapeArt.value = emptyMap()
+            }
+            return
+        }
+
+        if (lastLandscapeWanted != true) lastLandscapeWanted = true
+
+        val alreadyResolved = _landscapeArt.value
+        val items = _state.value.rails
+            .flatMap { it.items }
+            .filter { (it.tmdbId ?: 0) > 0 }
+            .distinctBy { "${it.type}:${it.id}" }
+            .filterNot { item ->
+                alreadyResolved.containsKey(
+                    "${normalizeType(item.type) ?: "movie"}:${item.id}"
+                )
+            }
+            .take(200)
+        if (items.isEmpty()) return
+
+        viewModelScope.launch {
+            val resolved = supervisorScope {
+                items.map { item ->
+                    async {
+                        val type = normalizeType(item.type) ?: return@async null
+                        val tmdbId = item.tmdbId ?: return@async null
+                        val art = runCatching {
+                            landscapeArtSemaphore.withPermit {
+                                heroArtworkRepository.resolve(
+                                    id = "tmdb:$tmdbId",
+                                    type = type,
+                                    tmdbId = tmdbId
+                                )
+                            }
+                        }.getOrNull()
+                        if (art != null) "$type:${item.id}" to art else null
+                    }
+                }.awaitAll()
+            }.filterNotNull()
+
+            if (resolved.isNotEmpty()) {
+                _landscapeArt.value = _landscapeArt.value + resolved.toMap()
+            }
+        }
+    }
+
     // Only TMDB-backed rails (discover / list) paginate; trakt and addon
     // sources render their first page.
     private val tmdbRailSources = mutableMapOf<String, TmdbRailPageSource>()
@@ -102,7 +349,7 @@ class NuvioFolderViewModel(application: Application) : AndroidViewModel(applicat
         val tmdbId: Int?,
         val mediaType: String,
         val sortBy: String?,
-        val filters: com.kennyb1201.kbstream.data.nuvio.NuvioFilters?,
+        val filters: NuvioFilters?,
         var nextPage: Int = 2
     ) {
         enum class Kind { DISCOVER, LIST }
@@ -112,10 +359,6 @@ class NuvioFolderViewModel(application: Application) : AndroidViewModel(applicat
 
     fun lookupKey(tmdbId: Int, type: String): String =
         "${type.lowercase()}::$tmdbId"
-
-    /** Hero item: the first item of the first non-empty rail (Nuvio behavior). */
-    fun heroItem(folder: NuvioFolder?, rails: List<NuvioRail>): NuvioContentItem? =
-        rails.firstOrNull { it.items.isNotEmpty() }?.items?.firstOrNull()
 
     /**
      * Route entry: resolve the folder by id (survives process-death restore
@@ -144,6 +387,8 @@ class NuvioFolderViewModel(application: Application) : AndroidViewModel(applicat
         currentFolderId = folderKey
         tmdbRailSources.clear()
         _selectedSourceId.value = null
+        _landscapeArt.value = emptyMap()
+        lastLandscapeWanted = null
         _state.value = UiState(
             folder = folder,
             showAllTab = showAllTab,
@@ -268,7 +513,7 @@ class NuvioFolderViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    private fun com.kennyb1201.kbstream.data.tmdb.TmdbDiscoverItem.toContentItem(
+    private fun TmdbDiscoverItem.toContentItem(
         mediaType: String?
     ): NuvioContentItem {
         val resolvedType = mediaType
@@ -407,5 +652,8 @@ class NuvioFolderViewModel(application: Application) : AndroidViewModel(applicat
 
     companion object {
         private const val PAGE_SIZE = 20
+
+        // Same dwell as HomeViewModel before hero network work starts.
+        private const val HERO_RESOLVE_DWELL_MS = 250L
     }
 }

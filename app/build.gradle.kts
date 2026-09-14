@@ -171,6 +171,9 @@ implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.26.4")
     // SVG badge art: several popular Nuvio badge packs serve chips as .svg,
     // which base Coil cannot decode — without this those badges render blank.
     implementation("io.coil-kt.coil3:coil-svg:3.0.0")
+    // Animated focus GIFs on Nuvio collection folder tiles (manifest
+    // focusGifUrl / focusGifEnabled); base Coil shows only the first frame.
+    implementation("io.coil-kt.coil3:coil-gif:3.0.0")
 
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.4")
 

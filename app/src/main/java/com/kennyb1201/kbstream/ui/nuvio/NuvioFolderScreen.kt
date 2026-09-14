@@ -20,8 +20,9 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 
 /**
  * One imported Nuvio folder. Layout comes from the folder's viewMode:
- *  - FOLLOW_LAYOUT: hero + rails visually identical to Home (folder-hosted
- *    backdrop/logo behind the hero until an item is focused)
+ *  - FOLLOW_LAYOUT (default): hero + rails visually identical to Home —
+ *    same clearlogo, gradients, metadata line, inline trailers, and the
+ *    global Landscape Cards / Show Catalog Type toggles
  *  - ROWS: plain rail list, no hero
  *  - GRID: poster grid of the merged items
  */
@@ -59,6 +60,7 @@ fun NuvioFolderScreen(
     ) {
         NuvioFolderBody(
             layoutMode = layoutMode,
+            viewModel = viewModel,
             state = state,
             resolvedIds = resolvedIds,
             selectedSourceId = selectedSourceId,
@@ -80,7 +82,19 @@ fun NuvioFolderScreen(
     }
 
     menuTarget?.let { item ->
-        val watched = viewModel.watchedKey(item.id, item.type) in watchedKeys
+        // Same watched-key normalization the rails use: TMDB items resolve
+        // through the ViewModel's tmdbId -> imdb id map, addon items key on
+        // their own imdb id.
+        val normalizedType = when (item.type.lowercase()) {
+            "series", "tv" -> "series"
+            else -> "movie"
+        }
+        val menuWatched = item.id.takeIf { it.startsWith("tt") }?.let { imdbId ->
+            viewModel.watchedKey(imdbId, normalizedType) in watchedKeys
+        } ?: item.tmdbId?.let { tmdbId ->
+            val imdbId = resolvedIds["$normalizedType::$tmdbId"]
+            imdbId != null && viewModel.watchedKey(imdbId, normalizedType) in watchedKeys
+        } ?: false
         PosterContextMenu(
             title = item.title ?: "Untitled",
             actions = listOf(
@@ -100,10 +114,10 @@ fun NuvioFolderScreen(
                     }
                 },
                 PosterContextAction(
-                    label = if (watched) "Mark as Unwatched" else "Mark as Watched"
+                    label = if (menuWatched) "Mark as Unwatched" else "Mark as Watched"
                 ) {
                     menuTarget = null
-                    if (watched) {
+                    if (menuWatched) {
                         viewModel.markUnwatched(item)
                     } else {
                         viewModel.markAsWatched(item)

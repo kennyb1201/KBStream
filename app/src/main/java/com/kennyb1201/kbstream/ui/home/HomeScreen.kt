@@ -94,6 +94,7 @@ import com.kennyb1201.kbstream.data.tmdb.displaySeasonEpisodeCount
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.data.nuvio.NuvioFolder
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.tmdb.movieStatusTag
@@ -578,6 +579,36 @@ private fun isDarkMonochromeArtwork(bitmap: android.graphics.Bitmap): Boolean {
     if (count == 0L) return false
 
     return luminanceSum / count < 148L && saturationSum / count < 42L
+}
+
+/**
+ * Public alias so Nuvio FOLLOW_LAYOUT folder screens can render the exact
+ * same hero (clearlogo, gradients, metadata, inline trailer) as Home —
+ * keeping one implementation guarantees the two stay identical.
+ */
+@Composable
+internal fun HomeHeroArtwork(
+    preview: MetaPreview,
+    meta: Meta?,
+    tmdbDetail: TmdbDetail?,
+    heroBackdropUrl: String?,
+    heroLogoUrl: String?,
+    trailerKey: String?,
+    autoPlayTrailer: Boolean,
+    muted: Boolean,
+    heroHeight: Dp = HomeHeroHeight
+) {
+    HomeHero(
+        preview = preview,
+        meta = meta,
+        tmdbDetail = tmdbDetail,
+        heroBackdropUrl = heroBackdropUrl,
+        heroLogoUrl = heroLogoUrl,
+        trailerKey = trailerKey,
+        autoPlayTrailer = autoPlayTrailer,
+        muted = muted,
+        heroHeight = heroHeight
+    )
 }
 
 @Composable
@@ -1941,6 +1972,15 @@ fun HomeScreen(
         mutableStateOf<MetaPreview?>(firstHomeItem)
     }
 
+    // Nuvio folder tile currently under focus (null = a normal catalog item
+    // owns the hero). The manifest supplies the folder's heroBackdropUrl /
+    // titleLogoUrl directly, so the hero swaps to the collection's own
+    // artwork without probing addons — no meta/trailer resolution happens
+    // for folders.
+    var focusedFolder by remember {
+        mutableStateOf<NuvioFolder?>(null)
+    }
+
     var focusedContinueWatchingItem by remember {
         mutableStateOf<UpNextItem?>(null)
     }
@@ -2029,6 +2069,7 @@ fun HomeScreen(
     ) {
         userAdjustedFocus = true
         focusedItem = item
+        focusedFolder = null
         focusedContinueWatchingItem = null
 
         // Focusing a catalog rail while the Continue Watching row is still
@@ -2040,6 +2081,18 @@ fun HomeScreen(
         // (only when populated), then the first rail — so the snap only
         // applies when CW exists.
         hideContinueWatchingSliver()
+    }
+
+    /**
+     * Focus landed on a Nuvio collection folder tile: swap the hero to the
+     * folder's manifest artwork (heroBackdropUrl + titleLogoUrl). Folders
+     * carry no meta or trailer, so we just point focusedFolder at it; the
+     * hero reads its artwork from there while it's non-null.
+     */
+    fun selectFolderHero(folder: NuvioFolder) {
+        userAdjustedFocus = true
+        focusedFolder = folder
+        focusedContinueWatchingItem = null
     }
 
     /**
@@ -2057,6 +2110,7 @@ fun HomeScreen(
     ) {
         userAdjustedFocus = true
         focusedItem = item
+        focusedFolder = null
         focusedContinueWatchingItem = upNextItem
     }
 
@@ -2249,7 +2303,26 @@ fun HomeScreen(
         Column(
             modifier = Modifier.fillMaxSize()
         ) {
-            focusedItem?.let {
+            // Hero owner: a focused Nuvio folder tile (manifest artwork)
+            // or a focused catalog/Continue-Watching item. Folders render
+            // even when no catalog item has been focused yet.
+            val heroFolder = focusedFolder
+            val folderBackdrop = heroFolder?.let { f ->
+                f.heroBackdropUrl?.takeIf { it.isNotBlank() }
+                    ?: f.coverImageUrl?.takeIf { it.isNotBlank() }
+            }
+            val folderLogo = heroFolder?.titleLogoUrl?.takeIf { it.isNotBlank() }
+            // Nuvio's ModernHomeModels blanks the hero title for
+            // hideTitle folders (the clearlogo stands alone; with no logo
+            // the hero shows artwork only).
+            val folderPreview = heroFolder?.let { f ->
+                MetaPreview(
+                    id = "nuvio-folder:${f.id ?: f.title}",
+                    type = "movie",
+                    name = if (f.hideTitle) "" else f.title
+                )
+            }
+            (folderPreview ?: focusedItem)?.let {
                 // Nuvio-style proportional hero: give the rails a fixed
                 // fraction of the real screen height, and the hero whatever
                 // remains (minus one row title + breathing room). Scales to
@@ -2266,11 +2339,11 @@ fun HomeScreen(
                 HomeHero(
                     preview = it,
                     heroHeight = heroComputedHeight,
-                    meta = heroMeta,
-                    tmdbDetail = heroTmdbDetail,
-                    heroBackdropUrl = heroBackdropUrl,
-                    heroLogoUrl = heroLogoUrl,
-                    trailerKey = heroTrailerKey,
+                    meta = if (heroFolder != null) null else heroMeta,
+                    tmdbDetail = if (heroFolder != null) null else heroTmdbDetail,
+                    heroBackdropUrl = if (heroFolder != null) folderBackdrop else heroBackdropUrl,
+                    heroLogoUrl = if (heroFolder != null) folderLogo else heroLogoUrl,
+                    trailerKey = if (heroFolder != null) null else heroTrailerKey,
                     autoPlayTrailer =
                         heroTrailerReady &&
                             focusedContinueWatchingItem == null &&
@@ -2604,7 +2677,8 @@ fun HomeScreen(
                                 is com.kennyb1201.kbstream.ui.nuvio.HomeEntry.Collection ->
                                     NuvioHomeCollectionRail(
                                         collection = e.collection,
-                                        onOpenFolder = onOpenNuvioFolder
+                                        onOpenFolder = onOpenNuvioFolder,
+                                        onFolderFocused = ::selectFolderHero
                                     )
                                 is com.kennyb1201.kbstream.ui.nuvio.HomeEntry.AddonRail -> {
                                     val rail = e.rail

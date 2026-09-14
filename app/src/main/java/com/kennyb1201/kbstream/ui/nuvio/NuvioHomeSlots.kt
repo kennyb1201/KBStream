@@ -1,5 +1,7 @@
 package com.kennyb1201.kbstream.ui.nuvio
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,13 +14,20 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.MaterialTheme
@@ -30,6 +39,7 @@ import com.kennyb1201.kbstream.data.nuvio.NuvioFolder
 import com.kennyb1201.kbstream.data.nuvio.NuvioHomeOrderPrefs
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.home.Rail
+import com.kennyb1201.kbstream.ui.theme.CardShape
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -192,16 +202,33 @@ sealed class HomeEntry {
 private val CollectionTileWidth = 210.dp
 private val CollectionTileHeight = 118.dp
 
+/** Tile size resolved from a folder's manifest tileShape. */
+private data class FolderTileSize(val width: Dp, val height: Dp)
+
+/**
+ * Nuvio's tile sizing: POSTER uses the poster card proportions, LANDSCAPE
+ * is 16:9 of the poster width, SQUARE is a square of the poster width.
+ * Case-insensitive: manifests in the wild mix "LANDSCAPE"/"landscape".
+ */
+private fun folderTileSize(tileShape: String?): FolderTileSize = when (tileShape?.uppercase()) {
+    "POSTER" -> FolderTileSize(124.dp, 180.dp)
+    "SQUARE" -> FolderTileSize(124.dp, 124.dp)
+    else -> FolderTileSize(CollectionTileWidth, CollectionTileHeight)
+}
+
 /**
  * One imported Nuvio collection on Home: its title plus a row of folder
- * tiles (hosted cover art with a title overlay, like Nuvio's collection
- * rows). Clicking a folder opens the folder screen with the collection's
- * layout mode.
+ * tiles (hosted cover art, optional focus GIF overlay, per-folder tile
+ * shape). Focusing a tile reports the folder so Home's hero can swap to
+ * the folder's manifest backdrop + clearlogo, matching Nuvio's
+ * ModernPayload.CollectionFolder hero behavior. Clicking a folder opens
+ * the folder screen with the collection's layout mode.
  */
 @Composable
 fun NuvioHomeCollectionRail(
     collection: NuvioCollectionProfile,
-    onOpenFolder: (String) -> Unit
+    onOpenFolder: (String) -> Unit,
+    onFolderFocused: ((NuvioFolder) -> Unit)? = null
 ) {
     Column(
         modifier = Modifier.padding(
@@ -229,7 +256,8 @@ fun NuvioHomeCollectionRail(
                 if (folderId != null) {
                     CollectionFolderTile(
                         folder = folder,
-                        onClick = { onOpenFolder(folderId) }
+                        onClick = { onOpenFolder(folderId) },
+                        onFocus = onFolderFocused?.let { callback -> { callback(folder) } }
                     )
                 }
             }
@@ -240,13 +268,24 @@ fun NuvioHomeCollectionRail(
 @Composable
 private fun CollectionFolderTile(
     folder: NuvioFolder,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onFocus: (() -> Unit)? = null
 ) {
-    KBCard(onClick = onClick) {
+    val tileSize = folderTileSize(folder.tileShape)
+    var isFocused by remember { mutableStateOf(false) }
+    val focusModifier = Modifier.onFocusChanged {
+        isFocused = it.isFocused
+        if (it.isFocused) onFocus?.invoke()
+    }
+
+    KBCard(
+        onClick = onClick,
+        modifier = focusModifier
+    ) {
         Box(
             modifier = Modifier
-                .width(CollectionTileWidth)
-                .height(CollectionTileHeight)
+                .width(tileSize.width)
+                .height(tileSize.height)
         ) {
             val coverUrl = folder.coverImageUrl?.takeIf { it.isNotBlank() }
             if (coverUrl != null) {
@@ -275,29 +314,62 @@ private fun CollectionFolderTile(
                 }
             }
 
-            // Title scrim: readable folder name over the collage art.
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .background(
-                        androidx.compose.ui.graphics.Brush.verticalGradient(
-                            colors = listOf(
-                                KBVoid.copy(alpha = 0f),
-                                KBVoid.copy(alpha = 0.75f)
+            // Focus GIF overlay (manifest focusGifUrl + focusGifEnabled):
+            // animated on top of the cover only while the tile is focused,
+            // fading in once loaded — Nuvio's CollectionRowSection behavior
+            // (the GIF is never a static poster; Coil still decodes its
+            // first frame, so the URL is withheld until focus).
+            val focusGifUrl = if (isFocused && folder.focusGifEnabled) {
+                folder.focusGifUrl?.takeIf { it.isNotBlank() }
+            } else {
+                null
+            }
+            if (focusGifUrl != null) {
+                var gifLoaded by remember(focusGifUrl) { mutableStateOf(false) }
+                val gifAlpha by animateFloatAsState(
+                    targetValue = if (gifLoaded) 1f else 0f,
+                    animationSpec = tween(durationMillis = 200),
+                    label = "folderGifFadeIn"
+                )
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(focusGifUrl).build(),
+                    contentDescription = null,
+                    contentScale = ContentScale.FillBounds,
+                    onSuccess = { gifLoaded = true },
+                    modifier = Modifier
+                        .matchParentSize()
+                        .clip(CardShape)
+                        .graphicsLayer { alpha = gifAlpha }
+                )
+            }
+
+            // Title scrim + label: Nuvio's hideTitle flag drops both, letting
+            // artwork (or focus GIF) stand alone.
+            if (!folder.hideTitle) {
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .background(
+                            androidx.compose.ui.graphics.Brush.verticalGradient(
+                                colors = listOf(
+                                    KBVoid.copy(alpha = 0f),
+                                    KBVoid.copy(alpha = 0.75f)
+                                )
                             )
                         )
-                    )
-            )
-            Text(
-                text = folder.title,
-                color = KBTextHi,
-                style = MaterialTheme.typography.labelLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(8.dp)
-            )
+                )
+                Text(
+                    text = folder.title,
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(8.dp)
+                )
+            }
         }
     }
 }
