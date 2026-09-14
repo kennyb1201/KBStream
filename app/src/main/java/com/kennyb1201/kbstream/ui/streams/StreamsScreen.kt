@@ -28,6 +28,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -139,15 +140,19 @@ fun StreamsScreen(
             )
         }
 
+        // Translucent scrim: heavy enough that text/cards stay readable,
+        // light enough that the backdrop stays visible behind the rail.
+        // The bottom stop stays darker (that's where the list lives) but no
+        // longer goes fully opaque, so the artwork still reads through.
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(
                     Brush.verticalGradient(
                         listOf(
-                            KBVoid.copy(alpha = 0.30f),
-                            KBVoid.copy(alpha = 0.74f),
-                            KBVoid
+                            KBVoid.copy(alpha = 0.20f),
+                            KBVoid.copy(alpha = 0.52f),
+                            KBVoid.copy(alpha = 0.90f)
                         )
                     )
                 )
@@ -256,7 +261,12 @@ private fun StreamsHeader(
             Text(
                 text = displayName,
                 color = KBTextHi,
-                style = MaterialTheme.typography.headlineLarge,
+                style = MaterialTheme.typography.headlineLarge.copy(
+                    shadow = Shadow(
+                        color = Color.Black.copy(alpha = 0.65f),
+                        blurRadius = 18f
+                    )
+                ),
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
@@ -273,7 +283,12 @@ private fun StreamsHeader(
                     runtimeMinutes?.let { append(" · ${formatStreamRuntime(it)}") }
                 },
                 color = KBAccent,
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.titleMedium.copy(
+                    shadow = Shadow(
+                        color = Color.Black.copy(alpha = 0.60f),
+                        blurRadius = 14f
+                    )
+                ),
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
@@ -293,7 +308,12 @@ private fun StreamsHeader(
                 ).joinToString(" · ")
             },
             color = KBTextHi,
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.bodyMedium.copy(
+                shadow = Shadow(
+                    color = Color.Black.copy(alpha = 0.55f),
+                    blurRadius = 12f
+                )
+            ),
             modifier = Modifier.padding(top = 8.dp)
         )
     }
@@ -343,17 +363,20 @@ private fun StreamCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(14.dp))
+                // Glass cards: translucent so the backdrop shows through,
+                // with the focused row noticeably more opaque so the selected
+                // source stays crisp against a busy frame.
                 .background(
                     if (isFocused) {
-                        KBSurfaceRaised.copy(alpha = 0.96f)
+                        KBSurfaceRaised.copy(alpha = 0.88f)
                     } else {
-                        KBSurface
+                        KBSurface.copy(alpha = 0.70f)
                     }
                 )
                 .border(
                     width = if (isFocused) 1.dp else 0.dp,
                     color = if (isFocused) {
-                        KBAccent.copy(alpha = 0.28f)
+                        KBAccent.copy(alpha = 0.38f)
                     } else {
                         Color.Transparent
                     },
@@ -419,7 +442,7 @@ private fun StreamsHeroState(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier
                 .background(
-                    KBSurface.copy(alpha = 0.94f),
+                    KBSurface.copy(alpha = 0.82f),
                     RoundedCornerShape(18.dp)
                 )
                 .border(
