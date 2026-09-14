@@ -145,18 +145,18 @@ class IptvRepository(
             getOrCreateGuideSnapshot(epgUrl.trim()).guideChannels
         }
 
-    fun observeLineupWithGuide(
+    fun observeLineupWithGuides(
         playlist: IptvPlaylist,
-        epgUrl: String,
+        epgUrls: List<String>,
         windowStart: Long,
         windowEnd: Long,
         limit: Int = Int.MAX_VALUE
     ): Flow<List<IptvChannelWithEpg>> = flow {
-        val normalizedGuideUrl = epgUrl.trim()
+        val normalizedGuideUrls = epgUrls.map(String::trim).filter(String::isNotEmpty)
         val normalizedPlaylistUrl = playlist.sourceUrl.orEmpty().trim()
 
         if (
-            normalizedGuideUrl.isBlank() ||
+            normalizedGuideUrls.isEmpty() ||
             normalizedPlaylistUrl.isBlank() ||
             playlist.channels.isEmpty()
         ) {
@@ -164,27 +164,45 @@ class IptvRepository(
             return@flow
         }
 
-        val snapshot = getOrCreateGuideSnapshot(normalizedGuideUrl)
-        val guideChannels = snapshot.guideChannels
+        // Snapshots for every configured source; a source whose guide has
+        // never been imported contributes nothing instead of failing the
+        // whole lineup.
+        val snapshots = normalizedGuideUrls.mapNotNull { url ->
+            val snapshot = getOrCreateGuideSnapshot(url)
+            if (snapshot.guideChannels.isEmpty()) {
+                Log.w(TAG, "LINEUP QUERY no guide channels epgUrl=$url")
+                null
+            } else {
+                snapshot
+            }
+        }
 
-        if (guideChannels.isEmpty()) {
-            Log.w(TAG, "LINEUP QUERY no guide channels epgUrl=$normalizedGuideUrl")
+        if (snapshots.isEmpty()) {
             emit(playlist.channels.map(::unmatchedItem))
             return@flow
         }
 
         val channelIds = playlist.channels.map { it.id }
-        val cachedMatches = loadCachedMatches(
-            playlistUrl = normalizedPlaylistUrl,
-            epgUrl = normalizedGuideUrl,
-            playlistChannelIds = channelIds
-        )
 
-        val resolvedMatches = resolveMatches(
+        // First source with a cached match for a channel wins; ties keep
+        // the earlier (primary) source's match.
+        val cachedMatches = HashMap<String, PlaylistEpgMatchEntity>(channelIds.size)
+        for (guideUrl in normalizedGuideUrls) {
+            val perSource = loadCachedMatches(
+                playlistUrl = normalizedPlaylistUrl,
+                epgUrl = guideUrl,
+                playlistChannelIds = channelIds.filterNot { it in cachedMatches }
+            )
+            perSource.forEach { (channelId, match) ->
+                cachedMatches.putIfAbsent(channelId, match)
+            }
+        }
+
+        val resolvedMatches = resolveMatchesMulti(
             playlistUrl = normalizedPlaylistUrl,
-            epgUrl = normalizedGuideUrl,
+            epgUrls = normalizedGuideUrls,
+            snapshots = snapshots,
             playlistChannels = playlist.channels,
-            snapshot = snapshot,
             cachedMatches = cachedMatches
         )
 
@@ -194,27 +212,42 @@ class IptvRepository(
 
         Log.w(
             TAG,
-            "LINEUP QUERY playlist=${playlist.channels.size} matched=${matchedGuideIds.size} epgUrl=$normalizedGuideUrl"
+            "LINEUP QUERY playlist=${playlist.channels.size} matched=${matchedGuideIds.size} sources=${snapshots.size}"
         )
 
-        val rows = loadProgramsChunked(
-            sourceUrl = normalizedGuideUrl,
-            channelIds = matchedGuideIds,
-            windowStart = windowStart,
-            windowEnd = windowEnd,
-            totalLimit = limit
-        )
+        // Programs may live under any source (a channel matched from the
+        // second guide has its rows keyed by that guide's URL), so query
+        // every snapshot and merge — dedupe keeps a program imported by two
+        // overlapping sources from rendering twice.
+        val rows = ArrayList<EpgProgramRow>()
+        var remainingLimit = limit
+        for (snapshot in snapshots) {
+            if (remainingLimit <= 0) break
+            val sourceRows = loadProgramsChunked(
+                sourceUrl = snapshot.sourceUrl,
+                channelIds = matchedGuideIds,
+                windowStart = windowStart,
+                windowEnd = windowEnd,
+                totalLimit = remainingLimit
+            )
+            rows.addAll(sourceRows)
+            remainingLimit -= sourceRows.size
+        }
+
+        val dedupedRows = rows
+            .groupBy { ProgramKey(it.channelId, it.startUtcMillis, it.endUtcMillis, it.title) }
+            .map { it.value.first() }
 
         Log.w(
             TAG,
-            "LINEUP QUERY rows=${rows.size} epgUrl=$normalizedGuideUrl"
+            "LINEUP QUERY rows=${dedupedRows.size} sources=${snapshots.size}"
         )
 
         emit(
             mapChannels(
                 channels = playlist.channels,
                 resolvedMatches = resolvedMatches,
-                rows = rows,
+                rows = dedupedRows,
                 nowUtcMillis = System.currentTimeMillis()
             )
         )
@@ -224,6 +257,7 @@ class IptvRepository(
         val normalizedGuideUrl = epgUrl.trim()
         if (normalizedGuideUrl.isBlank()) {
             return GuideSnapshot(
+                sourceUrl = normalizedGuideUrl,
                 guideChannels = emptyList(),
                 guideById = emptyMap(),
                 guideByDisplayName = emptyMap()
@@ -252,6 +286,7 @@ class IptvRepository(
             }
 
             GuideSnapshot(
+                sourceUrl = normalizedGuideUrl,
                 guideChannels = guideChannels,
                 guideById = guideById,
                 guideByDisplayName = guideByDisplayName
@@ -296,25 +331,35 @@ class IptvRepository(
             .associateBy { it.playlistChannelId }
     }
 
-    private suspend fun resolveMatches(
+    /**
+     * Match every playlist channel against the FIRST source that resolves
+     * it, in [epgUrls] order (primary first). A channel can end up matched
+     * in source A while its neighbor matches in source B — per-source
+     * caching keys everything by epgUrl so both coexist.
+     */
+    private suspend fun resolveMatchesMulti(
         playlistUrl: String,
-        epgUrl: String,
+        epgUrls: List<String>,
+        snapshots: List<GuideSnapshot>,
         playlistChannels: List<IptvChannel>,
-        snapshot: GuideSnapshot,
         cachedMatches: Map<String, PlaylistEpgMatchEntity>
     ): Map<String, ResolvedEpgMatch> {
         val resolved = LinkedHashMap<String, ResolvedEpgMatch>(playlistChannels.size)
         val recordsToSave = ArrayList<PlaylistEpgMatchEntity>()
         val updatedAt = System.currentTimeMillis()
+        val snapshotByUrl = snapshots.associateBy { it.sourceUrl }
 
         playlistChannels.forEach { channel ->
             val cached = cachedMatches[channel.id]
+            val cachedSnapshot = cached?.epgUrl
+                ?.let(snapshotByUrl::get)
             val cachedGuideChannel = cached?.epgChannelId
                 ?.let(::normalizeLookupKey)
-                ?.let(snapshot.guideById::get)
+                ?.let(cachedSnapshot?.guideById::get)
 
             val match = if (
                 cached != null &&
+                cachedSnapshot != null &&
                 (cached.epgChannelId == null || cachedGuideChannel != null)
             ) {
                 ResolvedEpgMatch(
@@ -322,19 +367,21 @@ class IptvRepository(
                     matchType = cached.matchType.toEpgMatchType()
                 )
             } else {
-                findBestMatch(
+                findBestMatchMulti(
                     channel = channel,
-                    guideById = snapshot.guideById,
-                    guideByDisplayName = snapshot.guideByDisplayName
+                    epgUrls = epgUrls,
+                    snapshots = snapshots
                 ).also { resolvedMatch ->
-                    recordsToSave += PlaylistEpgMatchEntity(
-                        playlistUrl = playlistUrl,
-                        playlistChannelId = channel.id,
-                        epgUrl = epgUrl,
-                        epgChannelId = resolvedMatch.epgChannel?.id,
-                        matchType = resolvedMatch.matchType.name,
-                        updatedAtUtcMillis = updatedAt
-                    )
+                    if (resolvedMatch.epgUrl != null) {
+                        recordsToSave += PlaylistEpgMatchEntity(
+                            playlistUrl = playlistUrl,
+                            playlistChannelId = channel.id,
+                            epgUrl = resolvedMatch.epgUrl,
+                            epgChannelId = resolvedMatch.epgChannel?.id,
+                            matchType = resolvedMatch.matchType.name,
+                            updatedAtUtcMillis = updatedAt
+                        )
+                    }
                 }
             }
 
@@ -350,41 +397,43 @@ class IptvRepository(
         return resolved
     }
 
-    private fun findBestMatch(
+    private fun findBestMatchMulti(
         channel: IptvChannel,
-        guideById: Map<String, EpgChannelEntity>,
-        guideByDisplayName: Map<String, EpgChannelEntity>
+        epgUrls: List<String>,
+        snapshots: List<GuideSnapshot>
     ): ResolvedEpgMatch {
         val idCandidates = listOf(channel.tvgId, channel.providerChannelId)
+        val nameCandidates = listOf(channel.tvgName, channel.displayName, channel.name)
 
-        idCandidates.firstNotNullOfOrNull { candidate ->
-            candidate?.trim()
-                ?.takeIf { it.isNotBlank() }
-                ?.let(::normalizeLookupKey)
-                ?.let(guideById::get)
-        }?.let { guideChannel ->
-            return ResolvedEpgMatch(
-                epgChannel = guideChannel.toXmltvChannel(),
-                matchType = EpgMatchType.ID_MATCH
-            )
-        }
+        epgUrls.forEach { epgUrl ->
+            val snapshot = snapshots.firstOrNull { it.sourceUrl == epgUrl }
+                ?: return@forEach
 
-        val nameCandidates = listOf(
-            channel.tvgName,
-            channel.displayName,
-            channel.name
-        )
+            idCandidates.firstNotNullOfOrNull { candidate ->
+                candidate?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let(::normalizeLookupKey)
+                    ?.let(snapshot.guideById::get)
+            }?.let { guideChannel ->
+                return ResolvedEpgMatch(
+                    epgChannel = guideChannel.toXmltvChannel(),
+                    matchType = EpgMatchType.ID_MATCH,
+                    epgUrl = epgUrl
+                )
+            }
 
-        nameCandidates.firstNotNullOfOrNull { candidate ->
-            candidate?.trim()
-                ?.takeIf { it.isNotBlank() }
-                ?.let(::normalizeLookupKey)
-                ?.let(guideByDisplayName::get)
-        }?.let { guideChannel ->
-            return ResolvedEpgMatch(
-                epgChannel = guideChannel.toXmltvChannel(),
-                matchType = EpgMatchType.NAME_MATCH
-            )
+            nameCandidates.firstNotNullOfOrNull { candidate ->
+                candidate?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let(::normalizeLookupKey)
+                    ?.let(snapshot.guideByDisplayName::get)
+            }?.let { guideChannel ->
+                return ResolvedEpgMatch(
+                    epgChannel = guideChannel.toXmltvChannel(),
+                    matchType = EpgMatchType.NAME_MATCH,
+                    epgUrl = epgUrl
+                )
+            }
         }
 
         return ResolvedEpgMatch(
@@ -727,7 +776,9 @@ class IptvRepository(
 
     private data class ResolvedEpgMatch(
         val epgChannel: XmltvChannel?,
-        val matchType: EpgMatchType
+        val matchType: EpgMatchType,
+        /** Source URL the match came from — null for NO_MATCH. */
+        val epgUrl: String? = null
     )
 
     private data class ProgramKey(
@@ -738,6 +789,7 @@ class IptvRepository(
     )
 
     private data class GuideSnapshot(
+        val sourceUrl: String,
         val guideChannels: List<EpgChannelEntity>,
         val guideById: Map<String, EpgChannelEntity>,
         val guideByDisplayName: Map<String, EpgChannelEntity>

@@ -127,6 +127,7 @@ fun GuideScreen(
     val epgUrl by viewModel.epgUrl.collectAsState()
     val playlistName by viewModel.playlistName.collectAsState()
     val extraPlaylistUrls by viewModel.extraPlaylistUrls.collectAsState()
+    val extraEpgUrls by viewModel.extraEpgUrls.collectAsState()
 
     val channelListState = rememberLazyListState()
     val firstChannelFocusRequester = remember { FocusRequester() }
@@ -551,6 +552,7 @@ LaunchedEffect(channelListState, groupedChannelIds) {
             epgUrl = epgUrl,
             playlistName = playlistName,
             extraPlaylistUrls = extraPlaylistUrls,
+            extraEpgUrls = extraEpgUrls,
             isLoading = isLoading,
             isImportingGuide = isImportingGuide,
             error = error,
@@ -561,6 +563,7 @@ LaunchedEffect(channelListState, groupedChannelIds) {
             onEpgUrlChanged = viewModel::onEpgUrlChanged,
             onPlaylistNameChanged = viewModel::onPlaylistNameChanged,
             onExtraPlaylistUrlsChanged = viewModel::onExtraPlaylistUrlsChanged,
+            onExtraEpgUrlsChanged = viewModel::onExtraEpgUrlsChanged,
             onLoad = { viewModel.load() },
             onReload = { viewModel.load() },
             onImportGuide = { viewModel.importGuide() },
@@ -570,6 +573,7 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                 viewModel.onEpgUrlChanged("")
                 viewModel.onPlaylistNameChanged("")
                 viewModel.onExtraPlaylistUrlsChanged("")
+                viewModel.onExtraEpgUrlsChanged("")
                 showSetup = true
             },
             modifier = panelModifier
@@ -1014,6 +1018,7 @@ private fun SetupPanel(
     epgUrl: String,
     playlistName: String,
     extraPlaylistUrls: String,
+    extraEpgUrls: String,
     isLoading: Boolean,
     isImportingGuide: Boolean,
     error: String?,
@@ -1024,6 +1029,7 @@ private fun SetupPanel(
     onEpgUrlChanged: (String) -> Unit,
     onPlaylistNameChanged: (String) -> Unit,
     onExtraPlaylistUrlsChanged: (String) -> Unit,
+    onExtraEpgUrlsChanged: (String) -> Unit,
     onLoad: () -> Unit,
     onReload: () -> Unit,
     onImportGuide: () -> Unit,
@@ -1033,9 +1039,20 @@ private fun SetupPanel(
 ) {    val firstFieldFocusRequester = remember { FocusRequester() }
     val panelFocusManager = LocalFocusManager.current
 
+    // Initial focus grab with retry. A single awaitFrame + requestFocus
+    // silently misses when the field hasn't attached yet (large overlay,
+    // busy first frame), and focus then falls through to controls BEHIND
+    // the panel (group chips) on the next key press. Retry a few frames —
+    // the same pattern the guide's row-focus flows use.
     LaunchedEffect(Unit) {
-        awaitFrame()
-        runCatching { firstFieldFocusRequester.requestFocus() }
+        var focused = false
+        var attempts = 0
+        while (!focused && attempts < 6) {
+            awaitFrame()
+            focused = runCatching { firstFieldFocusRequester.requestFocus() }
+                .isSuccess
+            attempts++
+        }
     }
 
     // When the panel goes away (SETUP toggled, playlist loaded) its fields
@@ -1048,6 +1065,7 @@ private fun SetupPanel(
     Column(
         modifier = modifier
             .fillMaxWidth()
+            .focusGroup()
             .background(KBSurface, RoundedCornerShape(18.dp))
             .padding(18.dp)
     ) {
@@ -1074,7 +1092,8 @@ private fun SetupPanel(
             label = "Playlist URL",
             onValueChange = onPlaylistUrlChanged,
             modifier = Modifier.fillMaxWidth(),
-            focusRequester = firstFieldFocusRequester
+            focusRequester = firstFieldFocusRequester,
+            keepFocusOnDone = true
         )
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -1083,8 +1102,38 @@ private fun SetupPanel(
             value = epgUrl,
             label = "EPG URL (optional)",
             onValueChange = onEpgUrlChanged,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth(),
+            keepFocusOnDone = true
         )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Secondary EPG sources, one per line, merged with the primary
+        // guide so channels missing from one source can still match the
+        // other. Matching keys off each source's own URL, exactly like the
+        // extra-playlists merge below.
+        Text(
+            text = "Extra EPG URLs (optional) — one per line",
+            color = KBTextLo,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = 2.dp)
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            KBTextField(
+                value = extraEpgUrls,
+                onValueChange = onExtraEpgUrlsChanged,
+                placeholder = "http://host/second-guide.xml",
+                keepFocusOnDone = true,
+                keyboardType = KeyboardType.Uri,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            KBPasteChip(onPaste = { onExtraEpgUrlsChanged(it) })
+        }
 
         Spacer(modifier = Modifier.height(12.dp))
 
@@ -1107,6 +1156,7 @@ private fun SetupPanel(
                 value = extraPlaylistUrls,
                 onValueChange = onExtraPlaylistUrlsChanged,
                 placeholder = "http://host/other.m3u|Name",
+                keepFocusOnDone = true,
                 modifier = Modifier.weight(1f)
             )
             Spacer(modifier = Modifier.width(8.dp))
@@ -1125,6 +1175,7 @@ private fun SetupPanel(
                 value = playlistName,
                 onValueChange = onPlaylistNameChanged,
                 placeholder = "Playlist name",
+                keepFocusOnDone = true,
                 modifier = Modifier.weight(1f)
             )
             Spacer(modifier = Modifier.width(8.dp))
@@ -1159,7 +1210,8 @@ private fun SetupPanel(
                     playlistName = playlistName,
                     playlist = playlist,
                     channelCount = channelCount,
-                    isImportingGuide = isImportingGuide
+                    isImportingGuide = isImportingGuide,
+                    extraEpgUrls = extraEpgUrls
                 )
             )
             Spacer(modifier = Modifier.height(14.dp))
@@ -1184,7 +1236,7 @@ private fun SetupPanel(
                 )
             }
 
-            if (epgUrl.isNotBlank()) {
+            if (epgUrl.isNotBlank() || extraEpgUrls.isNotBlank()) {
                 KBCard(onClick = onImportGuide) {
                     Text(
                         text = if (isImportingGuide) "IMPORTING..." else "IMPORT EPG",
@@ -1224,7 +1276,8 @@ private fun NativeUrlField(
     label: String,
     onValueChange: (String) -> Unit,
     modifier: Modifier = Modifier,
-    focusRequester: FocusRequester? = null
+    focusRequester: FocusRequester? = null,
+    keepFocusOnDone: Boolean = false
 ) {
     // One shared KB field everywhere: same look, IME behavior, D-pad
     // escape, and Enter handling (see KBTextField).
@@ -1234,6 +1287,7 @@ private fun NativeUrlField(
         placeholder = label,
         modifier = modifier,
         focusRequester = focusRequester,
+        keepFocusOnDone = keepFocusOnDone,
         keyboardType = KeyboardType.Uri
     )
 }
@@ -1350,11 +1404,14 @@ private fun buildSetupDiagnosticsText(
     playlistName: String,
     playlist: IptvPlaylist?,
     channelCount: Int,
-    isImportingGuide: Boolean
+    isImportingGuide: Boolean,
+    extraEpgUrls: String = ""
 ): String {
     return buildList {
         add(if (playlistUrl.isBlank()) "Playlist missing" else "Playlist ready")
         add(if (epgUrl.isBlank()) "EPG optional" else "EPG provided")
+        val extraEpgCount = extraEpgUrls.split('\n', ';').count { it.isNotBlank() }
+        if (extraEpgCount > 0) add("Extra EPG x$extraEpgCount")
         if (playlist != null) add("Channels $channelCount")
         if (isImportingGuide) add("EPG importing")
         if (playlistName.isNotBlank()) add("Name: $playlistName")

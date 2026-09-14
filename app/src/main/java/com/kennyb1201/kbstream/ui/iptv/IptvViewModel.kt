@@ -45,6 +45,22 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     private val _epgUrl = MutableStateFlow(prefs.getString(KEY_EPG_URL, "").orEmpty())
     val epgUrl: StateFlow<String> = _epgUrl.asStateFlow()
 
+    /**
+     * Secondary EPG sources (newline-separated URLs) merged with the
+     * primary guide. Channels missing from one source can still match the
+     * other; matching keys off each source's own URL in the cache tables,
+     * so any number of sources coexist without clobbering each other.
+     */
+    private val _extraEpgUrls = MutableStateFlow(
+        prefs.getString(KEY_EXTRA_EPG_URLS, "").orEmpty()
+    )
+    val extraEpgUrls: StateFlow<String> = _extraEpgUrls.asStateFlow()
+
+    /** Primary + extras, in order, trimmed, no blanks. */
+    private fun allEpgUrls(): List<String> =
+        (_epgUrl.value.trim().takeIf(String::isNotEmpty)?.let(::listOf).orEmpty() +
+            extraEpgUrlList()).distinct()
+
     private val _playlistName = MutableStateFlow(prefs.getString(KEY_PLAYLIST_NAME, "").orEmpty())
     val playlistName: StateFlow<String> = _playlistName.asStateFlow()
 
@@ -100,10 +116,18 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         catchupJob?.cancel()
         catchupJob = viewModelScope.launch {
             _catchupPrograms.value = try {
-                repository.getRecentCatchupPrograms(
-                    channel = channel,
-                    epgUrl = _epgUrl.value.trim()
-                )
+                // Guide data may live under any of the configured EPG
+                // sources; the first one that yields programs wins.
+                allEpgUrls().asSequence()
+                    .map { url ->
+                        repository.getRecentCatchupPrograms(
+                            channel = channel,
+                            epgUrl = url
+                        )
+                    }
+                    .firstOrNull(List::isNotEmpty)
+                    ?.toList()
+                    .orEmpty()
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 Log.w(TAG, "CATCHUP LOAD FAILED channel=${channel.id}: ${t.message}")
@@ -145,29 +169,42 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         )
 
     private val lineupSource: StateFlow<List<IptvChannelWithEpg>> = combine(
-        _playlist,
-        _epgUrl,
+        combine(
+            _playlist,
+            _epgUrl,
+            _extraEpgUrls
+        ) { playlist, epgUrl, extraEpgRaw ->
+            // Pair the playlist with its guide-source list (primary first,
+            // then extras). Inner combine's typed overload handles 3 flows;
+            // the outer one would exceed the 5-flow typed limit otherwise.
+            val guideUrls = (epgUrl.trim().takeIf(String::isNotEmpty)
+                ?.let(::listOf).orEmpty() +
+                extraEpgRaw.split('\n', ';')
+                    .mapNotNull { it.trim().takeIf(String::isNotEmpty) })
+                .distinct()
+            playlist to guideUrls
+        },
         _guideRefreshTick,
         _isImportingGuide,
         _pendingGuideChannelIds
-    ) { currentPlaylist, guideUrl, refreshTick, importingGuide, channelIds ->
+    ) { playlistAndGuides, refreshTick, importingGuide, channelIds ->
+        val (currentPlaylist, guideUrls) = playlistAndGuides
         GuideRequest(
             playlist = currentPlaylist,
-            guideUrl = guideUrl.trim(),
+            guideUrls = guideUrls,
             refreshTick = refreshTick,
             isImportingGuide = importingGuide,
             channelIds = channelIds
         )
     }.flatMapLatest { request ->
         val currentPlaylist = request.playlist
-        val guideUrl = request.guideUrl
 
         when {
             currentPlaylist == null -> flowOf(emptyList())
-            guideUrl.isBlank() -> flowOf(emptyList())
+            request.guideUrls.isEmpty() -> flowOf(emptyList())
             request.isImportingGuide -> flowOf(emptyList())
             request.channelIds.isEmpty() -> flowOf(emptyList())
-            else -> observeGuideRequest(currentPlaylist, guideUrl, request)
+            else -> observeGuideRequest(currentPlaylist, request)
         }
     }.stateIn(
         viewModelScope,
@@ -239,6 +276,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                     _epgUrl.value = prefs.getString(KEY_EPG_URL, "").orEmpty()
                     _playlistName.value = prefs.getString(KEY_PLAYLIST_NAME, "").orEmpty()
                     _extraPlaylistUrls.value = prefs.getString(KEY_EXTRA_PLAYLIST_URLS, "").orEmpty()
+                    _extraEpgUrls.value = prefs.getString(KEY_EXTRA_EPG_URLS, "").orEmpty()
                     _hiddenChannelIds.value =
                         prefs.getStringSet(KEY_HIDDEN_CHANNEL_IDS, emptySet()).orEmpty().toSet()
 
@@ -308,7 +346,32 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             clearGuideMemory(
                 buildGuideSourceKey(
                     playlist = playlist,
-                    guideUrl = value.trim(),
+                    guideUrls = allEpgUrls(),
+                    refreshTick = _guideRefreshTick.value + 1
+                )
+            )
+        } else {
+            clearGuideMemory()
+        }
+        _guideRefreshTick.value += 1
+    }
+
+    /** Parsed extra-EPG textarea: trimmed, one URL per line or ';'. */
+    private fun extraEpgUrlList(): List<String> =
+        _extraEpgUrls.value
+            .split('\n', ';')
+            .mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+
+    fun onExtraEpgUrlsChanged(value: String) {
+        _extraEpgUrls.value = value
+        saveInputs()
+
+        val playlist = _playlist.value
+        if (playlist != null) {
+            clearGuideMemory(
+                buildGuideSourceKey(
+                    playlist = playlist,
+                    guideUrls = allEpgUrls(),
                     refreshTick = _guideRefreshTick.value + 1
                 )
             )
@@ -366,10 +429,11 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private fun observeGuideRequest(
         currentPlaylist: IptvPlaylist,
-        guideUrl: String,
         request: GuideRequest
     ): Flow<List<IptvChannelWithEpg>> {
-        val sourceKey = buildGuideSourceKey(currentPlaylist, guideUrl, request.refreshTick)
+        val sourceKey = buildGuideSourceKey(
+            currentPlaylist, request.guideUrls, request.refreshTick
+        )
 
         // NOTE: this branch should rarely fire in practice now, because applyPlaylist()/
         // onEpgUrlChanged()/importGuideInternal() precompute and set loadedGuideSourceKey
@@ -392,9 +456,9 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         if (channelsToLoad.isEmpty()) return flowOf(emptyList())
 
         val now = System.currentTimeMillis()
-        return repository.observeLineupWithGuide(
+        return repository.observeLineupWithGuides(
             playlist = currentPlaylist.copy(channels = channelsToLoad),
-            epgUrl = guideUrl,
+            epgUrls = request.guideUrls,
             windowStart = now - GUIDE_PAST_WINDOW_MS,
             windowEnd = now + GUIDE_FUTURE_WINDOW_MS,
             limit = VISIBLE_GUIDE_PROGRAM_LIMIT
@@ -528,8 +592,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun importGuide() {
-        val url = _epgUrl.value.trim()
-        if (url.isBlank()) {
+        if (allEpgUrls().isEmpty()) {
             _guideError.value = "EPG URL is required"
             return
         }
@@ -538,13 +601,14 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             return
         }
         importJob?.cancel()
-        importJob = viewModelScope.launch { importGuideInternal(url) }
+        importJob = viewModelScope.launch { importGuideInternal(allEpgUrls().firstOrNull().orEmpty()) }
     }
 
     private fun refreshIfNeeded() {
         if (refreshJob?.isActive == true) return
         val playlistNeedsRefresh = isStale(KEY_PLAYLIST_UPDATED_AT, PLAYLIST_REFRESH_MS)
-        val guideNeedsRefresh = _epgUrl.value.isNotBlank() && isStale(KEY_EPG_UPDATED_AT, EPG_REFRESH_MS)
+        val guideNeedsRefresh = allEpgUrls().isNotEmpty() &&
+            isStale(KEY_EPG_UPDATED_AT, EPG_REFRESH_MS)
         if (!playlistNeedsRefresh && !guideNeedsRefresh) return
         refreshJob = viewModelScope.launch {
             if (playlistNeedsRefresh) {
@@ -554,7 +618,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                     Log.e(TAG, "BACKGROUND PLAYLIST REFRESH FAILED", error)
                 }
             }
-            if (guideNeedsRefresh) importGuideInternal(_epgUrl.value.trim())
+            if (guideNeedsRefresh) importGuideInternal(allEpgUrls().firstOrNull().orEmpty())
         }
     }
 
@@ -572,17 +636,36 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         if (epgUrl.isBlank()) return
         _isImportingGuide.value = true
         _guideError.value = null
+        val urls = allEpgUrls()
         try {
-            repository.importGuide(epgUrl)
+            var lastError: Throwable? = null
+            var imported = 0
+            for (url in urls) {
+                try {
+                    repository.importGuide(url)
+                    imported++
+                } catch (t: Throwable) {
+                    if (t is CancellationException) throw t
+                    lastError = t
+                    Log.e(TAG, "GUIDE IMPORT FAILED source=$url", t)
+                }
+            }
+            if (imported == 0) {
+                lastError?.let { throw it }
+                return
+            }
+            if (lastError != null) {
+                // At least one source made it in; surface the failures as a
+                // non-fatal warning but keep the successful guide data.
+                _guideError.value = "Some EPG sources failed: " + buildMessage(lastError)
+            }
             val playlist = _playlist.value
             clearGuideMemory(
-                playlist?.let {
-                    buildGuideSourceKey(
-                        playlist = it,
-                        guideUrl = epgUrl,
-                        refreshTick = _guideRefreshTick.value + 1
-                    )
-                }
+                buildGuideSourceKey(
+                    playlist = playlist,
+                    guideUrls = urls,
+                    refreshTick = _guideRefreshTick.value + 1
+                )
             )
             _guideRefreshTick.value += 1
             requestInitialGuideWindow()
@@ -590,7 +673,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
             _guideError.value = buildMessage(t)
-            Log.e(TAG, "GUIDE IMPORT FAILED source=$epgUrl", t)
+            Log.e(TAG, "GUIDE IMPORT FAILED", t)
         } finally {
             _isImportingGuide.value = false
         }
@@ -606,7 +689,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         clearGuideMemory(
             buildGuideSourceKey(
                 playlist = newPlaylist,
-                guideUrl = _epgUrl.value.trim(),
+                guideUrls = allEpgUrls(),
                 refreshTick = _guideRefreshTick.value + 1
             )
         )
@@ -647,8 +730,12 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         prefs.edit().putStringSet(KEY_HIDDEN_CHANNEL_IDS, _hiddenChannelIds.value).apply()
     }
 
-    private fun buildGuideSourceKey(playlist: IptvPlaylist, guideUrl: String, refreshTick: Int): String =
-        "${playlist.sourceUrl}|$guideUrl|$refreshTick"
+    private fun buildGuideSourceKey(
+        playlist: IptvPlaylist?,
+        guideUrls: List<String>,
+        refreshTick: Int
+    ): String =
+        "${playlist?.sourceUrl}|${guideUrls.joinToString(",")}|$refreshTick"
 
     private fun isStale(key: String, maxAgeMs: Long): Boolean {
         val updatedAt = prefs.getLong(key, 0L)
@@ -688,6 +775,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         prefs.edit()
             .putString(KEY_PLAYLIST_URL, _playlistUrl.value)
             .putString(KEY_EPG_URL, _epgUrl.value)
+            .putString(KEY_EXTRA_EPG_URLS, _extraEpgUrls.value)
             .putString(KEY_PLAYLIST_NAME, _playlistName.value)
             .putString(KEY_EXTRA_PLAYLIST_URLS, _extraPlaylistUrls.value)
             .apply()
@@ -704,7 +792,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private data class GuideRequest(
         val playlist: IptvPlaylist?,
-        val guideUrl: String,
+        val guideUrls: List<String>,
         val refreshTick: Int,
         val isImportingGuide: Boolean,
         val channelIds: Set<String>
@@ -715,6 +803,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         const val PREFS_NAME = "iptv_prefs"
         const val KEY_PLAYLIST_URL = "playlist_url"
         const val KEY_EPG_URL = "epg_url"
+        const val KEY_EXTRA_EPG_URLS = "extra_epg_urls"
         const val KEY_PLAYLIST_NAME = "playlist_name"
         const val KEY_EXTRA_PLAYLIST_URLS = "extra_playlist_urls"
         const val KEY_PLAYLIST_APPLIED_URL = "playlist_applied_url"

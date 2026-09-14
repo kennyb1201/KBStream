@@ -180,6 +180,12 @@ object PrefsPayloadBuilder {
             put("playlist_url", prefs.getString("playlist_url", null).orEmpty())
             put("playlist_name", prefs.getString("playlist_name", null).orEmpty())
             put("epg_url", prefs.getString("epg_url", null).orEmpty())
+            putJsonArray("extra_epg_urls") {
+                prefs.getString("extra_epg_urls", "").orEmpty()
+                    .split('\n', ';')
+                    .mapNotNull { it.trim().takeIf(String::isNotBlank) }
+                    .forEach { add(it) }
+            }
             putJsonArray("extra_playlist_urls") {
                 prefs.getString("extra_playlist_urls", "").orEmpty()
                     .split('\n', ';')
@@ -351,6 +357,10 @@ object PrefsPayloadApplier {
         val playlistUrl = str("playlist_url")
         val playlistName = str("playlist_name")
         val epgUrl = str("epg_url")
+        val extraEpgUrls = (payload["extra_epg_urls"] as? kotlinx.serialization.json.JsonArray)
+            ?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
+            .orEmpty()
+            .filter { it.isNotBlank() }
         val extraPlaylistUrls = (payload["extra_playlist_urls"] as? kotlinx.serialization.json.JsonArray)
             ?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
             .orEmpty()
@@ -365,6 +375,9 @@ object PrefsPayloadApplier {
         // only when the key is present — older payloads keep local edits.
         if (payload.containsKey("extra_playlist_urls")) {
             editor.putString("extra_playlist_urls", extraPlaylistUrls.joinToString("\n"))
+        }
+        if (payload.containsKey("extra_epg_urls")) {
+            editor.putString("extra_epg_urls", extraEpgUrls.joinToString("\n"))
         }
         (payload["hidden_channel_ids"] as? kotlinx.serialization.json.JsonArray)?.let { arr ->
             val set = arr.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }.toSet()

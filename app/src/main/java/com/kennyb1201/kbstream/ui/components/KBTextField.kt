@@ -94,7 +94,14 @@ fun KBTextField(
     visualTransformation: VisualTransformation = VisualTransformation.None,
     leading: (@Composable () -> Unit)? = null,
     onDone: (() -> Unit)? = null,
-    onFocusChanged: ((Boolean) -> Unit)? = null
+    onFocusChanged: ((Boolean) -> Unit)? = null,
+    /**
+     * Enter/Done normally commits AND drops focus (the field is "finished").
+     * Inside modal overlays (playlist setup) dropping focus lets the next
+     * key press fall through to controls behind the overlay, so callers can
+     * keep focus on the field instead: commit + hide the IME, keep focus.
+     */
+    keepFocusOnDone: Boolean = false
 ) {
     var focused by remember { mutableStateOf(false) }
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -102,7 +109,7 @@ fun KBTextField(
 
     fun finishEditing() {
         keyboardController?.hide()
-        focusManager.clearFocus()
+        if (!keepFocusOnDone) focusManager.clearFocus()
         onDone?.invoke()
     }
 
