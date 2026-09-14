@@ -1668,17 +1668,20 @@ private fun CatalogManagerDialog(
 ) {
     BackHandler(onBack = onDismiss)
 
-    // Focus pinning for the reorder arrows: a move relocates the pressed
-    // row (items are keyed by identity) and off-screen relocations dispose
-    // the focused button, throwing D-pad focus back to the header. After
-    // each move, scroll to the index the row landed on and re-focus the
-    // SAME button there, so repeated presses just keep working. If that
+    // Focus pinning for reorder/hide/show: any action that rebuilds the row
+    // list disposes the focused button and throws D-pad focus at the dialog
+    // header. The action handlers pin a (row key, button) target first; the
+    // LaunchedEffect below scrolls to wherever that row landed (visible or
+    // hidden section) and re-focuses the SAME button, so repeated presses
+    // just keep working. If that
     // button is disabled at its new position, fall back to the row's
     // toggle card.
     val listState = rememberLazyListState()
     val rowRequesters = remember { mutableMapOf<String, CatalogRowFocus>() }
+    // Focus restore target: the ROW KEY (not index — keys survive the list
+    // rebuilds that moves/hides/shows cause) plus which button in the row.
     var pendingFocus by remember {
-        mutableStateOf<Pair<Int, CatalogRowFocus.Slot>?>(null)
+        mutableStateOf<Pair<String, CatalogRowFocus.Slot>?>(null)
     }
 
     // One flat list: addon catalog rows first-class alongside collection
@@ -1740,12 +1743,9 @@ private fun CatalogManagerDialog(
         val fromIndex = visibleRows.indexOfFirst { it.key == row.key }
         if (fromIndex < 0) return
         // Arrange focus restore FIRST: the ViewModel write rebuilds the row
-        // list, so the target index is computed from the pre-move snapshot.
-        pendingFocus = when (delta) {
-            Int.MIN_VALUE -> 0 to slot
-            Int.MAX_VALUE -> visibleRows.lastIndex to slot
-            else -> (fromIndex + delta).coerceIn(0, visibleRows.lastIndex) to slot
-        }
+        // list. Restore targets the moved row itself (it lands at a new
+        // index; the key-based restore finds it there).
+        pendingFocus = row.key to slot
         if (row.isCollection) {
             onCollectionMove(row.key, delta)
         } else {
@@ -1753,13 +1753,58 @@ private fun CatalogManagerDialog(
         }
     }
 
+    /**
+     * Hide a row while keeping focus where the user's attention already is:
+     * hiding removes the row from the visible list, disposes the focused
+     * toggle button, and D-pad focus escapes to the dialog header (the
+     * SHOW ALL / DONE row). Pin the toggle of the neighbor row (next, or
+     * previous when hiding the last) so focus stays in the list instead.
+     */
+    fun hideRowKeepFocus(row: CatalogManagerDialogRow) {
+        val index = visibleRows.indexOfFirst { it.key == row.key }
+        val neighborKey = when {
+            visibleRows.size <= 1 -> null // list empties; let focus rest
+            index < 0 -> null
+            else ->
+                visibleRows.getOrNull(index + 1)?.key
+                    ?: visibleRows.getOrNull(index - 1)?.key
+        }
+        pendingFocus = neighborKey?.let { it to CatalogRowFocus.Slot.TOGGLE }
+        if (row.isCollection) {
+            onCollectionHide(row.collectionKey.orEmpty())
+        } else {
+            onToggle(row.config!!, !row.config.catalog.showOnHome)
+        }
+    }
+
+    /**
+     * Show a hidden row, keeping focus on its own toggle as it moves from
+     * the hidden section back into the visible rails list.
+     */
+    fun showRowKeepFocus(row: CatalogManagerDialogRow) {
+        pendingFocus = row.key to CatalogRowFocus.Slot.TOGGLE
+        if (row.isCollection) {
+            onCollectionHide(row.collectionKey.orEmpty())
+        } else {
+            onToggle(row.config!!, !row.config.catalog.showOnHome)
+        }
+    }
+
     LaunchedEffect(configurations, collectionsState, homeOrderVersion) {
         val target = pendingFocus ?: return@LaunchedEffect
         pendingFocus = null
-        val (index, slot) = target
-        runCatching { listState.animateScrollToItem(index) }
-        val row = visibleRows.getOrNull(index) ?: return@LaunchedEffect
-        val focus = rowRequesters[row.key] ?: return@LaunchedEffect
+        val (key, slot) = target
+        // The row may sit in the visible section or the hidden section —
+        // compute its LazyColumn index from wherever it landed.
+        val visibleIndex = visibleRows.indexOfFirst { it.key == key }
+        val lazyIndex = if (visibleIndex >= 0) {
+            visibleIndex
+        } else {
+            val hiddenIndex = hiddenRows.indexOfFirst { it.key == key }
+            if (hiddenIndex >= 0) visibleRows.size + 1 + hiddenIndex else return@LaunchedEffect
+        }
+        runCatching { listState.animateScrollToItem(lazyIndex) }
+        val focus = rowRequesters[key] ?: return@LaunchedEffect
         focus.of(slot)?.let { requester ->
             runCatching { requester.requestFocus() }
         } ?: run { runCatching { focus.toggle.requestFocus() } }
@@ -1894,13 +1939,9 @@ private fun CatalogManagerDialog(
                         position = index,
                         total = visibleRows.size,
                         rowFocus = rowFocus,
-                        onToggle = {
-                            if (row.isCollection) {
-                                onCollectionHide(row.collectionKey.orEmpty())
-                            } else {
-                                onToggle(row.config!!, !row.config.catalog.showOnHome)
-                            }
-                        },
+                        // Hide keeps focus in the list (next row's toggle)
+                        // instead of dumping it on the dialog header.
+                        onToggle = { hideRowKeepFocus(row) },
                         onPin = {
                             if (row.isCollection) {
                                 onCollectionPin(row.collectionKey.orEmpty())
@@ -1931,13 +1972,7 @@ private fun CatalogManagerDialog(
                             position = -1,
                             total = -1,
                             rowFocus = remember(row.key) { CatalogRowFocus() },
-                            onToggle = {
-                                if (row.isCollection) {
-                                    onCollectionHide(row.collectionKey.orEmpty())
-                                } else {
-                                    onToggle(row.config!!, !row.config.catalog.showOnHome)
-                                }
-                            },
+                            onToggle = { showRowKeepFocus(row) },
                             onPin = {},
                             onMove = { _, _ -> },
                             onRename = {}

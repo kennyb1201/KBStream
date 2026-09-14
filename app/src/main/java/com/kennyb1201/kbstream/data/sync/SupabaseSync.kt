@@ -91,6 +91,12 @@ object SupabaseSync {
     private const val TABLE_WATCHED = "sync_watched_status"
     private const val TABLE_PREFS = "sync_prefs"
 
+    /** Shown when auth is pressed in a build compiled without Supabase keys. */
+    private const val SYNC_NOT_CONFIGURED_MESSAGE =
+        "Sync isn't configured in this build. Add SUPABASE_URL and " +
+            "SUPABASE_ANON_KEY to local.properties and rebuild to enable " +
+            "sign-in, accounts, and cross-device sync."
+
     fun init(context: Context) {
         if (BuildConfig.SUPABASE_URL.isBlank() || BuildConfig.SUPABASE_ANON_KEY.isBlank()) {
             Log.i(TAG, "Supabase not configured — sync disabled")
@@ -145,7 +151,14 @@ object SupabaseSync {
     // ── Auth ────────────────────────────────────────────────────────
 
     fun signIn(context: Context, email: String, password: String) {
-        val c = client ?: return
+        val c = client
+        if (c == null) {
+            // Sync was never configured into this build (blank keys in
+            // local.properties). Never a silent no-op — the user pressed a
+            // button and deserves to know why nothing happened.
+            _authState.value = AuthState.Error(SYNC_NOT_CONFIGURED_MESSAGE)
+            return
+        }
         _authState.value = AuthState.SigningIn
         scope.launch {
             try {
@@ -170,13 +183,28 @@ object SupabaseSync {
     }
 
     fun signUp(context: Context, email: String, password: String) {
-        val c = client ?: return
+        val c = client
+        if (c == null) {
+            _authState.value = AuthState.Error(SYNC_NOT_CONFIGURED_MESSAGE)
+            return
+        }
         _authState.value = AuthState.SigningIn
         scope.launch {
             try {
                 c.auth.signUpWith(io.github.jan.supabase.gotrue.providers.builtin.Email) {
                     this.email = email.trim()
                     this.password = password
+                }
+                // Projects with "Confirm email" enabled return success but
+                // NO session — the account exists only after the user clicks
+                // the email link. Session-present means auto-confirm is on
+                // and we're signed in for real.
+                if (c.auth.currentSessionOrNull() == null) {
+                    _authState.value = AuthState.Error(
+                        "Account created! Check ${email.trim()} for a confirmation " +
+                            "link, then sign in here."
+                    )
+                    return@launch
                 }
                 persistSession(context, email.trim())
                 _authState.value = AuthState.SignedIn(email.trim())

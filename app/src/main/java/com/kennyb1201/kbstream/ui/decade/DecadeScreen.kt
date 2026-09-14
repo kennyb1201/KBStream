@@ -377,7 +377,9 @@ private fun DecadeRailRow(
             text = section.title,
             style = MaterialTheme.typography.titleMedium,
             color = KBTextLo,
-            modifier = Modifier.padding(bottom = 8.dp)
+            // Aligned with the posters' 20dp rail inset instead of sitting
+            // flush against the screen edge.
+            modifier = Modifier.padding(start = 20.dp, bottom = 8.dp)
         )
 
         LazyRow(
