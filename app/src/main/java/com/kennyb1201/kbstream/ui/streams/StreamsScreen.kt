@@ -140,19 +140,20 @@ fun StreamsScreen(
             )
         }
 
-        // Translucent scrim: heavy enough that text/cards stay readable,
-        // light enough that the backdrop stays visible behind the rail.
-        // The bottom stop stays darker (that's where the list lives) but no
-        // longer goes fully opaque, so the artwork still reads through.
+        // Translucent scrim: light enough that the backdrop clearly reads
+        // through, while the glass stream cards carry their own background so
+        // text stays legible. The bottom stop is the darkest (the list sits
+        // there) but no longer approaches opaque - artwork stays visible
+        // edge to edge.
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(
                     Brush.verticalGradient(
                         listOf(
-                            KBVoid.copy(alpha = 0.20f),
-                            KBVoid.copy(alpha = 0.52f),
-                            KBVoid.copy(alpha = 0.90f)
+                            KBVoid.copy(alpha = 0.10f),
+                            KBVoid.copy(alpha = 0.34f),
+                            KBVoid.copy(alpha = 0.74f)
                         )
                     )
                 )
@@ -368,9 +369,9 @@ private fun StreamCard(
                 // source stays crisp against a busy frame.
                 .background(
                     if (isFocused) {
-                        KBSurfaceRaised.copy(alpha = 0.88f)
+                        KBSurfaceRaised.copy(alpha = 0.86f)
                     } else {
-                        KBSurface.copy(alpha = 0.70f)
+                        KBSurface.copy(alpha = 0.58f)
                     }
                 )
                 .border(

@@ -4825,6 +4825,16 @@ private suspend fun calculateEpisodesRemaining(
 
                 if (finalRails.isNotEmpty()) {
                     railLoadRetriesLeft = RAIL_LOAD_RETRY_MAX_ATTEMPTS
+                } else if (
+                    pendingCatalogs.isNotEmpty() &&
+                    railLoadRetriesLeft == 0
+                ) {
+                    // Every attempt failed and the budget is spent: show a
+                    // readable error INSTEAD of silently leaving Home empty.
+                    // The next successful load clears it.
+                    _error.value =
+                        "Couldn't reach your add-ons. Check the network " +
+                            "connection, then press OK to retry."
                 }
 
                 _isLoading.value =
@@ -4857,8 +4867,17 @@ private suspend fun calculateEpisodesRemaining(
                 e
             )
 
+            // Cold-start races (TV launcher restoring the app before Wi-Fi/DNS
+            // settle) throw hard here, then the retry below succeeds a second
+            // later - showing the message immediately just flashes it. Stay
+            // silent while the retry budget still has attempts; surface the
+            // error only when the failure is final (or the user explicitly
+            // triggered this load and deserves immediate feedback).
+            val retriesStillPending = railLoadRetriesLeft > 0 && !forceRefresh
+
             if (
-                _rails.value.isEmpty()
+                _rails.value.isEmpty() &&
+                !retriesStillPending
             ) {
 
                 _error.value =
