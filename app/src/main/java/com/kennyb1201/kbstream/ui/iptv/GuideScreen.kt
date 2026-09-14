@@ -195,6 +195,21 @@ fun GuideScreen(
     fun withFavoriteFlag(item: IptvChannelWithEpg): IptvChannelWithEpg =
         item.copy(isFavorite = favoriteKey(item) in favorites)
 
+    // Recently-played channels: a queue of channel keys updated on PLAY
+    // (not mere focus), newest first, capped at 8. Rendered as a
+    // "RECENT" group at the front of the groups strip.
+    var recentChannelKeys by remember(activeProfileId) {
+        mutableStateOf(
+            guidePreferences.getStringSet("recent_channels", emptySet())
+                ?.toSet().orEmpty().toList().take(8)
+        )
+    }
+    LaunchedEffect(recentChannelKeys) {
+        guidePreferences.edit()
+            .putStringSet("recent_channels", recentChannelKeys.toSet())
+            .apply()
+    }
+
     val unhiddenChannels = remember(visibleChannels, hiddenGroups) {
     visibleChannels.filter { item ->
         val group = item.channel.groupTitle?.trim().orEmpty()
@@ -264,21 +279,6 @@ fun GuideScreen(
         if (item != null) {
             guidePreferences.edit().putString("last_channel", channelKey(item)).apply()
         }
-    }
-
-    // Recently-played channels: a queue of channel keys updated on PLAY
-    // (not mere focus), newest first, capped at 8. Rendered as a
-    // "RECENT" group at the front of the groups strip.
-    var recentChannelKeys by remember(activeProfileId) {
-        mutableStateOf(
-            guidePreferences.getStringSet("recent_channels", emptySet())
-                ?.toSet().orEmpty().toList().take(8)
-        )
-    }
-    LaunchedEffect(recentChannelKeys) {
-        guidePreferences.edit()
-            .putStringSet("recent_channels", recentChannelKeys.toSet())
-            .apply()
     }
 
     fun resolveChannelNumber(entry: String) {
@@ -880,7 +880,7 @@ Spacer(modifier = Modifier.height(14.dp))
                             latestOnPlayChannel?.invoke(item)
                             dismissSearch()
                         },
-                        onDismiss = ::dismissSearch
+                        onDismiss = { dismissSearch() }
                     )
                 }
 
@@ -1986,6 +1986,121 @@ private fun ChannelActionsDialog(
     }
 }
 
+@Composable
+private fun ChannelSearchDialog(
+    query: String,
+    results: List<IptvChannelWithEpg>,
+    channelKey: (IptvChannelWithEpg) -> String,
+    onQueryChanged: (String) -> Unit,
+    onPlay: (IptvChannelWithEpg) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .width(560.dp)
+                .background(KBSurfaceRaised, RoundedCornerShape(18.dp))
+                .border(1.dp, KBAccent.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = "SEARCH CHANNELS",
+                color = KBAccent,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            KBTextField(
+                value = query,
+                onValueChange = onQueryChanged,
+                placeholder = "Channel name or number…",
+                modifier = Modifier.fillMaxWidth(),
+                onDone = onDismiss
+            )
+            if (results.isEmpty()) {
+                Text(
+                    text = if (query.isBlank()) {
+                        "Type to filter the channel list"
+                    } else {
+                        "No channels match"
+                    },
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 420.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    itemsIndexed(
+                        items = results,
+                        key = { _, item -> channelKey(item) }
+                    ) { _, item ->
+                        val logoUrl = item.channel.logoUrl ?: item.epgChannel?.iconUrl
+                        KBCard(onClick = { onPlay(item) }, modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 8.dp)
+                            ) {
+                                if (!logoUrl.isNullOrBlank()) {
+                                    AsyncImage(
+                                        model = logoUrl,
+                                        contentDescription = item.channel.displayName,
+                                        contentScale = ContentScale.Fit,
+                                        modifier = Modifier.size(width = 44.dp, height = 30.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                }
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = item.channel.displayName,
+                                        color = KBTextHi,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    item.channel.groupTitle?.trim()
+                                        ?.takeIf { it.isNotBlank() }
+                                        ?.let { group ->
+                                            Text(
+                                                text = group,
+                                                color = KBTextLo,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                }
+                                item.channel.tvgChno?.trim()
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?.let { chno ->
+                                        Text(
+                                            text = chno,
+                                            color = KBTextLo,
+                                            style = MaterialTheme.typography.labelMedium
+                                        )
+                                    }
+                            }
+                        }
+                    }
+                }
+            }
+            KBCard(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "CLOSE",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                )
+            }
+        }
+    }
+}
 
 private enum class HiddenItemsTab { GROUPS, CHANNELS }
 

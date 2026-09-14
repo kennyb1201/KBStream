@@ -717,7 +717,7 @@ class IptvRepository(
             ) ?: return@mapNotNull null
             CatchupProgram(
                 title = row.title,
-                description = row.description.takeIf { it.isNotBlank() },
+                description = row.description?.takeIf { it.isNotBlank() },
                 startUtcMillis = row.startUtcMillis,
                 endUtcMillis = row.endUtcMillis,
                 url = url
