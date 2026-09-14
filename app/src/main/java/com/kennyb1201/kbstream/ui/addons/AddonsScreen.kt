@@ -994,6 +994,10 @@ private fun ActionButton(
                     Icon(
                         imageVector = it,
                         contentDescription = null,
+                        // Icons render in the app text color, not the dark
+                        // default - same treatment as CatalogIconButton in
+                        // the home manager.
+                        tint = KBTextHi,
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(5.dp))
@@ -1025,6 +1029,7 @@ private fun ActionButton(
                     Icon(
                         imageVector = it,
                         contentDescription = null,
+                        tint = KBTextLo.copy(alpha = 0.55f),
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(5.dp))
@@ -1059,6 +1064,7 @@ private fun SmallAction(
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
+                    tint = KBTextHi,
                     modifier = Modifier.size(14.dp)
                 )
                 Text(
@@ -1088,6 +1094,7 @@ private fun SmallAction(
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
+                    tint = KBTextLo.copy(alpha = 0.55f),
                     modifier = Modifier.size(14.dp)
                 )
                 Text(
