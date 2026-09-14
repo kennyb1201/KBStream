@@ -987,6 +987,24 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     val browseSubmenuLoading: StateFlow<Boolean> =
         _browseSubmenuLoading.asStateFlow()
 
+    /**
+     * Which Browse category is open in the browser strip. Lives in the
+     * activity-scoped ViewModel (not the composable's remember{}) so
+     * backing out of a discover screen restores the same open category
+     * instead of collapsing the browser back to nothing.
+     */
+    private val _selectedBrowseCategoryKey = MutableStateFlow<String?>(null)
+
+    val selectedBrowseCategoryKey: StateFlow<String?> =
+        _selectedBrowseCategoryKey.asStateFlow()
+
+    /**
+     * The exact chip (category + index within its submenu) that launched the
+     * current discover screen, so Back can re-focus that chip — the TV
+     * convention of focus returning to the thing that opened the screen.
+     */
+    var browseReturnChip: Pair<String, Int>? = null
+
     private var catalogResolveStarted = false
 
     /**
@@ -995,6 +1013,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
      * once-per-session) resolution off.
      */
     fun selectBrowseCategory(key: String) {
+        _selectedBrowseCategoryKey.value = key
         if (key == "keywords" || key == "collections") {
             _browseSubmenuLoading.value = !catalogResolveStarted
             if (!catalogResolveStarted) {
@@ -1007,6 +1026,12 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
     /** A submenu entry press: open its dedicated discover screen. */
     fun onBrowseEntryClicked(categoryKey: String, entry: BrowseEntry) {
+        // Remember where we came from so Back re-focuses this chip.
+        _selectedBrowseCategoryKey.value = categoryKey
+        _browseCategories.value.firstOrNull { it.key == categoryKey }
+            ?.entries?.indexOfFirst { it.id == entry.id && it.name == entry.name }
+            ?.takeIf { it >= 0 }
+            ?.let { browseReturnChip = categoryKey to it }
         when (categoryKey) {
             "genres" -> onOpenTagScreen?.invoke(entry.id, entry.name, false, "movie")
             "keywords" -> onOpenTagScreen?.invoke(entry.id, entry.name, true, "movie")

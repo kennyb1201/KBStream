@@ -189,11 +189,19 @@ val BROWSE_STUDIOS = listOf(
     BrowseEntry(6704, "Illumination"),
     BrowseEntry(521, "DreamWorks Animation"),
     BrowseEntry(10342, "Studio Ghibli"),
-    BrowseEntry(882, "Legendary Pictures"),
-    BrowseEntry(923, "Focus Features"),
-    BrowseEntry(7295, "Regency Enterprises"),
-    BrowseEntry(10146, "Sony Pictures Animation"),
-    BrowseEntry(10292, "Working Title Films")
+    // Tail of this list previously off-by-one (each id was the NEXT
+    // studio's): Legendary showed TOHO, Focus showed Legendary, Sony
+    // Pictures Animation showed Focus, Regency showed Relativity, and
+    // Working Title pointed at a dead id. All re-verified against
+    // themoviedb.org/company/{id} + /search/company:
+    //  882=TOHO, 923=Legendary, 508=Regency, 10146=Focus,
+    //  2251=Sony Pictures Animation, 10163=Working Title Films.
+    BrowseEntry(882, "TOHO"),
+    BrowseEntry(923, "Legendary Pictures"),
+    BrowseEntry(508, "Regency Enterprises"),
+    BrowseEntry(10146, "Focus Features"),
+    BrowseEntry(2251, "Sony Pictures Animation"),
+    BrowseEntry(10163, "Working Title Films")
 )
 
 // ---------------------------------------------------------------------------

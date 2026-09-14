@@ -792,7 +792,19 @@ private fun SearchBrowseBrowser(
     categories: List<BrowseCategory>,
     submenuLoading: Boolean
 ) {
-    var activeCategory by remember { mutableStateOf<BrowseCategory?>(null) }
+    // Selected category lives in the activity-scoped ViewModel, so backing
+    // out of a discover screen re-opens the same submenu instead of the
+    // browser resetting to no selection.
+    val selectedKey by viewModel.selectedBrowseCategoryKey.collectAsStateWithLifecycle()
+    val activeCategory = categories.firstOrNull { it.key == selectedKey }
+
+    // Re-focus the chip that launched the discover screen we just backed
+    // out of. The matching chip renders with grabInitialFocus so the TV
+    // focus system lands on it (which also scrolls it into view); the
+    // stored chip is cleared once consumed so later recompositions don't
+    // steal focus back.
+    val returnChip = viewModel.browseReturnChip
+    var returnChipConsumed by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.padding(top = 8.dp)) {
         SectionHeader(title = "Browse")
@@ -811,7 +823,6 @@ private fun SearchBrowseBrowser(
                     accent = activeCategory?.key == category.key,
                     onClick = {
                         viewModel.selectBrowseCategory(category.key)
-                        activeCategory = category
                     }
                 )
             }
@@ -838,7 +849,10 @@ private fun SearchBrowseBrowser(
                         .padding(top = 10.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    category.entries.forEach { entry ->
+                    category.entries.forEachIndexed { entryIndex, entry ->
+                        val isReturnChip = !returnChipConsumed &&
+                            returnChip?.first == category.key &&
+                            returnChip?.second == entryIndex
                         SearchChip(
                             label = entry.name,
                             onClick = {
@@ -846,6 +860,11 @@ private fun SearchBrowseBrowser(
                                     category.key,
                                     entry
                                 )
+                            },
+                            grabInitialFocus = isReturnChip,
+                            onInitialFocusConsumed = {
+                                returnChipConsumed = true
+                                viewModel.browseReturnChip = null
                             }
                         )
                     }
@@ -881,9 +900,22 @@ private fun SearchChip(
     label: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    accent: Boolean = true
+    accent: Boolean = true,
+    grabInitialFocus: Boolean = false,
+    onInitialFocusConsumed: (() -> Unit)? = null
 ) {
     var focused by remember { mutableStateOf(false) }
+    // Return-chip restore: when this chip is the one that opened the
+    // discover screen we just backed out of, pull TV focus onto it (the
+    // focus system also scrolls its row to make it visible), then tell the
+    // caller so later recompositions don't re-grab.
+    val returnFocusRequester = remember { FocusRequester() }
+    if (grabInitialFocus) {
+        LaunchedEffect(returnFocusRequester) {
+            runCatching { returnFocusRequester.requestFocus() }
+            onInitialFocusConsumed?.invoke()
+        }
+    }
     val borderColor = when {
         focused -> KBAccent
         accent -> KBTextLo.copy(alpha = 0.35f)
@@ -904,7 +936,9 @@ private fun SearchChip(
             border = Border(BorderStroke(1.dp, borderColor)),
             focusedBorder = Border(BorderStroke(2.dp, KBAccent))
         ),
-        modifier = modifier.onFocusChanged { focused = it.isFocused }
+        modifier = modifier
+            .focusRequester(returnFocusRequester)
+            .onFocusChanged { focused = it.isFocused }
     ) {
         Text(
             text = label,
