@@ -464,14 +464,23 @@ class HomeViewModel(
         val requestedId = item.id
         val requestedType = item.type
 
+        // Keep the PREVIOUS item's resolved art (backdrop + clearlogo)
+        // visible while the new item resolves. Nulling these here made the
+        // hero fall back to the raw addon backdrop/poster (a zoomed-in
+        // mess) plus a plain-text title for the 250ms dwell + network time
+        // on EVERY focus change — the "ugly backdrop flashes first"
+        // report. Only ART is held over: meta/detail (name, year, rating,
+        // synopsis) are cleared so the new item's title shows immediately
+        // and no wrong year/description ever appears under it. The
+        // resolution below publishes the new full set together.
+        // (The very first hero after Home opens has no previous art and
+        // resolves from cold — the rail-level prefetch warms that.)
         _heroMeta.value = _heroMeta.value?.takeIf {
             it.id == requestedId &&
                 it.type.equals(requestedType, ignoreCase = true)
         }
-        _heroBackdropUrl.value = null
-        _heroLogoUrl.value = null
-        _heroTrailerKey.value = null
         _heroTmdbDetail.value = null
+        _heroTrailerKey.value = null
 
         heroResolveJob = viewModelScope.launch {
             try {
@@ -746,6 +755,85 @@ Log.d(
                 _heroLogoUrl.value = null
                 _heroTrailerKey.value = null
                 _heroTmdbDetail.value = null
+            }
+        }
+    }
+
+    // Prefetches hero art (TMDB detail + hero artwork: backdrop + clearlogo)
+    // for rail items BEFORE the user focuses them, so the caches are hot and
+    // focusing a card swaps the hero art in one frame instead of showing the
+    // raw addon art + plain title for a second. The resolver flow is exactly
+    // the hero's: fetchEnrichedMetaCached / getDetailByTmdbId by id shape,
+    // then TmdbHeroArtworkRepository — both disk+memory cached, so a
+    // prefetched item's focus resolution becomes a cache hit that returns
+    // instantly. Throttled below the hero's own priority; failures are
+    // silent (the focus path retries over the network as before).
+    private val heroArtPrefetchInFlight =
+        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+    private val heroArtPrefetchSemaphore = Semaphore(permits = 4)
+
+    fun prefetchHeroArt(items: List<MetaPreview>) {
+        val toWarm = items
+            .filter { it.id.isNotBlank() }
+            .distinctBy { "${it.type}:${it.id}" }
+            .filter { heroArtPrefetchInFlight.add("${it.type}:${it.id}") }
+            .take(120)
+        if (toWarm.isEmpty()) return
+
+        viewModelScope.launch {
+            try {
+                coroutineScope {
+                    toWarm.map { item ->
+                        async {
+                            heroArtPrefetchSemaphore.withPermit {
+                                try {
+                                    val detail = when {
+                                        item.id.startsWith("tmdb:", ignoreCase = true) ->
+                                            item.id.substringAfter(":").toIntOrNull()
+                                                ?.let { tmdbRepository.getDetailByTmdbId(it, item.type) }
+
+                                        item.id.startsWith("tt", ignoreCase = true) ->
+                                            tmdbRepository.fetchEnrichedMetaCached(item.id, item.type)
+
+                                        item.id.toIntOrNull() != null ->
+                                            item.id.toIntOrNull()
+                                                ?.let { tmdbRepository.getDetailByTmdbId(it, item.type) }
+
+                                        else -> null
+                                    }
+
+                                    val tmdbId = when {
+                                        item.id.startsWith("tmdb:", ignoreCase = true) ->
+                                            item.id.substringAfter(":").toIntOrNull()
+                                        item.id.toIntOrNull() != null -> item.id.toIntOrNull()
+                                        else -> detail?.id
+                                    }
+
+                                    if (tmdbId != null && tmdbId > 0) {
+                                        tmdbHeroArtworkRepository.resolve(
+                                            id = "tmdb:$tmdbId",
+                                            type = item.type,
+                                            tmdbId = tmdbId
+                                        )
+                                    }
+                                } catch (e: kotlinx.coroutines.CancellationException) {
+                                    throw e
+                                } catch (_: Exception) {
+                                    // Silent: prefetch is best-effort; the
+                                    // focus path handles failures properly.
+                                } finally {
+                                    heroArtPrefetchInFlight.remove("${item.type}:${item.id}")
+                                }
+                            }
+                        }
+                    }.awaitAll()
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Scope-level failure (viewmodel clearing): nothing to do.
+            } finally {
+                toWarm.forEach { heroArtPrefetchInFlight.remove("${it.type}:${it.id}") }
             }
         }
     }
@@ -2373,6 +2461,24 @@ Log.d(
                                         localItems + previousSimklUpNextItems()
                                     )
                                 )
+                            // Warm hero art for the resume rows too: their
+                            // previews often carry only a poster, so without
+                            // a prefetch the hero flashes the poster as a
+                            // zoomed backdrop when the user scrolls up.
+                            prefetchHeroArt(
+                                _upNext.value.mapNotNull { up ->
+                                    up.parentId?.let { parentId ->
+                                        MetaPreview(
+                                            id = parentId,
+                                            type = up.parentType ?: "movie",
+                                            name = up.title,
+                                            poster = up.poster,
+                                            background = up.backdrop,
+                                            logo = up.clearLogo
+                                        )
+                                    }
+                                }
+                            )
                         }
 
                         val simklResult =
@@ -4782,6 +4888,14 @@ private suspend fun calculateEpisodesRemaining(
 
                 _rails.value =
                     finalRails.distinctBy { railKeyOf(it) }
+
+                // Warm the hero-art caches for everything on screen BEFORE
+                // the user focuses it: focusing then becomes a cache hit and
+                // the hero swaps art in one frame instead of flashing the
+                // raw addon backdrop + plain title for the resolve time.
+                prefetchHeroArt(
+                    finalRails.flatMap { it.items }
+                )
 
                 // Success: NOW clear any stale error (was previously done at
                 // attempt START, which wiped the message before it could be

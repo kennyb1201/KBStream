@@ -2443,6 +2443,12 @@ fun HomeScreen(
                                             FocusRequester()
                                         }
 
+                                    // Carry the row's own backdrop + clearLogo
+                                    // into the hero preview: while TMDB
+                                    // resolution is pending the hero renders
+                                    // THESE instead of falling back to the
+                                    // poster (which showed as an ugly zoomed
+                                    // backdrop with a plain-text title).
                                     val hero =
                                         MetaPreview(
                                             id =
@@ -2454,7 +2460,11 @@ fun HomeScreen(
                                             name =
                                                 item.title,
                                             poster =
-                                                item.poster
+                                                item.poster,
+                                            background =
+                                                item.backdrop,
+                                            logo =
+                                                item.clearLogo
                                         )
 
                                     CompactUpNextCard(
@@ -2609,11 +2619,16 @@ fun HomeScreen(
                                         },
                                         onFocus = {
                                             selectContinueWatchingHero(
+                                                // Backdrop flows into the
+                                                // hero preview so the art
+                                                // shows immediately while
+                                                // TMDB resolution pends.
                                                 MetaPreview(
                                                     id = upcoming.parentId,
                                                     type = upcoming.parentType,
                                                     name = upcoming.title,
-                                                    poster = upcoming.poster
+                                                    poster = upcoming.poster,
+                                                    background = upcoming.backdrop
                                                 ),
                                                 heroItem
                                             )
