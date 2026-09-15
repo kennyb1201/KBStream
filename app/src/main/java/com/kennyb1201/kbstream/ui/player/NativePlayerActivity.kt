@@ -41,6 +41,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
+import androidx.media3.common.VideoSize
 import androidx.media3.common.text.CueGroup
 import androidx.media3.common.text.Cue
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -100,6 +101,14 @@ private const val EXTRA_DRM_HEADERS = "drm_headers"
 private const val MAX_RETRY_ATTEMPTS = 6
 private val RETRY_BACKOFF_MS = listOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 30_000L)
 private val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
+
+// Aspect ratio modes. 0-2 map to the Media3 resize modes (see
+// applyResizeMode); 3-4 pin the video frame to a fixed 16:9 / 4:3 ratio
+// for misflagged streams where the embedded size doesn't match the
+// actual picture (squeezed/pillarboxed).
+val ASPECT_MODES = listOf("Fit", "Zoom", "Fill", "16:9", "4:3")
+private const val ASPECT_MODE_FORCE_16_9 = 3
+private const val ASPECT_MODE_FORCE_4_3 = 4
 private const val CONTROLS_HIDE_DELAY_MS = 6_000L
 private const val NEXT_UP_COUNTDOWN_SECONDS = 5
 
@@ -226,6 +235,11 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var settingsBufferLow: TextView
     private lateinit var btnTunneling: TextView
     private lateinit var btnAutoplay: TextView
+    private lateinit var btnAspectFit: TextView
+    private lateinit var btnAspectZoom: TextView
+    private lateinit var btnAspectFill: TextView
+    private lateinit var btnAspect169: TextView
+    private lateinit var btnAspect43: TextView
     private lateinit var settingsResolution: TextView
     private lateinit var settingsBitrate: TextView
     private lateinit var settingsCodec: TextView
@@ -855,6 +869,7 @@ class NativePlayerActivity : ComponentActivity() {
         drmLicenseUrl = intent.getStringExtra(EXTRA_DRM_LICENSE_URL)
         drmHeaders = parseHeaders(intent.getStringExtra(EXTRA_DRM_HEADERS).orEmpty())
         resizeModeIndex = AppPreferences.getDefaultAspectRatio(this)
+        // Applied in createPlayer(); no-op until the content frame exists.
         enableTunneling = AppPreferences.getEnableTunneling(this)
         bufferMode = AppPreferences.getDefaultBufferMode(this)
         subtitleSize = AppPreferences.getDefaultSubtitleSize(this)
@@ -1108,6 +1123,11 @@ class NativePlayerActivity : ComponentActivity() {
         settingsBufferLow = findViewById(R.id.btn_buffer_low)
         btnTunneling = findViewById(R.id.btn_tunneling)
         btnAutoplay = findViewById(R.id.btn_autoplay)
+        btnAspectFit = findViewById(R.id.btn_aspect_fit)
+        btnAspectZoom = findViewById(R.id.btn_aspect_zoom)
+        btnAspectFill = findViewById(R.id.btn_aspect_fill)
+        btnAspect169 = findViewById(R.id.btn_aspect_169)
+        btnAspect43 = findViewById(R.id.btn_aspect_43)
         settingsResolution = findViewById(R.id.settings_resolution)
         settingsBitrate = findViewById(R.id.settings_bitrate)
         settingsCodec = findViewById(R.id.settings_codec)
@@ -1221,13 +1241,9 @@ class NativePlayerActivity : ComponentActivity() {
         btnSubtitle.setOnClickListener { showPicker(PickerMode.SUBTITLE) }
         btnSpeed.setOnClickListener { showPicker(PickerMode.SPEED) }
         btnAspect.setOnClickListener {
-            resizeModeIndex = (resizeModeIndex + 1) % 3
-            applyResizeMode(when (resizeModeIndex) {                    1 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
-                else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-            })
-            val labels = listOf("Fit", "Zoom", "Fill")
-            btnAspect.text = labels[resizeModeIndex]
+            resizeModeIndex = (resizeModeIndex + 1) % ASPECT_MODES.size
+            applyAspectMode(resizeModeIndex)
+            btnAspect.text = ASPECT_MODES[resizeModeIndex]
             AppPreferences.setDefaultAspectRatio(this, resizeModeIndex)
             scheduleAutoHide()
         }
@@ -1336,6 +1352,27 @@ class NativePlayerActivity : ComponentActivity() {
             AppPreferences.setAutoPlayNext(this, autoPlayNext)
             updateSettingsPanelState()
         }
+
+        // Aspect ratio: direct pill selection (also keeps the top-bar
+        // button label in sync via updateControlsInfo).
+        val aspectClick = View.OnClickListener { v ->
+            resizeModeIndex = when (v.id) {
+                R.id.btn_aspect_zoom -> 1
+                R.id.btn_aspect_fill -> 2
+                R.id.btn_aspect_169 -> ASPECT_MODE_FORCE_16_9
+                R.id.btn_aspect_43 -> ASPECT_MODE_FORCE_4_3
+                else -> 0
+            }
+            applyAspectMode(resizeModeIndex)
+            updateControlsInfo()
+            updateSettingsPanelState()
+            AppPreferences.setDefaultAspectRatio(this, resizeModeIndex)
+        }
+        btnAspectFit.setOnClickListener(aspectClick)
+        btnAspectZoom.setOnClickListener(aspectClick)
+        btnAspectFill.setOnClickListener(aspectClick)
+        btnAspect169.setOnClickListener(aspectClick)
+        btnAspect43.setOnClickListener(aspectClick)
 
         // Subtitle size
         btnSubSmall.setOnClickListener {
@@ -2144,11 +2181,7 @@ class NativePlayerActivity : ComponentActivity() {
                 if (forceTextureViewFallback) {
                     fallbackTextureView?.let { player.setVideoTextureView(it) }
                 }
-                applyResizeMode(when (resizeModeIndex) {
-                    1 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                    2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
-                    else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-                })
+                applyAspectMode(resizeModeIndex)
                 playerView.post { player.prepare() }
             }
 
@@ -2271,6 +2304,12 @@ class NativePlayerActivity : ComponentActivity() {
 
         override fun onRenderedFirstFrame() {
             markFirstFrameRendered()
+        }
+
+        override fun onVideoSizeChanged(videoSize: VideoSize) {
+            // The user's forced 16:9 / 4:3 choice must survive the stream
+            // announcing its own (possibly misflagged) ratio.
+            applyForcedAspect()
         }
 
         override fun onTracksChanged(tracks: Tracks) {
@@ -3037,8 +3076,7 @@ class NativePlayerActivity : ComponentActivity() {
             if (exoPlayer?.isPlaying == true) R.drawable.ic_player_pause else R.drawable.ic_player_play
         )
         btnSpeed.text = "${playbackSpeed}x"
-        val aspectLabels = listOf("Fit", "Zoom", "Fill")
-        btnAspect.text = aspectLabels.getOrElse(resizeModeIndex) { "Fit" }
+        btnAspect.text = ASPECT_MODES.getOrElse(resizeModeIndex) { "Fit" }
         updateStreamHealthDisplay()
     }
 
@@ -3047,6 +3085,22 @@ class NativePlayerActivity : ComponentActivity() {
         selected -> R.drawable.pill_chip_selected_bg
         focused -> R.drawable.pill_chip_focused_bg
         else -> R.drawable.pill_chip_bg
+    }
+
+    /**
+     * Single source of truth for turning an ASPECT_MODES index into the
+     * base Media3 resize mode and applying it. Forced-ratio modes (16:9,
+     * 4:3) use RESIZE_MODE_FIT as the base; applyResizeMode pins the
+     * content frame's ratio on top.
+     */
+    private fun applyAspectMode(index: Int) {
+        applyResizeMode(
+            when (index) {
+                1 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+                else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+            }
+        )
     }
 
     private fun applyResizeMode(mode: Int) {
@@ -3068,15 +3122,48 @@ class NativePlayerActivity : ComponentActivity() {
             }
             applyToViewTree(playerView)
 
-            // 3) Invoke the private updateTextureViewSize() method which
-            //    actually applies the matrix transform to the TextureView
-            try {
-                val m = playerView.javaClass.getDeclaredMethod("updateTextureViewSize")
-                m.isAccessible = true
-                m.invoke(playerView)
-            } catch (_: Exception) {}
+            // 3) Force-ratio modes (16:9 / 4:3): the stock resize modes
+            //    always trust the stream's embedded video size, which is
+            //    wrong for misflagged streams. AspectRatioFrameLayout has
+            //    no public "force ratio" API, so pin its videoAspectRatio
+            //    field and re-assert it on every layout pass — the frame
+            //    then scales the surface to OUR ratio instead of the
+            //    stream's. Modes 0-2 clear the pin so the stream ratio
+            //    wins again.
+            val contentFrame = findPlayerViewContentFrame()
+            if (contentFrame is AspectRatioFrameLayout) {
+                forceAspectOnFrame = contentFrame
+                forceAspectValue = when (mode) {
+                    ASPECT_MODE_FORCE_16_9 -> 16f / 9f
+                    ASPECT_MODE_FORCE_4_3 -> 4f / 3f
+                    else -> 0f
+                }
+                if (forceAspectValue <= 0f) {
+                    // Unpinning: restore the frame to the stream's real
+                    // ratio NOW — the field would otherwise keep the last
+                    // forced value until the next video-size change. The
+                    // pin itself clears so later reasserts are no-ops and
+                    // the stream ratio rules again.
+                    val vs = exoPlayer?.videoSize
+                    try {
+                        val f = AspectRatioFrameLayout::class.java
+                            .getDeclaredField("videoAspectRatio")
+                        f.isAccessible = true
+                        f.setFloat(
+                            contentFrame,
+                            if (vs != null && vs.width > 0 && vs.height > 0)
+                                vs.width.toFloat() / vs.height.toFloat()
+                            else 0f
+                        )
+                    } catch (_: Exception) {}
+                }
+            } else {
+                forceAspectOnFrame = null
+                forceAspectValue = 0f
+            }
 
-            // 4) Force relayout on everything
+            // 4) Force relayout so the new ratio/measure takes effect now.
+            contentFrame?.requestLayout()
             playerView.requestLayout()
             playerView.invalidate()
 
@@ -3086,9 +3173,7 @@ class NativePlayerActivity : ComponentActivity() {
                 {
                     if (isDestroyed || isFinishing) return@postDelayed
                     try {
-                        val m = playerView.javaClass.getDeclaredMethod("updateTextureViewSize")
-                        m.isAccessible = true
-                        m.invoke(playerView)
+                        applyForcedAspect()
                         playerView.requestLayout()
                         playerView.invalidate()
                     } catch (_: Exception) {}
@@ -3096,6 +3181,32 @@ class NativePlayerActivity : ComponentActivity() {
                 120L
             )
         } catch (_: Exception) {}
+    }
+
+    /** Content frame currently pinned to a forced ratio (null = none). */
+    private var forceAspectOnFrame: AspectRatioFrameLayout? = null
+
+    /** Ratio to pin, or 0 to follow the stream (stock behavior). */
+    private var forceAspectValue = 0f
+
+    /**
+     * Re-applies the active forced ratio. Called after layout passes and
+     * video-size changes so a stream's embedded ratio can never override
+     * the user's 16:9 / 4:3 choice.
+     */
+    private fun applyForcedAspect() {
+        val frame = forceAspectOnFrame ?: return
+        if (forceAspectValue <= 0f) return
+        try {
+            val f = AspectRatioFrameLayout::class.java.getDeclaredField("videoAspectRatio")
+            f.isAccessible = true
+            f.setFloat(frame, forceAspectValue)
+            frame.requestLayout()
+        } catch (_: Exception) {
+            // Field renamed in a future Media3: forced modes silently stop
+            // working, stock modes unaffected.
+            forceAspectValue = 0f
+        }
     }
 
     private fun applyPillState(view: TextView, selected: Boolean) {
@@ -3120,7 +3231,13 @@ class NativePlayerActivity : ComponentActivity() {
         btnAutoplay.text = if (autoPlayNext) "ON" else "OFF"
         applyPillState(btnAutoplay, autoPlayNext)
 
-        val resizeModeLabels = listOf("Fit", "Zoom", "Fill")
+        applyPillState(btnAspectFit, resizeModeIndex == 0)
+        applyPillState(btnAspectZoom, resizeModeIndex == 1)
+        applyPillState(btnAspectFill, resizeModeIndex == 2)
+        applyPillState(btnAspect169, resizeModeIndex == ASPECT_MODE_FORCE_16_9)
+        applyPillState(btnAspect43, resizeModeIndex == ASPECT_MODE_FORCE_4_3)
+
+        val resizeModeLabels = ASPECT_MODES
         settingsSpeedAspect.text = "Speed: ${playbackSpeed}x • Aspect: ${resizeModeLabels.getOrElse(resizeModeIndex) { "Fit" }}"
         settingsSpeedAspect.visibility = View.VISIBLE
 

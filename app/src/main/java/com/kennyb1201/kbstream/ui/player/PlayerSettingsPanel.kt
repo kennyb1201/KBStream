@@ -64,7 +64,7 @@ fun SettingsPanel(
     // unlike Semi/Solid which draw a padded box around the whole cue.
     val subtitleBgOptions = listOf("None", "Semi", "Solid", "Text")
     val bufferModeOptions = listOf("Balanced", "Low Latency")
-    val resizeModeLabels = listOf("Fit", "Zoom", "Fill")
+    val resizeModeLabels = listOf("Fit", "Zoom", "Fill", "16:9", "4:3")
 
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) {

@@ -937,7 +937,7 @@ fun SettingsScreen(
             modifier = Modifier.padding(bottom = 4.dp)
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("Fit", "Zoom", "Fill").forEachIndexed { index, label ->
+            listOf("Fit", "Zoom", "Fill", "16:9", "4:3").forEachIndexed { index, label ->
                 KBCard(onClick = {
                     aspectRatio = index
                     AppPreferences.setDefaultAspectRatio(context, index)
