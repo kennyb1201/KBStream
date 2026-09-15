@@ -34,15 +34,39 @@ val omdbApiKey = localProps.getProperty("OMDB_API_KEY")
     ?: System.getenv("OMDB_API_KEY")
     ?: ""
 
-val supabaseUrl = localProps.getProperty("SUPABASE_URL")
+// Trim(): a pasted secret or local.properties value with a trailing
+// newline/space silently corrupts the apikey header -> Supabase answers
+// 401 "Invalid API key" even though the key itself is correct.
+val supabaseUrl = (localProps.getProperty("SUPABASE_URL")
     ?: System.getenv("SUPABASE_URL")
-    ?: ""
+    ?: "").trim()
 
-val supabaseAnonKey = localProps.getProperty("SUPABASE_ANON_KEY")
+val supabaseAnonKey = (localProps.getProperty("SUPABASE_ANON_KEY")
     ?: localProps.getProperty("SUPABASE_PUBLISHABLE_KEY")
     ?: System.getenv("SUPABASE_ANON_KEY")
     ?: System.getenv("SUPABASE_PUBLISHABLE_KEY")
-    ?: ""
+    ?: "").trim()
+
+// Catch malformed keys at BUILD time instead of as a runtime 401: a key
+// that is blank, contains whitespace, or is implausibly short cannot be
+// accepted by Supabase, so surface it in the build log immediately.
+if (supabaseUrl.isNotBlank()) {
+    if (supabaseAnonKey.isBlank()) {
+        logger.warn(
+            "SUPABASE_URL is set but SUPABASE_ANON_KEY is blank — " +
+                "sync sign-in will be disabled in this build."
+        )
+    } else if (
+        supabaseAnonKey.contains(' ') ||
+        supabaseAnonKey.length < 30
+    ) {
+        logger.warn(
+            "SUPABASE_ANON_KEY looks malformed (whitespace or < 30 chars) — " +
+                "Supabase will reject it with 'Invalid API key'. Re-paste the " +
+                "full key (starts with sb_publishable_ or eyJ)."
+        )
+    }
+}
 
 val releaseStoreFile = System.getenv("KBSTREAM_STORE_FILE")
 val releaseStorePassword = System.getenv("KBSTREAM_STORE_PASSWORD")
