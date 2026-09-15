@@ -240,15 +240,15 @@ private fun RailTitle(
 }
 
 /**
- * Poster or landscape card for collection ITEMS. The folder's tileShape is
- * an explicit per-folder override; when it isn't set the card follows the
- * global Home "Landscape Cards" toggle exactly (landscape there = landscape
- * here, posters there = posters here).
+ * Poster or landscape card for collection ITEMS. The manifest tileShape only
+ * ever shapes the folder TILES on Home — it never reaches the rails inside
+ * an opened folder. Item cards here follow the global Home "Landscape Cards"
+ * toggle exactly (landscape there = landscape here, posters there = posters
+ * here), matching Home's own rails.
  */
 @Composable
 private fun FolderItemCard(
     item: NuvioContentItem,
-    tileShape: String?,
     isWatched: Boolean,
     showLandscapeCards: Boolean,
     showCaptions: Boolean,
@@ -257,11 +257,7 @@ private fun FolderItemCard(
     onLongClick: () -> Unit,
     onFocus: (() -> Unit)? = null
 ) {
-    val isLandscape = when (tileShape?.uppercase()) {
-        "LANDSCAPE" -> true
-        "POSTER", "SQUARE" -> false
-        else -> showLandscapeCards
-    }
+    val isLandscape = showLandscapeCards
     val width = if (isLandscape) FolderLandscapeWidth else FolderPosterWidth
     val height = if (isLandscape) FolderLandscapeHeight else FolderPosterHeight
 
@@ -423,7 +419,6 @@ private fun FolderRailPageHandler(
         ) { item ->
             FolderItemCard(
                 item = item,
-                tileShape = railContext.tileShape,
                 isWatched = railContext.watchedLookup(item),
                 showLandscapeCards = railContext.showLandscapeCards,
                 // Home rails carry no captions; a "replica" folder follows
@@ -457,7 +452,6 @@ private fun FolderRailPageHandler(
 
 /** Everything a rail's cards need, bundled so FOLLOW_LAYOUT and ROWS share. */
 private data class RailCardContext(
-    val tileShape: String?,
     val showLandscapeCards: Boolean,
     val landscapeArt: Map<String, HeroArtwork>,
     val watchedLookup: (NuvioContentItem) -> Boolean,
@@ -492,7 +486,6 @@ private fun FollowHomeLayout(
     val landscapeArt by viewModel.landscapeArt.collectAsStateWithLifecycle()
 
     val railCardContext = RailCardContext(
-        tileShape = state.folder?.tileShape,
         showLandscapeCards = showLandscapeCards,
         landscapeArt = landscapeArt,
         watchedLookup = { item -> itemWatched(item, watchedKeys, resolvedIds) },
@@ -643,7 +636,6 @@ private fun RowsLayout(
                                 ) { item ->
                                     FolderItemCard(
                                         item = item,
-                                        tileShape = state.folder?.tileShape,
                                         isWatched = itemWatched(item, watchedKeys, resolvedIds),
                                         showLandscapeCards = showLandscapeCards,
                                         showCaptions = true,
