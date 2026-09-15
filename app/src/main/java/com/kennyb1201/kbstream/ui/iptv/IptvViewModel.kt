@@ -118,16 +118,18 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             _catchupPrograms.value = try {
                 // Guide data may live under any of the configured EPG
                 // sources; the first one that yields programs wins.
-                allEpgUrls().asSequence()
-                    .map { url ->
-                        repository.getRecentCatchupPrograms(
-                            channel = channel,
-                            epgUrl = url
-                        )
+                var found: List<com.kennyb1201.kbstream.data.iptv.CatchupProgram> = emptyList()
+                for (url in allEpgUrls()) {
+                    val rows = repository.getRecentCatchupPrograms(
+                        channel = channel,
+                        epgUrl = url
+                    )
+                    if (rows.isNotEmpty()) {
+                        found = rows
+                        break
                     }
-                    .firstOrNull(List::isNotEmpty)
-                    ?.toList()
-                    .orEmpty()
+                }
+                found
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 Log.w(TAG, "CATCHUP LOAD FAILED channel=${channel.id}: ${t.message}")

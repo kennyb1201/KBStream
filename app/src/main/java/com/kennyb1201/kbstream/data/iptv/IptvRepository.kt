@@ -352,10 +352,13 @@ class IptvRepository(
         playlistChannels.forEach { channel ->
             val cached = cachedMatches[channel.id]
             val cachedSnapshot = cached?.epgUrl
-                ?.let(snapshotByUrl::get)
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { raw -> snapshotByUrl.entries.firstOrNull { it.key.equals(raw, ignoreCase = true) } }
+                ?.value
             val cachedGuideChannel = cached?.epgChannelId
                 ?.let(::normalizeLookupKey)
-                ?.let(cachedSnapshot?.guideById::get)
+                ?.let { key -> cachedSnapshot?.guideById?.get(key) }
 
             val match = if (
                 cached != null &&
