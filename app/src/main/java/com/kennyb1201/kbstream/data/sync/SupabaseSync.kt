@@ -127,15 +127,26 @@ object SupabaseSync {
                 val savedEmail = prefs.getString(KEY_EMAIL, null)
 
                 if (refresh != null) {
+                    // Cold start: the client has NO in-memory session, so
+                    // refreshCurrentSession() would fail by definition — the
+                    // saved token must be fed in explicitly via
+                    // refreshSession(refreshToken), which also installs it as
+                    // the current session for auto-refresh from here on.
                     runCatching {
-                        c.auth.refreshCurrentSession()
+                        c.auth.refreshSession(refreshToken = refresh)
                     }.onSuccess {
                         _authState.value = AuthState.SignedIn(savedEmail.orEmpty())
                         _syncEnabled.value = true
                         startRealtime()
+                        startPeriodicFlush()
                         pullAll(context)
                     }.onFailure { e ->
-                        Log.w(TAG, "session refresh failed: ${e.message}")
+                        // Token revoked/expired-hard (e.g. password change,
+                        // server-side reuse detection). Drop it so we don't
+                        // keep feeding a dead token on every launch.
+                        Log.w(TAG, "session restore failed: ${e.message}")
+                        context.getSharedPreferences(SYNC_PREFS, Context.MODE_PRIVATE)
+                            .edit().remove(KEY_REFRESH_TOKEN).apply()
                         _authState.value = AuthState.SignedOut
                     }
                 } else {
@@ -170,6 +181,7 @@ object SupabaseSync {
                 _authState.value = AuthState.SignedIn(email.trim())
                 _syncEnabled.value = true
                 startRealtime()
+                startPeriodicFlush()
                 pullAll(context)
                 // Seed the cloud with this device's active-profile rows so
                 // other devices sync immediately (last-write-wins makes
@@ -210,6 +222,7 @@ object SupabaseSync {
                 _authState.value = AuthState.SignedIn(email.trim())
                 _syncEnabled.value = true
                 startRealtime()
+                startPeriodicFlush()
                 // Fresh account: push local state up as the initial seed.
                 pushAll(context)
             } catch (e: Exception) {
@@ -221,6 +234,8 @@ object SupabaseSync {
 
     fun signOut(context: Context) {
         val c = client ?: return
+        periodicFlushJob?.cancel()
+        periodicFlushJob = null
         scope.launch {
             runCatching { c.auth.signOut() }
             context.getSharedPreferences(SYNC_PREFS, Context.MODE_PRIVATE)
@@ -352,6 +367,24 @@ object SupabaseSync {
         flushJob = scope.launch {
             delay(400) // coalesce bursts (e.g. bulk watched import)
             flushOutbox()
+        }
+    }
+
+    // Retry loop for failed outbox rows (offline writes, RLS/network
+    // failures). The header contract promises "retried on interval" — this
+    // is that interval; without it a failed flush sits in the outbox until
+    // the next local write happens to enqueue something.
+    private var periodicFlushJob: kotlinx.coroutines.Job? = null
+
+    private fun startPeriodicFlush() {
+        if (periodicFlushJob?.isActive == true) return
+        periodicFlushJob = scope.launch {
+            while (isSignedIn()) {
+                delay(OUTBOX_RETRY_MS)
+                if (outbox.isNotEmpty()) {
+                    runCatching { flushOutbox() }
+                }
+            }
         }
     }
 
@@ -776,4 +809,8 @@ object SupabaseSync {
     private const val SYNC_PREFS = "kbstream_sync"
     private const val KEY_REFRESH_TOKEN = "supabase_refresh_token"
     private const val KEY_EMAIL = "supabase_email"
+
+    // Outbox retry cadence. One minute: short enough that an offline burst
+    // lands promptly after reconnect, rare enough to be invisible.
+    private const val OUTBOX_RETRY_MS = 60_000L
 }
