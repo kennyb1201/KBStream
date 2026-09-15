@@ -75,6 +75,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
+import com.kennyb1201.kbstream.data.iptv.CatchupProgram
 import com.kennyb1201.kbstream.data.iptv.EpgMatchType
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.iptv.IptvPlaylist
@@ -115,7 +116,8 @@ fun GuideScreen(
     defaultPlaylistUrl: String = "",
     defaultEpgUrl: String = "",
     defaultPlaylistName: String = "",
-    onPlayChannel: ((IptvChannelWithEpg) -> Unit)? = null
+    onPlayChannel: ((IptvChannelWithEpg) -> Unit)? = null,
+    onPlayCatchup: ((IptvChannelWithEpg, CatchupProgram) -> Unit)? = null
 ) {
     val playlist by viewModel.playlist.collectAsState()
     val visibleChannels by viewModel.visibleChannels.collectAsState()
@@ -157,6 +159,11 @@ fun GuideScreen(
         mutableStateOf(guidePreferences.getStringSet("hidden_groups", emptySet())?.toSet().orEmpty())
     }
     var menuItem by remember { mutableStateOf<IptvChannelWithEpg?>(null) }
+    // Catch-up (DVR): long-press a channel → CATCH-UP TV. The channel is
+    // held here while the program list dialog is up; programs stream in
+    // from the ViewModel (empty until the provider answers).
+    var catchupChannel by remember { mutableStateOf<IptvChannelWithEpg?>(null) }
+    val catchupPrograms by viewModel.catchupPrograms.collectAsState()
     
     var moveFocusToChannelList by remember { mutableStateOf(false) }
 
@@ -910,6 +917,7 @@ Spacer(modifier = Modifier.height(14.dp))
                     val item = withFavoriteFlag(rawItem)
                     ChannelActionsDialog(
                         item = item,
+                        hasCatchup = item.channel.catchupSource != null || item.channel.catchup != null,
                         onDismiss = { menuItem = null },
                         onToggleFavorite = {
                             val key = favoriteKey(item)
@@ -927,6 +935,23 @@ Spacer(modifier = Modifier.height(14.dp))
                                 saveSet("hidden_groups", hiddenGroups)
                             }
                             menuItem = null
+                        },
+                        onOpenCatchup = {
+                            catchupChannel = item
+                            viewModel.loadCatchupPrograms(item.channel)
+                            menuItem = null
+                        }
+                    )
+                }
+
+                catchupChannel?.let { catchupItem ->
+                    CatchupDialog(
+                        channelName = catchupItem.channel.displayName.ifBlank { "Live Channel" },
+                        programs = catchupPrograms,
+                        onDismiss = { catchupChannel = null },
+                        onPlay = { program ->
+                            catchupChannel = null
+                            onPlayCatchup?.invoke(catchupItem, program)
                         }
                     )
                 }
@@ -2009,10 +2034,12 @@ private fun formatTimeRange(startMillis: Long, endMillis: Long): String {
 @Composable
 private fun ChannelActionsDialog(
     item: IptvChannelWithEpg,
+    hasCatchup: Boolean,
     onDismiss: () -> Unit,
     onToggleFavorite: () -> Unit,
     onHideChannel: () -> Unit,
-    onHideGroup: () -> Unit
+    onHideGroup: () -> Unit,
+    onOpenCatchup: () -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
         Column(
@@ -2025,6 +2052,11 @@ private fun ChannelActionsDialog(
         ) {
             Text(item.channel.displayName, color = KBTextHi, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text("Channel options", color = KBTextLo, style = MaterialTheme.typography.bodyMedium)
+            if (hasCatchup) {
+                KBCard(onClick = onOpenCatchup, modifier = Modifier.fillMaxWidth()) {
+                    Text("CATCH-UP TV", color = KBTextHi, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
+                }
+            }
             KBCard(onClick = onToggleFavorite, modifier = Modifier.fillMaxWidth()) {
                 Text(if (item.isFavorite) "REMOVE FROM FAVORITES" else "ADD TO FAVORITES", color = KBTextHi, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
             }
@@ -2041,6 +2073,132 @@ private fun ChannelActionsDialog(
             }
         }
     }
+}
+
+/**
+ * Catch-up (DVR) program list for one channel: fully-aired programmes the
+ * provider's DVR template can still serve, newest first. Empty state
+ * explains why the list can be empty (provider advertises catch-up but has
+ * no guide history in the window).
+ */
+@Composable
+private fun CatchupDialog(
+    channelName: String,
+    programs: List<CatchupProgram>,
+    onDismiss: () -> Unit,
+    onPlay: (CatchupProgram) -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .width(560.dp)
+                .background(KBSurfaceRaised, RoundedCornerShape(18.dp))
+                .border(1.dp, KBAccent.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = "CATCH-UP TV",
+                color = KBAccent,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = channelName,
+                color = KBTextHi,
+                style = MaterialTheme.typography.titleLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            if (programs.isEmpty()) {
+                Text(
+                    text = "No recent programmes available. The channel advertises catch-up, " +
+                        "but the guide has no aired programme history for it yet \u2014 try again " +
+                        "after the EPG imports.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(vertical = 12.dp)
+                )
+            } else {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 380.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    programs.forEach { program ->
+                        KBCard(onClick = { onPlay(program) }, modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 10.dp)
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = program.title,
+                                        color = KBTextHi,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    program.description?.takeIf { it.isNotBlank() }?.let { desc ->
+                                        Text(
+                                            text = desc,
+                                            color = KBTextLo,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.padding(top = 2.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(
+                                    text = formatCatchupWindow(program.startUtcMillis, program.endUtcMillis),
+                                    color = KBAccent,
+                                    style = MaterialTheme.typography.labelMedium
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            KBCard(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
+                Text("CLOSE", color = KBTextLo, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
+            }
+        }
+    }
+}
+
+private fun formatCatchupWindow(startUtcMillis: Long, endUtcMillis: Long): String {
+    fun fmt(millis: Long): String {
+        val cal = java.util.Calendar.getInstance()
+        cal.timeInMillis = millis
+        val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
+        val h12 = if (hour % 12 == 0) 12 else hour % 12
+        return String.format(
+            java.util.Locale.US,
+            "%d:%02d%s",
+            h12,
+            cal.get(java.util.Calendar.MINUTE),
+            if (hour >= 12) "pm" else "am"
+        )
+    }
+    val now = java.util.Calendar.getInstance()
+    val dayStart = now.clone() as java.util.Calendar
+    dayStart.set(java.util.Calendar.HOUR_OF_DAY, 0)
+    dayStart.set(java.util.Calendar.MINUTE, 0)
+    dayStart.set(java.util.Calendar.SECOND, 0)
+    dayStart.set(java.util.Calendar.MILLISECOND, 0)
+    val dayLabel: String = when {
+        startUtcMillis < dayStart.timeInMillis -> "Yesterday"
+        startUtcMillis < dayStart.timeInMillis + 86_400_000L -> "Today"
+        else -> java.text.SimpleDateFormat("EEE", java.util.Locale.US).format(java.util.Date(startUtcMillis))
+    }
+    return "$dayLabel \u00b7 ${fmt(startUtcMillis)}\u2013${fmt(endUtcMillis)}"
 }
 
 @Composable

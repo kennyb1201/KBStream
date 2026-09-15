@@ -199,6 +199,8 @@ fun KBTextField(
  * The one paste button used next to every URL/key field: reads the shared
  * clipboard helper and hands the text to [onPaste]. Silently ignores an
  * empty clipboard. Focusable, so D-pad Right from the field reaches it.
+ * Icon-only: the clipboard glyph reads universally, and the label was
+ * redundant next to fields whose placeholder already says what goes in.
  */
 @Composable
 fun KBPasteChip(
@@ -212,22 +214,13 @@ fun KBPasteChip(
         },
         modifier = modifier
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-        ) {
-            Icon(
-                imageVector = Icons.Filled.ContentPaste,
-                contentDescription = null,
-                tint = KBTextLo,
-                modifier = Modifier.size(14.dp)
-            )
-            Spacer(modifier = Modifier.width(5.dp))
-            Text(
-                text = "PASTE",
-                color = KBTextHi,
-                style = MaterialTheme.typography.labelSmall
-            )
-        }
+        Icon(
+            imageVector = Icons.Filled.ContentPaste,
+            contentDescription = "Paste from clipboard",
+            tint = KBTextLo,
+            modifier = Modifier
+                .padding(horizontal = 12.dp, vertical = 9.dp)
+                .size(16.dp)
+        )
     }
 }

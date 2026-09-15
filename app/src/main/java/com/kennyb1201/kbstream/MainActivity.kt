@@ -1351,6 +1351,39 @@ fun AppRoot() {
                         streamHeaders = channel.headers,
                         returnTo = Screen.Guide
                     )
+                },
+
+                // Catch-up (DVR): launch the recorded broadcast URL directly.
+                // Not registered in the zap registry — CH+/CH− flips live
+                // channels, and a DVR recording is not one of them. Back
+                // returns to the guide like a live session.
+                onPlayCatchup = { channelWithEpg, program ->
+                    val channel = channelWithEpg.channel
+                    val channelName = channel.displayName.ifBlank { "Live Channel" }
+                    val programName = program.title.ifBlank { "Catch-up" }
+
+                    screen = Screen.Player(
+                        url = program.url,
+                        audioUrl = null,
+                        parentId = channel.id.ifBlank { channel.streamUrl },
+                        parentType = "channel",
+                        season = null,
+                        episode = null,
+                        episodeStreamId = channel.id,
+                        itemName = "$channelName — $programName",
+                        itemPoster = channel.logoUrl
+                            ?: channelWithEpg.epgChannel?.iconUrl,
+                        startPositionMs = 0L,
+                        sources = listOf(
+                            Stream(
+                                name = programName,
+                                title = programName,
+                                url = program.url
+                            )
+                        ),
+                        streamHeaders = channel.headers,
+                        returnTo = Screen.Guide
+                    )
                 }
             )
         }
