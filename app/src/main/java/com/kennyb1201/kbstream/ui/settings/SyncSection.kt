@@ -116,6 +116,10 @@ fun SyncSection() {
                 onValueChange = { email = it },
                 placeholder = "Email",
                 keyboardType = KeyboardType.Email,
+                // Modal-style form on a scrolling page: committing a field
+                // must not drop focus or the next Down escapes into the
+                // page scroll behind the form.
+                keepFocusOnDone = true,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 4.dp)
@@ -126,6 +130,7 @@ fun SyncSection() {
                 placeholder = "Password (6+ characters)",
                 keyboardType = KeyboardType.Password,
                 visualTransformation = PasswordVisualTransformation(),
+                keepFocusOnDone = true,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 4.dp)
