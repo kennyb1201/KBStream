@@ -17,6 +17,8 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbDiscoverItem
 import com.kennyb1201.kbstream.data.tmdb.TmdbHeroArtworkRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.alternatePosterPath
+import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
+import com.kennyb1201.kbstream.data.tmdb.cardBackdropPath
 import com.kennyb1201.kbstream.data.tmdb.displayDescription
 import com.kennyb1201.kbstream.data.tmdb.displayRating
 import com.kennyb1201.kbstream.data.tmdb.displayRuntime
@@ -303,7 +305,6 @@ class NuvioFolderViewModel(application: Application) : AndroidViewModel(applicat
         val alreadyResolved = _landscapeArt.value
         val items = _state.value.rails
             .flatMap { it.items }
-            .filter { (it.tmdbId ?: 0) > 0 }
             .distinctBy { "${it.type}:${it.id}" }
             .filterNot { item ->
                 alreadyResolved.containsKey(
@@ -318,17 +319,40 @@ class NuvioFolderViewModel(application: Application) : AndroidViewModel(applicat
                 items.map { item ->
                     async {
                         val type = normalizeType(item.type) ?: return@async null
-                        val tmdbId = item.tmdbId ?: return@async null
-                        val art = runCatching {
+
+                        // Home's exact lookup path: numeric id = TMDB id,
+                        // "tt…" = imdb id — so addon rails get TMDB art too.
+                        val detail = runCatching {
                             landscapeArtSemaphore.withPermit {
-                                heroArtworkRepository.resolve(
-                                    id = "tmdb:$tmdbId",
-                                    type = type,
-                                    tmdbId = tmdbId
+                                tmdbRepository.fetchEnrichedMetaCached(
+                                    item.id,
+                                    type
                                 )
                             }
                         }.getOrNull()
-                        if (art != null) "$type:${item.id}" to art else null
+
+                        // Card backdrop prefers an ALTERNATE TMDB image so
+                        // cards don't mirror the hero's primary backdrop;
+                        // the item's own background (same image the hero
+                        // shows) stays as fallback. The clearlogo comes
+                        // from TMDB's best logo. Same merge rules as
+                        // HomeViewModel.resolveLandscapeArt's regular
+                        // (non-pinned) rails.
+                        val tmdbBackdrop = detail?.cardBackdropPath()
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { TmdbRepository.BACKDROP_BASE + it }
+                        val tmdbLogo = detail?.bestLogoPath()
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { TmdbRepository.LOGO_BASE + it }
+
+                        // The entry always lands in the map (even all-null)
+                        // so appended pages don't re-resolve; misses are
+                        // cheap because fetchEnrichedMetaCached caches null
+                        // details in memory.
+                        "$type:${item.id}" to HeroArtwork(
+                            backdropUrl = tmdbBackdrop ?: item.backdropUrl,
+                            logoUrl = tmdbLogo
+                        )
                     }
                 }.awaitAll()
             }.filterNotNull()
@@ -516,8 +540,14 @@ class NuvioFolderViewModel(application: Application) : AndroidViewModel(applicat
     private fun TmdbDiscoverItem.toContentItem(
         mediaType: String?
     ): NuvioContentItem {
-        val resolvedType = mediaType
-            ?: if (firstAirDate != null) "series" else "movie"
+        // Same vocabulary as NuvioContentLoader: TMDB's "tv" becomes
+        // "series" so appended pages match the initially loaded rails and
+        // the rail-type suffix always displays "Series".
+        val resolvedType = when (mediaType?.lowercase()) {
+            "series", "show", "tv" -> "series"
+            else -> mediaType?.lowercase()
+                ?: if (firstAirDate != null) "series" else "movie"
+        }
         return NuvioContentItem(
             id = id.toString(),
             type = resolvedType,

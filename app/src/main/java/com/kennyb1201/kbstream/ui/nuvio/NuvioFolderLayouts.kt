@@ -212,9 +212,12 @@ private fun RailTitle(
     rail: NuvioRail,
     showType: Boolean
 ) {
-    // A rail mixes provider kinds rarely; the dominant item type names the row.
+    // A rail mixes provider kinds rarely; the dominant item type names the
+    // row. Normalized before counting so "tv" (TMDB discover rows) and
+    // "series" (addon/trakt rows) read identically — the type suffix only
+    // ever displays "Movie" or "Series", matching the rest of the app.
     val type = rail.items
-        .groupingBy { it.type }
+        .groupingBy { normalizeItemType(it) }
         .eachCount()
         .maxByOrNull { it.value }
         ?.key
@@ -549,7 +552,10 @@ private fun FollowHomeLayout(
             else -> {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(top = 4.dp, bottom = 24.dp),
+                    // Home's exact rail-column paddings: 2dp below the hero
+                    // (its hero_spacer), 16dp at the very bottom, sections
+                    // separated by the same 20dp gap.
+                    contentPadding = PaddingValues(top = 2.dp, bottom = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(FolderRailSectionGap)
                 ) {
                     visibleRails.forEach { rail ->
@@ -557,12 +563,17 @@ private fun FollowHomeLayout(
                             RailTitle(rail, showRailType)
                         }
                         item(key = "rail:${rail.sourceId}") {
-                            FolderRailPageHandler(
-                                rail = rail,
-                                railContext = railCardContext,
-                                viewModel = viewModel,
-                                onFocusItem = { heroItem = it }
-                            )
+                            // Home wraps every rail (title + row) in a Column
+                            // with 8dp bottom padding; matching it keeps the
+                            // inter-rail rhythm identical.
+                            Column(modifier = Modifier.padding(bottom = 8.dp)) {
+                                FolderRailPageHandler(
+                                    rail = rail,
+                                    railContext = railCardContext,
+                                    viewModel = viewModel,
+                                    onFocusItem = { heroItem = it }
+                                )
+                            }
                         }
                     }
                 }
@@ -583,6 +594,7 @@ private fun normalizeItemType(item: NuvioContentItem): String =
 
 @Composable
 private fun RowsLayout(
+    viewModel: NuvioFolderViewModel,
     state: NuvioFolderViewModel.UiState,
     resolvedIds: Map<String, String>,
     selectedSourceId: String?,
@@ -597,6 +609,13 @@ private fun RowsLayout(
     }
     val showRailType = remember {
         AppPreferences.getHomeRailShowCatalogType(context)
+    }
+
+    // Landscape art (alternate backdrop + clearlogo) resolves exactly like
+    // FOLLOW_LAYOUT while the toggle is on.
+    val landscapeArt by viewModel.landscapeArt.collectAsStateWithLifecycle()
+    LaunchedEffect(showLandscapeCards, state.rails) {
+        viewModel.ensureLandscapeArt(showLandscapeCards)
     }
 
     val visibleRails = if (selectedSourceId != null) {
@@ -639,7 +658,9 @@ private fun RowsLayout(
                                         isWatched = itemWatched(item, watchedKeys, resolvedIds),
                                         showLandscapeCards = showLandscapeCards,
                                         showCaptions = true,
-                                        art = null,
+                                        art = landscapeArt[
+                                            "${normalizeItemType(item)}:${item.id}"
+                                        ],
                                         onClick = { onOpenItem(item) },
                                         onLongClick = { onLongPressItem(item) }
                                     )
@@ -751,7 +772,7 @@ internal fun NuvioFolderBody(
 
         NuvioLayoutModes.Mode.ROWS ->
             RowsLayout(
-                state, resolvedIds, selectedSourceId, watchedKeys,
+                viewModel, state, resolvedIds, selectedSourceId, watchedKeys,
                 onSelectSource, onOpenItem, onLongPressItem
             )
 

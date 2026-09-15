@@ -213,8 +213,14 @@ class NuvioContentLoader(context: android.content.Context) {
     }
 
     private fun TmdbDiscoverItem.toContentItem(mediaType: String?): NuvioContentItem {
-        val resolvedType = mediaType
-            ?: inferMediaTypeFromDates()
+        // Normalize to the app's item vocabulary: TMDB calls it "tv" but
+        // every other source kind (addon, trakt, credits, collections) and
+        // the rail-type display use "series". Without this, discover rails
+        // showed "Tv" while addon rails showed "Series".
+        val resolvedType = when (mediaType?.lowercase()) {
+            "series", "show", "tv" -> "series"
+            else -> mediaType?.lowercase() ?: inferMediaTypeFromDates()
+        }
         return NuvioContentItem(
             id = id.toString(),
             type = resolvedType,
