@@ -1712,6 +1712,10 @@ private fun CatalogManagerDialog(
     var pendingFocus by remember {
         mutableStateOf<Pair<String, CatalogRowFocus.Slot>?>(null)
     }
+    // Retry bookkeeping: a target row can land a state-change late (the
+    // collection slice reloads asynchronously). Keep the pending target and
+    // retry on the next state change instead of dropping focus to the top.
+    var pendingFocusAttempts by remember { mutableStateOf(0) }
 
     // One flat list: addon catalog rows first-class alongside collection
     // rows, arranged by the merged home order the ViewModel owns.
@@ -1738,6 +1742,13 @@ private fun CatalogManagerDialog(
         orderedKeys.mapNotNull { key ->
             if (key.startsWith("nuvio:")) {
                 val collection = collectionByKey[key] ?: return@mapNotNull null
+                // Hidden/pinned derive from the FRESH home-order prefs (the
+                // same rule Home and the ViewModel use: hidden-set membership,
+                // or never-arranged counts as hidden) — not the async
+                // collectionsState snapshot. That snapshot reloads a beat
+                // after a toggle, which left the row in its old section for
+                // one frame and dumped D-pad focus at the top of the dialog.
+                val arranged = prefs.pinned.toSet() + prefs.order.toSet() + prefs.hiddenSet
                 CatalogManagerDialogRow(
                     key = key,
                     isCollection = true,
@@ -1745,8 +1756,8 @@ private fun CatalogManagerDialog(
                     collectionKey = key,
                     title = collection.title,
                     subtitle = "Collection · ${collection.folderCount} folders",
-                    isPinned = collection.isPinned,
-                    isHidden = collection.isHidden
+                    isPinned = key in prefs.pinned,
+                    isHidden = key in prefs.hiddenSet || key !in arranged
                 )
             } else {
                 val config = addonByKey[key] ?: return@mapNotNull null
@@ -1821,17 +1832,35 @@ private fun CatalogManagerDialog(
 
     LaunchedEffect(configurations, collectionsState, homeOrderVersion) {
         val target = pendingFocus ?: return@LaunchedEffect
-        pendingFocus = null
         val (key, slot) = target
         // The row may sit in the visible section or the hidden section —
-        // compute its LazyColumn index from wherever it landed.
+        // compute its LazyColumn index from wherever it landed. If it hasn't
+        // landed anywhere yet (late collection reload), keep the target and
+        // retry on the next state change rather than consuming it and
+        // stranding focus at the dialog header.
         val visibleIndex = visibleRows.indexOfFirst { it.key == key }
         val lazyIndex = if (visibleIndex >= 0) {
             visibleIndex
         } else {
             val hiddenIndex = hiddenRows.indexOfFirst { it.key == key }
-            if (hiddenIndex >= 0) visibleRows.size + 1 + hiddenIndex else return@LaunchedEffect
+            if (hiddenIndex >= 0) {
+                visibleRows.size + 1 + hiddenIndex
+            } else {
+                val attempts = pendingFocusAttempts + 1
+                if (attempts > 4) {
+                    // Row vanished entirely (e.g. a failed collection reload
+                    // emptied the list) — give up so a stale target can't
+                    // hijack focus forever.
+                    pendingFocus = null
+                    pendingFocusAttempts = 0
+                } else {
+                    pendingFocusAttempts = attempts
+                }
+                return@LaunchedEffect
+            }
         }
+        pendingFocus = null
+        pendingFocusAttempts = 0
         runCatching { listState.animateScrollToItem(lazyIndex) }
         val focus = rowRequesters[key] ?: return@LaunchedEffect
         focus.of(slot)?.let { requester ->
@@ -1996,11 +2025,13 @@ private fun CatalogManagerDialog(
                         items = hiddenRows,
                         key = { _, row -> "hidden:${row.key}" }
                     ) { _, row ->
+                        val rowFocus = remember(row.key) { CatalogRowFocus() }
+                        rowRequesters[row.key] = rowFocus
                         UnifiedManagerRow(
                             row = row,
                             position = -1,
                             total = -1,
-                            rowFocus = remember(row.key) { CatalogRowFocus() },
+                            rowFocus = rowFocus,
                             onToggle = { showRowKeepFocus(row) },
                             onPin = {},
                             onMove = { _, _ -> },
