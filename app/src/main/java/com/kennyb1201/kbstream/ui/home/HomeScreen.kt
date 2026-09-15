@@ -1402,8 +1402,10 @@ private fun UpcomingEpisodeCard(
                         Brush.verticalGradient(
                             colors = listOf(
                                 Color.Transparent,
-                                Color.Black.copy(alpha = 0.45f),
-                                KBVoid.copy(alpha = 0.95f)
+                                Color.Transparent,
+                                Color.Black.copy(alpha = 0.50f),
+                                KBVoid.copy(alpha = 1.0f),
+                                KBVoid.copy(alpha = 1.0f)
                             )
                         )
                     )
@@ -2031,6 +2033,43 @@ fun HomeScreen(
         lastPosterFocusRequester?.requestFocus()
     }
 
+    // Which row last held focus: "continue_watching", "upcoming",
+    // "catalog", or "folder". The sliver-hiding snaps below run once per
+    // ROW TRANSITION — onFocusChanged fires for every poster the D-pad
+    // crosses while scrolling horizontally, and a snap per focus step
+    // fights Compose's focus bring-into-view scroll, bouncing the posters
+    // up and down inside the rail on every horizontal move.
+    var lastFocusedRowKey by remember {
+        mutableStateOf<String?>(null)
+    }
+
+    // Item layout: 0 = hero spacer, then Continue Watching (only when it
+    // has entries), then Upcoming (only when populated), then the catalog
+    // rails — computed from presence so it also works when Continue
+    // Watching is empty and only the Upcoming rail exists.
+    fun upcomingRowIndex(): Int = 1 + (if (upNext.isNotEmpty()) 1 else 0)
+
+    fun firstRailIndex(): Int =
+        upcomingRowIndex() + (if (upcomingSchedule.isNotEmpty()) 1 else 0)
+
+    /**
+     * Snap the rails list so everything above [targetIndex] sits fully
+     * above the viewport. Only scrolls when a row above the target is
+     * partially visible (the sliver case); a list already resting at or
+     * past the target is left untouched, so this stays quiet while the
+     * user horizontal-scrolls inside a rail.
+     */
+    fun snapPastInterstitials(targetIndex: Int) {
+        if (
+            railListState.firstVisibleItemIndex < targetIndex &&
+            railListState.firstVisibleItemScrollOffset > 0
+        ) {
+            homeScope.launch {
+                railListState.scrollToItem(index = targetIndex)
+            }
+        }
+    }
+
     /**
      * The Continue Watching and Upcoming rows sit between the hero and the
      * catalog rails. When the viewport rests between item boundaries, the
@@ -2043,25 +2082,9 @@ fun HomeScreen(
      * event cannot catch that.
      */
     fun hideContinueWatchingSliver() {
-        // Item layout: 0 = hero spacer, then Continue Watching (only when
-        // it has entries), then Upcoming (only when populated), then the
-        // first catalog rail. Any interstitial row partially scrolled under
-        // the hero is a sliver, so snap past whichever rows are present —
-        // computed from presence so it also works when Continue Watching
-        // is empty and only the Upcoming rail exists.
-        val snapIndex =
-            1 +
-                (if (upNext.isNotEmpty()) 1 else 0) +
-                (if (upcomingSchedule.isNotEmpty()) 1 else 0)
-        val cwIndex = railListState.firstVisibleItemIndex
-        if (
-            cwIndex < snapIndex && // rows still under the hero
-            railListState.firstVisibleItemScrollOffset > 0
-        ) {
-            homeScope.launch {
-                railListState.animateScrollToItem(index = snapIndex)
-            }
-        }
+        // Catalog-rail focus: snap past BOTH interstitial rows (Continue
+        // Watching and Upcoming, whichever are present).
+        snapPastInterstitials(targetIndex = firstRailIndex())
     }
 
     fun selectHero(
@@ -2072,15 +2095,23 @@ fun HomeScreen(
         focusedFolder = null
         focusedContinueWatchingItem = null
 
-        // Focusing a catalog rail while the Continue Watching row is still
-        // partially visible: scroll just far enough that the CW row is fully
-        // above the viewport. One D-pad notch only guarantees the newly
-        // focused item is on screen, which used to leave a sliver of the CW
-        // cards peeking under the hero. Item layout: 0 = hero spacer,
-        // 1 = Continue Watching (only when present), 2 = Upcoming rail
-        // (only when populated), then the first rail — so the snap only
-        // applies when CW exists.
-        hideContinueWatchingSliver()
+        // Focusing a catalog rail while a Continue Watching / Upcoming row
+        // is still partially visible: scroll just far enough that those
+        // rows are fully above the viewport. One D-pad notch only
+        // guarantees the newly focused item is on screen, which used to
+        // leave a sliver of the CW cards peeking under the hero.
+        //
+        // Row-transition gate: onFocusChanged fires for EVERY poster the
+        // D-pad crosses while scrolling horizontally through a rail, and
+        // re-running the snap per step made it fight Compose's focus
+        // bring-into-view scroll — the posters visibly bounced up and down
+        // on every horizontal move. The snap therefore runs once when focus
+        // ENTERS the catalog rows; horizontal scrolling inside a rail never
+        // scrolls the list.
+        if (lastFocusedRowKey != "catalog") {
+            lastFocusedRowKey = "catalog"
+            hideContinueWatchingSliver()
+        }
     }
 
     /**
@@ -2093,6 +2124,7 @@ fun HomeScreen(
         userAdjustedFocus = true
         focusedFolder = folder
         focusedContinueWatchingItem = null
+        lastFocusedRowKey = "folder"
     }
 
     /**
@@ -2113,6 +2145,18 @@ fun HomeScreen(
         focusedFolder = null
         focusedContinueWatchingItem = upNextItem
 
+        // Row-transition capture (same reasoning as selectHero): remember
+        // what the row was BEFORE re-tagging, so the Upcoming snap below
+        // fires only when focus ENTERS the Upcoming row — never per
+        // horizontal focus step inside it.
+        val enteringUpcomingRow = lastFocusedRowKey != "upcoming"
+        lastFocusedRowKey =
+            if (upNextItem.id.startsWith("upcoming:")) {
+                "upcoming"
+            } else {
+                "continue_watching"
+            }
+
         // Focusing an UPCOMING card while the Continue Watching row is still
         // partially scrolled under the hero leaves its bottom sliver (and
         // the progress bar) peeking below the hero. The user is now on the
@@ -2124,16 +2168,18 @@ fun HomeScreen(
         if (upNextItem.id.startsWith("upcoming:")) {
             // Item layout: 0 = hero spacer, 1 = Continue Watching (only
             // when present), then the Upcoming row.
-            val upcomingIndex = 1 + (if (upNext.isNotEmpty()) 1 else 0)
+            val upcomingIndex = upcomingRowIndex()
             val atOrAboveUpcoming =
                 railListState.firstVisibleItemIndex < upcomingIndex ||
                     (
                         railListState.firstVisibleItemIndex == upcomingIndex &&
                             railListState.firstVisibleItemScrollOffset > 0
                         )
-            if (atOrAboveUpcoming) {
+            if (enteringUpcomingRow && atOrAboveUpcoming) {
                 homeScope.launch {
-                    railListState.animateScrollToItem(index = upcomingIndex)
+                    // Instant snap: an animated scroll re-targeted on every
+                    // focus step is what made the cards bounce up and down.
+                    railListState.scrollToItem(index = upcomingIndex)
                 }
             }
         }
@@ -2161,8 +2207,25 @@ fun HomeScreen(
         railListState.firstVisibleItemIndex,
         railListState.firstVisibleItemScrollOffset
     ) {
-        if (focusedContinueWatchingItem == null) {
-            hideContinueWatchingSliver()
+        when {
+            // On Upcoming: correct only a Continue Watching sliver ABOVE the
+            // Upcoming row (the progress-bar peek under the hero); the
+            // Upcoming row's own offset stays untouched so data refreshes
+            // cannot yank the row the user is browsing.
+            focusedContinueWatchingItem?.id?.startsWith("upcoming:") == true -> {
+                val upcomingIndex = upcomingRowIndex()
+                if (railListState.firstVisibleItemIndex < upcomingIndex) {
+                    homeScope.launch {
+                        railListState.scrollToItem(index = upcomingIndex)
+                    }
+                }
+            }
+
+            // On Continue Watching: never auto-scroll the row the user is on.
+            focusedContinueWatchingItem != null -> Unit
+
+            // Catalog rails, folder tiles, and the pre-focus seed state.
+            else -> hideContinueWatchingSliver()
         }
     }
 
@@ -2397,10 +2460,13 @@ fun HomeScreen(
                     )
             ) {
                 item(key = "hero_spacer") {
-                    Spacer(
-                        modifier = Modifier.height(
-                            HeroToFirstRailGap
-                        )
+                    // Opaque spacer that prevents CW progress bar
+                    // from peeking below the hero gradient.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(HeroToFirstRailGap)
+                            .background(Color.Black)
                     )
                 }
 
@@ -2606,34 +2672,35 @@ fun HomeScreen(
                                             episodeTitle = upcoming.episodeTitle
                                         )
 
-                                    UpcomingEpisodeCard(
-                                        upcoming = upcoming,
-                                        onClick = {
-                                            // Details only: the episode
-                                            // has not aired yet, so there
-                                            // is nothing to resume.
-                                            openUpNext(
-                                                heroItem,
-                                                openDetailsOnly = true
-                                            )
-                                        },
-                                        onFocus = {
-                                            selectContinueWatchingHero(
-                                                // Backdrop flows into the
-                                                // hero preview so the art
-                                                // shows immediately while
-                                                // TMDB resolution pends.
-                                                MetaPreview(
-                                                    id = upcoming.parentId,
-                                                    type = upcoming.parentType,
-                                                    name = upcoming.title,
-                                                    poster = upcoming.poster,
-                                                    background = upcoming.backdrop
-                                                ),
-                                                heroItem
-                                            )
-                                        }
-                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .width(224.dp)
+                                            .height(146.dp + PosterFocusHeadroom)
+                                            .padding(end = HomeRailGap),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        UpcomingEpisodeCard(
+                                            upcoming = upcoming,
+                                            onClick = {
+                                                openUpNext(
+                                                    heroItem,
+                                                    openDetailsOnly = true
+                                                )
+                                            },
+                                            onFocus = {
+                                                selectContinueWatchingHero(
+                                                    MetaPreview(
+                                                        id = upcoming.parentId,
+                                                        type = upcoming.parentType,
+                                                        name = upcoming.title,
+                                                        poster = upcoming.poster,
+                                                        background = upcoming.backdrop
+                                                    ),
+                                                    heroItem
+                                                )
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         }
