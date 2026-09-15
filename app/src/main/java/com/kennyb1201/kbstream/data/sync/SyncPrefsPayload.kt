@@ -53,6 +53,7 @@ object PrefsPayloadBuilder {
         "home_rail_hide_upcoming",
         "home_landscape_cards",
         "amoled_black",                      // AMOLED theme toggle (pure display pref)
+        "pure_black_surface",                // Pure black cards/panels/containers toggle
         "omdb_api_key"
     )
 
@@ -307,6 +308,15 @@ object PrefsPayloadApplier {
             val raw = (payload["amoled_black"] as? kotlinx.serialization.json.JsonPrimitive)?.content
             if (raw == "true" || raw == "false") {
                 com.kennyb1201.kbstream.ui.theme.kbAmoledBlackState.value = raw == "true"
+            }
+        }
+
+        // Pure black surface: same live-mirror treatment — a synced device
+        // repaints immediately instead of waiting for the next relaunch.
+        if (payload.containsKey("pure_black_surface")) {
+            val raw = (payload["pure_black_surface"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+            if (raw == "true" || raw == "false") {
+                com.kennyb1201.kbstream.ui.theme.kbPureBlackSurfaceState.value = raw == "true"
             }
         }
     }

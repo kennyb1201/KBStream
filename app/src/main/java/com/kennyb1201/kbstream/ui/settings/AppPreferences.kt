@@ -373,6 +373,22 @@ object AppPreferences {
         syncDisplayPrefsBlob(context)
     }
 
+    // ── Pure black surface (cards/panels/containers join the background) ──
+    private const val KEY_PURE_BLACK_SURFACE = "pure_black_surface"
+
+    /** Reads the pref AND mirrors it into the theme's live state. */
+    fun getPureBlackSurface(context: Context): Boolean {
+        val value = prefs(context).getBoolean(KEY_PURE_BLACK_SURFACE, false)
+        com.kennyb1201.kbstream.ui.theme.kbPureBlackSurfaceState.value = value
+        return value
+    }
+
+    fun setPureBlackSurface(context: Context, enabled: Boolean) {
+        com.kennyb1201.kbstream.ui.theme.kbPureBlackSurfaceState.value = enabled
+        prefs(context).edit().putBoolean(KEY_PURE_BLACK_SURFACE, enabled).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
     // ── Home rail titles: show catalog type ───────────────────────────
     fun getHomeRailShowCatalogType(context: Context): Boolean =
         prefs(context).getBoolean(KEY_SHOW_CATALOG_TYPE, false)

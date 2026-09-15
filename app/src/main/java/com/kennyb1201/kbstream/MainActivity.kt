@@ -720,6 +720,7 @@ class MainActivity : ComponentActivity() {
             // Sync the AMOLED toggle into the theme's live state BEFORE the
             // first composition so launch already paints the right palette.
             AppPreferences.getAmoledBlack(this)
+            AppPreferences.getPureBlackSurface(this)
             KBStreamTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize()

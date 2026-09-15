@@ -24,16 +24,37 @@ private val KBSurfaceRaisedDefault = Color(0xFF1D2530)
 private val KBVoidAmoled = Color(0xFF000000)
 private val KBSurfaceAmoled = Color(0xFF06080B)
 private val KBSurfaceRaisedAmoled = Color(0xFF0D1117)
+private val KBSurfacePureBlack = Color(0xFF000000)
+private val KBSurfaceRaisedPureBlack = Color(0xFF050505)
 
 /** Backing state for the AMOLED black toggle. Init from prefs at app start. */
 val kbAmoledBlackState = mutableStateOf(false)
 
+/**
+ * Backing state for the Pure Black Surface toggle (Nuvio-style): when on,
+ * cards / panels / containers join the background at true black. Requires
+ * the AMOLED toggle — the getters below enforce that dependency, so a
+ * synced blob that flips AMOLED off also lifts pure black.
+ */
+val kbPureBlackSurfaceState = mutableStateOf(false)
+
+private val pureBlackActive: Boolean
+    get() = kbAmoledBlackState.value && kbPureBlackSurfaceState.value
+
 val KBVoid: Color
     get() = if (kbAmoledBlackState.value) KBVoidAmoled else KBVoidDefault
 val KBSurface: Color
-    get() = if (kbAmoledBlackState.value) KBSurfaceAmoled else KBSurfaceDefault
+    get() = when {
+        pureBlackActive -> KBSurfacePureBlack
+        kbAmoledBlackState.value -> KBSurfaceAmoled
+        else -> KBSurfaceDefault
+    }
 val KBSurfaceRaised: Color
-    get() = if (kbAmoledBlackState.value) KBSurfaceRaisedAmoled else KBSurfaceRaisedDefault
+    get() = when {
+        pureBlackActive -> KBSurfaceRaisedPureBlack
+        kbAmoledBlackState.value -> KBSurfaceRaisedAmoled
+        else -> KBSurfaceRaisedDefault
+    }
 
 val KBAccent = Color(0xFFE8A33D) // brass / projector-bulb warmth -- the one accent
 val KBTextHi = Color(0xFFF3EFE4)
