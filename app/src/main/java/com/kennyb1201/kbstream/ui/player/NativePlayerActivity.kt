@@ -45,7 +45,6 @@ import androidx.media3.common.VideoSize
 import androidx.media3.common.text.CueGroup
 import androidx.media3.common.text.Cue
 import androidx.recyclerview.widget.LinearLayoutManager
-import coil.load
 import androidx.recyclerview.widget.RecyclerView
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -3089,7 +3088,7 @@ class NativePlayerActivity : ComponentActivity() {
                     val f = group.getTrackFormat(i)
                     val parts = mutableListOf<String>()
                     f.language?.uppercase()?.let { parts.add("Language: $it") }
-                    normalizeCodec(f.codecs.ifBlank { null })
+                    normalizeCodec(f.codecs?.ifBlank { null })
                         .takeIf { it != "—" }?.let { parts.add("Codec: $it") }
                     if (f.channelCount > 0) parts.add("Channels: ${f.channelCount}")
                     if (f.sampleRate > 0) parts.add("Sample rate: ${f.sampleRate} Hz")

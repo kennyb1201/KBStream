@@ -204,3 +204,14 @@ private fun SyncActionButton(
         }
     }
 }
+
+@Composable
+private fun SectionHeader(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.titleMedium,
+        color = KBTextHi,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(bottom = 6.dp)
+    )
+}

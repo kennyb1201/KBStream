@@ -1189,20 +1189,7 @@ private fun SettingsClearHistoryDialog(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier.padding(top = 18.dp)
                 ) {
-                    KBCard(onClick = {
-                        onConfirm()
-                        if (clearingHistory) return@KBCard
-                        clearingHistory = true
-                        backupScope.launch {
-                            runCatching {
-                                WatchHistoryRepository(context).clearAll()
-                                WatchedStatusRepository(context)
-                                    .clearLocalWatchState(clearSimklAuth = false)
-                            }
-                            clearingHistory = false
-                            historyClearedAt = System.currentTimeMillis()
-                        }
-                    }) {
+                    KBCard(onClick = onConfirm) {
                         Text(
                             text = "CLEAR",
                             color = KBAccent,
@@ -1211,7 +1198,7 @@ private fun SettingsClearHistoryDialog(
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
                         )
                     }
-                    KBCard(onClick = { showClearHistoryConfirm = false }) {
+                    KBCard(onClick = onDismiss) {
                         Text(
                             text = "CANCEL",
                             color = KBTextLo,
@@ -1222,7 +1209,7 @@ private fun SettingsClearHistoryDialog(
                     }
                 }
             }
-    }
+        }
 }
 
 // ── Helper composables ──────────────────────────────────────────
