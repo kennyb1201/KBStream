@@ -35,6 +35,7 @@ object ProfileManager {
         val avatarIndex: Int = 0,      // 0..7 generic avatar
         val customAvatarUrl: String? = null, // remote https URL (if ever used)
         val avatarData: String? = null,      // uploaded avatar as data:image/jpeg;base64 — syncs with the blob
+        val pinHash: String? = null,         // SHA-256 of the 4-digit PIN; null = no lock
         val createdAt: Long = System.currentTimeMillis()
     )
 
@@ -139,6 +140,35 @@ object ProfileManager {
             _activeProfile.value = updated.firstOrNull { it.id == profileId }
         }
     }
+
+    // ── Profile PIN (Who's Watching lock) ────────────────────────────
+    // Only the SHA-256 hash is stored/synced — the plain PIN never persists.
+    private fun hashPin(pin: String): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(pin.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }
+    }
+
+    /** Sets (4 digits) or clears (null/blank) a profile's PIN. Returns false on malformed input. */
+    fun setPin(context: Context, profileId: String, pin: String?): Boolean {
+        val clean = pin?.trim().orEmpty()
+        if (clean.isNotEmpty() && (clean.length != 4 || clean.any { !it.isDigit() })) return false
+        val updated = loadProfiles(context).map { p ->
+            if (p.id != profileId) p else p.copy(pinHash = clean.takeIf { it.isNotEmpty() }?.let { hashPin(it) })
+        }
+        saveProfiles(context, updated)
+        _profiles.value = updated
+        pushProfilesBlob(context, updated)
+        if (_activeProfile.value?.id == profileId) {
+            _activeProfile.value = updated.firstOrNull { it.id == profileId }
+        }
+        return true
+    }
+
+    fun hasPin(profile: Profile): Boolean = !profile.pinHash.isNullOrBlank()
+
+    fun verifyPin(profile: Profile, pin: String): Boolean =
+        profile.pinHash?.let { hashPin(pin) == it } ?: true
 
     /** Explicitly sets (or clears) a profile's custom avatar URL. Clearing also drops uploaded data. */
     fun setCustomAvatar(context: Context, profileId: String, url: String?) {

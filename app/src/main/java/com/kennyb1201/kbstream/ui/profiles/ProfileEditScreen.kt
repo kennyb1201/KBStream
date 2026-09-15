@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.shape.CircleShape
@@ -32,6 +34,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Border
@@ -92,6 +95,11 @@ fun ProfileEditScreen(
     var avatarUrlInput by remember(effectiveEditId) {
         mutableStateOf("")
     }
+    // PIN state: current entry (for changing an existing PIN), new PIN, and
+    // a confirm step. Blank everywhere = no PIN. Saved with the profile.
+    var currentPinInput by remember(effectiveEditId) { mutableStateOf("") }
+    var newPinInput by remember(effectiveEditId) { mutableStateOf("") }
+    var confirmPinInput by remember(effectiveEditId) { mutableStateOf("") }
     // Tracks whether the custom photo is in effect; selecting a color tile
     // flips this off so a color choice actually replaces the photo on save.
     var useCustomAvatar by remember(effectiveEditId) {
@@ -174,6 +182,59 @@ fun ProfileEditScreen(
                 .fillMaxWidth(0.6f)
                 .padding(top = 24.dp)
         )
+
+        // ── Parental PIN ─────────────────────────────────────────────
+        Text(
+            text = "Parental lock",
+            style = MaterialTheme.typography.titleMedium,
+            color = KBTextHi,
+            modifier = Modifier.padding(top = 24.dp)
+        )
+        Text(
+            text = if (editing?.pinHash != null)
+                "A PIN is set. Enter the current PIN to change or remove it."
+            else
+                "Require a 4-digit PIN to open this profile from Who's Watching.",
+            color = KBTextLo,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = 2.dp)
+        )
+        if (editing?.pinHash != null) {
+            KBTextField(
+                value = currentPinInput,
+                onValueChange = { currentPinInput = it.filter(Char::isDigit).take(4) },
+                placeholder = "Current PIN",
+                keyboardType = KeyboardType.NumberPassword,
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier
+                    .fillMaxWidth(0.6f)
+                    .padding(top = 8.dp)
+            )
+        }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier
+                .padding(top = 8.dp)
+                .fillMaxWidth(0.6f)
+        ) {
+            KBTextField(
+                value = newPinInput,
+                onValueChange = { newPinInput = it.filter(Char::isDigit).take(4) },
+                placeholder = "New PIN (4 digits)",
+                keyboardType = KeyboardType.NumberPassword,
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            KBTextField(
+                value = confirmPinInput,
+                onValueChange = { confirmPinInput = it.filter(Char::isDigit).take(4) },
+                placeholder = "Confirm PIN",
+                keyboardType = KeyboardType.NumberPassword,
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.weight(1f)
+            )
+        }
 
         // Avatar row: custom upload tile first, then the 8 generic colors
         Row(
@@ -308,6 +369,30 @@ fun ProfileEditScreen(
                 label = "Save",
                 enabled = name.isNotBlank()
             ) {
+                // PIN validation before anything else — on failure keep the
+                // screen open so the user can correct the entry.
+                val pinChanged = newPinInput.isNotBlank() || confirmPinInput.isNotBlank()
+                val wantsClear = newPinInput.isBlank() && confirmPinInput.isBlank() &&
+                    currentPinInput.isNotBlank()
+                val pinTargetId = editing?.id
+                if (editing != null && editing.pinHash != null) {
+                    val currentOk = newPinInput.isBlank() ||
+                        ProfileManager.verifyPin(editing, currentPinInput)
+                    val clearOk = !wantsClear || currentPinInput.isNotBlank()
+                    val matchOk = newPinInput.isBlank() || newPinInput == confirmPinInput
+                    if (!currentOk || !clearOk || !matchOk) {
+                        android.widget.Toast.makeText(
+                            context,
+                            when {
+                                !currentOk -> "Current PIN is incorrect"
+                                !clearOk -> "Enter the current PIN to remove the lock"
+                                else -> "PINs don't match"
+                            },
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                        return@ProfileActionButton
+                    }
+                }
                 // Precedence: typed URL > uploaded image > color/clear.
                 val typedUrl = avatarUrlInput.trim().takeIf { it.startsWith("http") }
                 if (editing == null) {
@@ -329,6 +414,13 @@ fun ProfileEditScreen(
                             (editing.customAvatarUrl != null || editing.avatarData != null) ->
                             ProfileManager.setCustomAvatar(context, editing.id, null)
                     }
+                }
+                // Apply the PIN after the profile itself is saved.
+                when {
+                    pinTargetId != null && pinChanged ->
+                        ProfileManager.setPin(context, pinTargetId, newPinInput)
+                    pinTargetId != null && wantsClear ->
+                        ProfileManager.setPin(context, pinTargetId, null)
                 }
                 onDone()
             }

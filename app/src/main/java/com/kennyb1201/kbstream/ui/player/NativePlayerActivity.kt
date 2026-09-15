@@ -681,6 +681,10 @@ class NativePlayerActivity : ComponentActivity() {
     private var drmLicenseUrl: String? = null
     private var drmHeaders = emptyMap<String, String>()
     private var externalSubtitleUri: Uri? = null
+    // Online subtitle search (OpenSubtitles): pending query results, loading
+    // flag for the picker, and the resolved uri being applied right now.
+    private var onlineSubResults: List<SubtitleSearchResult> = emptyList()
+    private var onlineSubLoading = false
     private var startPositionMs = 0L
     private var fromActorReturn = false
 
@@ -793,10 +797,68 @@ class NativePlayerActivity : ComponentActivity() {
             // Some providers do not offer persistable permissions; the current
             // playback session can still use the granted URI permission.
         }
+        attachExternalSubtitle(uri)
+    }
+
+    /**
+     * Shared apply path for every subtitle source: file picker, URL import,
+     * and OpenSubtitles downloads (cache file). Rebuilds the player so the
+     * sidecar subtitle config attaches, preserving position.
+     */
+    private fun attachExternalSubtitle(uri: Uri) {
         externalSubtitleUri = uri
         loadExternalSubtitleCues(uri)
         carryPositionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
         recreatePlayer()
+    }
+
+    /**
+     * Queries OpenSubtitles for the playing item, then re-opens the subtitle
+     * picker with the results as rows. Empty result set surfaces a toast.
+     */
+    private fun startOnlineSubtitleSearch() {
+        if (onlineSubLoading) return
+        val queryTitle = itemName
+        if (AppPreferences.getOpensubtitlesApiKey(this).isBlank()) {
+            Toast.makeText(this, "Add an OpenSubtitles API key in Settings", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (queryTitle.isBlank()) {
+            Toast.makeText(this, "No title available to search with", Toast.LENGTH_LONG).show()
+            return
+        }
+        onlineSubLoading = true
+        val lang = AppPreferences.getPreferredSubtitleLanguage(this)
+        lifecycleScope.launch {
+            val results = SubtitleSearchHelper.search(
+                this@NativePlayerActivity,
+                title = queryTitle,
+                season = season,
+                episode = episode,
+                languageHint = lang
+            )
+            onlineSubLoading = false
+            onlineSubResults = results
+            if (results.isEmpty()) {
+                Toast.makeText(this@NativePlayerActivity, "No subtitles found", Toast.LENGTH_SHORT).show()
+            } else {
+                showPicker(PickerMode.SUBTITLE)
+            }
+        }
+    }
+
+    /** Downloads the picked subtitle into cache and attaches it sidecar-style. */
+    private fun downloadOnlineSubtitle(hit: SubtitleSearchResult) {
+        Toast.makeText(this, "Loading subtitle…", Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch {
+            val body = SubtitleSearchHelper.download(this@NativePlayerActivity, hit)
+            if (body.isNullOrBlank()) {
+                Toast.makeText(this@NativePlayerActivity, "Subtitle download failed", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val uri = SubtitleSearchHelper.toCacheUri(this@NativePlayerActivity, hit, body)
+            attachExternalSubtitle(uri)
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -3738,8 +3800,30 @@ class NativePlayerActivity : ComponentActivity() {
                         dismissPicker()
                     }
                 )
+                // Online search entry: only when a key is configured. Shows
+                // results inline on re-open; a result row downloads and
+                // attaches through the shared sidecar path.
+                val subsKeyPresent = AppPreferences.getOpensubtitlesApiKey(this).isNotBlank()
+                val searchItem = if (subsKeyPresent) PickerItem(
+                    label = "SEARCH SUBTITLES ONLINE…",
+                    onClick = {
+                        dismissPicker()
+                        startOnlineSubtitleSearch()
+                    }
+                ) else null
+                // Resolved results from the last search render as rows above
+                // the embedded tracks; picking one downloads and attaches it.
+                val onlineRows = onlineSubResults.map { hit ->
+                    PickerItem(
+                        label = "${hit.language.uppercase()} · ${hit.fileName} · ${hit.downloads}↓",
+                        onClick = {
+                            dismissPicker()
+                            downloadOnlineSubtitle(hit)
+                        }
+                    )
+                }
+                val subtitleItems = listOfNotNull(searchItem, openFileItem) + onlineRows
                 val tracks = exoPlayer?.currentTracks ?: return
-                val subtitleItems = listOf(openFileItem)
                 val textGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
                 val anySelected = textGroups.any { g -> (0 until g.length).any { g.isTrackSelected(it) } }
                 val offItem = PickerItem(

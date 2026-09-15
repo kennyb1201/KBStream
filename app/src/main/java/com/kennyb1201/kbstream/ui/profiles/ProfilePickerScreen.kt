@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -31,6 +32,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Border
@@ -44,7 +46,10 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.sync.ProfileManager
+import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
@@ -64,6 +69,13 @@ fun ProfilePickerScreen(
     val pickerContext = androidx.compose.ui.platform.LocalContext.current
     val profiles by ProfileManager.profiles.collectAsState()
     val active by ProfileManager.activeProfile.collectAsState()
+
+    // Parental lock: a PIN-protected profile asks for its PIN before it
+    // activates. pinTarget holds the pending profile; pinEntry collects the
+    // digits; pinError explains a wrong guess.
+    var pinTarget by remember { mutableStateOf<ProfileManager.Profile?>(null) }
+    var pinEntry by remember { mutableStateOf("") }
+    var pinError by remember { mutableStateOf(false) }
 
     val firstRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) { firstRequester.requestFocus() }
@@ -102,8 +114,14 @@ fun ProfilePickerScreen(
                     customAvatarUrl = profile.customAvatarUrl ?: profile.avatarData,
                     selected = active?.id == profile.id,
                     onClick = {
-                        ProfileManager.setActive(pickerContext, profile)
-                        onSelect()
+                        if (ProfileManager.hasPin(profile)) {
+                            pinTarget = profile
+                            pinEntry = ""
+                            pinError = false
+                        } else {
+                            ProfileManager.setActive(pickerContext, profile)
+                            onSelect()
+                        }
                     }
                 )
             } + PickerTile(
@@ -129,6 +147,81 @@ fun ProfilePickerScreen(
                             onClick = tile.onClick
                         )
                     }
+                }
+            }
+        }
+    }
+
+    pinTarget?.let { pinProfile ->
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = {
+                pinTarget = null
+                pinEntry = ""
+                pinError = false
+            }
+        ) {
+            Column(
+                modifier = Modifier
+                    .width(420.dp)
+                    .background(KBSurfaceRaised, RoundedCornerShape(18.dp))
+                    .border(1.dp, KBAccent.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = pinProfile.name,
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.titleLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text("Enter PIN", color = KBTextLo, style = MaterialTheme.typography.bodyMedium)
+                KBTextField(
+                    value = pinEntry,
+                    onValueChange = {
+                        pinEntry = it.filter(Char::isDigit).take(4)
+                        pinError = false
+                    },
+                    placeholder = "••••",
+                    keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword,
+                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation()
+                )
+                if (pinError) {
+                    Text(
+                        text = "Wrong PIN — try again",
+                        color = KBDanger,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                KBCard(
+                    onClick = {
+                        pinTarget = null
+                        pinEntry = ""
+                        pinError = false
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        "CANCEL",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                    )
+                }
+            }
+        }
+
+        // Auto-verify the moment four digits are in; a wrong PIN clears the
+        // entry and shows the error instead of kicking the user out.
+        LaunchedEffect(pinEntry, pinProfile) {
+            if (pinEntry.length == 4) {
+                if (ProfileManager.verifyPin(pinProfile, pinEntry)) {
+                    pinTarget = null
+                    ProfileManager.setActive(pickerContext, pinProfile)
+                    onSelect()
+                } else {
+                    pinError = true
+                    pinEntry = ""
                 }
             }
         }

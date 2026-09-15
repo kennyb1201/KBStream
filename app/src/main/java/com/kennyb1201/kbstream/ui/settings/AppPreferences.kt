@@ -50,6 +50,7 @@ object AppPreferences {
     private const val KEY_POSTER_CAPTION_YEAR = "poster_caption_year"
     private const val KEY_POSTER_CAPTION_RATING = "poster_caption_rating"
     private const val KEY_OMDB_API_KEY = "omdb_api_key"
+    private const val KEY_OPENSUBTITLES_API_KEY = "opensubtitles_api_key"
     private const val KEY_HIDE_UPCOMING = "home_rail_hide_upcoming"
     private const val KEY_LANDSCAPE_CARDS = "home_landscape_cards"
     private fun prefs(context: Context): SharedPreferences =
@@ -466,6 +467,17 @@ object AppPreferences {
     fun setOmdbApiKey(context: Context, key: String) {
         syncDisplayPrefsBlob(context)
         prefs(context).edit().putString(KEY_OMDB_API_KEY, key.trim()).apply()
+    }
+
+    // ── OpenSubtitles API key (in-player online subtitle search) ─────
+    // Free key from opensubtitles.com; synced like the OMDb key so every
+    // device gets the player's SEARCH SUBTITLES entry.
+    fun getOpensubtitlesApiKey(context: Context): String =
+        prefs(context).getString(KEY_OPENSUBTITLES_API_KEY, "")?.trim().orEmpty()
+
+    fun setOpensubtitlesApiKey(context: Context, key: String) {
+        syncDisplayPrefsBlob(context)
+        prefs(context).edit().putString(KEY_OPENSUBTITLES_API_KEY, key.trim()).apply()
     }
 
     // ── Home rails: hide not-yet-released titles (digital filter) ─────

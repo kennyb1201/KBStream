@@ -136,6 +136,8 @@ fun SettingsScreen(
     var backupStatus by remember { mutableStateOf<String?>(null) }
     var omdbKeyInput by remember { mutableStateOf(AppPreferences.getOmdbApiKey(context)) }
     var omdbKeySaved by remember { mutableStateOf(false) }
+    var subsKeyInput by remember { mutableStateOf(AppPreferences.getOpensubtitlesApiKey(context)) }
+    var subsKeySaved by remember { mutableStateOf(false) }
 
     var selectedPane by remember { mutableStateOf(SettingsPane.INTEGRATIONS) }
 
@@ -306,6 +308,75 @@ fun SettingsScreen(
                 }
 
                 if (selectedPane == SettingsPane.INTEGRATIONS) {
+                // ── OPENSUBTITLES KEY (in-player subtitle search) ─────────
+                val subsFocusRequester = remember { FocusRequester() }
+                KBCard(
+                    onClick = { subsFocusRequester.requestFocus() },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(KBSurfaceRaised, RoundedCornerShape(8.dp))
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                    ) {
+                        Text(
+                            text = "OpenSubtitles API Key",
+                            color = KBTextHi,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = "Free key from opensubtitles.com — adds SEARCH SUBTITLES " +
+                                "to the player's subtitle picker for streams without subs.",
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                        val subsPaste: (String) -> Unit = { pasted ->
+                            subsKeyInput = pasted.trim()
+                            AppPreferences.setOpensubtitlesApiKey(context, subsKeyInput)
+                            subsKeySaved = subsKeyInput.isNotBlank()
+                        }
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .padding(top = 6.dp)
+                                .fillMaxWidth()
+                        ) {
+                            KBTextField(
+                                value = subsKeyInput,
+                                onValueChange = {
+                                    subsKeyInput = it.trim()
+                                    subsKeySaved = false
+                                },
+                                placeholder = "Paste key",
+                                modifier = Modifier.weight(1f),
+                                focusRequester = subsFocusRequester,
+                                onDone = {
+                                    AppPreferences.setOpensubtitlesApiKey(context, subsKeyInput)
+                                    subsKeySaved = subsKeyInput.isNotBlank()
+                                },
+                                onFocusChanged = { focusedNow ->
+                                    if (!focusedNow) {
+                                        AppPreferences.setOpensubtitlesApiKey(context, subsKeyInput)
+                                        subsKeySaved = subsKeyInput.isNotBlank()
+                                    }
+                                }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            KBPasteChip(onPaste = subsPaste)
+                        }
+                        if (subsKeySaved) {
+                            Text(
+                                text = "Saved — the search entry appears in the player's subtitle picker.",
+                                color = KBAccent,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(top = 5.dp)
+                            )
+                        }
+                    }
+                }
+
                 // ── STREAM BADGES (Nuvio-compatible packs) ────────────────
                 val badgeFocusRequester = remember { FocusRequester() }
                 KBCard(

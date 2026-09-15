@@ -54,7 +54,8 @@ object PrefsPayloadBuilder {
         "home_landscape_cards",
         "amoled_black",                      // AMOLED theme toggle (pure display pref)
         "pure_black_surface",                // Pure black cards/panels/containers toggle
-        "omdb_api_key"
+        "omdb_api_key",
+        "opensubtitles_api_key"              // player → search subtitles online
     )
 
     // Playback/decoder prefs that NEVER sync (documented for clarity).

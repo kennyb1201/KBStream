@@ -79,6 +79,7 @@ import com.kennyb1201.kbstream.data.iptv.CatchupProgram
 import com.kennyb1201.kbstream.data.iptv.EpgMatchType
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.iptv.IptvPlaylist
+import com.kennyb1201.kbstream.data.iptv.IptvReminderStore
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
@@ -164,6 +165,33 @@ fun GuideScreen(
     // from the ViewModel (empty until the provider answers).
     var catchupChannel by remember { mutableStateOf<IptvChannelWithEpg?>(null) }
     val catchupPrograms by viewModel.catchupPrograms.collectAsState()
+
+    // Programme reminders: set from the channel menu ("REMIND ME: <next>").
+    // A poller fires an in-guide banner when a reminder's programme starts;
+    // WATCH NOW zaps via the same path as a normal channel click.
+    var reminders by remember(activeProfileId) {
+        mutableStateOf(IptvReminderStore.load(guidePreferences))
+    }
+    var reminderBanner by remember { mutableStateOf<IptvReminderStore.Reminder?>(null) }
+    LaunchedEffect(reminders) {
+        while (true) {
+            delay(15_000)
+            val now = System.currentTimeMillis()
+            if (reminderBanner == null) {
+                reminderBanner = reminders.firstOrNull {
+                    it.startUtcMillis in 1..now && now < it.endUtcMillis
+                }
+            }
+            // Prune reminders whose programme ended more than 10 minutes ago.
+            val staleCutoff = now - 10 * 60_000L
+            if (reminders.any { it.endUtcMillis in 1..staleCutoff }) {
+                reminders.filter { it.endUtcMillis in 1..staleCutoff }.forEach { stale ->
+                    IptvReminderStore.remove(guidePreferences, stale.channelId, stale.startUtcMillis)
+                }
+                reminders = reminders.filter { it.endUtcMillis > staleCutoff }
+            }
+        }
+    }
     
     var moveFocusToChannelList by remember { mutableStateOf(false) }
 
@@ -915,10 +943,35 @@ Spacer(modifier = Modifier.height(14.dp))
 
                 menuItem?.let { rawItem ->
                     val item = withFavoriteFlag(rawItem)
+                    val itemReminderActive = item.next != null && IptvReminderStore.has(
+                        guidePreferences, item.channel.id, item.next.startUtcMillis
+                    )
                     ChannelActionsDialog(
                         item = item,
                         hasCatchup = item.channel.catchupSource != null || item.channel.catchup != null,
                         onDismiss = { menuItem = null },
+                        onToggleReminder = item.next?.let { nxt ->
+                            {
+                                if (itemReminderActive) {
+                                    IptvReminderStore.remove(guidePreferences, item.channel.id, nxt.startUtcMillis)
+                                    reminders = IptvReminderStore.load(guidePreferences)
+                                } else {
+                                    IptvReminderStore.add(
+                                        guidePreferences,
+                                        IptvReminderStore.Reminder(
+                                            channelId = item.channel.id,
+                                            channelName = item.channel.displayName,
+                                            logoUrl = item.channel.logoUrl,
+                                            programmeTitle = nxt.title,
+                                            startUtcMillis = nxt.startUtcMillis,
+                                            endUtcMillis = nxt.endUtcMillis
+                                        )
+                                    )
+                                    reminders = IptvReminderStore.load(guidePreferences)
+                                }
+                                menuItem = null
+                            }
+                        },
                         onToggleFavorite = {
                             val key = favoriteKey(item)
                             favorites = if (key in favorites) favorites - key else favorites + key
@@ -942,6 +995,72 @@ Spacer(modifier = Modifier.height(14.dp))
                             menuItem = null
                         }
                     )
+                }
+
+                // Programme-started banner: fires when a reminder's window
+                // opens while the guide is open. WATCH NOW reuses the exact
+                // channel-click path (recent list + onPlayChannel).
+                reminderBanner?.let { hit ->
+                    val bannerChannel = unhiddenChannels.firstOrNull {
+                        it.channel.id == hit.channelId
+                    }
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 24.dp)
+                            .width(560.dp)
+                            .background(KBSurfaceRaised, RoundedCornerShape(16.dp))
+                            .border(1.dp, KBAccent.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
+                            .padding(16.dp)
+                    ) {
+                        Text(
+                            text = "NOW ON: ${hit.channelName}",
+                            color = KBAccent,
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                        Text(
+                            text = hit.programmeTitle,
+                            color = KBTextHi,
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.padding(top = 12.dp)
+                        ) {
+                            KBCard(
+                                onClick = {
+                                    bannerChannel?.let { target ->
+                                        recentChannelKeys =
+                                            (listOf(channelKey(target)) + recentChannelKeys)
+                                                .distinct()
+                                                .take(8)
+                                        latestOnPlayChannel?.invoke(target)
+                                    }
+                                    reminderBanner = null
+                                }
+                            ) {
+                                Text(
+                                    "WATCH NOW",
+                                    color = KBTextHi,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                                )
+                            }
+                            KBCard(
+                                onClick = { reminderBanner = null }
+                            ) {
+                                Text(
+                                    "DISMISS",
+                                    color = KBTextLo,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                                )
+                            }
+                        }
+                    }
                 }
 
                 catchupChannel?.let { catchupItem ->
@@ -2039,7 +2158,9 @@ private fun ChannelActionsDialog(
     onToggleFavorite: () -> Unit,
     onHideChannel: () -> Unit,
     onHideGroup: () -> Unit,
-    onOpenCatchup: () -> Unit
+    onOpenCatchup: () -> Unit,
+    onToggleReminder: (() -> Unit)? = null,
+    reminderActive: Boolean = false
 ) {
     Dialog(onDismissRequest = onDismiss) {
         Column(
@@ -2055,6 +2176,18 @@ private fun ChannelActionsDialog(
             if (hasCatchup) {
                 KBCard(onClick = onOpenCatchup, modifier = Modifier.fillMaxWidth()) {
                     Text("CATCH-UP TV", color = KBTextHi, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
+                }
+            }
+            onToggleReminder?.let { toggle ->
+                KBCard(onClick = toggle, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        if (reminderActive) "REMOVE REMINDER" else "REMIND ME: ${item.next?.title ?: "next programme"}",
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                    )
                 }
             }
             KBCard(onClick = onToggleFavorite, modifier = Modifier.fillMaxWidth()) {
