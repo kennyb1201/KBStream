@@ -93,6 +93,7 @@ fun SettingsScreen(
     var railHideUpcoming by remember { mutableStateOf(AppPreferences.getHomeRailHideUpcoming(context)) }
     var landscapeCards by remember { mutableStateOf(AppPreferences.getHomeLandscapeCards(context)) }
     var amoledBlack by remember { mutableStateOf(AppPreferences.getAmoledBlack(context)) }
+    var pureBlackSurface by remember { mutableStateOf(AppPreferences.getPureBlackSurface(context)) }
     var clearingHistory by remember { mutableStateOf(false) }
     var historyClearedAt by remember { mutableStateOf<Long?>(null) }
     var showClearHistoryConfirm by remember { mutableStateOf(false) }
@@ -663,6 +664,20 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(8.dp))
 
         ToggleRow(
+            label = "Pure Black Surface",
+            description = "Also make cards, panels and containers pure black. Pixels turn fully off, saving power and boosting contrast. Applies instantly. Requires AMOLED Black.",
+            checked = pureBlackSurface && amoledBlack,
+            checkedOverride = if (amoledBlack) null else false,
+            onToggle = {
+                pureBlackSurface = it
+                AppPreferences.setPureBlackSurface(context, it)
+            },
+            enabled = amoledBlack
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        ToggleRow(
             label = "Hero Trailer Autoplay",
             description = "Auto-play trailers on the Home hero after a short pause. Turn off to keep the static backdrop.",
             checked = heroTrailerAutoplay,
@@ -1142,8 +1157,11 @@ private fun ToggleRow(
     description: String,
     checked: Boolean,
     onToggle: (Boolean) -> Unit,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    /** Forces the displayed state (e.g. showing OFF for a gated toggle) without touching the stored value. */
+    checkedOverride: Boolean? = null
 ) {
+    val displayChecked = checkedOverride ?: checked
     KBCard(
         onClick = { if (enabled) onToggle(!checked) },
         modifier = Modifier.fillMaxWidth()
@@ -1169,12 +1187,12 @@ private fun ToggleRow(
                 )
             }
             Text(
-                text = if (checked) "ON" else "OFF",
-                color = if (checked) KBVoid else KBTextHi,
+                text = if (displayChecked) "ON" else "OFF",
+                color = if (displayChecked) KBVoid else KBTextHi,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier
                     .background(
-                        if (checked) KBAccent else KBSurface,
+                        if (displayChecked) KBAccent else KBSurface,
                         RoundedCornerShape(6.dp)
                     )
                     .alpha(if (enabled) 1f else 0.35f)

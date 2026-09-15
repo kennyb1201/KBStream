@@ -366,17 +366,6 @@
                     android:ellipsize="end"
                     android:visibility="visible" />
 
-                <TextView
-                    android:id="@+id/stream_health"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="2dp"
-                    android:fontFamily="@font/oswald_medium"
-                    android:textColor="@color/kb_text_lo"
-                    android:textSize="12sp"
-                    android:maxLines="1"
-                    android:ellipsize="end"
-                    android:visibility="gone" />
             </LinearLayout>
             </LinearLayout>
         </ScrollView>
@@ -589,6 +578,21 @@
                     android:text="⊞"
                     android:textColor="@color/kb_text_hi"
                     android:textSize="12sp" />
+
+                <!-- Stream info -->
+                <TextView
+                    android:id="@+id/btn_info"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/control_button_bg"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:gravity="center"
+                    android:text="i"
+                    android:textColor="@color/kb_text_hi"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
 
                 <!-- Settings -->
                 <TextView
@@ -1159,6 +1163,131 @@
                     android:focusable="true" />
             </LinearLayout>
 
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- Stream info panel: translucent so the video stays visible behind
+         it while it's up. Shows source/addon/engine, file info, and the
+         full video + audio codec details. -->
+    <ScrollView
+        android:id="@+id/info_panel"
+        android:layout_width="520dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:background="@drawable/info_panel_bg"
+        android:orientation="vertical"
+        android:padding="22dp"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <ImageView
+                    android:id="@+id/info_addon_icon"
+                    android:layout_width="28dp"
+                    android:layout_height="28dp"
+                    android:layout_marginEnd="10dp"
+                    android:scaleType="fitCenter"
+                    android:contentDescription="Source addon icon"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/info_title"
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="@font/oswald_medium"
+                    android:text="STREAM INFO"
+                    android:textColor="@color/kb_accent"
+                    android:textSize="16sp" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/info_source"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:fontFamily="@font/oswald_medium"
+                android:textColor="@color/kb_text_hi"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/info_engine"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:fontFamily="@font/oswald_medium"
+                android:textColor="@color/kb_text_lo"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/info_file"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:fontFamily="@font/oswald_medium"
+                android:textColor="@color/kb_text_lo"
+                android:textSize="12sp"
+                android:maxLines="2"
+                android:ellipsize="end" />
+
+            <TextView
+                android:id="@+id/info_video_header"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:fontFamily="@font/oswald_medium"
+                android:text="VIDEO"
+                android:textColor="@color/kb_accent"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/info_video"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:fontFamily="@font/oswald_medium"
+                android:lineSpacingExtra="3dp"
+                android:textColor="@color/kb_text_hi"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/info_audio_header"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:fontFamily="@font/oswald_medium"
+                android:text="AUDIO"
+                android:textColor="@color/kb_accent"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/info_audio"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:fontFamily="@font/oswald_medium"
+                android:lineSpacingExtra="3dp"
+                android:textColor="@color/kb_text_hi"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/info_hint"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:fontFamily="@font/oswald_medium"
+                android:text="Press OK or Back to close"
+                android:textColor="@color/kb_text_lo"
+                android:textSize="11sp" />
         </LinearLayout>
     </ScrollView>
 

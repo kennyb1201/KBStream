@@ -45,6 +45,7 @@ import androidx.media3.common.VideoSize
 import androidx.media3.common.text.CueGroup
 import androidx.media3.common.text.Cue
 import androidx.recyclerview.widget.LinearLayoutManager
+import coil.load
 import androidx.recyclerview.widget.RecyclerView
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -212,7 +213,6 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var episodeTitleView: TextView
     private lateinit var sourceLabel: TextView
     private lateinit var badgeRow: LinearLayout
-    private lateinit var streamHealth: TextView
     private lateinit var overviewText: TextView
     private lateinit var seekbarRow: LinearLayout
     private lateinit var seekbar: SeekBar
@@ -244,6 +244,15 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var settingsBitrate: TextView
     private lateinit var settingsCodec: TextView
     private lateinit var settingsSpeedAspect: TextView
+    private lateinit var btnInfo: TextView
+    private lateinit var infoPanel: ScrollView
+    private lateinit var infoAddonIcon: ImageView
+    private lateinit var infoTitle: TextView
+    private lateinit var infoSource: TextView
+    private lateinit var infoEngine: TextView
+    private lateinit var infoFile: TextView
+    private lateinit var infoVideo: TextView
+    private lateinit var infoAudio: TextView
     private lateinit var pickerList: RecyclerView
     private lateinit var btnSubSmall: TextView
     private lateinit var btnSubNormal: TextView
@@ -324,6 +333,12 @@ class NativePlayerActivity : ComponentActivity() {
     private var currentAudioUrl: String? = null
     private var currentSourceLabel = "Source 1"
     private var currentBadges: List<StreamBadge> = emptyList()
+
+    // Source identity for the info panel: addon display name + logo URL are
+    // resolved once from the installed-addons registry by matching the active
+    // source label against addon names (cheap, no intent plumbing changes).
+    private var currentAddonName: String? = null
+    private var currentAddonLogoUrl: String? = null
     private var carryPositionMs = 0L
     private var playbackSpeed = 1f
     private var resizeModeIndex = 0
@@ -1007,6 +1022,7 @@ class NativePlayerActivity : ComponentActivity() {
             currentSourceLabel = first.displayLabel()
             currentBadges = first.badges
         }
+        resolveAddonIdentity(currentSourceLabel)
             ?: sources.firstOrNull()?.displayLabel()
             ?: "Current source"
         currentSourceIndex = sources.indexOfFirst { it.url == currentUrl }
@@ -1057,7 +1073,6 @@ class NativePlayerActivity : ComponentActivity() {
         episodeTitleView = findViewById(R.id.episode_title)
         sourceLabel = findViewById(R.id.source_label)
         badgeRow = findViewById(R.id.badge_row)
-        streamHealth = findViewById(R.id.stream_health)
         overviewText = findViewById(R.id.overview_text)
         seekbarRow = findViewById(R.id.seekbar_row)
         seekbar = findViewById(R.id.seekbar)
@@ -1070,6 +1085,15 @@ class NativePlayerActivity : ComponentActivity() {
         btnSubtitle = findViewById(R.id.btn_subtitle)
         btnSpeed = findViewById(R.id.btn_speed)
         btnAspect = findViewById(R.id.btn_aspect)
+        btnInfo = findViewById(R.id.btn_info)
+        infoPanel = findViewById(R.id.info_panel)
+        infoAddonIcon = findViewById(R.id.info_addon_icon)
+        infoTitle = findViewById(R.id.info_title)
+        infoSource = findViewById(R.id.info_source)
+        infoEngine = findViewById(R.id.info_engine)
+        infoFile = findViewById(R.id.info_file)
+        infoVideo = findViewById(R.id.info_video)
+        infoAudio = findViewById(R.id.info_audio)
         btnSettings = findViewById(R.id.btn_settings)
         pickerContainer = findViewById(R.id.picker_container)
         pickerTitle = findViewById(R.id.picker_title)
@@ -1248,6 +1272,19 @@ class NativePlayerActivity : ComponentActivity() {
             scheduleAutoHide()
         }
         btnAspect.setOnFocusChangeListener { _, focused -> if (focused) removeAutoHide() else scheduleAutoHide() }
+        btnInfo.setOnClickListener { toggleInfoPanel() }
+        btnInfo.setOnFocusChangeListener { _, focused -> if (focused) removeAutoHide() else scheduleAutoHide() }
+        infoPanel.setOnKeyListener { _, keyCode, event ->
+            // OK/Back close the panel; D-pad is swallowed so focus can't
+            // escape to the video surface while it's up.
+            if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+            when (keyCode) {
+                KeyEvent.KEYCODE_BACK,
+                KeyEvent.KEYCODE_DPAD_CENTER,
+                KeyEvent.KEYCODE_ENTER -> { hideInfoPanel(); showControls(); true }
+                else -> true
+            }
+        }
         btnSettings.setOnClickListener { toggleSettingsPanel() }
         btnSettings.setOnFocusChangeListener { _, focused -> if (focused) removeAutoHide() else scheduleAutoHide() }
 
@@ -1648,7 +1685,11 @@ class NativePlayerActivity : ComponentActivity() {
                     }
                 }
                 KeyEvent.KEYCODE_BACK -> {
-                    if (isPickerShowing || showSettingsPanel) { dismissAllPanels(); true } else false
+                    when {
+                        isPickerShowing || showSettingsPanel -> { dismissAllPanels(); true }
+                        infoPanel.visibility == View.VISIBLE -> { hideInfoPanel(); showControls(); true }
+                        else -> false
+                    }
                 }
                 else -> false
             }
@@ -1664,7 +1705,9 @@ class NativePlayerActivity : ComponentActivity() {
      * when a panel is up so Back-driven dismiss flows stay intact.
      */
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (isPickerShowing || showSettingsPanel) return super.onKeyDown(keyCode, event)
+        if (isPickerShowing || showSettingsPanel || infoPanel.visibility == View.VISIBLE) {
+            return super.onKeyDown(keyCode, event)
+        }
         when (keyCode) {
             KeyEvent.KEYCODE_MEDIA_PLAY -> { exoPlayer?.play(); hideControls(); return true }
             KeyEvent.KEYCODE_MEDIA_PAUSE -> { exoPlayer?.pause(); showControls(); return true }
@@ -2375,7 +2418,6 @@ class NativePlayerActivity : ComponentActivity() {
                     }
                 }
             }
-            updateStreamHealthDisplay()
         }
 
         override fun onPlayerError(error: PlaybackException) {
@@ -2937,18 +2979,128 @@ class NativePlayerActivity : ComponentActivity() {
         renderSourceBadges()
     }
 
-    private fun updateStreamHealthDisplay() {
-        if (streamWidth > 0 && streamHeight > 0) {
-            streamHealth.visibility = View.VISIBLE
-            streamHealth.text = buildString {
-                append(normalizeResolution(streamWidth, streamHeight))
-                if (streamBitrate > 0) append(" • ${streamBitrate / 1_000} kbps")
-                val codecLabel = normalizeCodec(streamCodec, streamDeclaredDvCodec, dvTo81Session)
-                if (codecLabel != "—") append(" • $codecLabel")
-            }
+    /**
+     * Resolves the active source's addon display name + logo URL by matching
+     * [label] against installed addons. Torrent/metadata-only streams and
+     * live channels simply leave both null (panel hides the icon row).
+     */
+    private fun resolveAddonIdentity(label: String?) {
+        val name = label?.trim().orEmpty()
+        if (name.isEmpty()) {
+            currentAddonName = null
+            currentAddonLogoUrl = null
+            return
+        }
+        val addon = try {
+            com.kennyb1201.kbstream.data.addon.AddonManager
+                .getInstance(applicationContext)
+                .getInstalledAddons()
+                .firstOrNull { it.displayName.equals(name, ignoreCase = true) }
+        } catch (_: Exception) {
+            null
+        }
+        currentAddonName = addon?.displayName ?: name
+        currentAddonLogoUrl = addon?.logo
     }
 
-}
+    /** Human label for the playback engine currently in use. */
+    private fun engineLabel(): String {
+        val parts = mutableListOf("Hardware video decoder")
+        parts.appendAudioEngineLabel()
+        if (p5GlesActive) parts.add("GLES raw-plane color corrector (P5 DV)")
+        if (enableTunneling) parts.add("Tunneled")
+        if (forceTextureViewFallback) parts.add("TextureView surface")
+        return parts.joinToString(" • ")
+    }
+
+    private fun MutableList<String>.appendAudioEngineLabel() {
+        when (AppPreferences.getAudioDecoder(applicationContext)) {
+            AppPreferences.AUDIO_DECODER_DEVICE_ONLY -> add("Hardware audio")
+            AppPreferences.AUDIO_DECODER_PREFER_APP -> add("FFmpeg audio preferred")
+            else -> add("FFmpeg audio fallback")
+        }
+    }
+
+    private fun toggleInfoPanel() {
+        if (infoPanel.visibility == View.VISIBLE) {
+            hideInfoPanel()
+            showControls()
+        } else {
+            dismissPicker()
+            dismissSettingsPanel()
+            buildInfoPanel()
+            infoPanel.visibility = View.VISIBLE
+            scrim.visibility = View.VISIBLE
+            removeAutoHide()
+            infoPanel.requestFocus()
+        }
+    }
+
+    private fun hideInfoPanel() {
+        infoPanel.visibility = View.GONE
+        if (!showSettingsPanel && !isPickerShowing) {
+            scrim.visibility = View.GONE
+        }
+    }
+
+    /** Fills every info row from the live player + stream state. */
+    private fun buildInfoPanel() {
+        // Source row + addon icon
+        infoSource.text = "Source: ${currentAddonName ?: currentSourceLabel}"
+        val logo = currentAddonLogoUrl
+        if (!logo.isNullOrBlank()) {
+            infoAddonIcon.visibility = View.VISIBLE
+            infoAddonIcon.load(logo)
+        } else {
+            infoAddonIcon.visibility = View.GONE
+            infoAddonIcon.setImageDrawable(null)
+        }
+        infoEngine.text = "Engine: ${engineLabel()}"
+
+        // File row: filename for http(s) sources, torrent name otherwise
+        val fileLabel = currentUrl?.let { url ->
+            val path = url.substringBefore('?').substringAfterLast('/')
+            if (path.contains('%')) java.net.URLDecoder.decode(path, "UTF-8") else path
+        }?.takeIf { it.isNotBlank() && it.contains('.') }
+            ?: currentSourceLabel
+        infoFile.text = "File: $fileLabel"
+
+        // VIDEO block
+        infoVideo.text = buildString {
+            if (streamWidth > 0 && streamHeight > 0) {
+                appendLine("Resolution: ${streamWidth}×${streamHeight} (${normalizeResolution(streamWidth, streamHeight)})")
+            } else {
+                appendLine("Resolution: —")
+            }
+            val codecLabel = normalizeCodec(streamCodec, streamDeclaredDvCodec, dvTo81Session)
+            appendLine("Codec: ${if (codecLabel != "—") codecLabel else streamMimeType ?: "—"}")
+            if (streamBitrate > 0) appendLine("Bitrate: ${streamBitrate / 1_000} kbps")
+            exoPlayer?.videoSize?.pixelWidthHeightRatio?.takeIf { it != 1f }?.let {
+                appendLine("Pixel ratio: $it")
+            }
+            if (p5GlesActive) appendLine("Dolby Vision P5 — GL color correction active")
+        }.trimEnd()
+
+        // AUDIO block: every selected audio track's format details
+        val audioLines = mutableListOf<String>()
+        exoPlayer?.currentTracks?.groups?.forEach { group ->
+            for (i in 0 until group.length) {
+                if (group.type == C.TRACK_TYPE_AUDIO && group.isTrackSelected(i)) {
+                    val f = group.getTrackFormat(i)
+                    val parts = mutableListOf<String>()
+                    f.language?.uppercase()?.let { parts.add("Language: $it") }
+                    normalizeCodec(f.codecs.ifBlank { null })
+                        .takeIf { it != "—" }?.let { parts.add("Codec: $it") }
+                    if (f.channelCount > 0) parts.add("Channels: ${f.channelCount}")
+                    if (f.sampleRate > 0) parts.add("Sample rate: ${f.sampleRate} Hz")
+                    if (f.bitrate > 0) parts.add("Bitrate: ${f.bitrate / 1_000} kbps")
+                    if (parts.isNotEmpty()) audioLines.add(parts.joinToString(" • "))
+                }
+            }
+        }
+        infoAudio.text = if (audioLines.isEmpty()) "—" else audioLines.joinToString("\n")
+    }
+
 
     /**
      * Auto-select audio and subtitle tracks matching the user's preferred
@@ -3077,7 +3229,6 @@ class NativePlayerActivity : ComponentActivity() {
         )
         btnSpeed.text = "${playbackSpeed}x"
         btnAspect.text = ASPECT_MODES.getOrElse(resizeModeIndex) { "Fit" }
-        updateStreamHealthDisplay()
     }
 
     private fun pillBg(selected: Boolean, focused: Boolean): Int = when {
@@ -3273,6 +3424,11 @@ class NativePlayerActivity : ComponentActivity() {
         clockHandler.removeCallbacks(clockRunnable)
         clockHandler.post(clockRunnable)
         // If a panel is open, the panel owns focus — do not steal it.
+        if (infoPanel.visibility == View.VISIBLE) {
+            // Info panel keeps its own focus; just keep controls visible.
+            scheduleAutoHide()
+            return
+        }
         if (!showSettingsPanel && !isPickerShowing) {
             controlsOverlay.post {
                 // While a skip prompt is up it is the primary target —
@@ -3304,6 +3460,7 @@ class NativePlayerActivity : ComponentActivity() {
         controlsOverlay.visibility = View.GONE
         seekbarRow.visibility = View.GONE
         dismissAllPanels()
+        hideInfoPanel()
         bufferingSpinner.visibility = View.GONE
         if (exoPlayer?.isPlaying == true) {
             hideSplash()
@@ -4191,6 +4348,7 @@ class NativePlayerActivity : ComponentActivity() {
         when {
             isPickerShowing -> { dismissPicker(); showControls(); return }
             showSettingsPanel -> { dismissSettingsPanel(); showControls(); return }
+            infoPanel.visibility == View.VISIBLE -> { hideInfoPanel(); showControls(); return }
             controlsVisible -> { hideControls(); return }
         }
         super.onBackPressed()
@@ -4268,6 +4426,7 @@ class NativePlayerActivity : ComponentActivity() {
         carryPositionMs = if (isLiveChannel) 0L else exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
         currentSourceLabel = stream.displayLabel()
         currentBadges = stream.badges
+        resolveAddonIdentity(currentSourceLabel)
         currentUrl = newUrl
         currentAudioUrl = stream.audioUrl
         currentSourceIndex = sources.indexOfFirst { it.url == newUrl }
