@@ -8,6 +8,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -836,9 +838,9 @@ private fun SearchBrowseBrowser(
     // out of. The matching chip renders with grabInitialFocus so the TV
     // focus system lands on it (which also scrolls it into view); the
     // stored chip is cleared once consumed so later recompositions don't
-    // steal focus back.
+    // steal focus back. Consumption is tracked inside SubmenuChipFlowRow
+    // (scoped to the submenu that actually rendered the chip).
     val returnChip = viewModel.browseReturnChip
-    var returnChipConsumed by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.padding(top = 8.dp)) {
         SectionHeader(title = "Browse")
@@ -863,7 +865,10 @@ private fun SearchBrowseBrowser(
         }
 
         // Submenu chips for the active category; each opens a dedicated
-        // discover screen (Tag / Studio / Collection / Decade).
+        // discover screen (Tag / Studio / Collection / Decade). Wrapped
+        // FlowRow, not one long scrolling row: the big submenus (91 entries
+        // in Services & Networks) would otherwise need 90 D-pad right-presses
+        // to reach the end — wrapped rows let focus move straight DOWN.
         val category = activeCategory
         if (category != null) {
             if (submenuLoading) {
@@ -877,41 +882,65 @@ private fun SearchBrowseBrowser(
                     )
                 )
             } else if (category.entries.isNotEmpty()) {
-                // Same edge padding as the category strip / poster rails:
-                // without it the first and last submenu chips' borders clip
-                // against the screen edge (padding lives inside the scroll
-                // so it travels with the content).
-                Row(
-                    modifier = Modifier
-                        .horizontalScroll(rememberScrollState())
-                        .padding(
-                            top = 10.dp,
-                            start = SEARCH_RAIL_EDGE_PADDING,
-                            end = SEARCH_RAIL_EDGE_PADDING
-                        ),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    category.entries.forEachIndexed { entryIndex, entry ->
-                        val isReturnChip = !returnChipConsumed &&
-                            returnChip?.first == category.key &&
-                            returnChip?.second == entryIndex
-                        SearchChip(
-                            label = entry.name,
-                            onClick = {
-                                viewModel.onBrowseEntryClicked(
-                                    category.key,
-                                    entry
-                                )
-                            },
-                            grabInitialFocus = isReturnChip,
-                            onInitialFocusConsumed = {
-                                returnChipConsumed = true
-                                viewModel.browseReturnChip = null
-                            }
-                        )
+                // Horizontal edge padding matches the category strip /
+                // poster rails so chip borders never clip at the screen
+                // edge; the 10.dp top gap mirrors the old row spacing.
+                SubmenuChipFlowRow(
+                    entries = category.entries,
+                    categoryKey = category.key,
+                    onEntryClicked = viewModel::onBrowseEntryClicked,
+                    returnChip = returnChip,
+                    onReturnChipConsumed = {
+                        viewModel.browseReturnChip = null
                     }
-                }
+                )
             }
+        }
+    }
+}
+
+/**
+ * Wrapped multi-row chip grid for the browse submenu (FlowRow). One long
+ * horizontal row stops scaling once a category holds dozens of entries:
+ * the Fire TV D-pad would need a right-press per chip to reach the far
+ * end. Wrapping into rows keeps every entry a few presses away, and
+ * vertical D-pad movement walks the rows naturally.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SubmenuChipFlowRow(
+    entries: List<BrowseEntry>,
+    categoryKey: String,
+    onEntryClicked: (String, BrowseEntry) -> Unit,
+    returnChip: Pair<String, Int>?,
+    onReturnChipConsumed: () -> Unit
+) {
+    var returnChipConsumed by remember { mutableStateOf(false) }
+
+    FlowRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                top = 10.dp,
+                start = SEARCH_RAIL_EDGE_PADDING,
+                end = SEARCH_RAIL_EDGE_PADDING
+            ),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        entries.forEachIndexed { entryIndex, entry ->
+            val isReturnChip = !returnChipConsumed &&
+                returnChip?.first == categoryKey &&
+                returnChip?.second == entryIndex
+            SearchChip(
+                label = entry.name,
+                onClick = { onEntryClicked(categoryKey, entry) },
+                grabInitialFocus = isReturnChip,
+                onInitialFocusConsumed = {
+                    returnChipConsumed = true
+                    onReturnChipConsumed()
+                }
+            )
         }
     }
 }

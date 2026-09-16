@@ -1,0 +1,78 @@
+  RESOLVED 'HGTV' -> id 210 tmdb_name='HGTV' votes={210: 4}
+      recent: [('Renovation Aloha', '2024'), ('Barbie Dreamhouse Challenge', '2023'), ('Ugliest House in America', '2022')]
+  RESOLVED 'History' -> id 65 tmdb_name='History' votes={65: 3}
+      recent: [('Hazardous History with Henry Winkler', '2025'), ('Sitting Bull', '2025'), ("Kevin Costner's The West", '2025')]
+  RESOLVED 'Investigation Discovery' -> id 244 tmdb_name='Investigation Discovery' votes={244: 2}
+      recent: [('The Cult Behind the Killer: The Andrea Yates Story', '2026'), ('Who Hired the Hitman?', '2025'), ('The Friday the 13th Murders', '2025')]
+  RESOLVED 'TLC' -> id 84 tmdb_name='TLC' votes={84: 3}
+      recent: [('90 Day: Hunt for Love', '2025'), ('Baylen Out Loud', '2025'), ('90 Day: The Last Resort', '2023')]
+  RESOLVED 'Animal Planet' -> id 91 tmdb_name='Animal Planet' votes={91: 1}
+      recent: [('Mysterious Creatures with Forrest Galante', '2021'), ("Jeremy Wade's Dark Waters", '2019'), ("Crikey! It's the Irwins", '2018')]
+  RESOLVED 'Science Channel' -> id 226 tmdb_name='Science' votes={226: 3}
+      recent: [('Ancient Unexplained Files', '2021'), ('UFO Witness', '2021'), ('Curse of the Bermuda Triangle', '2020')]
+  RESOLVED 'CMT' -> id 85 tmdb_name='CMT' votes={85: 2}
+      recent: [('The Last Cowboy', '2019'), ('Sun Records', '2017'), ('Still the King', '2016')]
+  RESOLVED 'TV Land' -> id 397 tmdb_name='TV Land' votes={397: 2}
+      recent: [('Nobodies', '2017'), ('Lopez', '2016'), ('Teachers', '2016')]
+  RESOLVED 'Disney Channel' -> id 54 tmdb_name='Disney Channel' votes={54: 3}
+      recent: [('Vampirina: Teenage Vampire', '2025'), ('Electric Bloom', '2025'), ('StuGo', '2025')]
+  RESOLVED 'Disney XD' -> id 44 tmdb_name='Disney XD' votes={44: 2}
+      recent: [('Dragon Striker', '2026'), ('Armorsaurs', '2025'), ("Marvel's Moon Girl and Devil Dinosaur", '2023')]
+  RESOLVED 'Disney Junior' -> id 281 tmdb_name='Disney Junior' votes={281: 3}
+      recent: [('Sofia the First: Royal Magic', '2026'), ('Iron Man and His Awesome Friends', '2025'), ('Mickey Mouse Clubhouse+', '2025')]
+  UNRESOLVED 'Boomerang' (no network match via probes)
+  RESOLVED 'OWN' -> id 827 tmdb_name='OWN' votes={827: 2}
+      recent: [('The Hair Tales', '2022'), ('The Kings of Napa', '2022'), ('Cherish the Day', '2020')]
+  RESOLVED 'Oxygen' -> id 132 tmdb_name='Oxygen' votes={132: 3}
+      recent: [('The Killer Among Us', '2026'), ('The Girl on the Milk Carton', '2024'), ('Selena & Yolanda: The Secrets Between Them', '2024')]
+  RESOLVED 'WE tv' -> id 448 tmdb_name='WE tv' votes={448: 4}
+      recent: [('Extreme Love', '2018'), ('Love After Lockup', '2018'), ('Growing Up Hip Hop: Atlanta', '2017')]
+  UNRESOLVED 'UPtv' (no network match via probes)
+  RESOLVED 'Game Show Network' -> id 63 tmdb_name='Game Show Network' votes={63: 1}
+      recent: [('People Puzzler', '2021'), ('America Says', '2018'), ('Skin Wars: Fresh Paint', '2016')]
+  RESOLVED 'Hallmark Channel' -> id 384 tmdb_name='Hallmark Channel' votes={384: 2}
+      recent: [("Twelve Dates 'Til Christmas", '2025'), ('Providence Falls', '2025'), ('Mistletoe Murders', '2024')]
+  UNRESOLVED 'Hallmark Family' (no network match via probes)
+  RESOLVED 'INSP' -> id 747 tmdb_name='INSP' votes={747: 1}
+      recent: []
+  UNRESOLVED 'Great American Family' (no network match via probes)
+  RESOLVED 'Pop TV' -> id 516 tmdb_name='Pop' votes={516: 1}
+      recent: [('Florida Girls', '2019'), ("Let's Get Physical", '2018'), ('Hot Date', '2017')]
+  RESOLVED 'Bounce TV' -> id 1351 tmdb_name='Bounce TV' votes={1351: 2}
+      recent: [('Act Your Age', '2023'), ('Johnson', '2021'), ('Saints & Sinners', '2016')]
+  RESOLVED 'PBS' -> id 14 tmdb_name='PBS' votes={14: 2}
+      recent: [('The American Revolution', '2025'), ('Maigret', '2025'), ('Leonardo da Vinci', '2024')]
+  RESOLVED 'Telemundo' -> id 193 tmdb_name='Telemundo' votes={193: 2}
+      recent: [('Wolf: Die Killing', '2026'), ('Dinastía Casillas', '2025'), ('Velvet el nuevo imperio', '2025')]
+  RESOLVED 'Univision' -> id 28 tmdb_name='Univision' votes={28: 1}
+      recent: [('Tierra de amor y coraje', '2026'), ('Guardián de mi vida', '2026'), ('Doménica Montero', '2025')]
+  RESOLVED 'truTV' -> id 364 tmdb_name='truTV' votes={364: 3}
+      recent: [('Impractical Jokers: Dinner Party', '2020'), ('Tacoma FD', '2019'), ("Bobcat Goldthwait's Misfits & Monsters", '2018')]
+  RESOLVED 'Cinemax' -> id 359 tmdb_name='Cinemax' votes={359: 2}
+      recent: [('Trackers', '2019'), ('Jett', '2019'), ('Warrior', '2019')]
+  RESOLVED 'ESPN' -> id 29 tmdb_name='ESPN' votes={29: 1, 2540: 1}
+      recent: [('The Kingdom', '2025'), ('Galácticos', '2021'), ('The Last Dance', '2020')]
+  UNRESOLVED 'NFL Network' (no network match via probes)
+  UNRESOLVED 'MLB Network' (no network match via probes)
+  RESOLVED 'CNBC' -> id 175 tmdb_name='CNBC' votes={175: 1}
+      recent: [("Jay Leno's Garage", '2015'), ('The Profit', '2013'), ('Flipping Out', '2007')]
+  RESOLVED 'MSNBC' -> id 37 tmdb_name='MSNBC' votes={37: 2}
+      recent: [('The Joy Reid Show', '2020'), ('All In with Chris Hayes', '2013'), ("The Last Word with Lawrence O'Donnell", '2010')]
+  UNRESOLVED 'Fox News' (no network match via probes)
+  RESOLVED 'BBC America' -> id 493 tmdb_name='BBC America' votes={493: 3}
+      recent: [('Orphan Black: Echoes', '2024'), ('Eden: Untamed Planet', '2021'), ('The Watch', '2021')]
+  RESOLVED 'BBC Two' -> id 332 tmdb_name='BBC Two' votes={332: 4}
+      recent: [('Twenty Twenty Six', '2026'), ('Michael Jackson: An American Tragedy', '2026'), ('AI Confidential with Hannah Fry', '2026')]
+  RESOLVED 'ITV1' -> id 9 tmdb_name='ITV1' votes={9: 3}
+      recent: [('The Dark', '2026'), ('Believe Me', '2026'), ('Secret Service', '2026')]
+  UNRESOLVED 'Channel 5' (no network match via probes)
+  RESOLVED 'Discovery Family' -> id 1287 tmdb_name='Discovery Family' votes={1287: 1}
+      recent: [('Transformers: Rescue Bots Academy', '2018'), ('My Little Pony: Equestria Girls', '2017'), ('The New Adventures of Peter Pan', '2013')]
+  RESOLVED 'MotorTrend' -> id 2444 tmdb_name='MotorTrend' votes={2444: 3, 435: 1}
+      recent: [('Texas Metal', '2017'), ('Iron Resurrection', '2016'), ("Bitchin' Rides", '2014')]
+  RESOLVED 'Cooking Channel' -> id 802 tmdb_name='Cooking Channel' votes={802: 2}
+      recent: [('Good Eats: Reloaded', '2018'), ('Man v. Food', '2008'), ('Emeril Live', '1997')]
+  RESOLVED 'Destination America' -> id 530 tmdb_name='Destination America' votes={530: 1}
+      recent: [('Terror in the Woods', '2017'), ('Haunted Towns', '2017'), ('UFOs: The Lost Evidence', '2017')]
+  UNRESOLVED 'AMC Plus' (no network match via probes)
+NETWORK PASS DONE

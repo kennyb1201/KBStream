@@ -1,0 +1,132 @@
+== streamer network ids ==
+  network 3343: 'BET+' recent: [("Tyler Perry's Divorced Sistas", '2025'), ('Lil Kev', '2025'), ('The Family Business: New Orleans', '2025')]
+  network 4262: 'ERR HTTP Error 404: Not Found' recent: []
+  network 4012: 'CiF TV' recent: []
+  network 5553: 'ERR HTTP Error 404: Not Found' recent: []
+  network 4331: 'ERR HTTP Error 404: Not Found' recent: []
+== retry nets ==
+  UNRESOLVED 'Hallmark Movies & Mysteries'
+  UNRESOLVED 'Great American Family'
+  UNRESOLVED 'NBA TV'
+  UNRESOLVED 'NFL Network'
+  UNRESOLVED 'Fox News'
+  UNRESOLVED 'Channel 5'
+== service companies ==
+  'Plex': 283072='Plex', 310548='Plex'
+  'Shudder': 142877='Shudder', 51159='Shudder Films'
+  'AMC Plus': 226350='AMC+', 26262='AIC PLUS+'
+  'AMC+': 122304='AMC', 226350='AMC+'
+  'Discovery Plus': 225743='discovery plus', 233846='Discovery plus Journeys'
+  'Discovery+': 6790='Discovery', 100298='DISCOVERY'
+  'Epix': 6805='Epix', 299017='epix studio'
+  'MGM+': 236503='MGM', 136673='MGM'
+  'BritBox': 159102='BritBox', 236529='BritBox International'
+  'Acorn TV': 212651='Acorn TV'
+  'ALLBLK': 172801='Allblk', 202600='Allbiz'
+  'fuboTV': 57501='Fun TV', 113499='Nub TV'
+  'Xumo': 263687='Lumo'
+  'Crunchyroll LLC': 198847='Crunchyroll'
+  'DAZN': 135210='DAZN', 219645='DAZN'
+  'ESPN Plus': NO RESULTS
+  'Tastemade': 109306='Tastemade', 271768='Tastemade Studios'
+  'CuriosityStream': 96320='CuriosityStream', 131907='CuriosityStream, Partisan Pictures'
+  'Sundance Now': 181515='Sundance Now'
+  'IFC Films Unlimited': NO RESULTS
+  'Hallmark Media': 304438='Hallmark Media', 53015='Hallmark Media'
+  'GAC Media': 308806='Glacé Media', 309825='Gal Media'
+  'Roku Media': 279515='Roku Media', 13617='R.U. Media'
+== remaining keywords ==
+  MISS 'formula 1' (top: 'formula one (f1)', 'formula 2')
+  OK 'nascar' id=161630 movies=35
+  OK 'car racing' id=298953 movies=36
+  OK 'boxing' id=209476 movies=650
+  MISS 'mixed martial arts' (top: 'mixed martial arts (mma)')
+  OK 'wrestling' id=5970 movies=724
+  OK 'bank heist' id=191845 movies=74
+  OK 'hacking' id=12361 movies=92
+  OK 'con artist' id=10453 movies=130
+  OK 'undercover' id=1568 movies=244
+  OK 'small town' id=1415 movies=1077
+  OK 'amusement park' id=155582 movies=158
+  OK 'circus' id=291 movies=475
+  OK 'summer camp' id=5767 movies=176
+  OK 'midlife crisis' id=1599 movies=122
+  OK 'toxic relationship' id=241804 movies=135
+  OK 'obsessive love' id=159278 movies=40
+  OK 'stalker' id=6844 movies=373
+  OK 'conspiracy' id=10410 movies=565
+  OK 'cover-up' id=9665 movies=107
+  OK 'whistleblower' id=209799 movies=51
+  OK 'journalist' id=736 movies=466
+  OK 'lawyer' id=10909 movies=547
+  OK 'jury' id=8881 movies=38
+  MISS 'forensics' (top: 'forensic')
+  OK 'hospital' id=11612 movies=726
+  OK 'doctor' id=13005 movies=782
+  OK 'nurse' id=428 movies=387
+  OK 'surgeon' id=3262 movies=99
+  OK 'firefighter' id=192094 movies=121
+  OK 'police' id=6149 movies=1583
+  OK 'bounty hunter' id=801 movies=143
+  OK 'gunslinger' id=75 movies=98
+  OK 'stockbroker' id=10631 movies=27
+  OK 'social media' id=176834 movies=394
+  OK 'paparazzi' id=2560 movies=47
+  OK 'fashion' id=15479 movies=399
+  OK 'model' id=14818 movies=246
+  OK 'musician' id=4048 movies=645
+  OK 'band' id=311916 movies=129
+  OK 'rapper' id=4562 movies=134
+  OK 'stand-up comedian' id=276162 movies=255
+  OK 'broadway' id=156028 movies=154
+  OK 'ballet' id=10551 movies=552
+  OK 'military' id=162365 movies=491
+  OK 'veteran' id=159909 movies=152
+  OK 'homelessness' id=2981 movies=295
+  OK 'immigrant' id=2356 movies=445
+  OK 'american dream' id=2355 movies=110
+  OK 'civil rights' id=4098 movies=193
+  MISS 'suffrage' (top: "women's suffrage", 'suffragettes')
+  OK 'cult leader' id=159028 movies=38
+  OK 'doomsday' id=34161 movies=31
+  OK 'nuclear war' id=677 movies=82
+  OK 'alien contact' id=160515 movies=57
+  OK 'first contact' id=211248 movies=6
+  MISS 'artificial satellite' (top: )
+  OK 'deep space' id=209280 movies=21
+  MISS 'colonization' (top: 'colonisation', 'decolonization')
+  OK 'terraforming' id=1613 movies=4
+  OK 'cryogenics' id=3385 movies=25
+  OK 'cloning' id=11628 movies=32
+  OK 'genetic engineering' id=163561 movies=41
+  OK 'mutation' id=2766 movies=88
+  OK 'super strength' id=160184 movies=10
+  OK 'superhero team' id=155030 movies=164
+  OK 'vigilante' id=7002 movies=260
+  MISS 'antihero' (top: 'female antihero', 'anti hero')
+  OK 'sword and sorcery' id=234213 movies=118
+  OK 'magical object' id=15252 movies=32
+  OK 'cursed object' id=304115 movies=29
+  OK 'haunted doll' id=249694 movies=19
+  OK 'ouija' id=10111 movies=43
+  OK 'seance' id=328949 movies=5
+  OK 'medium' id=2723 movies=60
+  OK 'exorcist' id=159940 movies=69
+  OK 'demon' id=15001 movies=804
+  OK 'antichrist' id=337438 movies=2
+  OK 'apocalypse' id=12332 movies=372
+  OK 'ragnarok' id=333626 movies=0
+  OK 'flood' id=173272 movies=122
+  OK 'volcano' id=3347 movies=185
+  OK 'earthquake' id=3521 movies=221
+  OK 'tornado' id=2213 movies=75
+  OK 'hurricane' id=2215 movies=88
+  OK 'shark' id=15097 movies=350
+  OK 'snake' id=1585 movies=207
+  OK 'spider' id=3986 movies=113
+  OK 'crocodile' id=3185 movies=114
+  OK 'bear' id=10468 movies=253
+  OK 'wolf pack' id=185653 movies=11
+  OK 'locust' id=179566 movies=7
+  OK 'infestation' id=163395 movies=16
+DONE

@@ -1,0 +1,16 @@
+== direct id checks ==
+  network 385: 'Marca Perú ' recent=EMPTY
+  network 5303: 'GAC Family' recent=[('When Hope Calls', '2019')]
+  network 1307: 'Great American Pure Flix' recent=[('When Hope Calls', '2019')]
+  network 2853: 'Hallmark Movies Now' recent=[('When Hope Calls', '2019')]
+== show probes (print all networks) ==
+  'Billy the Kid' -> 'Billy the Kid' networks=[(922, 'Epix'), (6219, 'MGM+'), (8522, 'MGM+')]
+  'From 2022' -> 'My Love from the Stars' networks=[(1024, 'Prime Video')]
+  'Sunday Night Football' -> 'Sunday Night Football: Reality Hot Seat' networks=[]
+  'Monday Night Football' -> 'Monday Night Football' networks=[(2, 'ABC')]
+  'MLB World Series' -> '2025 MLB World Series' networks=[]
+  'Bringing Up Bates' -> 'Bringing Up Bates' networks=[(1180, 'UP TV')]
+  search MISS 'A Christmas Less Ordinary'
+  search MISS 'Christmas on Candy Cane Lane'
+  'The Way Home' -> 'The Way Home' networks=[(384, 'Hallmark Channel')]
+DONE

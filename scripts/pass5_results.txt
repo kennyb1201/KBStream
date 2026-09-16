@@ -1,0 +1,150 @@
+== company id confirmation (/company/{id} + movie discover count) ==
+  [OK ] company 210099: 'Amazon MGM Studios' movies=104 newest=2026 (expect 'Amazon MGM Studios')
+  [OK ] company 114247: 'YouTube' movies=3 newest=2022 (expect 'YouTube')
+  [OK ] company 171251: 'Netflix Animation Studios' movies=2 newest=2025 (expect 'Netflix Animation')
+  [OK ] company 290879: 'The Roku Channel' movies=0 newest=- (expect 'The Roku Channel')
+  [OK ] company 156742: 'Onyx Collective' movies=2 newest=2023 (expect 'Onyx Collective')
+  [OK ] company 21659: '20th Television' movies=0 newest=- (expect '20th Television')
+  [OK ] company 236613: 'ABC Signature' movies=0 newest=- (expect 'ABC Signature')
+  [OK ] company 1957: 'Warner Bros. Television' movies=105 newest=2022 (expect 'Warner Bros. Television')
+  [OK ] company 11073: 'Sony Pictures Television' movies=78 newest=2024 (expect 'Sony Pictures Television')
+  [NAME-MISMATCH] company 7938: 'UCP' movies=9 newest=2023 (expect 'Universal Content Productions')
+  [OK ] company 1081: 'CBS Studios' movies=30 newest=2025 (expect 'CBS')
+  [OK ] company 224196: 'CBS Studios' movies=0 newest=- (expect 'CBS Studios')
+  [OK ] company 28523: 'Lionsgate Television' movies=18 newest=2021 (expect 'Lionsgate Television')
+  [OK ] company 224800: 'Lionsgate Television' movies=0 newest=- (expect 'Lionsgate Television')
+  [OK ] company 10427: 'Open Road Films' movies=28 newest=2022 (expect 'Open Road Films')
+  [OK ] company 270158: 'STX Entertainment' movies=1 newest=2015 (expect 'STX Entertainment')
+  [OK ] company 117057: 'Annapurna Pictures' movies=0 newest=- (expect 'Annapurna Pictures')
+  [OK ] company 13184: 'Annapurna Pictures' movies=38 newest=2026 (expect 'Annapurna Pictures')
+  [OK ] company 81: 'Plan B Entertainment' movies=57 newest=2026 (expect 'Plan B Entertainment')
+  [OK ] company 1: 'Lucasfilm Ltd.' movies=81 newest=2026 (expect 'Lucasfilm')
+  [OK ] company 6125: 'Walt Disney Animation Studios' movies=53 newest=2025 (expect 'Walt Disney Animation')
+  [OK ] company 158526: 'Walt Disney Animation Studios' movies=2 newest=2025 (expect 'Walt Disney Animation')
+  [OK ] company 9383: 'Blue Sky Studios' movies=26 newest=2022 (expect 'Blue Sky Studios')
+  [OK ] company 58: 'Sony Pictures Classics' movies=21 newest=2025 (expect 'Sony Pictures Classics')
+  [OK ] company 25120: 'Warner Animation Group' movies=18 newest=2026 (expect 'Warner Animation Group')
+  [OK ] company 7899: 'Cartoon Network Studios' movies=50 newest=2023 (expect 'Cartoon Network Studios')
+  [OK ] company 2348: 'Nickelodeon Movies' movies=58 newest=2026 (expect 'Nickelodeon Movies')
+  [OK ] company 746: 'MTV Films' movies=46 newest=2020 (expect 'MTV Films')
+  [OK ] company 96540: 'Paramount Players' movies=17 newest=2023 (expect 'Paramount Players')
+  [OK ] company 24955: 'Paramount Animation' movies=12 newest=2026 (expect 'Paramount Animation')
+  [OK ] company 147786: 'Dimension Films' movies=0 newest=- (expect 'Dimension Films')
+  [OK ] company 23: 'Imagine Entertainment' movies=129 newest=2025 (expect 'Imagine Entertainment')
+  [OK ] company 1645: 'Scott Free Productions' movies=61 newest=2024 (expect 'Scott Free Productions')
+  [OK ] company 18: 'Gracie Films' movies=32 newest=2026 (expect 'Gracie Films')
+  [OK ] company 34209: 'shondaland' movies=1 newest=2023 (expect 'shondaland')
+  [OK ] company 7036: 'CJ Entertainment' movies=371 newest=2024 (expect 'CJ Entertainment')
+  [OK ] company 2073: 'KADOKAWA' movies=253 newest=2025 (expect 'KADOKAWA')
+  [OK ] company 528: 'Bandai Visual' movies=191 newest=2023 (expect 'Bandai Visual')
+  [OK ] company 3153: 'SUNRISE' movies=112 newest=2026 (expect 'SUNRISE')
+  [OK ] company 5438: 'Kyoto Animation' movies=26 newest=2025 (expect 'Kyoto Animation')
+  [OK ] company 3464: 'Madhouse' movies=101 newest=2024 (expect 'Madhouse')
+  [OK ] company 5542: 'Toei Animation' movies=299 newest=2026 (expect 'Toei Animation')
+  [OK ] company 31058: 'WIT STUDIO' movies=19 newest=2024 (expect 'WIT STUDIO')
+  [OK ] company 21444: 'MAPPA' movies=11 newest=2025 (expect 'MAPPA')
+  [OK ] company 5887: 'ufotable' movies=24 newest=2025 (expect 'ufotable')
+  [OK ] company 13113: 'A-1 Pictures' movies=29 newest=2025 (expect 'A-1 Pictures')
+  [OK ] company 2849: 'BONES' movies=25 newest=2024 (expect 'BONES')
+  [OK ] company 529: 'Production I.G' movies=121 newest=2025 (expect 'Production I.G')
+  [OK ] company 6689: 'SHAFT' movies=12 newest=2025 (expect 'SHAFT')
+  [OK ] company 50908: 'TRIGGER' movies=12 newest=2023 (expect 'TRIGGER')
+  [OK ] company 3756: 'CoMix Wave Films' movies=23 newest=2025 (expect 'CoMix Wave Films')
+  [OK ] company 12292: 'Temple Hill Entertainment' movies=44 newest=2026 (expect 'Temple Hill Entertainment')
+  [OK ] company 5420: 'Color Force' movies=15 newest=2023 (expect 'Color Force')
+  [OK ] company 6735: 'Participant' movies=103 newest=2025 (expect 'Participant')
+  [OK ] company 1020: 'Millennium Media' movies=170 newest=2026 (expect 'Millennium Media')
+  [OK ] company 12654: 'The Pokémon Company' movies=33 newest=2022 (expect 'The Pokémon Company')
+  [OK ] company 3052: 'Troma Entertainment' movies=111 newest=2025 (expect 'Troma Entertainment')
+  [OK ] company 283072: 'Plex' movies=0 newest=- (expect 'Plex')
+  [OK ] company 142877: 'Shudder' movies=18 newest=2025 (expect 'Shudder')
+  [OK ] company 226350: 'AMC+' movies=0 newest=- (expect 'AMC+')
+  [OK ] company 225743: 'discovery plus' movies=0 newest=- (expect 'discovery plus')
+  [OK ] company 159102: 'BritBox' movies=0 newest=- (expect 'BritBox')
+  [OK ] company 212651: 'Acorn TV' movies=0 newest=- (expect 'Acorn TV')
+  [OK ] company 172801: 'Allblk' movies=0 newest=- (expect 'Allblk')
+  [OK ] company 135210: 'DAZN' movies=2 newest=2022 (expect 'DAZN')
+  [OK ] company 109306: 'Tastemade' movies=0 newest=- (expect 'Tastemade')
+  [OK ] company 96320: 'CuriosityStream' movies=7 newest=2024 (expect 'CuriosityStream')
+  [OK ] company 181515: 'Sundance Now' movies=0 newest=- (expect 'Sundance Now')
+  [OK ] company 304438: 'Hallmark Media' movies=0 newest=- (expect 'Hallmark Media')
+  [OK ] company 279515: 'Roku Media' movies=2 newest=2026 (expect 'Roku Media')
+  [OK ] company 6805: 'Epix' movies=20 newest=2022 (expect 'Epix')
+  [NAME-MISMATCH] company 57501: 'Fun TV' movies=0 newest=- (expect 'fuboTV')
+  [OK ] company 198847: 'Crunchyroll' movies=1 newest=2017 (expect 'Crunchyroll')
+== full US provider registry scan (name contains key) ==
+  'AMC': {80: 'AMC', 526: 'AMC+', 528: 'AMC+ Amazon Channel', 635: 'AMC+ Roku Premium Channel', 1854: 'AMC Plus Apple TV channel'}
+  'Discovery +': {520: 'Discovery +'}
+  'Hallmark': {290: 'Hallmark+ Amazon Channel', 1746: 'Hallmark TV Amazon Channel', 2058: 'Hallmark+ Apple TV channel'}
+  'ESPN': {1718: 'ESPN', 1768: 'ESPN Plus'}
+  'MGM': {34: 'MGM Plus', 583: 'MGM+ Amazon Channel', 636: 'MGM Plus Roku Premium Channel'}
+  'Starz': {43: 'Starz', 634: 'Starz Roku Premium Channel', 1794: 'Starz Amazon Channel', 1855: 'Starz Apple TV channel'}
+  'Freevee': {}
+  'Roku': {207: 'The Roku Channel', 633: 'Paramount+ Roku Premium Channel', 634: 'Starz Roku Premium Channel', 635: 'AMC+ Roku Premium Channel', 636: 'MGM Plus Roku Premium Channel'}
+  'Plex': {538: 'Plex', 2077: 'Plex Channel'}
+  'Shudder': {99: 'Shudder', 204: 'Shudder Amazon Channel', 2049: 'Shudder Apple TV channel'}
+  'ALLBLK': {251: 'ALLBLK', 2036: 'ALLBLK Apple TV channel', 2064: 'ALLBLK Amazon channel '}
+  'Sundance': {143: 'Sundance Now', 205: 'Sundance Now Amazon Channel', 2048: 'Sundance Now Apple TV channel'}
+  'Curiosity': {190: 'Curiosity Stream', 603: 'CuriosityStream Amazon Channel', 2060: 'CuriosityStream Apple TV channel'}
+  'Tastemade': {2047: 'Tastemade Apple TV channel', 2068: 'Tastemade Amazon Channel '}
+  'fubo': {257: 'fuboTV'}
+  'Xumo': {1963: 'Xumo Play'}
+  'DAZN': {}
+  'MUBI': {11: 'MUBI', 201: 'MUBI Amazon Channel'}
+  'Criterion': {258: 'Criterion Channel'}
+  'Acorn': {87: 'Acorn TV', 196: 'AcornTV Amazon Channel', 2034: 'Acorn TV Apple TV channel'}
+  'hoopla': {212: 'Hoopla'}
+  'Kanopy': {191: 'Kanopy'}
+  'BritBox': {151: 'BritBox', 197: 'BritBox Amazon Channel', 1852: 'Britbox Apple TV channel'}
+  'Peacock': {386: 'Peacock Premium', 387: 'Peacock Premium Plus', 2553: 'Peacock Premium Plus Amazon Channel'}
+  'Paramount': {582: 'Paramount+ Amazon Channel', 633: 'Paramount+ Roku Premium Channel', 1853: 'Paramount Plus Apple TV channel', 2303: 'Paramount Plus Premium', 2616: 'Paramount Plus Essential'}
+  'Apple TV': {2: 'Apple TV Store', 350: 'Apple TV', 1852: 'Britbox Apple TV channel', 1853: 'Paramount Plus Apple TV channel', 1854: 'AMC Plus Apple TV channel', 1855: 'Starz Apple TV channel', 2033: 'A&E Crime Central Apple TV channel', 2034: 'Acorn TV Apple TV channel', 2036: 'ALLBLK Apple TV channel', 2039: 'BBC Select Apple Tv channel', 2042: 'Carnegie Hall+ Apple TV channel', 2044: 'OUTtv Apple TV channel', 2045: 'UP Faith & Family Apple TV channel', 2047: 'Tastemade Apple TV channel', 2048: 'Sundance Now Apple TV channel', 2049: 'Shudder Apple TV channel', 2050: 'ScreenPix Apple TV channel', 2055: 'Lifetime Movie Club Apple TV channel', 2056: 'IFC Films Unlimited Apple TV channel', 2057: 'HISTORY Vault Apple TV channel', 2058: 'Hallmark+ Apple TV channel', 2059: 'Eros Now Select Apple TV channel', 2060: 'CuriosityStream Apple TV channel', 2061: 'Cinemax Apple TV channel', 2243: 'Apple TV Amazon Channel'}
+  'YouTube': {188: 'YouTube Premium', 192: 'YouTube', 235: 'YouTube Free', 2528: 'YouTube TV'}
+  'Max': {289: 'Cinemax Amazon Channel', 1825: 'HBO Max Amazon Channel', 1899: 'HBO Max', 2061: 'Cinemax Apple TV channel'}
+  'Crave': {}
+  'Tubi': {73: 'Tubi TV'}
+  'Pluto': {300: 'Pluto TV'}
+== remaining networks: probe + print ALL networks of each probe show ==
+    [UPtv] 'Bringing Up Bates' -> 'Bringing Up Bates' networks=[(1180, 'UP TV')]
+    [UPtv] 'Date My Dad' -> 'Date My Dad' networks=[(1180, 'UP TV')]
+    [UPtv] 'When Calls the Heart' -> 'When Calls the Heart' networks=[(384, 'Hallmark Channel')]
+  => 'UPtv' candidate id 1180 tmdb_name='UP TV' votes={1180: 2, 384: 1}
+       recent: [('Ties That Bind', '2015'), ('Bringing Up Bates', '2015')]
+    [Hallmark Movies & Mysteries] search MISS 'Aurora Teagarden Mysteries'
+    [Hallmark Movies & Mysteries] search MISS "Martha's Vineyard Mysteries"
+    [Hallmark Movies & Mysteries] search MISS 'Emma Fielding Mysteries'
+  UNRESOLVED 'Hallmark Movies & Mysteries'
+    [Great American Family] 'When Hope Calls' -> 'When Hope Calls' networks=[(1307, 'Great American Pure Flix'), (2853, 'Hallmark Movies Now'), (5303, 'GAC Family')]
+    [Great American Family] search MISS 'A Cinderella Christmas Ball'
+    [Great American Family] 'Casa Grande' -> 'Casa Grande' networks=[(5865, 'Amazon Freevee')]
+  => 'Great American Family' candidate id 1307 tmdb_name='Great American Pure Flix' votes={1307: 1, 2853: 1, 5303: 1, 5865: 1}
+       recent: [('When Hope Calls', '2019')]
+    [NFL Network] search MISS 'Good Morning Football'
+    [NFL Network] search MISS 'NFL Total Access'
+  UNRESOLVED 'NFL Network'
+    [MLB Network] search MISS 'MLB Tonight'
+  UNRESOLVED 'MLB Network'
+    [Fox News] 'The Five' -> 'The Five' networks=[(214, 'Sky One')]
+    [Fox News] 'Hannity' -> 'Hannity' networks=[(45, 'Fox News Channel')]
+    [Fox News] 'Gutfeld!' -> 'Gutfeld!' networks=[(45, 'Fox News Channel')]
+  => 'Fox News' candidate id 45 tmdb_name='Fox News Channel' votes={214: 1, 45: 2}
+       recent: [('Tucker Carlson Originals', '2021'), ('Gutfeld!', '2021'), ('Tucker Carlson Today', '2021')]
+    [Channel 5 UK] 'All Creatures Great and Small' -> 'All Creatures Great and Small' networks=[(4, 'BBC One')]
+    [Channel 5 UK] 'The Durrells' -> 'The Durrells' networks=[(9, 'ITV1')]
+    [Channel 5 UK] 'Dalgliesh' -> 'Dalgliesh' networks=[(99, '5')]
+  => 'Channel 5 UK' candidate id 4 tmdb_name='BBC One' votes={4: 1, 9: 1, 99: 1}
+       recent: [('The Rapture', '2026'), ('The Hairdresser Mysteries', '2026'), ('Ann Droid', '2026')]
+    [AMC+ network] 'Dark Winds' -> 'Dark Winds' networks=[(174, 'AMC')]
+    [AMC+ network] 'Kin' -> 'Kin' networks=[]
+    [AMC+ network] 'Lucky Hank' -> 'Lucky Hank' networks=[(174, 'AMC')]
+  => 'AMC+ network' candidate id 174 tmdb_name='AMC' votes={174: 2}
+       recent: [('The Vampire Lestat', '2026'), ('The Audacity', '2026'), ('Talamasca: The Secret Order', '2025')]
+    [BET+] "Tyler Perry's Divorced Sistas" -> "Tyler Perry's Divorced Sistas" networks=[(3343, 'BET+'), (4330, 'Paramount+')]
+    [BET+] 'Lil Kev' -> 'Lil Kev' networks=[(3343, 'BET+')]
+  => 'BET+' candidate id 3343 tmdb_name='BET+' votes={3343: 2, 4330: 1}
+       recent: [("Tyler Perry's Divorced Sistas", '2025'), ('Lil Kev', '2025'), ('The Family Business: New Orleans', '2025')]
+    [MotorTrend+] 'Roadkill Garage' -> 'Roadkill Garage' networks=[(2444, 'MotorTrend')]
+    [MotorTrend+] 'Hot Rod Garage' -> 'Hot Rod Garage' networks=[(2444, 'MotorTrend')]
+  => 'MotorTrend+' candidate id 2444 tmdb_name='MotorTrend' votes={2444: 2}
+       recent: [('Texas Metal', '2017'), ('Iron Resurrection', '2016'), ("Bitchin' Rides", '2014')]
+DONE

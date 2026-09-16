@@ -31,6 +31,9 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import org.json.JSONArray
 import java.util.concurrent.atomic.AtomicReferenceArray
 
 /**
@@ -202,6 +205,10 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
     init {
         loadRecentSearches()
+        // Restore the last-resolved keyword/collection ids from disk so the
+        // browse submenu renders instantly; a background refresh then only
+        // repairs gaps after the TTL.
+        loadBrowseCatalogCache()
 
         WatchStateBus.updates
             .onEach { (key, isWatched) ->
@@ -1080,6 +1087,14 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private var catalogResolveStarted = false
 
+    // Caps parallel TMDB name->id lookups in resolveCatalogEntries: the
+    // 216-name keyword list fanned out unbounded and TMDB throttled the
+    // burst, silently dropping chips (failed lookups are filtered out).
+    private val catalogResolveSemaphore = Semaphore(permits = 8)
+
+    /** True when the disk cache was applied AND is younger than the TTL. */
+    private var browseCacheFresh = false
+
     /**
      * Sidebar selection: swap the submenu. Keyword/collection entries are
      * runtime-resolved ids, so picking those categories kicks the (cached,
@@ -1092,8 +1107,17 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         if (browseReturnChip?.first != key) browseReturnChip = null
         _selectedBrowseCategoryKey.value = key
         if (key == "keywords" || key == "collections") {
-            _browseSubmenuLoading.value = !catalogResolveStarted
-            if (!catalogResolveStarted) {
+            // Only show the resolving state when there is nothing to render:
+            // with a disk-cache hit the chips are already in place, and a
+            // background refresh (stale TTL) must not blank them out with a
+            // spinner.
+            val hasEntries = _browseCategories.value
+                .firstOrNull { it.key == key }?.entries?.isNotEmpty() == true
+            _browseSubmenuLoading.value = !hasEntries && !catalogResolveStarted
+            // A FRESH disk cache is already correct (TMDB ids are stable),
+            // so skip the ~300 lookups entirely; a stale or missing cache
+            // kicks the rate-limited background resolve off once.
+            if (!catalogResolveStarted && !browseCacheFresh) {
                 viewModelScope.launch { resolveCatalogEntries() }
             }
         } else {
@@ -1130,9 +1154,15 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Resolves the runtime-id submenus once per session: keyword names via
-     * /search/keyword, collection names via /search/collection. Hand-picked
-     * ids would rot; a name lookup always returns TMDB's canonical id.
+     * Resolves the runtime-id submenus: keyword names via /search/keyword,
+     * collection names via /search/collection. Hand-picked ids would rot; a
+     * name lookup always returns TMDB's canonical id.
+     *
+     * Results are persisted to disk (see [loadBrowseCatalogCache]) so the
+     * FIRST app run pays the lookup cost and every later run renders the
+     * chips instantly. Lookups are capped by [catalogResolveSemaphore] —
+     * the unbounded 216-name fan-out tripped TMDB throttling and silently
+     * dropped chips — and each name gets one retry after a short backoff.
      */
     private suspend fun resolveCatalogEntries() {
         if (catalogResolveStarted) return
@@ -1141,27 +1171,31 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         val keywordEntries = coroutineScope {
             BROWSE_KEYWORD_NAMES.map { name ->
                 async {
-                    runCatching {
-                        tmdbRepository.searchKeywords(name)
-                            .firstOrNull { it.name.equals(name, ignoreCase = true) }
-                            ?.let { BrowseEntry(it.id, name) }
-                    }.getOrNull()
+                    catalogResolveSemaphore.withPermit {
+                        resolveWithRetry(name) {
+                            tmdbRepository.searchKeywords(name)
+                                .firstOrNull { it.name.equals(name, ignoreCase = true) }
+                                ?.let { BrowseEntry(it.id, name) }
+                        }
+                    }
                 }
             }.awaitAll().filterNotNull()
         }
         val collectionEntries = coroutineScope {
             BROWSE_COLLECTION_NAMES.map { name ->
                 async {
-                    runCatching {
-                        // Prefer the exact-name hit: TMDB's search ranking
-                        // drifts over time and first-hit can resolve to an
-                        // unrelated collection ("The Lord of the Rings
-                        // Collection" once resolved to a making-of doc).
-                        val results = tmdbRepository.searchCollection(name)
-                        (results.firstOrNull { it.name.equals(name, ignoreCase = true) }
-                            ?: results.firstOrNull())
-                            ?.let { BrowseEntry(it.id, name) }
-                    }.getOrNull()
+                    catalogResolveSemaphore.withPermit {
+                        resolveWithRetry(name) {
+                            // Prefer the exact-name hit: TMDB's search ranking
+                            // drifts over time and first-hit can resolve to an
+                            // unrelated collection ("The Lord of the Rings
+                            // Collection" once resolved to a making-of doc).
+                            val results = tmdbRepository.searchCollection(name)
+                            (results.firstOrNull { it.name.equals(name, ignoreCase = true) }
+                                ?: results.firstOrNull())
+                                ?.let { BrowseEntry(it.id, name) }
+                        }
+                    }
                 }
             }.awaitAll().filterNotNull()
         }
@@ -1174,6 +1208,101 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             }
         }
         _browseSubmenuLoading.value = false
+        saveBrowseCatalogCache(keywordEntries, collectionEntries)
+    }
+
+    /**
+     * One name lookup with a single throttled-retry: TMDB's search endpoint
+     * occasionally 429s under bursts even below the rate cap, and a dropped
+     * chip is invisible (the entry just never renders).
+     */
+    private suspend fun resolveWithRetry(
+        name: String,
+        lookup: suspend () -> BrowseEntry?
+    ): BrowseEntry? {
+        val first = runCatching { lookup() }.getOrNull()
+        if (first != null) return first
+        delay(BROWSE_RESOLVE_RETRY_DELAY_MS)
+        return runCatching { lookup() }.getOrNull()
+    }
+
+    // ------------------------------------------------------------------
+    // Browse-catalog disk cache: resolved keyword/collection ids in
+    // search_prefs as JSON. Makes the submenu open instantly on every run
+    // after the first (the ~300 name lookups otherwise re-run each
+    // session). Format per list: [["name", id], ...] plus a saved-at
+    // timestamp; expired after [BROWSE_CACHE_TTL_MS] and refreshed in the
+    // background on next open.
+    // ------------------------------------------------------------------
+
+    private fun loadBrowseCatalogCache() {
+        runCatching {
+            val prefs = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val savedAt = prefs.getLong(KEY_BROWSE_CATALOG_SAVED_AT, 0L)
+            val keywordsJson = prefs.getString(KEY_BROWSE_KEYWORD_IDS, null)
+            val collectionsJson = prefs.getString(KEY_BROWSE_COLLECTION_IDS, null)
+            val hasData = !keywordsJson.isNullOrEmpty() || !collectionsJson.isNullOrEmpty()
+            if (!hasData) return
+
+            fun parse(json: String): List<BrowseEntry> {
+                val arr = JSONArray(json)
+                return (0 until arr.length()).mapNotNull { i ->
+                    val pair = arr.optJSONArray(i) ?: return@mapNotNull null
+                    val id = pair.optInt(0, -1)
+                    val name = pair.optString(1)
+                    if (id > 0 && name.isNotBlank()) BrowseEntry(id, name) else null
+                }
+            }
+
+            val keywords = keywordsJson?.let(::parse).orEmpty()
+            val collections = collectionsJson?.let(::parse).orEmpty()
+            if (keywords.isEmpty() && collections.isEmpty()) return
+
+            // "Fresh" means recent AND substantially complete (>= 90% of the
+            // name lists resolved): a cache written while TMDB was
+            // throttling could be missing a chunk of chips, and trusting it
+            // for a full TTL would pin that gap. A partial cache still
+            // renders instantly below — it just doesn't skip the background
+            // refresh that repairs it.
+            val ageOk =
+                savedAt > 0 && System.currentTimeMillis() - savedAt < BROWSE_CACHE_TTL_MS
+            val keywordsComplete =
+                keywords.size * 10 >= BROWSE_KEYWORD_NAMES.size * 9
+            val collectionsComplete =
+                collections.size * 10 >= BROWSE_COLLECTION_NAMES.size * 9
+            browseCacheFresh = ageOk && keywordsComplete && collectionsComplete
+
+            _browseCategories.value = BROWSE_CATEGORIES.map { category ->
+                when (category.key) {
+                    "keywords" ->
+                        category.copy(entries = keywords.ifEmpty { category.entries })
+                    "collections" ->
+                        category.copy(entries = collections.ifEmpty { category.entries })
+                    else -> category
+                }
+            }
+        }.onFailure { Log.w(TAG, "browse catalog cache read failed", it) }
+    }
+
+    private fun saveBrowseCatalogCache(
+        keywords: List<BrowseEntry>,
+        collections: List<BrowseEntry>
+    ) {
+        runCatching {
+            fun toJson(entries: List<BrowseEntry>): String {
+                val arr = JSONArray()
+                entries.forEach { entry ->
+                    arr.put(JSONArray().put(entry.id).put(entry.name))
+                }
+                return arr.toString()
+            }
+            app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putLong(KEY_BROWSE_CATALOG_SAVED_AT, System.currentTimeMillis())
+                .putString(KEY_BROWSE_KEYWORD_IDS, toJson(keywords))
+                .putString(KEY_BROWSE_COLLECTION_IDS, toJson(collections))
+                .apply()
+        }.onFailure { Log.w(TAG, "browse catalog cache write failed", it) }
     }
 
     fun onResultOpened(result: SearchTitleResult) {
@@ -1263,8 +1392,23 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     private companion object {
+        const val TAG = "SearchViewModel"
         const val PREFS_NAME = "search_prefs"
         const val KEY_RECENT_SEARCHES = "recent_searches"
+        const val KEY_BROWSE_KEYWORD_IDS = "browse_keyword_ids"
+        const val KEY_BROWSE_COLLECTION_IDS = "browse_collection_ids"
+        const val KEY_BROWSE_CATALOG_SAVED_AT = "browse_catalog_saved_at"
+
+        /**
+         * How long the disk-cached keyword/collection ids are trusted. TMDB
+         * ids are stable, so the TTL mostly guards against a cached resolve
+         * that was itself incomplete (e.g. resolved while offline); a stale
+         * cache renders instantly while a background refresh repairs it.
+         */
+        const val BROWSE_CACHE_TTL_MS = 7L * 24L * 60L * 60L * 1000L
+
+        /** Backoff before the single retry of a throttled name lookup. */
+        const val BROWSE_RESOLVE_RETRY_DELAY_MS = 750L
         const val RECENT_SEARCHES_SEPARATOR = "\u0001"
         const val MAX_RESOLUTION_BATCH = 300
         const val MAX_RECENT_SEARCHES = 10

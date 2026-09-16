@@ -1,0 +1,220 @@
+== round 2 networks ==
+  RESOLVED 'Boomerang' -> id 5459 tmdb_name='Boomerang' votes={5459: 1}
+      recent: [('Yabba-Dabba Dinosaurs', '2020'), ('My Spy Family', '2007')]
+  UNRESOLVED 'UPtv'
+  UNRESOLVED 'Hallmark Movies & Mysteries'
+  UNRESOLVED 'Great American Family'
+  UNRESOLVED 'NFL Network'
+  UNRESOLVED 'MLB Network'
+  UNRESOLVED 'Fox News'
+  UNRESOLVED 'Channel 5'
+  RESOLVED 'ESPN recheck' -> id 29 tmdb_name='ESPN' votes={29: 2}
+      recent: [('The Kingdom', '2025'), ('Galácticos', '2021'), ('The Last Dance', '2020')]
+== new companies ==
+  'Amazon MGM Studios': 210099='Amazon MGM Studios', 242583='United Artists'
+  'Amazon Studios': 235254='Amazon Studios', 208227='Amazon Studios'
+  'YouTube': 114247='YouTube', 73091='YouTube Red'
+  MISS 'YouTube Premium'
+  'Netflix Animation': 171251='Netflix Animation Studios'
+  'Roku Originals': 148435='Kooku Originals'
+  'The Roku Channel': 290879='The Roku Channel'
+  MISS 'Hulu Originals'
+  'Onyx Collective': 156742='Onyx Collective'
+  '20th Television': 21659='20th Television', 236166='20th Television'
+  'ABC Signature': 236613='ABC Signature', 264123='ABC Signature UK'
+  'Warner Bros. Television': 1957='Warner Bros. Television', 197829='Warner Bros. International Television Production'
+  'Sony Pictures Television': 11073='Sony Pictures Television', 247509='Sony Pictures Television – Kids'
+  'Universal Content Productions': 7938='UCP'
+  'CBS Studios': 224196='CBS Studios', 1081='CBS Studios'
+  'Lionsgate Television': 224800='Lionsgate Television', 28523='Lionsgate Television'
+  'Open Road Films': 10427='Open Road Films', 303339='Open Road Films UK'
+  'STX Entertainment': 270158='STX Entertainment', 50249='Stax Entertainment'
+  'Annapurna Pictures': 117057='Annapurna Pictures', 13184='Annapurna Pictures'
+  'Plan B Entertainment': 81='Plan B Entertainment', 11077='No Plan B Entertainment'
+  'Lucasfilm': 11928='Luna-Film', 183864='Luna-film'
+  'Walt Disney Animation Studios': 158526='Walt Disney Animation Studios', 6125='Walt Disney Animation Studios'
+  'Blue Sky Studios': 9383='Blue Sky Studios', 251514='Blue Sea Studios'
+  'Sony Pictures Classics': 302911='Sony Pictures Classics', 58='Sony Pictures Classics'
+  'Warner Animation Group': 25120='Warner Animation Group'
+  'Cartoon Network Studios': 7899='Cartoon Network Studios', 67225='Cartoon Network Studios Europe'
+  'Nickelodeon Movies': 2348='Nickelodeon Movies'
+  'MTV Films': 746='MTV Films', 147938='MTV Documentary Films'
+  'Paramount Players': 96540='Paramount Players'
+  'Paramount Animation': 24955='Paramount Animation', 1081='CBS Studios'
+  'Dimension Films': 97440='3-Dimension Films', 147786='Dimension Films'
+  'Imagine Entertainment': 23='Imagine Entertainment', 82204='IMAGICA Entertainment'
+  'Scott Free Productions': 221347='Scott Free Productions', 1645='Scott Free Productions'
+  'Gracie Films': 307764='Gracie Films', 18='Gracie Films'
+  'Shondaland': 34209='shondaland', 104086='Wondaland'
+  'CJ Entertainment': 7036='CJ Entertainment', 126761='CJ HK Entertainment'
+  'Kadokawa': 2073='KADOKAWA', 1194='KADOKAWA Shoten'
+  'Bandai Visual': 528='Bandai Visual'
+  'Sunrise': 3153='SUNRISE', 19850='Sunrise Films'
+  'Kyoto Animation': 5438='Kyoto Animation'
+  'Madhouse': 3464='Madhouse', 233726='Madhouse Creative'
+  'Toei Animation': 292385='Toei Animation', 5542='Toei Animation'
+  'Wit Studio': 31058='WIT STUDIO', 250003='TORUKU from WIT STUDIO'
+  'MAPPA': 21444='MAPPA', 60449='Kappa'
+  'Ufotable': 280276='ufotable', 5887='ufotable'
+  'A-1 Pictures': 13113='A-1 Pictures', 115750='Anú Pictures'
+  'Bones': 2849='BONES', 165870='BONES'
+  'Production I.G': 166624='Production I.G', 529='Production I.G'
+  'Shaft': 6689='SHAFT', 274368='SHAFT'
+  'Trigger': 265915='Trigger', 50908='TRIGGER'
+  'CoMix Wave Films': 3756='CoMix Wave Films', 224580='Cosmic Wave Films'
+  'Temple Hill Entertainment': 12292='Temple Hill Entertainment'
+  'Color Force': 5420='Color Force'
+  'Participant': 128416='Participant', 6735='Participant'
+  'Millennium Media': 1020='Millennium Media'
+  'Pokémon Company': 12654='The Pokémon Company', 161390='The Pokémon Company International'
+  'Toho': 882='TOHO', 657='TOHO-TOWA'
+  'Troma': 3052='Troma Entertainment', 146390='Tropa'
+== new provider ids (US registry) ==
+  'Roku': {207: 'The Roku Channel', 635: 'AMC+ Roku Premium Channel', 636: 'MGM Plus Roku Premium Channel', 633: 'Paramount+ Roku Premium Channel', 634: 'Starz Roku Premium Channel'}
+  'Plex': {538: 'Plex', 2077: 'Plex Channel'}
+  'AMC Plus': {1854: 'AMC Plus Apple TV channel'}
+  'Discovery': {584: 'Discovery+ Amazon Channel', 520: 'Discovery +', 408: 'Investigation Discovery', 403: 'Discovery'}
+  'Max': {1825: 'HBO Max Amazon Channel', 289: 'Cinemax Amazon Channel', 1899: 'HBO Max', 2061: 'Cinemax Apple TV channel'}
+  'ESPN Plus': {1768: 'ESPN Plus'}
+  'MGM Plus': {636: 'MGM Plus Roku Premium Channel', 34: 'MGM Plus'}
+  'Crackle': {}
+  'Xumo': {1963: 'Xumo Play'}
+  'Mubi': {11: 'MUBI', 201: 'MUBI Amazon Channel'}
+  'Criterion': {258: 'Criterion Channel'}
+  'BritBox': {1852: 'Britbox Apple TV channel', 151: 'BritBox', 197: 'BritBox Amazon Channel'}
+  'Acorn': {87: 'Acorn TV', 196: 'AcornTV Amazon Channel', 2034: 'Acorn TV Apple TV channel'}
+  'Shudder': {99: 'Shudder', 204: 'Shudder Amazon Channel', 2049: 'Shudder Apple TV channel'}
+  'ALLBLK': {251: 'ALLBLK', 2036: 'ALLBLK Apple TV channel', 2064: 'ALLBLK Amazon channel '}
+  'BET': {}
+  'Hoopla': {212: 'Hoopla'}
+  'Kanopy': {191: 'Kanopy'}
+  'Fubo': {257: 'fuboTV'}
+  'Sling': {299: 'Sling TV Orange and Blue', 1809: 'Sling TV Orange'}
+  'YouTube': {192: 'YouTube', 188: 'YouTube Premium', 2528: 'YouTube TV', 235: 'YouTube Free'}
+  'Apple TV': {350: 'Apple TV', 2: 'Apple TV Store', 1854: 'AMC Plus Apple TV channel', 1852: 'Britbox Apple TV channel', 2033: 'A&E Crime Central Apple TV channel', 2034: 'Acorn TV Apple TV channel', 2036: 'ALLBLK Apple TV channel', 2045: 'UP Faith & Family Apple TV channel', 2047: 'Tastemade Apple TV channel', 2049: 'Shudder Apple TV channel', 2050: 'ScreenPix Apple TV channel', 2044: 'OUTtv Apple TV channel', 2055: 'Lifetime Movie Club Apple TV channel', 2058: 'Hallmark+ Apple TV channel', 2059: 'Eros Now Select Apple TV channel', 2060: 'CuriosityStream Apple TV channel', 2061: 'Cinemax Apple TV channel', 2039: 'BBC Select Apple Tv channel', 2042: 'Carnegie Hall+ Apple TV channel', 2056: 'IFC Films Unlimited Apple TV channel', 2057: 'HISTORY Vault Apple TV channel', 1855: 'Starz Apple TV channel', 2243: 'Apple TV Amazon Channel', 1853: 'Paramount Plus Apple TV channel', 2048: 'Sundance Now Apple TV channel'}
+  'Peacock': {386: 'Peacock Premium', 387: 'Peacock Premium Plus', 2553: 'Peacock Premium Plus Amazon Channel'}
+  'Freevee': {}
+  'Hoopla': {212: 'Hoopla'}
+  'Dove': {2378: 'Dove Amazon Channel'}
+  'Great American': {2433: 'Great American Pure Flix Amazon Channel'}
+  'Hallmark': {290: 'Hallmark+ Amazon Channel', 2058: 'Hallmark+ Apple TV channel', 1746: 'Hallmark TV Amazon Channel'}
+  'Interest': {}
+== new keywords ==
+  OK 'esports' id=166939 movies=70
+  OK 'influencer' id=357090 movies=42
+  OK 'gamer' id=10439 movies=36
+  OK 'chess' id=316 movies=171
+  OK 'poker' id=383 movies=111
+  OK 'election' id=15134 movies=188
+  OK 'wall street' id=5636 movies=62
+  OK 'startup' id=185507 movies=12
+  OK 'artificial intelligence' id=378084 movies=25
+  OK 'virtual reality' id=4563 movies=228
+  OK 'space race' id=156836 movies=41
+  OK 'astronaut' id=14626 movies=248
+  OK 'moon landing' id=7422 movies=65
+  OK 'cowboy' id=155291 movies=307
+  OK 'outlaw' id=9503 movies=285
+  OK 'gold rush' id=4542 movies=64
+  OK 'prohibition' id=262121 movies=13
+  OK 'pandemic' id=188973 movies=385
+  OK 'outbreak' id=9744 movies=65
+  OK 'body swap' id=374381 movies=2
+  OK 'time machine' id=5455 movies=117
+  OK 'parallel universe' id=243230 movies=55
+  OK 'multiverse' id=336874 movies=50
+  OK 'doppelganger' id=376610 movies=4
+  OK 'shapeshifting' id=1370 movies=44
+  OK 'immortality' id=4978 movies=114
+  OK 'genie' id=190536 movies=65
+  OK 'mermaid' id=5938 movies=176
+  OK 'olympics' id=315138 movies=62
+  OK 'gymnastics' id=650 movies=57
+  OK 'surfing' id=5349 movies=349
+  OK 'skateboarding' id=390 movies=404
+  MISS 'formula 1' (top: 'formula one (f1)', 'formula 2')
+  OK 'nascar' id=161630 movies=35
+  OK 'air force' id=3779 movies=52
+  OK 'navy' id=3588 movies=124
+  OK 'marines' id=371802 movies=0
+  OK 'sniper' id=1589 movies=122
+  OK 'double agent' id=3637 movies=45
+  OK 'art theft' id=156031 movies=33
+  OK 'bank robbery' id=15363 movies=359
+  OK 'prison escape' id=9777 movies=203
+  OK 'wrongful conviction' id=171989 movies=77
+  OK 'death row' id=2501 movies=71
+  OK 'billionaire' id=12547 movies=75
+  OK 'royal family' id=4833 movies=134
+  OK 'monarchy' id=2471 movies=46
+  OK 'bank heist' id=191845 movies=74
+  OK 'hacking' id=12361 movies=92
+  OK 'con artist' id=10453 movies=130
+  OK 'undercover' id=1568 movies=244
+  OK 'small town' id=1415 movies=1077
+  OK 'big city' id=12401 movies=43
+  OK 'amusement park' id=155582 movies=158
+  OK 'circus' id=291 movies=475
+  OK 'circus performer' id=230896 movies=16
+  OK 'summer camp' id=5767 movies=176
+  OK 'road trip' id=7312 movies=984
+  OK 'bachelorette party' id=221475 movies=23
+  OK 'midlife crisis' id=1599 movies=122
+  OK 'empty nest' id=267673 movies=10
+  OK 'toxic relationship' id=241804 movies=135
+  OK 'obsessive love' id=159278 movies=40
+  OK 'stalker' id=6844 movies=373
+  OK 'conspiracy' id=10410 movies=565
+  OK 'cover-up' id=9665 movies=107
+  OK 'whistleblower' id=209799 movies=51
+  OK 'journalist' id=736 movies=466
+  OK 'lawyer' id=10909 movies=547
+  OK 'judge' id=934 movies=188
+  OK 'jury' id=8881 movies=38
+  OK 'forensic science' id=157256 movies=22
+  MISS 'csi' (top: 'csg', 'csx')
+  OK 'autopsy' id=4715 movies=43
+  OK 'medical examination' id=190433 movies=18
+  OK 'hospital' id=11612 movies=726
+  OK 'doctor' id=13005 movies=782
+  OK 'nurse' id=428 movies=387
+  OK 'surgeon' id=3262 movies=99
+  OK 'paramedic' id=41603 movies=29
+  OK 'firefighter' id=192094 movies=121
+  OK 'police officer' id=15090 movies=318
+  OK 'detective inspector' id=1752 movies=25
+  OK 'bounty hunter' id=801 movies=143
+  OK 'cowgirl' id=33602 movies=34
+  OK 'gunslinger' id=75 movies=98
+  OK 'saloon' id=1582 movies=123
+  OK 'banker' id=3515 movies=75
+  OK 'stockbroker' id=10631 movies=27
+  OK 'hedge fund' id=184116 movies=8
+  OK 'crypto' id=330493 movies=16
+  MISS 'influencer culture' (top: )
+  OK 'social media' id=176834 movies=394
+  OK 'paparazzi' id=2560 movies=47
+  OK 'fashion' id=15479 movies=399
+  OK 'model' id=14818 movies=246
+  OK 'musician' id=4048 movies=645
+  OK 'band' id=311916 movies=129
+  OK 'rapper' id=4562 movies=134
+  OK 'dj' id=186117 movies=101
+  OK 'stand-up comedian' id=276162 movies=255
+  OK 'broadway' id=156028 movies=154
+  OK 'theatre' id=284103 movies=279
+  OK 'opera' id=2199 movies=1224
+  OK 'ballet' id=10551 movies=552
+  OK 'dancer' id=733 movies=321
+  OK 'choir' id=2318 movies=67
+  OK 'military' id=162365 movies=491
+  OK 'veteran' id=159909 movies=152
+  OK 'ptsd' id=376994 movies=5
+  OK 'homelessness' id=2981 movies=295
+  OK 'poverty' id=12987 movies=566
+  OK 'immigrant' id=2356 movies=445
+  OK 'american dream' id=2355 movies=110
+  OK 'racism' id=12425 movies=948
+  OK 'civil rights' id=4098 movies=193
+  MISS 'suffrage' (top: "women's suffrage", 'suffragettes')
+DONE
