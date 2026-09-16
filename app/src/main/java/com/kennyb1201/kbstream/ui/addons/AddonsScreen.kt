@@ -945,6 +945,7 @@ private fun AddonDetails(
         )
     }
 }
+}
 
 @Composable
 private fun DetailLine(
