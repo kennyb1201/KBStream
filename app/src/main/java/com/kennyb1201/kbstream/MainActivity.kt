@@ -716,6 +716,15 @@ class MainActivity : ComponentActivity() {
             false
         )
 
+        // Establish the active profile BEFORE the first composition. The
+        // theme seed inside setContent reads PROFILE-SCOPED prefs (AMOLED /
+        // pure-black live under "<profileId>.kbstream_player_prefs"); with
+        // init still pending, that read resolved the legacy global store
+        // (toggle=false) and the app launched with the regular palette —
+        // AMOLED only "kicked in" after visiting Settings, whose own read
+        // then mirrored the correct scoped value into the live theme state.
+        com.kennyb1201.kbstream.data.sync.ProfileManager.init(applicationContext)
+
         setContent {
             // Sync the AMOLED toggle into the theme's live state BEFORE the
             // first composition so launch already paints the right palette.
@@ -757,10 +766,23 @@ fun AppRoot() {
     // Profile gating: with profiles set up, launch into the picker so each
     // session starts under the right identity. Fresh installs (no profiles)
     // skip it and stay optional-profile.
+    // init() already ran in onCreate (before first composition); here we
+    // only gate the entry screen on whether profiles exist.
     LaunchedEffect(Unit) {
-        com.kennyb1201.kbstream.data.sync.ProfileManager.init(applicationContext)
         if (com.kennyb1201.kbstream.data.sync.ProfileManager.hasProfiles(applicationContext)) {
             screen = Screen.ProfilePicker
+        }
+    }
+
+    // Re-mirror the theme toggles on every active-profile change: AMOLED /
+    // pure-black are profile-scoped prefs backing live theme state, and the
+    // switch path (picker / profile editor) never touched the mirrors — the
+    // new profile's palette only appeared after opening Settings.
+    val themeMirrorContext = LocalContext.current
+    LaunchedEffect(Unit) {
+        com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.collect {
+            AppPreferences.getAmoledBlack(themeMirrorContext)
+            AppPreferences.getPureBlackSurface(themeMirrorContext)
         }
     }
 
