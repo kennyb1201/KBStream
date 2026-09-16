@@ -149,7 +149,7 @@ object RedditDiscussionsClient {
         return TmdbReview(
             id = "reddit:${post.optString("id", permalink)}",
             author = "u/$author",
-            authorDetails = null,,
+            authorDetails = null,
             content = composed,
             createdAt = isoFromUtcSeconds(createdUtc),
             spoiler = false
