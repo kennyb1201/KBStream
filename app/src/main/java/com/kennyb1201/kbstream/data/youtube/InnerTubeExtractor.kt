@@ -60,6 +60,15 @@ object InnerTubeExtractor {
      */
     private const val MAX_TRAILER_HEIGHT = 1080
     private const val PREFERRED_VIDEO_MIME = "avc"
+
+    /**
+     * How many audio candidates to CDN-probe (best-first) before giving up
+     * on the adaptive pair and falling back to a muxed progressive stream.
+     * Bounds worst-case resolve latency: each probe is a ~1 MB ranged GET
+     * with a 2 s connect / 5 s read timeout.
+     */
+    private const val MAX_AUDIO_PROBES = 3
+
     private const val FALLBACK_API_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
 
     private val VIDEO_ID_REGEX = Regex("^[a-zA-Z0-9_-]{11}$")
@@ -310,26 +319,60 @@ object InnerTubeExtractor {
 
         // Prefer adaptive video + audio (best quality) only when HLS is absent.
         val bestVideo = pickBest(adaptiveVideo, PREFERRED_SEPARATE_CLIENT)
-        val bestAudio = pickBest(adaptiveAudio, PREFERRED_SEPARATE_CLIENT)
 
         val resolvedVideo = bestVideo?.let {
             resolveReachableUrl(it.url, userAgentFor(it.client))
         }
-        val resolvedAudio =
-            if (resolvedVideo != null) bestAudio?.let {
-                resolveReachableUrl(it.url, userAgentFor(it.client))
-            } else null
 
+        // Probe more than one audio candidate: googlevideo rejects probes
+        // per-CDN-node, so the single best audio URL 403ing does NOT mean the
+        // title has no usable audio. Falling back to the video-only stream
+        // here used to ship silent trailers (Adaptive video tracks carry no
+        // audio) — exactly the "trailers play muted" report.
+        var resolvedAudio: String? = null
         if (resolvedVideo != null) {
-            val clientUa = bestVideo?.let { userAgentFor(it.client) }
-            return if (resolvedAudio != null) {
-                PlayableSource.Adaptive(resolvedVideo, resolvedAudio, userAgent = clientUa)
-            } else {
-                PlayableSource.Muxed(resolvedVideo, userAgent = clientUa)
+            val audioCandidates = adaptiveAudio.sortedWith(
+                compareByDescending<StreamCandidate> { it.score }
+                    .thenBy { if (it.hasN) 1 else 0 }
+                    .thenBy { it.priority }
+            )
+            var probes = 0
+            for (candidate in audioCandidates) {
+                if (probes >= MAX_AUDIO_PROBES) break
+                probes++
+                val probed = resolveReachableUrl(
+                    candidate.url,
+                    userAgentFor(candidate.client)
+                )
+                if (probed != null) {
+                    resolvedAudio = probed
+                    break
+                }
+            }
+            if (resolvedAudio == null) {
+                Log.w(
+                    TAG,
+                    "No adaptive audio URL reachable after $probes probes " +
+                        "— will fall back to a muxed stream"
+                )
             }
         }
 
-        // Last resort: progressive (combined) stream
+        if (resolvedVideo != null && resolvedAudio != null) {
+            val clientUa = bestVideo?.let { userAgentFor(it.client) }
+            return PlayableSource.Adaptive(resolvedVideo, resolvedAudio, userAgent = clientUa)
+        }
+
+        // No verified adaptive audio (or no video at all): fall through to
+        // the progressive (combined) stream — genuinely muxed, so it carries
+        // audio even when every adaptive audio URL failed its probe.
+        if (resolvedVideo != null) {
+            Log.w(
+                TAG,
+                "Adaptive video resolved but audio probe failed; " +
+                    "falling through to muxed progressive"
+            )
+        }
         val bestProgressive = progressive.sortedWith(
             compareByDescending<StreamCandidate> { it.score }
                 .thenBy { if (it.hasN) 1 else 0 }
@@ -340,6 +383,7 @@ object InnerTubeExtractor {
             resolveReachableUrl(it.url, userAgentFor(it.client))
         }
         if (resolvedProgressive != null) {
+            Log.d(TAG, "Falling back to muxed progressive stream (audio safety)")
             return PlayableSource.Muxed(
                 resolvedProgressive,
                 userAgent = userAgentFor(bestProgressive.client)
