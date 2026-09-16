@@ -22,6 +22,7 @@ import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -98,6 +99,11 @@ fun PosterCard(
     val context = LocalContext.current
     var hasError by remember(posterUrl) { mutableStateOf(false) }
 
+    // Settings toggle: the eye badge (started-but-not-finished shows) can be
+    // switched off app-wide; the completed checkmark is always unaffected.
+    val showEyeBadge = isPartiallyWatched &&
+        AppPreferences.getPosterPartialWatchBadge(context)
+
     KBCard(
         onClick = onClick,
         onLongClick = onLongClick,
@@ -142,7 +148,7 @@ fun PosterCard(
                         .align(Alignment.TopEnd)
                         .padding(8.dp)
                 )
-            } else if (isPartiallyWatched) {
+            } else if (showEyeBadge) {
                 WatchedEyeBadge(
                     modifier = Modifier
                         .align(Alignment.TopEnd)

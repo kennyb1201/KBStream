@@ -52,6 +52,7 @@ object PrefsPayloadBuilder {
         "poster_caption_rating",
         "home_rail_hide_upcoming",
         "home_landscape_cards",
+        "poster_partial_watch_badge",
         "amoled_black",                      // AMOLED theme toggle (pure display pref)
         "pure_black_surface",                // Pure black cards/panels/containers toggle
         "omdb_api_key",

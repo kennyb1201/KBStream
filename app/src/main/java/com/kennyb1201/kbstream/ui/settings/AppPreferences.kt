@@ -53,6 +53,7 @@ object AppPreferences {
     private const val KEY_OPENSUBTITLES_API_KEY = "opensubtitles_api_key"
     private const val KEY_HIDE_UPCOMING = "home_rail_hide_upcoming"
     private const val KEY_LANDSCAPE_CARDS = "home_landscape_cards"
+    private const val KEY_POSTER_PARTIAL_WATCH_BADGE = "poster_partial_watch_badge"
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(
             com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, PREFS_NAME),
@@ -496,6 +497,15 @@ object AppPreferences {
     fun setHomeLandscapeCards(context: Context, enabled: Boolean) {
         syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_LANDSCAPE_CARDS, enabled).apply()
+    }
+
+    // ── Poster eye badge: shows started-but-not-finished shows ────────
+    fun getPosterPartialWatchBadge(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_POSTER_PARTIAL_WATCH_BADGE, true)
+
+    fun setPosterPartialWatchBadge(context: Context, enabled: Boolean) {
+        syncDisplayPrefsBlob(context)
+        prefs(context).edit().putBoolean(KEY_POSTER_PARTIAL_WATCH_BADGE, enabled).apply()
     }
 
     /**

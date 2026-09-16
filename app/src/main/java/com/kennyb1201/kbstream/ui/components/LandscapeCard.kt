@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
@@ -54,6 +55,11 @@ fun LandscapeCard(
 ) {
     val context = LocalContext.current
     var hasError by remember(backdropUrl) { mutableStateOf(false) }
+
+    // Settings toggle: the eye badge (started-but-not-finished shows) can be
+    // switched off app-wide; the completed checkmark is always unaffected.
+    val showEyeBadge = isPartiallyWatched &&
+        AppPreferences.getPosterPartialWatchBadge(context)
     // Logo URL present but unloadable (dead TMDB path, CDN 404): fall back
     // to the plain title text instead of a silent blank corner.
     var logoFailed by remember(logoUrl) { mutableStateOf(false) }
@@ -154,7 +160,7 @@ fun LandscapeCard(
                         .align(Alignment.TopEnd)
                         .padding(8.dp)
                 )
-            } else if (isPartiallyWatched) {
+            } else if (showEyeBadge) {
                 WatchedEyeBadge(
                     modifier = Modifier
                         .align(Alignment.TopEnd)

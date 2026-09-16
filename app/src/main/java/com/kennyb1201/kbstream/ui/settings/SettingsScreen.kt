@@ -106,6 +106,7 @@ fun SettingsScreen(
     var captionRating by remember { mutableStateOf(AppPreferences.getPosterCaptionRating(context)) }
     var railHideUpcoming by remember { mutableStateOf(AppPreferences.getHomeRailHideUpcoming(context)) }
     var landscapeCards by remember { mutableStateOf(AppPreferences.getHomeLandscapeCards(context)) }
+    var partialWatchBadge by remember { mutableStateOf(AppPreferences.getPosterPartialWatchBadge(context)) }
     var amoledBlack by remember { mutableStateOf(AppPreferences.getAmoledBlack(context)) }
     var pureBlackSurface by remember { mutableStateOf(AppPreferences.getPureBlackSurface(context)) }
     var clearingHistory by remember { mutableStateOf(false) }
@@ -880,6 +881,18 @@ fun SettingsScreen(
                     onToggle = {
                         landscapeCards = it
                         AppPreferences.setHomeLandscapeCards(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                ToggleRow(
+                    label = "Eye Badge for In-Progress Shows",
+                    description = "Show an eye marker on posters for series you've started but not finished. The completed checkmark always wins when a show is fully watched.",
+                    checked = partialWatchBadge,
+                    onToggle = {
+                        partialWatchBadge = it
+                        AppPreferences.setPosterPartialWatchBadge(context, it)
                     }
                 )
                 }
