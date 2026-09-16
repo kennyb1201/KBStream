@@ -504,7 +504,16 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                     Log.w(TAG, "CACHE RESTORE HIT channels=${cachedPlaylist.channels.size} source=$url")
                     refreshIfNeeded()
                 } else {
-                    Log.w(TAG, "CACHE RESTORE MISS source=$url")
+                    // URL is configured but nothing cached (first entry after
+                    // clearing app storage, a provider purge, or a profile
+                    // switch before the first successful load). Falling back
+                    // to showing the setup screen with a dead action row made
+                    // the guide LOOK broken; a configured URL is an explicit
+                    // instruction to load, so fetch it now. The UI keeps the
+                    // guide usable meanwhile: channels appear the moment the
+                    // fetch + cache write finish.
+                    Log.w(TAG, "CACHE RESTORE MISS source=$url — auto-loading playlist")
+                    load()
                 }
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t

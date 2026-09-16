@@ -1201,13 +1201,19 @@ private fun SetupPanel(
     // busy first frame), and focus then falls through to controls BEHIND
     // the panel (group chips) on the next key press. Retry a few frames —
     // the same pattern the guide's row-focus flows use.
+    // NOTE: requestFocus() returns false (no exception) when focus can't
+    // transfer to an unattached/not-yet-focusable node, so success is the
+    // RETURN VALUE, not runCatching's isSuccess — that only ever means "no
+    // exception thrown", which is always true, so the loop used to exit
+    // after ONE frame with focus still stranded and the action row
+    // unreachable by D-pad.
     LaunchedEffect(Unit) {
         var focused = false
         var attempts = 0
-        while (!focused && attempts < 6) {
+        while (!focused && attempts < 12) {
             awaitFrame()
             focused = runCatching { firstFieldFocusRequester.requestFocus() }
-                .isSuccess
+                .getOrDefault(false)
             attempts++
         }
     }
