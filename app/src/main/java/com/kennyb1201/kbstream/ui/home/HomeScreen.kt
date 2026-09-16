@@ -2074,8 +2074,8 @@ fun HomeScreen(
     //  - the hero stays visible above the first rail exactly like Nuvio.
     // Nuvio uses MODERN_ROW_HEADER_FOCUS_INSET = 40.dp for the same job;
     // RailHeaderFocusInset mirrors that (defined with the Home constants).
-    val railRowsBringIntoViewSpec = remember(LocalDensity.current) {
-        val density = LocalDensity.current
+    val density = LocalDensity.current
+    val railRowsBringIntoViewSpec = remember(density) {
         val topInsetPx = with(density) { RailHeaderFocusInset.toPx() }
         object : BringIntoViewSpec {
             override fun calculateScrollDistance(
@@ -2102,8 +2102,7 @@ fun HomeScreen(
     // default scroll (cards never disappear past the left edge). Wrapping
     // each rail's LazyRow with this also SHADOWS the vertical spec above,
     // which would otherwise leak into the rows via CompositionLocalProvider.
-    val railCardsBringIntoViewSpec = remember(LocalDensity.current) {
-        val density = LocalDensity.current
+    val railCardsBringIntoViewSpec = remember(density) {
         val startPaddingPx = with(density) { RailHorizontalStartPadding.toPx() }
         object : BringIntoViewSpec {
             override fun calculateScrollDistance(
