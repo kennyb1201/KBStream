@@ -1809,6 +1809,19 @@ private fun CatalogManagerDialog(
                 visibleRows.getOrNull(index + 1)?.key
                     ?: visibleRows.getOrNull(index - 1)?.key
         }
+        // Park focus on the neighbor's toggle SYNCHRONOUSLY, before the
+        // state change lands. The toggled row's item key flips
+        // ("key" <-> "hidden:key"), which disposes the focused button and
+        // would otherwise drop the ring on the dialog header for a frame
+        // until the restore effect below runs — the visible jump the user
+        // sees on every toggle. The neighbor keeps its key through the
+        // rebuild, so parking on it first means focus is simply NEVER
+        // cleared and the header is never touched.
+        if (neighborKey != null) {
+            rowRequesters[neighborKey]?.toggle?.let { requester ->
+                runCatching { requester.requestFocus() }
+            }
+        }
         pendingFocus = neighborKey?.let { it to CatalogRowFocus.Slot.TOGGLE }
         if (row.isCollection) {
             onCollectionHide(row.collectionKey.orEmpty())
@@ -1836,6 +1849,15 @@ private fun CatalogManagerDialog(
             else ->
                 hiddenRows.getOrNull(index + 1)?.key
                     ?: hiddenRows.getOrNull(index - 1)?.key
+        }
+        // Same synchronous park as hideRowKeepFocus: the shown row's item
+        // key flips and disposes the focused toggle, so focus the next
+        // hidden row's toggle BEFORE the rebuild instead of letting the
+        // ring flash on the dialog header first.
+        if (neighborKey != null) {
+            rowRequesters[neighborKey]?.toggle?.let { requester ->
+                runCatching { requester.requestFocus() }
+            }
         }
         pendingFocus = neighborKey?.let { it to CatalogRowFocus.Slot.TOGGLE }
         if (row.isCollection) {
