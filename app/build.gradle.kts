@@ -148,7 +148,10 @@ dependencies {
 
     implementation("androidx.tv:tv-material:1.0.0")
     implementation("androidx.tv:tv-foundation:1.0.0")
-    implementation(platform("androidx.compose:compose-bom:2024.06.00"))
+    // 1.7.x BOM: BringIntoViewSpec (Nuvio-style focus landing on the Home
+    // rails) was finalized in Compose 1.7; 1.6 shipped only the old
+    // BringIntoViewResponder API.
+    implementation(platform("androidx.compose:compose-bom:2024.09.03"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")

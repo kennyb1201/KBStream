@@ -9,6 +9,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.BringIntoViewSpec
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,14 +32,15 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlin.math.abs
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.kennyb1201.kbstream.data.tmdb.displayDescription
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -58,6 +61,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -121,7 +125,6 @@ import com.kennyb1201.kbstream.ui.home.UpcomingEpisode
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
 import com.kennyb1201.kbstream.data.youtube.YoutubeChunkedDataSourceFactory
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 private val HomePosterWidth = 124.dp
 private val HomePosterHeight = 180.dp
@@ -139,6 +142,11 @@ private val RailBottomContentPadding = 12.dp
 
 private val RailHorizontalStartPadding = 12.dp
 private val RailSectionGap = 20.dp
+
+// Nuvio parity: MODERN_ROW_HEADER_FOCUS_INSET. When a row takes focus, its
+// header lands this far below the rails viewport top — deterministic landing
+// kills both the CW/Upcoming sliver and the per-focus-step bounce.
+private val RailHeaderFocusInset = 40.dp
 
 private val HeroToFirstRailGap = 2.dp
 
@@ -1848,6 +1856,7 @@ private fun CompactUpNextCard(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun HomeScreen(
     onItemClick: (MetaPreview) -> Unit,
@@ -2012,7 +2021,6 @@ fun HomeScreen(
     // the Continue Watching row can be cleared out of the viewport on rail
     // focus (see below).
     val railListState = rememberLazyListState()
-    val homeScope = rememberCoroutineScope()
 
     var heroTrailerReady by remember {
         mutableStateOf(false)
@@ -2054,58 +2062,67 @@ fun HomeScreen(
         lastPosterFocusRequester?.requestFocus()
     }
 
-    // Which row last held focus: "continue_watching", "upcoming",
-    // "catalog", or "folder". The sliver-hiding snaps below run once per
-    // ROW TRANSITION — onFocusChanged fires for every poster the D-pad
-    // crosses while scrolling horizontally, and a snap per focus step
-    // fights Compose's focus bring-into-view scroll, bouncing the posters
-    // up and down inside the rail on every horizontal move.
-    var lastFocusedRowKey by remember {
-        mutableStateOf<String?>(null)
-    }
-
-    // Item layout: 0 = hero spacer, then Continue Watching (only when it
-    // has entries), then Upcoming (only when populated), then the catalog
-    // rails — computed from presence so it also works when Continue
-    // Watching is empty and only the Upcoming rail exists.
-    fun upcomingRowIndex(): Int = 1 + (if (upNext.isNotEmpty()) 1 else 0)
-
-    fun firstRailIndex(): Int =
-        upcomingRowIndex() + (if (upcomingSchedule.isNotEmpty()) 1 else 0)
-
-    /**
-     * Snap the rails list so everything above [targetIndex] sits fully
-     * above the viewport. Only scrolls when a row above the target is
-     * partially visible (the sliver case); a list already resting at or
-     * past the target is left untouched, so this stays quiet while the
-     * user horizontal-scrolls inside a rail.
-     */
-    fun snapPastInterstitials(targetIndex: Int) {
-        if (
-            railListState.firstVisibleItemIndex < targetIndex &&
-            railListState.firstVisibleItemScrollOffset > 0
-        ) {
-            homeScope.launch {
-                railListState.scrollToItem(index = targetIndex)
+    // Nuvio-style focus landing (ported from NuvioTV's ModernHomeContent /
+    // ModernHomeRowsList). No snap scrolls anywhere: the rows LazyColumn is
+    // wrapped in a BringIntoViewSpec so that when a catalog rail takes
+    // focus, Compose's native focus bring-into-view scroll lands the row
+    // at a fixed inset below the viewport top. Deterministic landing means:
+    //  - no Continue Watching / Upcoming sliver peeking under the hero
+    //    (landing on a catalog rail always pushes those rows fully above),
+    //  - no bounce (the spec returns the same distance for every child of
+    //    the focused row, so the scroll target never changes mid-flight),
+    //  - the hero stays visible above the first rail exactly like Nuvio.
+    // Nuvio uses MODERN_ROW_HEADER_FOCUS_INSET = 40.dp for the same job;
+    // RailHeaderFocusInset mirrors that (defined with the Home constants).
+    val railRowsBringIntoViewSpec = remember(LocalDensity.current) {
+        val density = LocalDensity.current
+        val topInsetPx = with(density) { RailHeaderFocusInset.toPx() }
+        object : BringIntoViewSpec {
+            override fun calculateScrollDistance(
+                offset: Float,
+                size: Float,
+                containerSize: Float
+            ): Float {
+                val currentLeadingEdge = offset
+                // Already resting at the landing line: done. This also keeps
+                // the spring quiet during horizontal focus moves (no bounce).
+                if (abs(currentLeadingEdge - topInsetPx) < 1f) return 0f
+                val distance = currentLeadingEdge - topInsetPx
+                // Never force the list above its start (mirrors Nuvio's
+                // canScrollBackward guard).
+                if (distance < 0f && !railListState.canScrollBackward) return 0f
+                return distance
             }
         }
     }
 
-    /**
-     * The Continue Watching and Upcoming rows sit between the hero and the
-     * catalog rails. When the viewport rests between item boundaries, the
-     * bottom few pixels of those cards peek out right under the hero — very
-     * visible against the dark background. Snap the list so BOTH rows are
-     * fully above the viewport whenever focus sits on a catalog rail (not
-     * on those rows themselves). Called from [selectHero] (focus moved onto
-     * a rail) and from a snapshot effect that also covers the case where a
-     * row appears/changes after focus is already on a rail — a single focus
-     * event cannot catch that.
-     */
-    fun hideContinueWatchingSliver() {
-        // Catalog-rail focus: snap past BOTH interstitial rows (Continue
-        // Watching and Upcoming, whichever are present).
-        snapPastInterstitials(targetIndex = firstRailIndex())
+    // Horizontal counterpart (Nuvio's ModernHomeRows horizontalBringIntoViewSpec):
+    // a focused card lands with its leading edge at the rail's start padding,
+    // so the row tracks focus like Nuvio's rails instead of the minimal
+    // default scroll (cards never disappear past the left edge). Wrapping
+    // each rail's LazyRow with this also SHADOWS the vertical spec above,
+    // which would otherwise leak into the rows via CompositionLocalProvider.
+    val railCardsBringIntoViewSpec = remember(LocalDensity.current) {
+        val density = LocalDensity.current
+        val startPaddingPx = with(density) { RailHorizontalStartPadding.toPx() }
+        object : BringIntoViewSpec {
+            override fun calculateScrollDistance(
+                offset: Float,
+                size: Float,
+                containerSize: Float
+            ): Float {
+                val childSize = abs(size)
+                val initialTarget = startPaddingPx
+                val spaceAvailable = containerSize - initialTarget
+                val targetForLeadingEdge =
+                    if (childSize <= containerSize && spaceAvailable < childSize) {
+                        containerSize - childSize
+                    } else {
+                        initialTarget
+                    }
+                return offset - targetForLeadingEdge
+            }
+        }
     }
 
     fun selectHero(
@@ -2115,47 +2132,13 @@ fun HomeScreen(
         focusedItem = item
         focusedFolder = null
         focusedContinueWatchingItem = null
-
-        // Focusing a catalog rail while a Continue Watching / Upcoming row
-        // is still partially visible: scroll just far enough that those
-        // rows are fully above the viewport. One D-pad notch only
-        // guarantees the newly focused item is on screen, which used to
-        // leave a sliver of the CW cards peeking under the hero.
-        //
-        // Row-transition gate: onFocusChanged fires for EVERY poster the
-        // D-pad crosses while scrolling horizontally through a rail, and
-        // re-running the snap per step made it fight Compose's focus
-        // bring-into-view scroll — the posters visibly bounced up and down
-        // on every horizontal move. The snap therefore runs once when focus
-        // ENTERS the catalog rows; horizontal scrolling inside a rail never
-        // scrolls the list.
-        if (lastFocusedRowKey != "catalog") {
-            lastFocusedRowKey = "catalog"
-            hideContinueWatchingSliver()
-        }
     }
 
     /**
-     * Focus landed on a Nuvio collection folder tile: swap the hero to the
-     * folder's manifest artwork (heroBackdropUrl + titleLogoUrl). Folders
-     * carry no meta or trailer, so we just point focusedFolder at it; the
-     * hero reads its artwork from there while it's non-null.
-     */
-    fun selectFolderHero(folder: NuvioFolder) {
-        userAdjustedFocus = true
-        focusedFolder = folder
-        focusedContinueWatchingItem = null
-        lastFocusedRowKey = "folder"
-    }
-
-    /**
-     * Focus landed on a card inside the Continue Watching OR Upcoming rows
-     * (both drive the hero's episode/progress view, and both are rows the
-     * sliver guard must never scroll away while the user is on them). The
-     * Upcoming cards set this too, which is what exempts them from the
-     * catalog-rail snap: focusing an Upcoming card scrolls only far enough
-     * to bring it on screen, leaving the CW sliver above it — correct,
-     * since the user is deliberately on the rows under the hero.
+     * Focus landed on a card inside the Continue Watching OR Upcoming rows:
+     * both drive the hero's episode/progress view. No snap scrolls here
+     * anymore — the rows LazyColumn's BringIntoViewSpec handles landing
+     * deterministically, and the user's own row is never scrolled away.
      */
     fun selectContinueWatchingHero(
         item: MetaPreview,
@@ -2165,45 +2148,6 @@ fun HomeScreen(
         focusedItem = item
         focusedFolder = null
         focusedContinueWatchingItem = upNextItem
-
-        // Row-transition capture (same reasoning as selectHero): remember
-        // what the row was BEFORE re-tagging, so the Upcoming snap below
-        // fires only when focus ENTERS the Upcoming row — never per
-        // horizontal focus step inside it.
-        val enteringUpcomingRow = lastFocusedRowKey != "upcoming"
-        lastFocusedRowKey =
-            if (upNextItem.id.startsWith("upcoming:")) {
-                "upcoming"
-            } else {
-                "continue_watching"
-            }
-
-        // Focusing an UPCOMING card while the Continue Watching row is still
-        // partially scrolled under the hero leaves its bottom sliver (and
-        // the progress bar) peeking below the hero. The user is now on the
-        // row BELOW Continue Watching, so snap it fully above the viewport —
-        // same intent as hideContinueWatchingSliver, but landing with the
-        // Upcoming row at the top instead of skipping past it. CW cards
-        // themselves never trigger this: the user is deliberately on that
-        // row and their view must not be scrolled away.
-        if (upNextItem.id.startsWith("upcoming:")) {
-            // Item layout: 0 = hero spacer, 1 = Continue Watching (only
-            // when present), then the Upcoming row.
-            val upcomingIndex = upcomingRowIndex()
-            val atOrAboveUpcoming =
-                railListState.firstVisibleItemIndex < upcomingIndex ||
-                    (
-                        railListState.firstVisibleItemIndex == upcomingIndex &&
-                            railListState.firstVisibleItemScrollOffset > 0
-                        )
-            if (enteringUpcomingRow && atOrAboveUpcoming) {
-                homeScope.launch {
-                    // Instant snap: an animated scroll re-targeted on every
-                    // focus step is what made the cards bounce up and down.
-                    railListState.scrollToItem(index = upcomingIndex)
-                }
-            }
-        }
     }
 
     // Re-apply rail display settings changed in Settings while we were away
@@ -2214,40 +2158,6 @@ fun HomeScreen(
         // Pick up Collections-manager edits (import / pin / reorder / hide)
         // made while we were away.
         nuvioViewModel.load()
-    }
-
-    // Continuous rail-sliver guard: the CW/Upcoming rows can appear or
-    // change after focus already sits on a catalog rail (instant snapshot
-    // landing, Simkl merge, rail rebuild) with no focus event firing, so
-    // re-run the snap whenever the data or scroll position changes. Skipped
-    // while the user is actually on one of those rows so their own view is
-    // never scrolled away.
-    LaunchedEffect(
-        upNext,
-        upcomingSchedule,
-        railListState.firstVisibleItemIndex,
-        railListState.firstVisibleItemScrollOffset
-    ) {
-        when {
-            // On Upcoming: correct only a Continue Watching sliver ABOVE the
-            // Upcoming row (the progress-bar peek under the hero); the
-            // Upcoming row's own offset stays untouched so data refreshes
-            // cannot yank the row the user is browsing.
-            focusedContinueWatchingItem?.id?.startsWith("upcoming:") == true -> {
-                val upcomingIndex = upcomingRowIndex()
-                if (railListState.firstVisibleItemIndex < upcomingIndex) {
-                    homeScope.launch {
-                        railListState.scrollToItem(index = upcomingIndex)
-                    }
-                }
-            }
-
-            // On Continue Watching: never auto-scroll the row the user is on.
-            focusedContinueWatchingItem != null -> Unit
-
-            // Catalog rails, folder tiles, and the pre-focus seed state.
-            else -> hideContinueWatchingSliver()
-        }
     }
 
     LaunchedEffect(showTopBar) {
@@ -2482,519 +2392,277 @@ fun HomeScreen(
                 )
             }
 
-            LazyColumn(
-                state = railListState,
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(
-                    top = 0.dp,
-                    bottom = 16.dp
-                ),
-                verticalArrangement =
-                    Arrangement.spacedBy(
-                        RailSectionGap
-                    )
+            // Nuvio parity: the rows list gets the custom vertical
+            // BringIntoViewSpec (fixed header landing inset). The opaque
+            // hero spacer below is what lets Nuvio's fixed-viewport trick
+            // work with a flowing hero: focus scrolling the catalog rails
+            // slides the spacer under the hero instead of leaving the
+            // CW/Upcoming sliver peeking out from behind it.
+            CompositionLocalProvider(
+                LocalBringIntoViewSpec provides railRowsBringIntoViewSpec
             ) {
-                item(key = "hero_spacer") {
-                    // Opaque spacer that prevents CW progress bar
-                    // from peeking below the hero gradient.
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(HeroToFirstRailGap)
-                            .background(Color.Black)
-                    )
-                }
-
-                if (upNext.isNotEmpty()) {
-                    item(
-                        key = "continue_watching"
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(
-                                start = TvSafeAreaHorizontal,
-                                top = 0.dp,
-                                bottom = 8.dp
-                            )
-                        ) {
-                            SectionTitle(
-                                "Continue Watching"
-                            )
-
-                            LazyRow(
-                                contentPadding =
-                                    PaddingValues(
-                                        start =
-                                            RailHorizontalStartPadding,
-                                        end =
-                                            TvSafeAreaHorizontal,
-                                        top = 10.dp,
-                                        bottom = 12.dp
-                                    ),
-                                horizontalArrangement =
-                                    Arrangement.spacedBy(
-                                        0.dp
-                                    )
-                            ) {
-                                items(
-                                    items = upNext,
-                                    key = { it.id }
-                                ) { item ->
-                                    val requester =
-                                        remember {
-                                            FocusRequester()
-                                        }
-
-                                    // Carry the row's own backdrop + clearLogo
-                                    // into the hero preview: while TMDB
-                                    // resolution is pending the hero renders
-                                    // THESE instead of falling back to the
-                                    // poster (which showed as an ugly zoomed
-                                    // backdrop with a plain-text title).
-                                    val hero =
-                                        MetaPreview(
-                                            id =
-                                                item.parentId
-                                                    ?: item.id,
-                                            type =
-                                                item.parentType
-                                                    ?: "movie",
-                                            name =
-                                                item.title,
-                                            poster =
-                                                item.poster,
-                                            background =
-                                                item.backdrop,
-                                            logo =
-                                                item.clearLogo
-                                        )
-
-                                    CompactUpNextCard(
-                                        item = item,
-                                        onClick = {
-                                            openUpNext(
-                                                item
-                                            )
-                                        },
-                                        onLongClick = {
-                                            // Remember this card's requester so
-                                            // dismissing the menu restores focus
-                                            // to the exact card that opened it.
-                                            lastPosterFocusRequester =
-                                                requester
-                                            openContinueWatchingMenu(
-                                                item
-                                            )
-                                        },
-                                        onFocus = {
-                                            selectContinueWatchingHero(
-                                                hero,
-                                                item
-                                            )
-                                        },
-                                        onUpPressed = {
-                                            openTopBar(
-                                                requester
-                                            )
-                                        },
-                                        focusRequester =
-                                            requester,
-                                        badgeColor =
-                                            when {
-                                                item.isSeriesFinale ->
-                                                    KBDanger
-
-                                                item.isSeasonFinale ->
-                                                    KBRust
-
-                                                else ->
-                                                    when (
-                                                        item.badge
-                                                    ) {
-                                                        UpNextBadge.CONTINUE_WATCHING ->
-                                                            KBAccent
-
-                                                        UpNextBadge.NEXT_UP ->
-                                                            KBSteel
-
-                                                        UpNextBadge.NEW_EPISODE ->
-                                                            KBSuccess
-
-                                                        UpNextBadge.NEW_SEASON ->
-                                                            KBPlum
-                                                    }
-                                            },
-                                        badgeText =
-                                            when {
-                                                item.isSeriesFinale ->
-                                                    "SERIES FINALE"
-
-                                                item.isSeasonFinale ->
-                                                    "SEASON FINALE"
-
-                                                else ->
-                                                    when (
-                                                        item.badge
-                                                    ) {
-                                                        UpNextBadge.CONTINUE_WATCHING ->
-                                                            "RESUME"
-
-                                                        UpNextBadge.NEXT_UP ->
-                                                            "NEXT UP"
-
-                                                        UpNextBadge.NEW_EPISODE ->
-                                                            "NEW"
-
-                                                        UpNextBadge.NEW_SEASON ->
-                                                            "NEW SEASON"
-                                                    }
-                                            }
-                                    )
-                                }
-                            }
-                        }
+                // Nuvio parity: bottom contentPadding equals the rows
+                // viewport so the LAST rail can also land at the focus
+                // inset — without it the tail rows stop short and leave a
+                // sliver of the rows above them peeking under the hero.
+                val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+                LazyColumn(
+                    state = railListState,
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(
+                        top = 0.dp,
+                        bottom = screenHeight * 0.52f
+                    ),
+                    verticalArrangement =
+                        Arrangement.spacedBy(
+                            RailSectionGap
+                        )
+                ) {
+                    item(key = "hero_spacer") {
+                        // Opaque spacer that prevents CW progress bar
+                        // from peeking below the hero gradient.
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(HeroToFirstRailGap)
+                                .background(Color.Black)
+                        )
                     }
-                }
 
-                if (upcomingSchedule.isNotEmpty()) {
-                    item(
-                        key = "upcoming_schedule"
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(
-                                start = TvSafeAreaHorizontal,
-                                top = 0.dp,
-                                bottom = 8.dp
-                            )
+                    if (upNext.isNotEmpty()) {
+                        item(
+                            key = "continue_watching"
                         ) {
-                            SectionTitle(
-                                "Upcoming"
-                            )
-
-                            LazyRow(
-                                contentPadding =
-                                    PaddingValues(
-                                        start =
-                                            RailHorizontalStartPadding,
-                                        end =
-                                            TvSafeAreaHorizontal,
-                                        top = 10.dp,
-                                        bottom = 12.dp
-                                    ),
-                                horizontalArrangement =
-                                    Arrangement.spacedBy(
-                                        0.dp
-                                    )
+                            Column(
+                                modifier = Modifier.padding(
+                                    start = TvSafeAreaHorizontal,
+                                    top = 0.dp,
+                                    bottom = 8.dp
+                                )
                             ) {
-                                items(
-                                    items = upcomingSchedule,
-                                    key = { it.id }
-                                ) { upcoming ->
-                                    val heroItem =
-                                        UpNextItem(
-                                            id = upcoming.id,
-                                            title = upcoming.title,
-                                            poster = upcoming.poster,
-                                            badge = UpNextBadge.NEXT_UP,
-                                            backdrop = upcoming.backdrop,
-                                            parentId = upcoming.parentId,
-                                            parentType = upcoming.parentType,
-                                            // Hero renders "Airs <label>" +
-                                            // the calendar date for these.
-                                            airDateLabel = upcoming.airDateLabel,
-                                            airDateFull = upcoming.airDateFull,
-                                            season = upcoming.season,
-                                            episode = upcoming.episode,
-                                            episodeTitle = upcoming.episodeTitle
-                                        )
+                                SectionTitle(
+                                    "Continue Watching"
+                                )
 
-                                    Box(
-                                        modifier = Modifier
-                                            .width(224.dp)
-                                            .height(146.dp + PosterFocusHeadroom)
-                                            .padding(end = HomeRailGap),
-                                        contentAlignment = Alignment.Center
+                                CompositionLocalProvider(
+                                    LocalBringIntoViewSpec provides railCardsBringIntoViewSpec
+                                ) {
+                                    LazyRow(
+                                        contentPadding =
+                                            PaddingValues(
+                                                start =
+                                                    RailHorizontalStartPadding,
+                                                end =
+                                                    TvSafeAreaHorizontal,
+                                                top = 10.dp,
+                                                bottom = 12.dp
+                                            ),
+                                        horizontalArrangement =
+                                            Arrangement.spacedBy(
+                                                0.dp
+                                            )
                                     ) {
-                                        UpcomingEpisodeCard(
-                                            upcoming = upcoming,
-                                            onClick = {
-                                                openUpNext(
-                                                    heroItem,
-                                                    openDetailsOnly = true
+                                        items(
+                                            items = upNext,
+                                            key = { it.id }
+                                        ) { item ->
+                                            val requester =
+                                                remember {
+                                                    FocusRequester()
+                                                }
+
+                                            // Carry the row's own backdrop + clearLogo
+                                            // into the hero preview: while TMDB
+                                            // resolution is pending the hero renders
+                                            // THESE instead of falling back to the
+                                            // poster (which showed as an ugly zoomed
+                                            // backdrop with a plain-text title).
+                                            val hero =
+                                                MetaPreview(
+                                                    id =
+                                                        item.parentId
+                                                            ?: item.id,
+                                                    type =
+                                                        item.parentType
+                                                            ?: "movie",
+                                                    name =
+                                                        item.title,
+                                                    poster =
+                                                        item.poster,
+                                                    background =
+                                                        item.backdrop,
+                                                    logo =
+                                                        item.clearLogo
                                                 )
-                                            },
-                                            onFocus = {
-                                                selectContinueWatchingHero(
-                                                    MetaPreview(
-                                                        id = upcoming.parentId,
-                                                        type = upcoming.parentType,
-                                                        name = upcoming.title,
-                                                        poster = upcoming.poster,
-                                                        background = upcoming.backdrop
-                                                    ),
-                                                    heroItem
-                                                )
-                                            }
-                                        )
+
+                                            CompactUpNextCard(
+                                                item = item,
+                                                onClick = {
+                                                    openUpNext(
+                                                        item
+                                                    )
+                                                },
+                                                onLongClick = {
+                                                    // Remember this card's requester so
+                                                    // dismissing the menu restores focus
+                                                    // to the exact card that opened it.
+                                                    lastPosterFocusRequester =
+                                                        requester
+                                                    openContinueWatchingMenu(
+                                                        item
+                                                    )
+                                                },
+                                                onFocus = {
+                                                    selectContinueWatchingHero(
+                                                        hero,
+                                                        item
+                                                    )
+                                                },
+                                                onUpPressed = {
+                                                    openTopBar(
+                                                        requester
+                                                    )
+                                                },
+                                                focusRequester =
+                                                    requester,
+                                                badgeColor =
+                                                    when {
+                                                        item.isSeriesFinale ->
+                                                            KBDanger
+
+                                                        item.isSeasonFinale ->
+                                                            KBRust
+
+                                                        else ->
+                                                            when (
+                                                                item.badge
+                                                            ) {
+                                                                UpNextBadge.CONTINUE_WATCHING ->
+                                                                    KBAccent
+
+                                                                UpNextBadge.NEXT_UP ->
+                                                                    KBSteel
+
+                                                                UpNextBadge.NEW_EPISODE ->
+                                                                    KBSuccess
+
+                                                                UpNextBadge.NEW_SEASON ->
+                                                                    KBPlum
+                                                            }
+                                                    },
+                                                badgeText =
+                                                    when {
+                                                        item.isSeriesFinale ->
+                                                            "SERIES FINALE"
+
+                                                        item.isSeasonFinale ->
+                                                            "SEASON FINALE"
+
+                                                        else ->
+                                                            when (
+                                                                item.badge
+                                                            ) {
+                                                                UpNextBadge.CONTINUE_WATCHING ->
+                                                                    "RESUME"
+
+                                                                UpNextBadge.NEXT_UP ->
+                                                                    "NEXT UP"
+
+                                                                UpNextBadge.NEW_EPISODE ->
+                                                                    "NEW"
+
+                                                                UpNextBadge.NEW_SEASON ->
+                                                                    "NEW SEASON"
+                                                            }
+                                                    }
+                                            )
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                }
 
-                when {
-                    // Full-screen spinner only when there is nothing to show
-                    // yet: a rebuild with existing rails keeps them visible
-                    // (rails stream in progressively on top of the old list
-                    // instead of flashing a loader on every refresh).
-                    isLoading && rails.isEmpty() -> {
-                        item(key = "loading") {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(24.dp),
-                                contentAlignment = Alignment.Center
+                    if (upcomingSchedule.isNotEmpty()) {
+                        item(
+                            key = "upcoming_schedule"
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(
+                                    start = TvSafeAreaHorizontal,
+                                    top = 0.dp,
+                                    bottom = 8.dp
+                                )
                             ) {
-                                CircularProgressIndicator(
-                                    color = KBAccent,
-                                    strokeWidth = 3.dp
-                                )
-                            }
-                        }
-                    }
-
-                    error != null -> {
-                        item(key = "error") {
-                            Text(
-                                text =
-                                    "Error: $error",
-                                modifier =
-                                    Modifier.padding(
-                                        24.dp
-                                    )
-                            )
-                        }
-                    }
-
-                    rails.isEmpty() -> {
-                        item(key = "empty") {
-                            // Clicking (OK on the remote) retries the
-                            // rail build immediately - no need to leave
-                            // Home or poke a setting when a cold-start
-                            // load failed.
-                            KBCard(
-                                onClick = {
-                                    viewModel.refreshRailsOnly()
-                                },
-                                modifier = Modifier
-                                    .padding(24.dp)
-                            ) {
-                                Text(
-                                    text =
-                                        "No catalogs available. Press OK to retry, or add an addon to get started."
-                                )
-                            }
-                        }
-                    }
-
-                    else -> {
-                        // Nuvio collections interleave with addon rails:
-                        // the merged order was computed above in composable
-                        // context (pin / reorder / hide from the manager;
-                        // unarranged collections sit after the addon rails).
-                        itemsIndexed(
-                            items = mergedEntries,
-                            key = { _, entry ->
-                                when (entry) {
-                                    is com.kennyb1201.kbstream.ui.nuvio.HomeEntry.AddonRail ->
-                                        "rail|" + entry.sourceIndex + "|" +
-                                            entry.rail.addonName + ":" +
-                                            entry.rail.catalogName + ":" + entry.rail.type
-                                    is com.kennyb1201.kbstream.ui.nuvio.HomeEntry.Collection ->
-                                        "nuvio|" + (entry.collection.id ?: entry.collection.title)
-                                }
-                            }
-                        ) { _, entry ->
-                            when (val e = entry) {
-                                is com.kennyb1201.kbstream.ui.nuvio.HomeEntry.Collection ->
-                                    NuvioHomeCollectionRail(
-                                        collection = e.collection,
-                                        onOpenFolder = onOpenNuvioFolder,
-                                        onFolderFocused = ::selectFolderHero
-                                    )
-                                is com.kennyb1201.kbstream.ui.nuvio.HomeEntry.AddonRail -> {
-                                    val rail = e.rail
-                                    val railIndex = e.sourceIndex
-
-                                    Column(
-                                        modifier = Modifier.padding(
-                                            start = TvSafeAreaHorizontal,
-                                            top = 0.dp,
-                                            bottom = 8.dp
-                                        )
-                                    ) {
-                                        SectionTitle(
-                                            homeRailTitle(
-                                                catalogName = rail.catalogName,
-                                                addonName = rail.addonName,
-                                                type = rail.type,
-                                                showType = showRailType,
-                                                showAddon = showRailAddon
-                                            )
-                                        )
-
-                                val railRowState = rememberLazyListState()
-
-                                InfiniteRailPageHandler(
-                                    listState = railRowState,
-                                    itemCount = rail.items.size,
-                                    railKey = rail.addonName + "::" +
-                                        rail.catalogId + "::" + rail.type,
-                                    onLoadMore = viewModel::loadMoreForRail
+                                SectionTitle(
+                                    "Upcoming"
                                 )
 
-                                LazyRow(
-                                    state = railRowState,
-                                    contentPadding = PaddingValues(
-                                        start = RailHorizontalStartPadding,
-                                        end = TvSafeAreaHorizontal,
-                                        top = RailTopContentPadding,
-                                        bottom = RailBottomContentPadding
-                                    ),
-                                    horizontalArrangement =
-                                        Arrangement.spacedBy(0.dp)
+                                CompositionLocalProvider(
+                                    LocalBringIntoViewSpec provides railCardsBringIntoViewSpec
                                 ) {
-                                    items(
-                                        items = rail.items,
-                                        key = {
-                                            "${it.type}:${it.id}"
-                                        }
-                                    ) { meta ->
-
-                                        val requester = remember {
-                                            FocusRequester()
-                                        }
-
-                                        val watched =
-                                            viewModel.watchedKey(
-                                                meta.id,
-                                                meta.type
-                                            ) in watchedKeys
-
-                                        val isFirstRailFirstRow =
-                                            railIndex == firstDisplayedRailSourceIndex &&
-                                                firstRailNeedsUpHook
-
-                                        val cardWidth =
-                                            if (landscapeCards) {
-                                                HomeLandscapeWidth
-                                            } else {
-                                                HomePosterWidth
-                                            }
-
-                                        val cardHeight =
-                                            if (landscapeCards) {
-                                                HomeLandscapeHeight
-                                            } else {
-                                                HomePosterHeight
-                                            }
-
-                                        val posterModifier = Modifier
-                                            .offset(y = (-3).dp)
-                                            .focusRequester(requester)
-                                            .width(cardWidth)
-                                            .height(cardHeight)
-                                            .onFocusChanged { focusState ->
-                                                if (focusState.isFocused) {
-                                                    lastFocusedItemKey = "${meta.type}:${meta.id}"
-                                                    selectHero(meta)
-                                                }
-                                            }
-                                            .then(
-                                                if (isFirstRailFirstRow) {
-                                                    Modifier.onPreviewKeyEvent { event ->
-                                                        if (
-                                                            event.type == KeyEventType.KeyDown &&
-                                                            event.key == Key.DirectionUp
-                                                        ) {
-                                                            openTopBar(requester)
-                                                            true
-                                                        } else {
-                                                            false
-                                                        }
-                                                    }
-                                                } else {
-                                                    Modifier
-                                                }
+                                    LazyRow(
+                                        contentPadding =
+                                            PaddingValues(
+                                                start =
+                                                    RailHorizontalStartPadding,
+                                                end =
+                                                    TvSafeAreaHorizontal,
+                                                top = 10.dp,
+                                                bottom = 12.dp
+                                            ),
+                                        horizontalArrangement =
+                                            Arrangement.spacedBy(
+                                                0.dp
                                             )
-
-                                        Box(
-                                            modifier = Modifier
-                                                .width(cardWidth)
-                                                .height(
-                                                    cardHeight +
-                                                        PosterFocusHeadroom
+                                    ) {
+                                        items(
+                                            items = upcomingSchedule,
+                                            key = { it.id }
+                                        ) { upcoming ->
+                                            val heroItem =
+                                                UpNextItem(
+                                                    id = upcoming.id,
+                                                    title = upcoming.title,
+                                                    poster = upcoming.poster,
+                                                    badge = UpNextBadge.NEXT_UP,
+                                                    backdrop = upcoming.backdrop,
+                                                    parentId = upcoming.parentId,
+                                                    parentType = upcoming.parentType,
+                                                    // Hero renders "Airs <label>" +
+                                                    // the calendar date for these.
+                                                    airDateLabel = upcoming.airDateLabel,
+                                                    airDateFull = upcoming.airDateFull,
+                                                    season = upcoming.season,
+                                                    episode = upcoming.episode,
+                                                    episodeTitle = upcoming.episodeTitle
                                                 )
-                                                .padding(
-                                                    end = HomeRailGap
-                                                ),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            val art =
-                                                rail.landscapeArt[
-                                                    "${meta.type}:${meta.id}"
-                                                ]
 
-                                            if (landscapeCards) {
-                                                LandscapeCard(
-                                                    backdropUrl = art?.first
-                                                        ?: meta.background,
-                                                    logoUrl = art?.second
-                                                        ?: meta.logo,
-                                                    fallbackTitle = meta.name,
-                                                    contentDescription = meta.name,
-                                                    isWatched = watched,
+                                            Box(
+                                                modifier = Modifier
+                                                    .width(224.dp)
+                                                    .height(146.dp + PosterFocusHeadroom)
+                                                    .padding(end = HomeRailGap),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                UpcomingEpisodeCard(
+                                                    upcoming = upcoming,
                                                     onClick = {
-                                                        selectHero(meta)
-                                                        onItemClick(meta)
+                                                        openUpNext(
+                                                            heroItem,
+                                                            openDetailsOnly = true
+                                                        )
                                                     },
-                                                    onLongClick = {
-                                                        lastPosterFocusRequester =
-                                                            requester
-                                                        posterMenu =
-                                                            PosterMenuTarget(
-                                                                meta,
-                                                                rail
-                                                            )
-                                                    },
-                                                    modifier = posterModifier
-                                                )
-                                            } else {
-                                                PosterCard(
-                                                    posterUrl = meta.poster,
-                                                    contentDescription = meta.name,
-                                                    isWatched = watched,
-                                                    onClick = {
-                                                        selectHero(meta)
-                                                        onItemClick(meta)
-                                                    },
-                                                    onLongClick = {
-                                                        lastPosterFocusRequester =
-                                                            requester
-                                                        posterMenu =
-                                                            PosterMenuTarget(
-                                                                meta,
-                                                                rail
-                                                            )
-                                                    },
-                                                    modifier = posterModifier,
-                                                    onPosterError = { throwable ->
-                                                        Log.e(
-                                                            "HOME_UI",
-                                                            "Catalog poster load failed, " +
-                                                                "title=${meta.name}, " +
-                                                                "poster=${meta.poster}",
-                                                            throwable
+                                                    onFocus = {
+                                                        selectContinueWatchingHero(
+                                                            MetaPreview(
+                                                                id = upcoming.parentId,
+                                                                type = upcoming.parentType,
+                                                                name = upcoming.title,
+                                                                poster = upcoming.poster,
+                                                                background = upcoming.backdrop
+                                                            ),
+                                                            heroItem
                                                         )
                                                     }
                                                 )
@@ -3002,20 +2670,293 @@ fun HomeScreen(
                                         }
                                     }
                                 }
-
                             }
+                        }
+                    }
+
+                    when {
+                        // Full-screen spinner only when there is nothing to show
+                        // yet: a rebuild with existing rails keeps them visible
+                        // (rails stream in progressively on top of the old list
+                        // instead of flashing a loader on every refresh).
+                        isLoading && rails.isEmpty() -> {
+                            item(key = "loading") {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(24.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    CircularProgressIndicator(
+                                        color = KBAccent,
+                                        strokeWidth = 3.dp
+                                    )
+                                }
+                            }
+                        }
+
+                        error != null -> {
+                            item(key = "error") {
+                                Text(
+                                    text =
+                                        "Error: $error",
+                                    modifier =
+                                        Modifier.padding(
+                                            24.dp
+                                        )
+                                )
+                            }
+                        }
+
+                        rails.isEmpty() -> {
+                            item(key = "empty") {
+                                // Clicking (OK on the remote) retries the
+                                // rail build immediately - no need to leave
+                                // Home or poke a setting when a cold-start
+                                // load failed.
+                                KBCard(
+                                    onClick = {
+                                        viewModel.refreshRailsOnly()
+                                    },
+                                    modifier = Modifier
+                                        .padding(24.dp)
+                                ) {
+                                    Text(
+                                        text =
+                                            "No catalogs available. Press OK to retry, or add an addon to get started."
+                                    )
+                                }
+                            }
+                        }
+
+                        else -> {
+                            // Nuvio collections interleave with addon rails:
+                            // the merged order was computed above in composable
+                            // context (pin / reorder / hide from the manager;
+                            // unarranged collections sit after the addon rails).
+                            itemsIndexed(
+                                items = mergedEntries,
+                                key = { _, entry ->
+                                    when (entry) {
+                                        is com.kennyb1201.kbstream.ui.nuvio.HomeEntry.AddonRail ->
+                                            "rail|" + entry.sourceIndex + "|" +
+                                                entry.rail.addonName + ":" +
+                                                entry.rail.catalogName + ":" + entry.rail.type
+                                        is com.kennyb1201.kbstream.ui.nuvio.HomeEntry.Collection ->
+                                            "nuvio|" + (entry.collection.id ?: entry.collection.title)
+                                    }
+                                }
+                            ) { _, entry ->
+                                when (val e = entry) {
+                                    is com.kennyb1201.kbstream.ui.nuvio.HomeEntry.Collection ->
+                                        NuvioHomeCollectionRail(
+                                            collection = e.collection,
+                                            onOpenFolder = onOpenNuvioFolder,
+                                            onFolderFocused = { folder: NuvioFolder ->
+                                                userAdjustedFocus = true
+                                                focusedFolder = folder
+                                                focusedContinueWatchingItem = null
+                                            }
+                                        )
+                                    is com.kennyb1201.kbstream.ui.nuvio.HomeEntry.AddonRail -> {
+                                        val rail = e.rail
+                                        val railIndex = e.sourceIndex
+
+                                        Column(
+                                            modifier = Modifier.padding(
+                                                start = TvSafeAreaHorizontal,
+                                                top = 0.dp,
+                                                bottom = 8.dp
+                                            )
+                                        ) {
+                                            SectionTitle(
+                                                homeRailTitle(
+                                                    catalogName = rail.catalogName,
+                                                    addonName = rail.addonName,
+                                                    type = rail.type,
+                                                    showType = showRailType,
+                                                    showAddon = showRailAddon
+                                                )
+                                            )
+
+                                    val railRowState = rememberLazyListState()
+
+                                    InfiniteRailPageHandler(
+                                        listState = railRowState,
+                                        itemCount = rail.items.size,
+                                        railKey = rail.addonName + "::" +
+                                            rail.catalogId + "::" + rail.type,
+                                        onLoadMore = viewModel::loadMoreForRail
+                                    )
+
+                                    CompositionLocalProvider(
+                                        LocalBringIntoViewSpec provides railCardsBringIntoViewSpec
+                                    ) {
+                                        LazyRow(
+                                            state = railRowState,
+                                            contentPadding = PaddingValues(
+                                                start = RailHorizontalStartPadding,
+                                                end = TvSafeAreaHorizontal,
+                                                top = RailTopContentPadding,
+                                                bottom = RailBottomContentPadding
+                                            ),
+                                            horizontalArrangement =
+                                                Arrangement.spacedBy(0.dp)
+                                        ) {
+                                            items(
+                                                items = rail.items,
+                                                key = {
+                                                    "${it.type}:${it.id}"
+                                                }
+                                            ) { meta ->
+
+                                                val requester = remember {
+                                                    FocusRequester()
+                                                }
+
+                                                val watched =
+                                                    viewModel.watchedKey(
+                                                        meta.id,
+                                                        meta.type
+                                                    ) in watchedKeys
+
+                                                val isFirstRailFirstRow =
+                                                    railIndex == firstDisplayedRailSourceIndex &&
+                                                        firstRailNeedsUpHook
+
+                                                val cardWidth =
+                                                    if (landscapeCards) {
+                                                        HomeLandscapeWidth
+                                                    } else {
+                                                        HomePosterWidth
+                                                    }
+
+                                                val cardHeight =
+                                                    if (landscapeCards) {
+                                                        HomeLandscapeHeight
+                                                    } else {
+                                                        HomePosterHeight
+                                                    }
+
+                                                val posterModifier = Modifier
+                                                    .offset(y = (-3).dp)
+                                                    .focusRequester(requester)
+                                                    .width(cardWidth)
+                                                    .height(cardHeight)
+                                                    .onFocusChanged { focusState ->
+                                                        if (focusState.isFocused) {
+                                                            lastFocusedItemKey = "${meta.type}:${meta.id}"
+                                                            selectHero(meta)
+                                                        }
+                                                    }
+                                                    .then(
+                                                        if (isFirstRailFirstRow) {
+                                                            Modifier.onPreviewKeyEvent { event ->
+                                                                if (
+                                                                    event.type == KeyEventType.KeyDown &&
+                                                                    event.key == Key.DirectionUp
+                                                                ) {
+                                                                    openTopBar(requester)
+                                                                    true
+                                                                } else {
+                                                                    false
+                                                                }
+                                                            }
+                                                        } else {
+                                                            Modifier
+                                                        }
+                                                    )
+
+                                                Box(
+                                                    modifier = Modifier
+                                                        .width(cardWidth)
+                                                        .height(
+                                                            cardHeight +
+                                                                PosterFocusHeadroom
+                                                        )
+                                                        .padding(
+                                                            end = HomeRailGap
+                                                        ),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    val art =
+                                                        rail.landscapeArt[
+                                                            "${meta.type}:${meta.id}"
+                                                        ]
+
+                                                    if (landscapeCards) {
+                                                        LandscapeCard(
+                                                            backdropUrl = art?.first
+                                                                ?: meta.background,
+                                                            logoUrl = art?.second
+                                                                ?: meta.logo,
+                                                            fallbackTitle = meta.name,
+                                                            contentDescription = meta.name,
+                                                            isWatched = watched,
+                                                            onClick = {
+                                                                selectHero(meta)
+                                                                onItemClick(meta)
+                                                            },
+                                                            onLongClick = {
+                                                                lastPosterFocusRequester =
+                                                                    requester
+                                                                posterMenu =
+                                                                    PosterMenuTarget(
+                                                                        meta,
+                                                                        rail
+                                                                    )
+                                                            },
+                                                            modifier = posterModifier
+                                                        )
+                                                    } else {
+                                                        PosterCard(
+                                                            posterUrl = meta.poster,
+                                                            contentDescription = meta.name,
+                                                            isWatched = watched,
+                                                            onClick = {
+                                                                selectHero(meta)
+                                                                onItemClick(meta)
+                                                            },
+                                                            onLongClick = {
+                                                                lastPosterFocusRequester =
+                                                                    requester
+                                                                posterMenu =
+                                                                    PosterMenuTarget(
+                                                                        meta,
+                                                                        rail
+                                                                    )
+                                                            },
+                                                            modifier = posterModifier,
+                                                            onPosterError = { throwable ->
+                                                                Log.e(
+                                                                    "HOME_UI",
+                                                                    "Catalog poster load failed, " +
+                                                                        "title=${meta.name}, " +
+                                                                        "poster=${meta.poster}",
+                                                                    throwable
+                                                                )
+                                                            }
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                }
+                                    }
                                 }
                             }
                         }
                     }
-                }
 
-                item(key = "bottom_spacer") {
-                    Spacer(
-                        modifier = Modifier.height(
-                            0.dp
+                    item(key = "bottom_spacer") {
+                        Spacer(
+                            modifier = Modifier.height(
+                                0.dp
+                            )
                         )
-                    )
+                    }
                 }
             }
         }
