@@ -47,8 +47,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
@@ -290,6 +292,23 @@ fun DetailScreen(
     var episodeTransitionState by remember {
         mutableStateOf(EpisodeTransitionState())
     }
+
+    // Focus sink for season changes triggered from the episode cards
+    // (Left/Right past a row edge, or OK on a chip). Swapping seasons
+    // replaces the whole episodes row - and while episodes reload it is
+    // swapped for a placeholder item - which disposes the focused card.
+    // Compose's fallback search then throws the ring at the Play button
+    // until the edge-restore effect below lands it on the target card:
+    // the visible up-then-back jump. This ZERO-SIZE, always-composed node
+    // (attached at the meta-content root, before any state swap) is parked
+    // on SYNCHRONOUSLY before the season change is applied, so the focused
+    // card's disposal never leaves focus ownerless and the fallback search
+    // never runs. It is invisible, has zero bounds, and takes part in no
+    // manual navigation because focus always leaves it within milliseconds
+    // - via the edge-restore effect (key presses) or focusSeasonOrEpisode
+    // (chip presses).
+    val seasonSwapFocusSink = remember { FocusRequester() }
+    var seasonSwapSinkArmed by remember { mutableStateOf(false) }
 
     val meta by viewModel.meta.collectAsState()
     val omdbRatings by viewModel.omdbRatings.collectAsState()
@@ -655,6 +674,10 @@ fun DetailScreen(
             ]?.requestFocus()
         }
 
+        // Focus is off the sink now — disarm it so it never captures
+        // focus during ordinary spatial navigation.
+        seasonSwapSinkArmed = false
+
         clearEpisodeTransitionState()
     }
 
@@ -937,6 +960,18 @@ fun DetailScreen(
             Box(
                 modifier = Modifier.fillMaxSize()
             ) {
+                // Zero-size focus sink for season swaps (see declaration).
+                // A child, not a modifier on this Box: children of a Box
+                // measure independently, so its 1px bounds constrain
+                // nothing while giving the focus system a stable node.
+                Box(
+                    modifier = Modifier
+                        .size(1.dp)
+                        .alpha(0f)
+                        .focusRequester(seasonSwapFocusSink)
+                        .focusProperties { canFocus = seasonSwapSinkArmed }
+                        .focusable()
+                )
                 AsyncImage(
             model = remember(backdropUrl) {
                 ImageRequest.Builder(context)
@@ -1927,6 +1962,16 @@ fun DetailScreen(
                                                                                 edge =
                                                                                     EpisodeFocusEdge.END
                                                                             )
+                                                                        // Park focus on the
+                                                                        // root sink BEFORE the
+                                                                        // season swap disposes
+                                                                        // the focused card.
+                                                                        seasonSwapSinkArmed =
+                                                                            true
+                                                                        runCatching {
+                                                                            seasonSwapFocusSink
+                                                                                .requestFocus()
+                                                                        }
                                                                         selectedSeason =
                                                                             seasons[
                                                                                 currentSeasonIndex -
@@ -1950,6 +1995,16 @@ fun DetailScreen(
                                                                                 edge =
                                                                                     EpisodeFocusEdge.START
                                                                             )
+                                                                        // Park focus on the
+                                                                        // root sink BEFORE the
+                                                                        // season swap disposes
+                                                                        // the focused card.
+                                                                        seasonSwapSinkArmed =
+                                                                            true
+                                                                        runCatching {
+                                                                            seasonSwapFocusSink
+                                                                                .requestFocus()
+                                                                        }
                                                                         selectedSeason =
                                                                             seasons[
                                                                                 currentSeasonIndex +
