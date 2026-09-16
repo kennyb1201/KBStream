@@ -1818,11 +1818,26 @@ private fun CatalogManagerDialog(
     }
 
     /**
-     * Show a hidden row, keeping focus on its own toggle as it moves from
-     * the hidden section back into the visible rails list.
+     * Show a hidden row. The row itself LEAVES the hidden section on this
+     * action — a catalog returns to its home-order slot (often far up the
+     * list) and a collection re-lands at the end of the arrangement — so
+     * pinning focus to the shown row dragged it up the whole dialog and
+     * the user had to travel back down to reach the next hidden row.
+     * Instead pin the NEXT hidden row's toggle (previous when this was
+     * the last), mirroring hideRowKeepFocus, so successive toggles work
+     * without any focus travel. Nothing to pin when this empties the
+     * hidden section — focus rests (dialog header), same as hide.
      */
     fun showRowKeepFocus(row: CatalogManagerDialogRow) {
-        pendingFocus = row.key to CatalogRowFocus.Slot.TOGGLE
+        val index = hiddenRows.indexOfFirst { it.key == row.key }
+        val neighborKey = when {
+            hiddenRows.size <= 1 -> null
+            index < 0 -> null
+            else ->
+                hiddenRows.getOrNull(index + 1)?.key
+                    ?: hiddenRows.getOrNull(index - 1)?.key
+        }
+        pendingFocus = neighborKey?.let { it to CatalogRowFocus.Slot.TOGGLE }
         if (row.isCollection) {
             onCollectionHide(row.collectionKey.orEmpty())
         } else {
