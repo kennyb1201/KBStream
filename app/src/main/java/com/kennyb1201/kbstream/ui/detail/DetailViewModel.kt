@@ -19,6 +19,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbPersonDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
+import com.kennyb1201.kbstream.data.reddit.RedditDiscussionsClient
 import com.kennyb1201.kbstream.data.trakt.TraktCommentsClient
 import com.kennyb1201.kbstream.data.omdb.OmdbClient
 import com.kennyb1201.kbstream.data.omdb.OmdbRatings
@@ -760,6 +761,35 @@ for (metaAddon in metaAddons) {
                     _allReviews.value = (_allReviews.value + traktReviews)
                         .distinctBy { it.id }
                 }
+            }
+
+            // Keyless Reddit backfill — the volume source now that Trakt
+            // rejects most bundled client ids. Top-upvoted title+year
+            // discussion posts, gated so only real write-ups qualify.
+            runCatching {
+                val detailNow = _tmdbDetail.value
+                val title = detailNow?.title ?: detailNow?.name
+                if (!title.isNullOrBlank()) {
+                    val year = (
+                        detailNow?.releaseDate ?: detailNow?.firstAirDate
+                        )?.takeIf { it.length >= 4 }?.substring(0, 4)
+                    val redditReviews = RedditDiscussionsClient.fetchReviews(
+                        title = title,
+                        year = year,
+                        type = normalizedType
+                    )
+                    if (redditReviews.isNotEmpty()) {
+                        _allReviews.value = (_allReviews.value + redditReviews)
+                            .distinctBy { it.id }
+                        Log.d(
+                            "KBStream",
+                            "reddit reviews merged: ${redditReviews.size} " +
+                                "for \"$title\" ($year)"
+                        )
+                    }
+                }
+            }.onFailure {
+                Log.w("KBStream", "reddit reviews failed: ${it.message}")
             }
         }
     }

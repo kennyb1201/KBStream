@@ -36,7 +36,9 @@ object TraktCommentsClient {
         .build()
 
     // Nuvio's own bundled Trakt app client id — the same key NuvioContentLoader
-    // already uses for unauthenticated public-list browsing.
+    // already uses for unauthenticated public-list browsing. NOTE: Trakt now
+    // rejects many widely-copied third-party client ids (403); requests here
+    // fail soft so that only costs the supplementary Trakt comments.
     private const val CLIENT_ID =
         "0183a5b53aef4c46b1b42a4cb1f9afc0e68a1e4f13b78017e5b3a26c8b63f57c"
 
