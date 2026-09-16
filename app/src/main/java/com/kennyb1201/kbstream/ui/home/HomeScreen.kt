@@ -142,6 +142,14 @@ private val RailSectionGap = 20.dp
 
 private val HeroToFirstRailGap = 2.dp
 
+// Hero clearlogo box (ContentScale.Fit inside). Collection (Nuvio folder)
+// manifests supply their own titleLogoUrl, which is frequently a wordmark
+// that reads small at the shared size — render it noticeably larger.
+private val HeroLogoWidth = 300.dp
+private val HeroLogoHeight = 82.dp
+private val CollectionHeroLogoWidth = 400.dp
+private val CollectionHeroLogoHeight = 120.dp
+
 private val PosterFocusHeadroom = 24.dp
 
 private val TvSafeAreaHorizontal = 12.dp
@@ -596,7 +604,9 @@ internal fun HomeHeroArtwork(
     trailerKey: String?,
     autoPlayTrailer: Boolean,
     muted: Boolean,
-    heroHeight: Dp = HomeHeroHeight
+    heroHeight: Dp = HomeHeroHeight,
+    heroLogoWidth: Dp = HeroLogoWidth,
+    heroLogoHeight: Dp = HeroLogoHeight
 ) {
     HomeHero(
         preview = preview,
@@ -607,7 +617,9 @@ internal fun HomeHeroArtwork(
         trailerKey = trailerKey,
         autoPlayTrailer = autoPlayTrailer,
         muted = muted,
-        heroHeight = heroHeight
+        heroHeight = heroHeight,
+        heroLogoWidth = heroLogoWidth,
+        heroLogoHeight = heroLogoHeight
     )
 }
 
@@ -622,7 +634,9 @@ private fun HomeHero(
     autoPlayTrailer: Boolean,
     muted: Boolean,
     continueWatchingItem: UpNextItem? = null,
-    heroHeight: Dp = HomeHeroHeight
+    heroHeight: Dp = HomeHeroHeight,
+    heroLogoWidth: Dp = HeroLogoWidth,
+    heroLogoHeight: Dp = HeroLogoHeight
 ) {
     val context = LocalContext.current
     val title = meta?.name ?: preview.name
@@ -1108,7 +1122,10 @@ private fun HomeHero(
         Column(
             modifier = Modifier
                 .fillMaxHeight()
-                .fillMaxWidth(0.4f)
+                // 0.46f (was 0.4f): gives the hero logo/wordmark box room —
+                // the logo's Modifier.width() coerces to this column, so a
+                // bigger logo box without a wider column would clamp back.
+                .fillMaxWidth(0.46f)
                 .padding(
                     start = 32.dp,
                     end = 20.dp,
@@ -1116,13 +1133,17 @@ private fun HomeHero(
                 ),
             verticalArrangement = Arrangement.Bottom
         ) {
-            if (!clearLogo.isNullOrBlank()) {                    HeroClearLogo(
-                        url = clearLogo,
-                        name = title,
-                        modifier = Modifier
-                            .width(300.dp)
-                            .height(82.dp)
-                    )
+            if (!clearLogo.isNullOrBlank()) {
+                HeroClearLogo(
+                    url = clearLogo,
+                    name = title,
+                    // Fixed size, coerced by the parent column's constraints
+                    // on narrow screens; Collection manifests get the larger
+                    // box so their wordmark logos carry the hero.
+                    modifier = Modifier
+                        .width(heroLogoWidth)
+                        .height(heroLogoHeight)
+                )
             } else {
                 Text(
                     text = title,
@@ -2443,7 +2464,21 @@ fun HomeScreen(
                         com.kennyb1201.kbstream.ui.settings.AppPreferences
                             .getHeroTrailerMuted(context),
                     continueWatchingItem =
-                        focusedContinueWatchingItem
+                        focusedContinueWatchingItem,
+                    // Collection manifests supply their own wordmark logo —
+                    // render it larger than the shared TMDB hero logo.
+                    heroLogoWidth =
+                        if (heroFolder != null) {
+                            CollectionHeroLogoWidth
+                        } else {
+                            HeroLogoWidth
+                        },
+                    heroLogoHeight =
+                        if (heroFolder != null) {
+                            CollectionHeroLogoHeight
+                        } else {
+                            HeroLogoHeight
+                        }
                 )
             }
 
