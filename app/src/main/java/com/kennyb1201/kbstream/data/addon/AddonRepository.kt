@@ -150,6 +150,32 @@ class AddonRepository {
             .build()
             .create(StremioApiService::class.java)
 
+    // Search-catalog probes outlive normal catalog calls when the catalog is
+    // backed by an LLM (AIOMetadata "AI Search"). Same generous timeouts as
+    // stream resolution — a slow AI search must return its rail, not a
+    // silently swallowed timeout.
+    private val searchClient =
+        client.newBuilder()
+            .readTimeout(
+                40,
+                TimeUnit.SECONDS
+            )
+            .callTimeout(
+                45,
+                TimeUnit.SECONDS
+            )
+            .build()
+
+    private val searchApi: StremioApiService =
+        Retrofit.Builder()
+            .baseUrl("https://example.com/")
+            .client(searchClient)
+            .addConverterFactory(
+                MoshiConverterFactory.create(moshi)
+            )
+            .build()
+            .create(StremioApiService::class.java)
+
     private val catalogCache =
         mutableMapOf<String, CachedCatalog>()
 
@@ -351,7 +377,12 @@ class AddonRepository {
                 "UTF-8"
             )
 
-        return api.getCatalog(
+        // Search-catalog probes get their own client with a generous
+        // call timeout: some catalogs are backed by an LLM (AIOMetadata's
+        // "AI Search" / gemini.search routinely takes 10-30s to answer)
+        // and the shared 25s client was silently killing those requests
+        // before they could return their rail.
+        return searchApi.getCatalog(
             "$base/catalog/$type/$catalogId/search=$encoded.json"
         ).metas
     }

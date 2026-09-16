@@ -1201,7 +1201,13 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         const val MAX_COLLECTION_RESULTS = 8
 
         const val MAX_ADDON_RESULTS_PER_ADDON = 40
-        const val MAX_ADDON_GROUPS = 10
+        // Rails per add-on. Must exceed AIOMetadata's maximum search-catalog
+        // set (Movies / Series / Anime x2 / Collections / People x2 / AI = 8):
+        // search-style rails are ordered first per addon, and a tighter cap
+        // silently dropped the tail of the user's search order — usually the
+        // AI Search rail.
+        const val MAX_ADDON_GROUPS_PER_ADDON = 8
+        const val MAX_ADDON_GROUPS = 14
 
         /**
          * True for AIOMetadata "AI Search" / "People Search" /
@@ -1236,7 +1242,12 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         fun ManifestCatalog.railLabel(addonName: String): String {
             val raw = customName?.trim()?.takeIf { it.isNotEmpty() } ?: name
             if (isSearchStyleCatalog()) {
+                // Manifests often name search catalogs "Addon - AI Search"
+                // (or "Addon · AI Search"); stripping just the addon name
+                // used to leave a dangling "- AI Search" rail label.
                 return raw.removePrefix(addonName).trim()
+                    .removePrefix("-").trim()
+                    .removePrefix("\u00B7").trim()
                     .ifEmpty { raw }
             }
             return when (type.lowercase()) {
@@ -1253,9 +1264,6 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
         /** Catalog probes per catalog-only addon when it has no search resource. */
         const val MAX_ADDON_CATALOG_PROBES = 12
-
-        /** Rails per add-on, so one catalog-heavy addon can't crowd the rest. */
-        const val MAX_ADDON_GROUPS_PER_ADDON = 5
 
         /** Per-rail cap on TMDB enrichments for missing year/rating. */
         const val MAX_ENRICH_PER_GROUP = 20
