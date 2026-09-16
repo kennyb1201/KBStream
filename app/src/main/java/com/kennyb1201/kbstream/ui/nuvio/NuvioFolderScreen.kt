@@ -46,12 +46,22 @@ fun NuvioFolderScreen(
 
     var menuTarget by remember { mutableStateOf<NuvioContentItem?>(null) }
 
+    // Long-press "Open in Grid": force the folder into its GRID layout for
+    // this visit, whatever its manifest viewMode says. Back returns to the
+    // folder's own layout first, then exits — same feel as Home's
+    // "Open in Grid" returning to the rails.
+    var showAsGrid by remember(folderId) { mutableStateOf(false) }
+
     LaunchedEffect(folderId) {
         viewModel.loadById(folderId)
     }
 
     val folder = state.folder
-    val layoutMode = NuvioLayoutModes.fromViewMode(folder?.viewMode)
+    val layoutMode = if (showAsGrid) {
+        NuvioLayoutModes.Mode.GRID
+    } else {
+        NuvioLayoutModes.fromViewMode(folder?.viewMode)
+    }
 
     Column(
         modifier = Modifier
@@ -99,6 +109,13 @@ fun NuvioFolderScreen(
             title = item.title ?: "Untitled",
             actions = listOf(
                 PosterContextAction(
+                    label = "Open in Grid",
+                    description = "Browse this whole collection as a poster grid"
+                ) {
+                    menuTarget = null
+                    showAsGrid = true
+                },
+                PosterContextAction(
                     label = "Go to Details",
                     description = "Open this title's detail page"
                 ) {
@@ -114,7 +131,12 @@ fun NuvioFolderScreen(
                     }
                 },
                 PosterContextAction(
-                    label = if (menuWatched) "Mark as Unwatched" else "Mark as Watched"
+                    label = if (menuWatched) "Mark as Unwatched" else "Mark as Watched",
+                    description = if (menuWatched) {
+                        "Clear watched status on this device and Simkl"
+                    } else {
+                        "Show this title as watched"
+                    }
                 ) {
                     menuTarget = null
                     if (menuWatched) {
@@ -129,6 +151,12 @@ fun NuvioFolderScreen(
     }
 
     BackHandler {
-        onBack()
+        // Grid override is a visit-level view: Back first restores the
+        // folder's own layout, and only a second Back exits the folder.
+        if (showAsGrid) {
+            showAsGrid = false
+        } else {
+            onBack()
+        }
     }
 }

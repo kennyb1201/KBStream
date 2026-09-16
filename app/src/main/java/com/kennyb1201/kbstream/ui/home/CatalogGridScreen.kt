@@ -42,6 +42,7 @@ import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 
 /**
@@ -69,8 +70,24 @@ fun CatalogGridScreen(
     // preserves loaded pages across recompositions. The DisposableEffect
     // clears the shared ViewModel state when the screen leaves composition
     // so a stale grid never leaks into later Home sessions.
+    //
+    // The pop-back-to-Home decision lives HERE, not in the null-branch
+    // below: a fresh open always composes one frame with an unseeded grid
+    // (the ViewModel state starts null), and an onBack launched from that
+    // frame still fires after the open effect has successfully seeded the
+    // grid — the grid flashed for one frame and dumped the user back on
+    // Home with focus dropped on Continue Watching.
     LaunchedEffect(title, addonName) {
-        viewModel.openCatalogInGrid(title, addonName)
+        // On a cold process restore the rails may still be loading, so
+        // retry briefly before concluding the catalog is really gone.
+        repeat(50) {
+            viewModel.openCatalogInGrid(title, addonName)
+            if (viewModel.catalogGrid.value != null) {
+                return@LaunchedEffect
+            }
+            delay(100L)
+        }
+        onBack()
     }
 
     DisposableEffect(title, addonName) {
@@ -80,9 +97,21 @@ fun CatalogGridScreen(
     }
 
     val state = grid ?: run {
-        // Grid closed (or never opened) — pop straight back to Home.
-        LaunchedEffect(Unit) { onBack() }
-        Box(modifier = Modifier.fillMaxSize().background(KBVoid))
+        // Grid not seeded yet. On a fresh open the effect above seeds it
+        // within a frame; this is just that one loading frame (plus a
+        // possible cold-restore wait for the rails to load). It NEVER
+        // navigates from here — see the open effect above for why.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(KBVoid),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator(
+                color = KBAccent,
+                strokeWidth = 3.dp
+            )
+        }
         return
     }
 
