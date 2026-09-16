@@ -231,6 +231,15 @@ class NuvioRepository(private val context: Context) {
             val request = Request.Builder()
                 .url(url)
                 .header("Accept", "application/json")
+                // raw.githubusercontent serves user-uploaded profile JSON
+                // through a CDN layer that keeps serving STALE copies after
+                // the file is updated (same URL, new commit): an old export
+                // kept rendering with previous viewModes/grid layouts long
+                // after the fix. Skip CDN caches entirely for profile
+                // fetches — correctness over edge latency for a request
+                // that happens at most once per 12h TTL.
+                .header("Cache-Control", "no-cache")
+                .header("Pragma", "no-cache")
                 .build()
 
             val body = client.newCall(request).execute().use { response ->

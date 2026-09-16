@@ -57,7 +57,7 @@ class NuvioContentLoader(context: android.content.Context) {
     suspend fun loadFolderRails(folder: NuvioFolder): List<NuvioRail> =
         withContext(Dispatchers.IO) {
             supervisorScope {
-                folder.sources
+                dedupeSources(folder.sources.ifEmpty { folder.catalogSources.map { it.toSource() } })
                     .mapIndexed { index, source ->
                         async {
                             val items = loadSource(source)
@@ -73,6 +73,43 @@ class NuvioContentLoader(context: android.content.Context) {
                     .filter { it.items.isNotEmpty() }
             }
         }
+
+    /**
+     * Remove repeated sources inside a folder. Real exports (incl. the
+     * davecollections builder) emit the SAME source twice for the two
+     * sort directions — e.g. both "top 10 ... week" twin rows — and one
+     * profile in the wild carried the same tmdbId twice per movie
+     * collection folder (2,198 duplicate entries in one file). Duplicates
+     * render as literally identical rails side by side, which reads as
+     * "this collection isn't working". Key on every field that addresses
+     * the content: provider + tmdb id/source type, addon id/catalog id,
+     * trakt list id, plus name/title/sortBy/filters so differently-tuned
+     * discover rows ("Recent" vs "Popular") stay distinct.
+     */
+    private fun dedupeSources(sources: List<NuvioSource>): List<NuvioSource> {
+        if (sources.size < 2) return sources
+        val seen = HashSet<String>()
+        return sources.filter { source ->
+            seen.add(
+                buildString {
+                    append(source.provider?.lowercase()).append('|')
+                    append(source.tmdbSourceType?.uppercase()).append('|')
+                    append(source.tmdbId).append('|')
+                    append(source.addonId).append('|')
+                    append(source.catalogId).append('|')
+                    append(source.type?.lowercase()).append('|')
+                    append(source.genre).append('|')
+                    append(source.mediaType?.uppercase()).append('|')
+                    append(source.traktListId).append('|')
+                    append(source.name).append('|')
+                    append(source.title).append('|')
+                    append(source.sortBy).append('|')
+                    append(source.sortHow).append('|')
+                    append(source.filters)
+                }
+            )
+        }
+    }
 
     /**
      * Rail title matching Home's "AddonName · CatalogName" format. Nuvio
@@ -184,16 +221,25 @@ class NuvioContentLoader(context: android.content.Context) {
                 }
 
             // PERSON = the person's acting credits; DIRECTOR = credits where
-            // they crewed as "Director". Both come from the combined_credits
-            // append on /person/{id}, ordered by popularity like Nuvio.
-            "PERSON", "DIRECTOR" ->
+            // they crewed as "Director"; WRITER = crew jobs in the writing
+            // family (Writer, Screenplay, Story). All come from the
+            // combined_credits append on /person/{id}, ordered by popularity
+            // like Nuvio. WRITER was previously unmapped, so writer rails
+            // from exported profiles came back empty.
+            "PERSON", "DIRECTOR", "WRITER" ->
                 source.tmdbId?.let { personId ->
                     tmdbRepository.getPerson(personId)?.let { person ->
                         val credits = person.combinedCredits ?: return@let emptyList()
-                        val rows = if (source.tmdbSourceType.equals("DIRECTOR", true)) {
-                            credits.crew.filter { it.job.equals("Director", ignoreCase = true) }
-                        } else {
-                            credits.cast
+                        val rows = when (source.tmdbSourceType?.uppercase()) {
+                            "DIRECTOR" ->
+                                credits.crew.filter { it.job.equals("Director", ignoreCase = true) }
+                            "WRITER" ->
+                                credits.crew.filter {
+                                    val job = it.job?.lowercase().orEmpty()
+                                    job == "writer" || job == "screenplay" ||
+                                        job == "story" || job == "screenstory"
+                                }
+                            else -> credits.cast
                         }
                         rows
                             .sortedByDescending { it.popularity ?: 0.0 }
@@ -369,6 +415,10 @@ class NuvioContentLoader(context: android.content.Context) {
     private suspend fun loadAddonSource(source: NuvioSource): List<NuvioContentItem> {
         val addonId = source.addonId ?: return emptyList()
         val catalogId = source.catalogId ?: return emptyList()
+        // The request type must be the ADDON'S OWN declared type — exports
+        // mirror the manifest verbatim, and addons key their handlers on it.
+        // Mapping "tv" (IPTV/Live-TV genre catalogs) to "series" made every
+        // such rail request /catalog/series/… and come back empty.
         val type = normalizeAddonType(source.type)
             ?: return emptyList()
 
@@ -411,11 +461,16 @@ class NuvioContentLoader(context: android.content.Context) {
             else -> null
         }
 
-    private fun normalizeAddonType(raw: String?): String? =
-        when (raw?.lowercase()) {
-            "movie" -> "movie"
-            "series", "tv" -> "series"
-            "all" -> null // addon catalogs are always typed; "all" is not a catalog type
-            else -> null
-        }
+    /**
+     * Request type for an addon catalog: the raw manifest type, lowercased.
+     * NEVER normalize "tv" to "series" here — the catalog path must match
+     * what the addon declared ("tv" is how IPTV addons type their channel
+     * catalogs; "all" is a real merged-catalog type in the AIOStreams
+     * family). Display typing happens later via toContentItem.
+     */
+    private fun normalizeAddonType(raw: String?): String? {
+        val value = raw?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
+            ?: return null
+        return value
+    }
 }

@@ -52,8 +52,22 @@ data class NuvioFolder(
 data class NuvioCatalogSource(
     val type: String? = null,
     val addonId: String? = null,
-    val catalogId: String? = null
-)
+    val catalogId: String? = null,
+    val genre: String? = null
+) {
+    /**
+     * Convert to the generic source shape so newer exports that carry ONLY
+     * catalogSources (no sources array) still load. provider=addon is the
+     * same convention Nuvio writes into the sources list for these.
+     */
+    fun toSource(): NuvioSource = NuvioSource(
+        provider = "addon",
+        addonId = addonId,
+        catalogId = catalogId,
+        type = type,
+        genre = genre
+    )
+}
 
 /**
  * One content source inside a folder. Nuvio keeps every field present in
