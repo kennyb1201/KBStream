@@ -742,16 +742,18 @@ private fun AddonDetails(
 ) {
     val catalogScrollState = rememberScrollState()
 
-    // One scrollable column for the whole panel: with a big description or
-    // a long TYPES line the fixed layout pushed the action buttons past the
-    // panel's bottom edge and clipped them. verticalScroll + focusable
-    // children means Compose scrolls the focused button into view — actions
-    // are always reachable no matter how much info the add-on carries.
+    // Pinned identity header + scrollable body. The whole panel used to be
+    // one scrollable column, so the moment D-pad focus landed on an action
+    // button below the fold, Compose scrolled the focused button into view
+    // and the add-on logo/title scrolled off the top — the header was gone
+    // exactly when the user was working with that add-on. Now the header is
+    // OUTSIDE the scroll container (always visible), and only the details +
+    // actions scroll beneath it; focusable children still bring themselves
+    // into view within the body's own scroll.
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(18.dp)
-            .verticalScroll(catalogScrollState)
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -789,6 +791,14 @@ private fun AddonDetails(
                 }
             }
         }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .padding(top = 12.dp)
+                .verticalScroll(catalogScrollState)
+        ) {
 
         addon.description?.takeIf { it.isNotBlank() }?.let {
             Text(
@@ -931,8 +941,6 @@ private fun AddonDetails(
             text = addon.manifestUrl,
             color = KBTextHi,
             style = MaterialTheme.typography.bodySmall,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(top = 4.dp)
         )
     }
