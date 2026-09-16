@@ -23,7 +23,6 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
-import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
@@ -50,11 +49,11 @@ fun WatchedCheckBadge(
 }
 
 /**
- * Eye badge for shows the user has STARTED but not finished. Same circle
- * treatment as [WatchedCheckBadge] (same size, border, scrim) so the two
- * read as one marker family — the completed checkmark simply wins when a
- * show is fully watched, and the eye's accent tint keeps it distinct from
- * the neutral check at a glance.
+ * Eye badge for shows the user has STARTED but not finished. Identical
+ * treatment to [WatchedCheckBadge] — same circle, same scrim, same warm
+ * white for border and glyph — so the two read as one marker family; the
+ * eye shape itself is what distinguishes started-but-unfinished from the
+ * completed check.
  */
 @Composable
 fun WatchedEyeBadge(
@@ -65,13 +64,13 @@ fun WatchedEyeBadge(
             .size(24.dp)
             .clip(CircleShape)
             .background(KBVoid.copy(alpha = 0.8f))
-            .border(1.dp, KBAccent.copy(alpha = 0.95f), CircleShape),
+            .border(1.dp, KBTextHi.copy(alpha = 0.95f), CircleShape),
         contentAlignment = Alignment.Center
     ) {
         Icon(
             imageVector = Icons.Filled.Visibility,
             contentDescription = null,
-            tint = KBAccent,
+            tint = KBTextHi,
             modifier = Modifier.size(13.dp)
         )
     }
