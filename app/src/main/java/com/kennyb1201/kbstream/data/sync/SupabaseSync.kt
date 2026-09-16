@@ -132,28 +132,66 @@ object SupabaseSync {
                     // saved token must be fed in explicitly via
                     // refreshSession(refreshToken), which also installs it as
                     // the current session for auto-refresh from here on.
-                    runCatching {
+                    val result = runCatching {
                         c.auth.refreshSession(refreshToken = refresh)
-                    }.onSuccess {
+                    }
+                    result.onSuccess {
+                        // refreshSession() ROTATES the refresh token (the
+                        // saved one is now spent). Re-persist the fresh token
+                        // immediately: keeping the stale one guarantees the
+                        // NEXT cold start trips Supabase's refresh-token
+                        // reuse detection, which revokes the whole session
+                        // family — the "signed out after updating" report.
+                        persistSession(context, savedEmail.orEmpty())
                         _authState.value = AuthState.SignedIn(savedEmail.orEmpty())
                         _syncEnabled.value = true
                         startRealtime()
                         startPeriodicFlush()
                         pullAll(context)
                     }.onFailure { e ->
-                        // Token revoked/expired-hard (e.g. password change,
-                        // server-side reuse detection). Drop it so we don't
-                        // keep feeding a dead token on every launch.
-                        Log.w(TAG, "session restore failed: ${e.message}")
-                        context.getSharedPreferences(SYNC_PREFS, Context.MODE_PRIVATE)
-                            .edit().remove(KEY_REFRESH_TOKEN).apply()
-                        _authState.value = AuthState.SignedOut
+                        // Only a HARD rejection means the token is truly
+                        // dead (revoked, password changed, or reuse
+                        // detection already fired). Transient failures
+                        // (timeout, offline right after an app update,
+                        // 5xx) must KEEP the token so the next launch
+                        // retries — wiping it here turned every network
+                        // hiccup into a surprise sign-out.
+                        val msg = (e.message ?: "").lowercase()
+                        // Supabase's hard-dead responses say "Invalid
+                        // Refresh Token" / "Already Used" (HTTP 4xx) —
+                        // none of the transient markers below, so they
+                        // still reach the wipe branch.
+                        val transient =
+                            msg.contains("timeout") ||
+                                msg.contains("timed out") ||
+                                msg.contains("unable to resolve") ||
+                                msg.contains("failed to connect") ||
+                                msg.contains("connection") ||
+                                msg.contains("econn") ||
+                                msg.contains("network") ||
+                                msg.contains("server error") ||
+                                msg.contains("http 5")
+                        if (transient) {
+                            Log.w(
+                                TAG,
+                                "session restore transient failure " +
+                                    "(keeping token for retry): ${e.message}"
+                            )
+                            _authState.value = AuthState.SignedOut
+                        } else {
+                            Log.w(TAG, "session restore failed: ${e.message}")
+                            context.getSharedPreferences(SYNC_PREFS, Context.MODE_PRIVATE)
+                                .edit().remove(KEY_REFRESH_TOKEN).apply()
+                            _authState.value = AuthState.SignedOut
+                        }
                     }
                 } else {
                     _authState.value = AuthState.SignedOut
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "restoreSession failed", e)
+                // Any unexpected error path: keep the saved token — the
+                // next launch can still restore from it.
+                Log.e(TAG, "restoreSession failed (token kept)", e)
                 _authState.value = AuthState.SignedOut
             }
         }
