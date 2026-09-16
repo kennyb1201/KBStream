@@ -692,10 +692,11 @@ class NativePlayerActivity : ComponentActivity() {
     /// shown once, so STATE_READY never re-triggers it mid-session.
     private var actorReturnOverlayShown = false
 
-    /// True once playback has actually started during this player session.
-    /// Gates the full splash overlay: it appears on every fresh source load
-    /// (each switchToSource resets it), but never on mid-playback rebuffers
-    /// or when returning from the actor overlay (fromActorReturn).
+    /// True once the first video frame has actually rendered during this
+    /// player session (set by markFirstFrameRendered). Gates the full splash
+    /// overlay: it appears on every fresh source load (each switchToSource
+    /// resets it), but never on mid-playback rebuffers or when returning from
+    /// the actor overlay (fromActorReturn).
     private var hasPlayedOnce = false
     private var historyId = ""
     private var simklScrobbleSent = false
@@ -2351,11 +2352,13 @@ class NativePlayerActivity : ComponentActivity() {
     private fun createPlayerListener() = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             if (isPlaying) {
-                hasPlayedOnce = true
+                // Splash dismissal and the hasPlayedOnce latch live in
+                // markFirstFrameRendered(): audio can start before the
+                // decoder paints frame 1, so this callback fires too early
+                // and left a black screen + yellow spinner in that gap.
                 // Actual playback resumed: the actor-return pause session
                 // is over, so later buffering rebuffers use normal paths.
                 fromActorReturn = false
-                hideSplash()
                 armStallWatchdog()
                 if (controlsVisible && !showSettingsPanel && !isPickerShowing) {
                     scheduleAutoHide()
@@ -2574,7 +2577,14 @@ class NativePlayerActivity : ComponentActivity() {
         bufferingSpinner.visibility = View.GONE
         reconnectingContainer.visibility = View.GONE
         errorContainer.visibility = View.GONE
-        hideSplash()
+        // STATE_READY only means "buffered enough to start" - decoder init
+        // and the first paint still come after. Hold the splash until the
+        // first frame renders (markFirstFrameRendered dismisses it) so that
+        // gap is splash-covered instead of black. Audio-only streams have
+        // no video frame to wait for and dismiss immediately.
+        if (firstFrameRendered || !videoTrackPresent) {
+            hideSplash()
+        }
         updateControlsInfo()
     }
 
@@ -2620,6 +2630,18 @@ class NativePlayerActivity : ComponentActivity() {
         firstFrameRenderedAtMs = System.currentTimeMillis()
         reconnectingContainer.visibility = View.GONE
         bufferingSpinner.visibility = View.GONE
+        // The first rendered frame is the moment the splash goes away: video
+        // is now visibly on screen underneath it. STATE_READY and isPlaying
+        // both fire BEFORE the decoder paints, so they must not dismiss the
+        // splash — that is what exposed a black screen + yellow spinner in
+        // the READY-to-first-frame gap.
+        if (splashContainer.visibility == View.VISIBLE) {
+            hideSplash()
+        }
+        // The "player has started" latch also belongs to the first frame:
+        // setting it on isPlaying turned any post-audio buffering into the
+        // small-spinner branch instead of the full splash.
+        hasPlayedOnce = true
     }
 
     /**
@@ -3523,7 +3545,10 @@ class NativePlayerActivity : ComponentActivity() {
         dismissAllPanels()
         hideInfoPanel()
         bufferingSpinner.visibility = View.GONE
-        if (exoPlayer?.isPlaying == true) {
+        // Same rule as updateUIReady: only drop the splash once the first
+        // frame is actually up (or the stream has no video track) - audio
+        // can be playing while the decoder is still painting frame 1.
+        if (exoPlayer?.isPlaying == true && (firstFrameRendered || !videoTrackPresent)) {
             hideSplash()
         }
 
