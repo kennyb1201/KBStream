@@ -168,6 +168,7 @@ fun TagScreen(
                     TagRailRow(
                         section = section,
                         watchedKeys = watchedKeys,
+                        partialWatchedKeys = partialWatchedKeys,
                         resolvedIds = resolvedIds,
                         onNavigateDetail = onNavigateDetail,
                         onLoadMore = { viewModel.loadMoreSection(section.title) },
@@ -355,6 +356,7 @@ private fun TagHeader(
 private fun TagRailRow(
     section: StudioSection,
     watchedKeys: Set<String>,
+    partialWatchedKeys: Set<String>,
     resolvedIds: Map<String, String>,
     onNavigateDetail: (String, String) -> Unit,
     onLoadMore: () -> Unit,

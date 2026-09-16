@@ -170,6 +170,7 @@ fun DecadeScreen(
                     DecadeRailRow(
                         section = section,
                         watchedKeys = watchedKeys,
+                        partialWatchedKeys = partialWatchedKeys,
                         resolvedIds = resolvedIds,
                         onNavigateDetail = onNavigateDetail,
                         onLoadMore = { viewModel.loadMoreSection(section.title) },
@@ -353,6 +354,7 @@ private fun DecadeHeader(
 private fun DecadeRailRow(
     section: StudioSection,
     watchedKeys: Set<String>,
+    partialWatchedKeys: Set<String>,
     resolvedIds: Map<String, String>,
     onNavigateDetail: (String, String) -> Unit,
     onLoadMore: () -> Unit,

@@ -169,6 +169,7 @@ fun StudioScreen(
                     StudioRailRow(
                         section = section,
                         watchedKeys = watchedKeys,
+                        partialWatchedKeys = partialWatchedKeys,
                         resolvedIds = resolvedIds,
                         onNavigateDetail = onNavigateDetail,
                         onLoadMore = { viewModel.loadMoreSection(section.title) },
@@ -420,6 +421,7 @@ private fun isDarkMonochromeMark(image: coil3.Image): Boolean {
 private fun StudioRailRow(
     section: StudioSection,
     watchedKeys: Set<String>,
+    partialWatchedKeys: Set<String>,
     resolvedIds: Map<String, String>,
     onNavigateDetail: (String, String) -> Unit,
     onLoadMore: () -> Unit,
