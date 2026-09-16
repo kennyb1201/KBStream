@@ -3670,44 +3670,83 @@ class NativePlayerActivity : ComponentActivity() {
             }
             val sizes = listOf(11f, 14f, 18f)
             subtitleText.setTextSize(TypedValue.COMPLEX_UNIT_SP, sizes[subtitleSize])
+            // Embedded styling (ASS BackColour, styled WebVTT) can carry its
+            // own background spans on the cue text (position-driven external
+            // subs pass Cue.text through raw). Strip them so the box never
+            // renders — the app's Background choice must be the only thing
+            // that paints behind subtitles.
+            val clean = withoutEmbeddedBoxes(text)
             when (subtitleBackground) {
-                1 -> {
-                    // Box: view-level background wraps the whole TextView
-                    // (grows with the longest line, padded on all sides).
-                    subtitleText.text = text
-                    subtitleText.setBackgroundColor(0x80000000.toInt())
-                    subtitleText.setPadding(16, 4, 16, 4)
-                }
-                2 -> {
-                    subtitleText.text = text
-                    subtitleText.setBackgroundColor(0xE5000000.toInt())
-                    subtitleText.setPadding(16, 4, 16, 4)
-                }
-                3 -> {
-                    // Text (letters-only): dark strip painted behind the
-                    // glyph runs themselves via spans — no box, no side
-                    // padding, and the gap between wrapped lines stays
-                    // clean. Matches the Nuvio look.
-                    subtitleText.background = null
-                    subtitleText.setPadding(0, 0, 0, 0)
-                    val spannable = android.text.SpannableString(text)
-                    spannable.setSpan(
-                        android.text.style.BackgroundColorSpan(
-                            0xB3000000.toInt()
-                        ),
-                        0,
-                        spannable.length,
-                        android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                    )
-                    subtitleText.text = spannable
-                }
+                1 -> renderStrip(clean, 0x80000000.toInt(), padded = true)
+                2 -> renderStrip(clean, 0xE5000000.toInt(), padded = true)
+                3 -> renderStrip(clean, 0xB3000000.toInt(), padded = false)
                 else -> {
-                    subtitleText.text = text
+                    subtitleText.text = clean
                     subtitleText.background = null
                     subtitleText.setPadding(0, 0, 0, 0)
                 }
             }
             subtitleText.visibility = View.VISIBLE
+        }
+
+        /**
+         * Removes background-painting spans (ASS BackColour, styled WebVTT)
+         * from cue text so no stream can paint its own box behind subtitles.
+         * Non-background styling (italics, speaker colors) is preserved.
+         */
+        private fun withoutEmbeddedBoxes(text: String): CharSequence {
+            return runCatching {
+                val spanned = android.text.SpannableString(text)
+                var removed = false
+                for (span in spanned.getSpans(0, spanned.length, Object::class.java)) {
+                    if (span is android.text.style.BackgroundColorSpan ||
+                        span is android.text.style.LineBackgroundSpan
+                    ) {
+                        spanned.removeSpan(span)
+                        removed = true
+                    }
+                }
+                if (removed) spanned else text
+            }.getOrDefault(text)
+        }
+
+        /**
+         * Glyph-hugging strip background: the color paints behind the glyphs
+         * themselves (per wrapped row), never as one wide view-level box that
+         * grows with the longest line and leaves ragged text edges. [padded]
+         * adds a non-breaking-space cushion on each authored line's ends so
+         * the strip reads as a soft rectangle; the unpadded variant is the
+         * tight letters-only Nuvio look.
+         */
+        private fun renderStrip(text: CharSequence, color: Int, padded: Boolean) {
+            subtitleText.background = null
+            subtitleText.setPadding(0, 0, 0, 0)
+            if (!padded) {
+                val spannable = android.text.SpannableString(text)
+                spannable.setSpan(
+                    android.text.style.BackgroundColorSpan(color),
+                    0,
+                    spannable.length,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                subtitleText.text = spannable
+                return
+            }
+            val pad = "\u00A0"
+            val out = android.text.SpannableStringBuilder()
+            text.toString().lines().forEachIndexed { index, line ->
+                if (index > 0) out.append("\n")
+                if (line.isEmpty()) return@forEachIndexed
+                val start = out.length
+                out.append(pad).append(line).append(pad)
+                out.setSpan(
+                    android.text.style.BackgroundColorSpan(color),
+                    start,
+                    out.length,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+            }
+            subtitleText.text = out
         }
     }
 

@@ -1102,7 +1102,7 @@ fun SettingsScreen(
                     modifier = Modifier.padding(bottom = 4.dp)
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("None", "Semi", "Solid").forEachIndexed { index, label ->
+                    listOf("None", "Semi", "Solid", "Text").forEachIndexed { index, label ->
                         KBCard(onClick = {
                             subtitleBg = index
                             AppPreferences.setDefaultSubtitleBackground(context, index)
