@@ -692,7 +692,20 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                     Spacer(modifier = Modifier.height(14.dp))
 
                     if (playlist == null) {
-                        renderSetupPanel(Modifier)
+                        // Same treatment as the overlay placement below:
+                        // cap the height and let the panel scroll. With no
+                        // playlist loaded this inline panel is the whole
+                        // screen, and once a URL is typed the diagnostics
+                        // block pushes it past the display height — the
+                        // lower URL fields and action row would clip off
+                        // ("half the screen disappears").
+                        val inlinePanelMaxHeight =
+                            LocalConfiguration.current.screenHeightDp.dp - 120.dp
+                        renderSetupPanel(
+                            Modifier
+                                .heightIn(max = inlinePanelMaxHeight)
+                                .verticalScroll(rememberScrollState())
+                        )
                     } else {
                         if (groups.isNotEmpty()) {
                             LazyRow(

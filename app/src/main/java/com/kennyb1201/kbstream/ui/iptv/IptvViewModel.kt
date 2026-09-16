@@ -204,8 +204,14 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         when {
             currentPlaylist == null -> flowOf(emptyList())
             request.guideUrls.isEmpty() -> flowOf(emptyList())
-            request.isImportingGuide -> flowOf(emptyList())
             request.channelIds.isEmpty() -> flowOf(emptyList())
+            // NOTE: no isImportingGuide guard here. While a stale-EPG
+            // background refresh runs, the previous import's programmes are
+            // still in the DB — blanking the lineup for the whole import made
+            // the guide show "no program data" for minutes on entry (it only
+            // recovered when the import finished). Query the cached data
+            // right away; importGuideInternal() bumps the refresh tick when
+            // done, which re-runs this query against the fresh import.
             else -> observeGuideRequest(currentPlaylist, request)
         }
     }.stateIn(
