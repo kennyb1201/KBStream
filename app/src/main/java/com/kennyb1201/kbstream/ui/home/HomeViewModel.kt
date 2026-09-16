@@ -1982,10 +1982,12 @@ Log.d(
                             episode = episode,
                             imdbId = parentId
                         ),
-                    // Only kept when the label is relative ("In 5 days");
-                    // beyond a week the label IS the full date and the hero
-                    // would render the same date twice.
-                    airDateFull = airFull.takeIf { it != airLabel } ?: "",
+                    // Always populated — render sites de-dupe against
+                    // [airDateLabel] where both would say the same thing
+                    // (hero). The Upcoming card needs the absolute date even
+                    // when the label IS the date, because NEW SEASON cards
+                    // replace the label chip with "NEW SEASON".
+                    airDateFull = airFull,
                     isSeasonPremiere = episode == 1
                 )
             )

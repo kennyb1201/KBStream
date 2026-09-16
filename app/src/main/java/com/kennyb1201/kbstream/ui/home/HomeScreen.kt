@@ -1283,9 +1283,15 @@ continueTimeLeft?.let { label ->
 
             // Upcoming-rail items: the real calendar date under the
             // "Airs …" label ("Mon, Sep 15"), styled like the other
-            // hero detail lines.
+            // hero detail lines. Skipped when the label already IS the
+            // date ("Airs Mon, Sep 15") so the same date never renders
+            // twice.
             continueWatchingItem?.airDateFull
                 ?.takeIf { it.isNotBlank() }
+                ?.takeIf { fullDate ->
+                    continueWatchingItem.airDateLabel
+                        ?.let { "Airs $it" } != fullDate
+                }
                 ?.let { fullDate ->
                     Text(
                         text = fullDate,
@@ -1510,6 +1516,26 @@ private fun UpcomingEpisodeCard(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 2.dp)
                 )
+
+                // Calendar date ("Mon, Sep 15") — the same line the hero
+                // shows under "Airs …". Matters most on NEW SEASON cards:
+                // their top chip carries no timing info at all, so without
+                // this the card gives no clue when the season lands.
+                upcoming.airDateFull
+                    .takeIf { it.isNotBlank() }
+                    ?.let { fullDate ->
+                        Text(
+                            text = fullDate,
+                            color = if (focused) {
+                                KBTextHi.copy(alpha = 0.70f)
+                            } else {
+                                KBTextLo
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                            modifier = Modifier.padding(top = 1.dp)
+                        )
+                    }
 
                 upcoming.episodeTitle
                     ?.trim()
