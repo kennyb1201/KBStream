@@ -355,6 +355,19 @@ class HomeViewModel(
     val watchedKeys: StateFlow<Set<String>> =
         _watchedKeys.asStateFlow()
 
+    /*
+     * Keys of shows started-but-not-finished (the eye badge). Filled by the
+     * same refresh that fills watchedKeys; the completed checkmark wins
+     * when a key is in both sets.
+     */
+    private val _partialWatchedKeys =
+        MutableStateFlow<Set<String>>(
+            emptySet()
+        )
+
+    val partialWatchedKeys: StateFlow<Set<String>> =
+        _partialWatchedKeys.asStateFlow()
+
     private val _upNext =
         MutableStateFlow<List<UpNextItem>>(
             emptyList()
@@ -894,6 +907,14 @@ Log.d(
 
                 _watchedKeys.value =
                     current
+
+                // A manual mark/unmark always clears the eye badge for that
+                // key: markWatchedLocal resolves it to fully-watched (the
+                // checkmark wins) and markUnwatchedLocal resets it entirely.
+                if (key in _partialWatchedKeys.value) {
+                    _partialWatchedKeys.value =
+                        _partialWatchedKeys.value - key
+                }
             }
         }
     }
@@ -928,6 +949,7 @@ Log.d(
                     dismissedContinueWatching.putAll(loadDismissedContinueWatching())
 
                     _watchedKeys.value = emptySet()
+                    _partialWatchedKeys.value = emptySet()
 
                     _heroMeta.value = null
                     _heroTmdbDetail.value = null
@@ -5331,6 +5353,12 @@ private suspend fun calculateEpisodesRemaining(
                             preloadItems
                         )
 
+                val resolvedPartialWatchedKeys =
+                    watchedStatusRepository
+                        .preloadAndGetPartiallyWatchedKeys(
+                            preloadItems
+                        )
+
                 val isCurrent =
                     watchedRefreshMutex
                         .withLock {
@@ -5348,6 +5376,11 @@ private suspend fun calculateEpisodesRemaining(
                 _watchedKeys.value =
                     resolvedWatchedKeys
 
+
+                // The completed checkmark wins over the eye badge when a
+                // show resolves to both.
+                _partialWatchedKeys.value =
+                    resolvedPartialWatchedKeys - resolvedWatchedKeys
                 Log.d(
                     "HOME_WATCHED",
                     "marker refresh complete: " +

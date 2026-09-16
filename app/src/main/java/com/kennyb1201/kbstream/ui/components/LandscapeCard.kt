@@ -49,7 +49,8 @@ fun LandscapeCard(
     isWatched: Boolean,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isPartiallyWatched: Boolean = false
 ) {
     val context = LocalContext.current
     var hasError by remember(backdropUrl) { mutableStateOf(false) }
@@ -149,6 +150,12 @@ fun LandscapeCard(
 
             if (isWatched) {
                 WatchedCheckBadge(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
+                )
+            } else if (isPartiallyWatched) {
+                WatchedEyeBadge(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(8.dp)

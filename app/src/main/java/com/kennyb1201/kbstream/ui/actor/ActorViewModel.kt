@@ -73,6 +73,35 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
         initialValue = emptySet()
     )
 
+    // Eye-badge twin of watchedKeys: shows started-but-not-finished, from
+    // the same cached watch state. The completed checkmark wins when a key
+    // resolves to both.
+    val partialWatchedKeys: StateFlow<Set<String>> = combine(
+        _person,
+        _resolvedCreditIds,
+        watchedStatusRepository.observeWatchUpdates()
+    ) { personDetail: TmdbPersonDetail?, resolvedMap: Map<String, String>, _ ->
+        if (personDetail == null || resolvedMap.isEmpty()) {
+            emptySet()
+        } else {
+            sortedCredits(personDetail)
+                .mapNotNull { credit ->
+                    val mediaType = normalizeMediaType(credit.mediaType) ?: return@mapNotNull null
+                    val imdbId = resolvedMap[creditLookupKey(credit.id, mediaType)] ?: return@mapNotNull null
+                    if (watchedStatusRepository.isPartiallyWatchedCached(imdbId, mediaType)) {
+                        watchedKey(imdbId, mediaType)
+                    } else {
+                        null
+                    }
+                }
+                .toSet() - watchedKeys.value
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptySet()
+    )
+
     fun watchedKey(id: String, type: String): String = "${type.lowercase()}::$id"
 
     fun creditLookupKey(tmdbId: Int, mediaType: String): String =

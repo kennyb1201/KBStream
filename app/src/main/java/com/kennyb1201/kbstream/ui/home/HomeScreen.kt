@@ -992,8 +992,7 @@ private fun HomeHero(
         formatTimeLeft(continueWatchingItem?.remainingMinutes)
 
         val continueEpisodeCount =
-    continueWatchingItem?.let { item ->
-        val watched = item.episodesWatched
+    continueWatchingItem?.let { item ->                                                val watched = item.episodesWatched
         val total = item.episodesTotal
 
         if (
@@ -1896,6 +1895,7 @@ fun HomeScreen(
     }
     val rails by viewModel.rails.collectAsStateWithLifecycle()
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
+    val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
     val upNext by viewModel.upNext.collectAsStateWithLifecycle()
     val upcomingSchedule by
         viewModel.upcomingSchedule.collectAsStateWithLifecycle()
@@ -2819,6 +2819,16 @@ fun HomeScreen(
                                                         meta.type
                                                     ) in watchedKeys
 
+                                                // Eye badge: started but not
+                                                // finished. Never shown when the
+                                                // completed checkmark resolves.
+                                                val watchedPartially =
+                                                    !watched &&
+                                                        viewModel.watchedKey(
+                                                            meta.id,
+                                                            meta.type
+                                                        ) in partialWatchedKeys
+
                                                 val isFirstRailFirstRow =
                                                     railIndex == firstDisplayedRailSourceIndex &&
                                                         firstRailNeedsUpHook
@@ -2892,6 +2902,7 @@ fun HomeScreen(
                                                             fallbackTitle = meta.name,
                                                             contentDescription = meta.name,
                                                             isWatched = watched,
+                                                            isPartiallyWatched = watchedPartially,
                                                             onClick = {
                                                                 selectHero(meta)
                                                                 onItemClick(meta)
@@ -2912,6 +2923,7 @@ fun HomeScreen(
                                                             posterUrl = meta.poster,
                                                             contentDescription = meta.name,
                                                             isWatched = watched,
+                                                            isPartiallyWatched = watchedPartially,
                                                             onClick = {
                                                                 selectHero(meta)
                                                                 onItemClick(meta)

@@ -43,6 +43,7 @@ fun NuvioFolderScreen(
     val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
     val selectedSourceId by viewModel.selectedSourceId.collectAsStateWithLifecycle()
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
+    val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
 
     var menuTarget by remember { mutableStateOf<NuvioContentItem?>(null) }
 
@@ -75,6 +76,7 @@ fun NuvioFolderScreen(
             resolvedIds = resolvedIds,
             selectedSourceId = selectedSourceId,
             watchedKeys = watchedKeys,
+            partialWatchedKeys = partialWatchedKeys,
             onSelectSource = viewModel::selectSource,
             onOpenItem = { item ->
                 viewModel.resolveAndNavigate(item) { type, imdbId ->

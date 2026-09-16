@@ -49,8 +49,18 @@ class WatchedStatusRepository(
     private val cache =
         mutableMapOf<
             String,
-            Pair<Long, Boolean>
+            Pair<Long, WatchedCacheEntry>
             >()
+
+    /**
+     * In-memory watched state per cache key, paired with the resolve time.
+     * [isPartiallyWatched] marks shows started-but-not-finished (the eye
+     * badge); it only ever resolves for "series" keys.
+     */
+    private data class WatchedCacheEntry(
+        val isWatched: Boolean,
+        val isPartiallyWatched: Boolean
+    )
 
     private val cacheMutex =
         Mutex()
@@ -92,6 +102,15 @@ class WatchedStatusRepository(
         emptySet()
 
     private var completedShowImdbIds:
+        Set<String> =
+        emptySet()
+
+    /*
+     * Shows the user has STARTED on Simkl but not finished (watched episode
+     * count > 0, not fully watched). Resolved from the same cached all-shows
+     * response as the completed set, so it costs no extra network call.
+     */
+    private var partialShowImdbIds:
         Set<String> =
         emptySet()
 
@@ -149,7 +168,7 @@ class WatchedStatusRepository(
                             normalizedId,
                             normalizedType
                         )
-                    ]?.second ?: false
+                    ]?.second?.isWatched ?: false
                 }
             }
             .stateIn(
@@ -210,6 +229,9 @@ class WatchedStatusRepository(
                     emptySet()
 
                 completedShowImdbIds =
+                    emptySet()
+
+                partialShowImdbIds =
                     emptySet()
 
                 simklSetsFetchedAt =
@@ -324,7 +346,10 @@ class WatchedStatusRepository(
                 ) {
                     cache[entry.key] =
                         entry.updatedAt to
-                            entry.isWatched
+                            WatchedCacheEntry(
+                                entry.isWatched,
+                                entry.isPartiallyWatched
+                            )
                 }
             }
         }
@@ -460,12 +485,32 @@ class WatchedStatusRepository(
                     emptySet()
                 }
 
+            // Same cached all-shows response as the completed set, so this
+            // resolves the eye-badge set for free alongside the checkmarks.
+            val refreshedPartialShowImdbIds =
+                try {
+                    simklRepository
+                        .getPartiallyWatchedShowImdbIds()
+                } catch (e: Exception) {
+                    Log.e(
+                        "WATCHED_REPO",
+                        "getPartiallyWatchedShowImdbIds failed: " +
+                            e.message,
+                        e
+                    )
+
+                    emptySet()
+                }
+
             cacheMutex.withLock {
                 completedMovieKeys =
                     refreshedMovieKeys
 
                 completedShowImdbIds =
                     refreshedShowImdbIds
+
+                partialShowImdbIds =
+                    refreshedPartialShowImdbIds
 
                 simklSetsFetchedAt =
                     now
@@ -481,8 +526,11 @@ class WatchedStatusRepository(
 
         val remoteSnapshot =
             cacheMutex.withLock {
-                completedMovieKeys to
-                    completedShowImdbIds
+                Triple(
+                    completedMovieKeys,
+                    completedShowImdbIds,
+                    partialShowImdbIds
+                )
             }
 
         val movieKeys =
@@ -490,6 +538,9 @@ class WatchedStatusRepository(
 
         val showImdbIds =
             remoteSnapshot.second
+
+        val partialShowIds =
+            remoteSnapshot.third
 
         val localOverrideKeys =
             localWatchedOverrideKeys()
@@ -541,6 +592,23 @@ class WatchedStatusRepository(
                             false
                     }
 
+                /*
+                 * Eye badge: a series the user has started but not
+                 * finished. Simkl side first (free membership lookup in
+                 * the all-shows snapshot); when Simkl has no entry, fall
+                 * back to local history — any in-progress episode row
+                 * (resume position saved, not completed) means "in the
+                 * middle of it". Movies resolve watched-or-not, nothing
+                 * in between.
+                 */
+                val partialShow =
+                    normalizedType == "series" &&
+                        !watched &&
+                        (
+                            id in partialShowIds ||
+                                hasLocalInProgressEpisode(id)
+                            )
+
                 WatchedStatusEntity(
                     key =
                         cacheKey(
@@ -557,6 +625,9 @@ class WatchedStatusRepository(
                     isWatched =
                         watched,
 
+                    isPartiallyWatched =
+                        partialShow,
+
                     updatedAt =
                         now
                 )
@@ -566,7 +637,10 @@ class WatchedStatusRepository(
             resolvedEntities.forEach { entity ->
                 cache[entity.key] =
                     entity.updatedAt to
-                        entity.isWatched
+                        WatchedCacheEntry(
+                            entity.isWatched,
+                            entity.isPartiallyWatched
+                        )
             }
         }
 
@@ -636,6 +710,56 @@ class WatchedStatusRepository(
         return watchedKeysFromCache(
             items
         )
+    }
+
+    /**
+     * Eye-badge twin of [preloadAndGetWatchedKeys]: preloads the batch, then
+     * returns the keys resolved as started-but-not-finished. Callers subtract
+     * the fully-watched keys themselves so the checkmark wins the corner.
+     */
+    suspend fun preloadAndGetPartiallyWatchedKeys(
+        items: List<Pair<String, String>>
+    ): Set<String> {
+
+        preload(
+            items
+        )
+
+        return cacheMutex.withLock {
+            items
+                .asSequence()
+                .mapNotNull { (id, type) ->
+
+                    val normalizedId =
+                        id.trim()
+
+                    if (
+                        normalizedId.isBlank()
+                    ) {
+                        return@mapNotNull null
+                    }
+
+                    val normalizedType =
+                        normalizeType(
+                            type
+                        )
+
+                    val key =
+                        cacheKey(
+                            normalizedId,
+                            normalizedType
+                        )
+
+                    if (
+                        cache[key]?.second?.isPartiallyWatched == true
+                    ) {
+                        key
+                    } else {
+                        null
+                    }
+                }
+                .toSet()
+        }
     }
 
     suspend fun forceRefresh(
@@ -847,6 +971,9 @@ class WatchedStatusRepository(
                 completedShowImdbIds =
                     emptySet()
 
+                partialShowImdbIds =
+                    emptySet()
+
                 simklSetsFetchedAt =
                     0L
             }
@@ -907,7 +1034,7 @@ class WatchedStatusRepository(
                         )
 
                     if (
-                        cache[key]?.second == true
+                        cache[key]?.second?.isWatched == true
                     ) {
                         key
                     } else {
@@ -940,6 +1067,23 @@ class WatchedStatusRepository(
             LOCAL_WATCHED_THRESHOLD
     }
 
+    /**
+     * Local "started but not finished" signal for a series: an in-progress
+     * watch-history row (resume position saved, episode not completed).
+     * Used when Simkl has no entry for the show so the eye badge still
+     * reflects purely-local viewing.
+     */
+    private suspend fun hasLocalInProgressEpisode(
+        id: String
+    ): Boolean {
+
+        return try {
+            historyDao.getResumeForParent(id) != null
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     suspend fun isWatchedCached(
         id: String,
         type: String
@@ -960,7 +1104,36 @@ class WatchedStatusRepository(
                     normalizedId,
                     type
                 )
-            ]?.second ?: false
+            ]?.second?.isWatched ?: false
+        }
+    }
+
+    /**
+     * True when the cached state marks this title as started-but-not-
+     * finished (the eye badge). Only ever true for series keys; movies
+     * resolve watched-or-not, nothing in between.
+     */
+    suspend fun isPartiallyWatchedCached(
+        id: String,
+        type: String
+    ): Boolean {
+
+        val normalizedId =
+            id.trim()
+
+        if (
+            normalizedId.isBlank()
+        ) {
+            return false
+        }
+
+        return cacheMutex.withLock {
+            cache[
+                cacheKey(
+                    normalizedId,
+                    type
+                )
+            ]?.second?.isPartiallyWatched ?: false
         }
     }
 
@@ -1033,7 +1206,10 @@ class WatchedStatusRepository(
 
         cacheMutex.withLock {
             cache[key] =
-                now to true
+                now to WatchedCacheEntry(
+                    isWatched = true,
+                    isPartiallyWatched = false
+                )
         }
 
         _watchedStateVersion.value =
@@ -1158,7 +1334,10 @@ class WatchedStatusRepository(
         // re-fetched.
         cacheMutex.withLock {
             cache[key] =
-                now to false
+                now to WatchedCacheEntry(
+                    isWatched = false,
+                    isPartiallyWatched = false
+                )
 
             when (
                 normalizedType
@@ -1172,9 +1351,13 @@ class WatchedStatusRepository(
                             }
                             .toSet()
 
-                "series" ->
+                "series" -> {
                     completedShowImdbIds =
                         completedShowImdbIds - normalizedId
+
+                    partialShowImdbIds =
+                        partialShowImdbIds - normalizedId
+                }
             }
         }
 

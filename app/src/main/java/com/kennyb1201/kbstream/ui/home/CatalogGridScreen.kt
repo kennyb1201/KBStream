@@ -62,6 +62,7 @@ fun CatalogGridScreen(
 ) {
     val grid by viewModel.catalogGrid.collectAsStateWithLifecycle()
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
+    val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
 
     var menuTarget by remember { mutableStateOf<MetaPreview?>(null) }
 
@@ -218,6 +219,9 @@ fun CatalogGridScreen(
                                 isWatched =
                                     viewModel.watchedKey(meta.id, meta.type) in
                                         watchedKeys,
+                                isPartiallyWatched =
+                                    viewModel.watchedKey(meta.id, meta.type) in
+                                        partialWatchedKeys,
                                 onClick = {
                                     onItemClick(meta)
                                 },

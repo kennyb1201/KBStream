@@ -83,6 +83,36 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         initialValue = emptySet()
     )
 
+    // Eye-badge twin of watchedKeys: shows started-but-not-finished, from
+    // the same cached watch state. The completed checkmark wins when a key
+    // resolves to both.
+    val partialWatchedKeys: StateFlow<Set<String>> = combine(
+        _sections,
+        _resolvedIds,
+        watchedStatusRepository.observeWatchUpdates()
+    ) { sections: List<StudioSection>, resolvedMap: Map<String, String>, _ ->
+        if (sections.isEmpty() || resolvedMap.isEmpty()) {
+            emptySet()
+        } else {
+            sections.flatMap { it.items }
+                .mapNotNull { studioItem ->
+                    val tmdbId = studioItem.item.id
+                    val mediaType = normalizeMediaType(studioItem.mediaType) ?: return@mapNotNull null
+                    val imdbId = resolvedMap[lookupKey(tmdbId, mediaType)] ?: return@mapNotNull null
+                    if (watchedStatusRepository.isPartiallyWatchedCached(imdbId, mediaType)) {
+                        watchedKey(imdbId, mediaType)
+                    } else {
+                        null
+                    }
+                }
+                .toSet() - watchedKeys.value
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptySet()
+    )
+
     // Caps parallel TMDB imdb-id lookups (same rationale as TagViewModel).
     private val imdbResolveSemaphore = Semaphore(permits = 8)
 

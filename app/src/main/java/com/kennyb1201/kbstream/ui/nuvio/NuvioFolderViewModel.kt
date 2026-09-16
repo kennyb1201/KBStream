@@ -114,6 +114,39 @@ class NuvioFolderViewModel(application: Application) : AndroidViewModel(applicat
         initialValue = emptySet()
     )
 
+    // Eye-badge twin of watchedKeys: shows started-but-not-finished, from
+    // the same cached watch state. The completed checkmark wins when a key
+    // resolves to both.
+    val partialWatchedKeys: StateFlow<Set<String>> = combine(
+        _state,
+        _resolvedIds,
+        watchedStatusRepository.observeWatchUpdates()
+    ) { state: UiState, resolved: Map<String, String>, _: Long ->
+        if (state.rails.isEmpty()) {
+            emptySet()
+        } else {
+            val keys = mutableSetOf<String>()
+            for (rail in state.rails) {
+                for (item in rail.items) {
+                    val normalized = normalizeType(item.type) ?: continue
+                    val imdbId = item.tmdbId?.let { tmdbId ->
+                        resolved[lookupKey(tmdbId, normalized)]
+                    } ?: item.id.takeIf { it.startsWith("tt") }
+                    if (imdbId != null &&
+                        watchedStatusRepository.isPartiallyWatchedCached(imdbId, normalized)
+                    ) {
+                        keys += watchedKey(imdbId, normalized)
+                    }
+                }
+            }
+            keys - watchedKeys.value
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptySet()
+    )
+
     // ------------------------------------------------------------------
     // Home-identical hero: TMDB detail + hero artwork + trailer for the
     // focused item, mirroring HomeViewModel.resolveHeroMeta (250ms dwell +

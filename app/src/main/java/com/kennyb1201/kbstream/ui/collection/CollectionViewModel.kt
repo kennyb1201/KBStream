@@ -66,6 +66,34 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
         initialValue = emptySet()
     )
 
+    // Eye-badge twin of watchedKeys (collection parts are movies, so the
+    // eye only ever resolves through a manual in-progress state; kept for
+    // parity with every other screen's watched pipeline).
+    val partialWatchedKeys: StateFlow<Set<String>> = combine(
+        _collection,
+        _resolvedIds,
+        watchedStatusRepository.observeWatchUpdates()
+    ) { detail: TmdbCollectionDetail?, resolved: Map<String, String>, _: Long ->
+        if (detail == null || resolved.isEmpty()) {
+            emptySet()
+        } else {
+            detail.parts
+                .mapNotNull { part ->
+                    val imdbId = resolved[lookupKey(part.id, "movie")] ?: return@mapNotNull null
+                    if (watchedStatusRepository.isPartiallyWatchedCached(imdbId, "movie")) {
+                        watchedKey(imdbId, "movie")
+                    } else {
+                        null
+                    }
+                }
+                .toSet() - watchedKeys.value
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptySet()
+    )
+
     // Caps parallel TMDB imdb-id lookups (same rationale as TagViewModel).
     private val imdbResolveSemaphore = Semaphore(permits = 8)
 

@@ -62,6 +62,7 @@ fun CollectionScreen(
     val collection by viewModel.collection.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
+    val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
     val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
 
     // Long-press context menu for collection part posters.
@@ -183,6 +184,15 @@ fun CollectionScreen(
                             CollectionPosterTile(
                                 part = part,
                                 isWatched = watched,
+                                isPartiallyWatched =
+                                    resolvedIds[
+                                        viewModel.lookupKey(part.id, "movie")
+                                    ]?.let { imdbId ->
+                                        viewModel.watchedKey(
+                                            imdbId,
+                                            "movie"
+                                        ) in partialWatchedKeys
+                                    } == true,
                                 onClick = {
                                     onNavigateDetail(
                                         "movie",
@@ -347,7 +357,8 @@ private fun CollectionPosterTile(
     isWatched: Boolean,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isPartiallyWatched: Boolean = false
 ) {
     Column(
         modifier = modifier.width(124.dp)
@@ -358,6 +369,7 @@ private fun CollectionPosterTile(
                 ?: part.name
                 ?: "Collection movie",
             isWatched = isWatched,
+            isPartiallyWatched = isPartiallyWatched,
             onClick = onClick,
             onLongClick = onLongClick,
             modifier = Modifier

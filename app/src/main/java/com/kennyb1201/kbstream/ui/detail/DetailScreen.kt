@@ -310,6 +310,7 @@ fun DetailScreen(
     val inProgressByStreamId by viewModel.inProgressByStreamId.collectAsState()
     val collection by viewModel.collection.collectAsState()
     val watchedKeys by viewModel.watchedKeys.collectAsState()
+    val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsState()
     val resolvedPosterIds by viewModel.resolvedPosterIds.collectAsState()
     val completedEpisodeIds by viewModel.completedEpisodeIds.collectAsState()
     val watchedEpisodeKeys by viewModel.watchedEpisodeKeys.collectAsState()
@@ -2424,6 +2425,20 @@ fun DetailScreen(
                                                         "movie"
                                                     ) in watchedKeys
                                                 } == true,
+                                            isPartiallyWatched =
+                                                resolvedPosterIds[
+                                                    viewModel
+                                                        .posterLookupKey(
+                                                            part.id,
+                                                            "movie"
+                                                        )
+                                                ]?.let {
+                                                    imdbId ->
+                                                    viewModel.watchedKey(
+                                                        imdbId,
+                                                        "movie"
+                                                    ) in partialWatchedKeys
+                                                } == true,
                                             onClick = {
                                                 scope.launch {
                                                     val imdbId =
@@ -2538,6 +2553,20 @@ fun DetailScreen(
                                                         imdbId,
                                                         type.lowercase()
                                                     ) in watchedKeys
+                                                } == true,
+                                            isPartiallyWatched =
+                                                resolvedPosterIds[
+                                                    viewModel
+                                                        .posterLookupKey(
+                                                            rec.id,
+                                                            normalizedType
+                                                        )
+                                                ]?.let {
+                                                    imdbId ->
+                                                    viewModel.watchedKey(
+                                                        imdbId,
+                                                        type.lowercase()
+                                                    ) in partialWatchedKeys
                                                 } == true,
                                             onClick = {
                                                 scope.launch {
@@ -3859,6 +3888,7 @@ private fun PosterGridCard(
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
+    isPartiallyWatched: Boolean = false,
     captionYear: String? = null,
     captionRating: Double? = null
 ) {
@@ -3874,6 +3904,7 @@ private fun PosterGridCard(
             },
             contentDescription = contentDescription,
             isWatched = isWatched,
+            isPartiallyWatched = isPartiallyWatched,
             onClick = onClick,
             onLongClick = onLongClick,
             modifier = modifier

@@ -97,6 +97,7 @@ fun ActorScreen(
     val person by viewModel.person.collectAsState()
     val resolvedCreditIds by viewModel.resolvedCreditIds.collectAsState()
     val watchedKeys by viewModel.watchedKeys.collectAsState()
+    val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val error by viewModel.error.collectAsState()
     val topWorkBackdropUrl by viewModel.topWorkBackdropUrl.collectAsState()
@@ -375,6 +376,8 @@ fun ActorScreen(
                                                 credit = credit,
                                                 isWatched = resolvedCreditIds[viewModel.creditLookupKey(credit.id, "movie")]
                                                     ?.let { imdbId -> viewModel.watchedKey(imdbId, "movie") in watchedKeys } == true,
+                                                isPartiallyWatched = resolvedCreditIds[viewModel.creditLookupKey(credit.id, "movie")]
+                                                    ?.let { imdbId -> viewModel.watchedKey(imdbId, "movie") in partialWatchedKeys } == true,
                                                 onClick = {
                                                     viewModel.resolveAndNavigate(credit.id, "movie", onNavigateDetail)
                                                 },
@@ -415,6 +418,8 @@ fun ActorScreen(
                                                 credit = credit,
                                                 isWatched = resolvedCreditIds[viewModel.creditLookupKey(credit.id, "series")]
                                                     ?.let { imdbId -> viewModel.watchedKey(imdbId, "series") in watchedKeys } == true,
+                                                isPartiallyWatched = resolvedCreditIds[viewModel.creditLookupKey(credit.id, "series")]
+                                                    ?.let { imdbId -> viewModel.watchedKey(imdbId, "series") in partialWatchedKeys } == true,
                                                 onClick = {
                                                     viewModel.resolveAndNavigate(credit.id, "tv", onNavigateDetail)
                                                 },
@@ -550,7 +555,8 @@ private fun ActorCreditCard(
     isWatched: Boolean,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
-    focusRequester: FocusRequester? = null
+    focusRequester: FocusRequester? = null,
+    isPartiallyWatched: Boolean = false
 ) {
     Column(
         modifier = Modifier
@@ -561,6 +567,7 @@ private fun ActorCreditCard(
             posterUrl = remember(credit.posterPath) { credit.posterPath?.let { TmdbRepository.POSTER_BASE + it } },
             contentDescription = credit.title ?: credit.name ?: "",
             isWatched = isWatched,
+            isPartiallyWatched = isPartiallyWatched,
             onClick = onClick,
             onLongClick = onLongClick,
             modifier = Modifier

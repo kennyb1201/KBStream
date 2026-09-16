@@ -123,6 +123,12 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
     private val _watchedKeys = MutableStateFlow<Set<String>>(emptySet())
     val watchedKeys: StateFlow<Set<String>> = _watchedKeys.asStateFlow()
 
+    // Keys of shows started-but-not-finished (the eye badge) for the poster
+    // rails. Filled by the same refresh as watchedKeys; the completed
+    // checkmark wins when a key is in both sets.
+    private val _partialWatchedKeys = MutableStateFlow<Set<String>>(emptySet())
+    val partialWatchedKeys: StateFlow<Set<String>> = _partialWatchedKeys.asStateFlow()
+
     private val _resolvedPosterIds = MutableStateFlow<Map<String, String>>(emptyMap())
     val resolvedPosterIds: StateFlow<Map<String, String>> = _resolvedPosterIds.asStateFlow()
 
@@ -246,6 +252,16 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                         watchedKey(imdbId, mediaType)
                     }
                     .toSet()
+
+                _partialWatchedKeys.value = resolvedItems
+                    .filter { (_, mediaType, imdbId) ->
+                        watchedStatusRepository.isPartiallyWatchedCached(imdbId, mediaType)
+                    }
+                    .map { (_, mediaType, imdbId) ->
+                        watchedKey(imdbId, mediaType)
+                    }
+                    .toSet() -
+                    _watchedKeys.value
 
                 Log.i(
                     "KBStream",
@@ -1082,6 +1098,9 @@ for (metaAddon in metaAddons) {
             }
 
             _watchedKeys.value = _watchedKeys.value + watchedKey(imdbId, normalizedType)
+            // A manual mark resolves the tile to fully-watched: drop the eye.
+            _partialWatchedKeys.value =
+                _partialWatchedKeys.value - watchedKey(imdbId, normalizedType)
         }
     }
 
@@ -1118,6 +1137,9 @@ for (metaAddon in metaAddons) {
             }
 
             _watchedKeys.value = _watchedKeys.value - watchedKey(imdbId, normalizedType)
+            // Reset state entirely: the tile goes back to unwatched.
+            _partialWatchedKeys.value =
+                _partialWatchedKeys.value - watchedKey(imdbId, normalizedType)
         }
     }
 

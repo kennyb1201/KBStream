@@ -258,7 +258,8 @@ private fun FolderItemCard(
     art: HeroArtwork?,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
-    onFocus: (() -> Unit)? = null
+    onFocus: (() -> Unit)? = null,
+    isPartiallyWatched: Boolean = false
 ) {
     val isLandscape = showLandscapeCards
     val width = if (isLandscape) FolderLandscapeWidth else FolderPosterWidth
@@ -292,6 +293,7 @@ private fun FolderItemCard(
                     fallbackTitle = item.title,
                     contentDescription = item.title,
                     isWatched = isWatched,
+                    isPartiallyWatched = isPartiallyWatched,
                     onClick = onClick,
                     onLongClick = onLongClick,
                     modifier = cardModifier
@@ -301,6 +303,7 @@ private fun FolderItemCard(
                     posterUrl = item.posterUrl,
                     contentDescription = item.title,
                     isWatched = isWatched,
+                    isPartiallyWatched = isPartiallyWatched,
                     onClick = onClick,
                     onLongClick = onLongClick,
                     modifier = cardModifier
@@ -333,6 +336,23 @@ private fun itemWatched(
         ?: item.tmdbId?.let { resolvedIds["$normalized::$it"] }
         ?: return false
     return "$normalized::$imdbId" in watchedKeys
+}
+
+/** Eye-badge twin of [itemWatched]: same id resolution against the
+ *  partially-watched key set. Only rendered when the checkmark is absent. */
+private fun itemWatchedPartially(
+    item: NuvioContentItem,
+    partialWatchedKeys: Set<String>,
+    resolvedIds: Map<String, String>
+): Boolean {
+    val normalized = when (item.type.lowercase()) {
+        "series", "tv" -> "series"
+        else -> "movie"
+    }
+    val imdbId = item.id.takeIf { it.startsWith("tt") }
+        ?: item.tmdbId?.let { resolvedIds["$normalized::$it"] }
+        ?: return false
+    return "$normalized::$imdbId" in partialWatchedKeys
 }
 
 /**
@@ -423,6 +443,7 @@ private fun FolderRailPageHandler(
             FolderItemCard(
                 item = item,
                 isWatched = railContext.watchedLookup(item),
+                isPartiallyWatched = railContext.partiallyWatchedLookup(item),
                 showLandscapeCards = railContext.showLandscapeCards,
                 // Home rails carry no captions; a "replica" folder follows
                 // suit.
@@ -458,6 +479,7 @@ private data class RailCardContext(
     val showLandscapeCards: Boolean,
     val landscapeArt: Map<String, HeroArtwork>,
     val watchedLookup: (NuvioContentItem) -> Boolean,
+    val partiallyWatchedLookup: (NuvioContentItem) -> Boolean,
     val onOpenItem: (NuvioContentItem) -> Unit,
     val onLongPressItem: (NuvioContentItem) -> Unit,
     val onFocus: (NuvioContentItem) -> Unit = {}
@@ -474,6 +496,7 @@ private fun FollowHomeLayout(
     resolvedIds: Map<String, String>,
     selectedSourceId: String?,
     watchedKeys: Set<String>,
+    partialWatchedKeys: Set<String>,
     onSelectSource: (String?) -> Unit,
     onOpenItem: (NuvioContentItem) -> Unit,
     onLongPressItem: (NuvioContentItem) -> Unit
@@ -492,6 +515,9 @@ private fun FollowHomeLayout(
         showLandscapeCards = showLandscapeCards,
         landscapeArt = landscapeArt,
         watchedLookup = { item -> itemWatched(item, watchedKeys, resolvedIds) },
+        partiallyWatchedLookup = { item ->
+            itemWatchedPartially(item, partialWatchedKeys, resolvedIds)
+        },
         onOpenItem = onOpenItem,
         onLongPressItem = onLongPressItem
     )
@@ -599,6 +625,7 @@ private fun RowsLayout(
     resolvedIds: Map<String, String>,
     selectedSourceId: String?,
     watchedKeys: Set<String>,
+    partialWatchedKeys: Set<String>,
     onSelectSource: (String?) -> Unit,
     onOpenItem: (NuvioContentItem) -> Unit,
     onLongPressItem: (NuvioContentItem) -> Unit
@@ -656,6 +683,11 @@ private fun RowsLayout(
                                     FolderItemCard(
                                         item = item,
                                         isWatched = itemWatched(item, watchedKeys, resolvedIds),
+                                        isPartiallyWatched = itemWatchedPartially(
+                                            item,
+                                            partialWatchedKeys,
+                                            resolvedIds
+                                        ),
                                         showLandscapeCards = showLandscapeCards,
                                         showCaptions = true,
                                         art = landscapeArt[
@@ -684,6 +716,7 @@ private fun GridLayout(
     resolvedIds: Map<String, String>,
     selectedSourceId: String?,
     watchedKeys: Set<String>,
+    partialWatchedKeys: Set<String>,
     onSelectSource: (String?) -> Unit,
     onOpenItem: (NuvioContentItem) -> Unit,
     onLongPressItem: (NuvioContentItem) -> Unit
@@ -728,6 +761,11 @@ private fun GridLayout(
                                 posterUrl = item.posterUrl,
                                 contentDescription = item.title,
                                 isWatched = itemWatched(item, watchedKeys, resolvedIds),
+                                isPartiallyWatched = itemWatchedPartially(
+                                    item,
+                                    partialWatchedKeys,
+                                    resolvedIds
+                                ),
                                 onClick = { onOpenItem(item) },
                                 onLongClick = { onLongPressItem(item) },
                                 modifier = Modifier
@@ -759,6 +797,7 @@ internal fun NuvioFolderBody(
     resolvedIds: Map<String, String>,
     selectedSourceId: String?,
     watchedKeys: Set<String>,
+    partialWatchedKeys: Set<String>,
     onSelectSource: (String?) -> Unit,
     onOpenItem: (NuvioContentItem) -> Unit,
     onLongPressItem: (NuvioContentItem) -> Unit
@@ -767,19 +806,19 @@ internal fun NuvioFolderBody(
         NuvioLayoutModes.Mode.FOLLOW_LAYOUT ->
             FollowHomeLayout(
                 viewModel, state, resolvedIds, selectedSourceId, watchedKeys,
-                onSelectSource, onOpenItem, onLongPressItem
+                partialWatchedKeys, onSelectSource, onOpenItem, onLongPressItem
             )
 
         NuvioLayoutModes.Mode.ROWS ->
             RowsLayout(
                 viewModel, state, resolvedIds, selectedSourceId, watchedKeys,
-                onSelectSource, onOpenItem, onLongPressItem
+                partialWatchedKeys, onSelectSource, onOpenItem, onLongPressItem
             )
 
         NuvioLayoutModes.Mode.GRID ->
             GridLayout(
                 state, resolvedIds, selectedSourceId, watchedKeys,
-                onSelectSource, onOpenItem, onLongPressItem
+                partialWatchedKeys, onSelectSource, onOpenItem, onLongPressItem
             )
     }
 }

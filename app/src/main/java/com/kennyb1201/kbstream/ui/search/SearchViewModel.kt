@@ -144,6 +144,19 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     val watchedKeys: StateFlow<Set<String>> =
         _watchedKeys.asStateFlow()
 
+    /*
+     * Keys of shows started-but-not-finished (the eye badge). Filled by the
+     * same preloads that fill watchedKeys; the completed checkmark wins when
+     * a key is in both sets.
+     */
+    private val _partialWatchedKeys =
+        MutableStateFlow<Set<String>>(
+            emptySet()
+        )
+
+    val partialWatchedKeys: StateFlow<Set<String>> =
+        _partialWatchedKeys.asStateFlow()
+
     // TMDB id -> IMDB id resolutions for the visible title results, filled
     // asynchronously after each search/trending load so poster badges and the
     // long-press "Mark as Watched" action can key off the IMDB id.
@@ -199,6 +212,13 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                     current.remove(key)
                 }
                 _watchedKeys.value = current
+
+                // A manual mark/unmark always clears the eye badge for that
+                // key: the completed checkmark wins, or the tile goes back
+                // to unwatched.
+                if (key in _partialWatchedKeys.value) {
+                    _partialWatchedKeys.value = _partialWatchedKeys.value - key
+                }
             }
             .launchIn(viewModelScope)
     }
@@ -268,6 +288,45 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             _resolvedIds.value = _resolvedIds.value + resolved.associate {
                 (tmdbId, mediaType, imdbId) ->
                 lookupKey(tmdbId, mediaType) to imdbId!!
+            }
+
+            // Fill the watched checkmark + eye badge for the freshly
+            // resolved tiles from the same cached Simkl state every other
+            // screen preloads.
+            preloadWatchedKeysFor(
+                resolved
+                    .map { (_, mediaType, imdbId) -> imdbId!! to mediaType }
+                    .distinct()
+            )
+        }
+    }
+
+    /**
+     * Preload the watched + partial (eye) state for a batch of already-
+     * keyed IMDB items and merge both key sets into the exposed state.
+     * Reads the repository's shared memory/disk caches, so repeat calls
+     * (every search wave) cost no extra network traffic.
+     */
+    private fun preloadWatchedKeysFor(items: List<Pair<String, String>>) {
+        if (items.isEmpty()) return
+
+        viewModelScope.launch {
+            try {
+                val watched =
+                    watchedStatusRepository.preloadAndGetWatchedKeys(items)
+
+                val partial =
+                    watchedStatusRepository
+                        .preloadAndGetPartiallyWatchedKeys(items) -
+                        watched
+
+                _watchedKeys.value = _watchedKeys.value + watched
+                _partialWatchedKeys.value =
+                    (_partialWatchedKeys.value + partial) - watched
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e("SEARCH_WATCHED", "watched preload failed: ${e.message}", e)
             }
         }
     }
@@ -518,6 +577,20 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             // the gaps from TMDB (disk+memory cached, keyed by the IMDB id
             // these results already carry) and republish when done.
             _addonResultGroups.value = groups
+
+            // Add-on results already carry IMDB ids: preload their watched /
+            // eye-badge state so those rails read like every other screen.
+            preloadWatchedKeysFor(
+                groups
+                    .flatMap { it.results }
+                    .mapNotNull { r ->
+                        val type = normalizedType(r.type) ?: return@mapNotNull null
+                        val imdbId = r.meta.id.takeIf { it.startsWith("tt") }
+                            ?: return@mapNotNull null
+                        imdbId to type
+                    }
+                    .distinct()
+            )
 
             try {
                 val enriched = enrichAddonGroups(groups)

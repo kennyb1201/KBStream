@@ -102,6 +102,7 @@ fun SearchScreen(
     val collectionResults by viewModel.collectionResults.collectAsStateWithLifecycle()
     val addonResultGroups by viewModel.addonResultGroups.collectAsStateWithLifecycle()
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
+    val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val recentSearches by viewModel.recentSearches.collectAsStateWithLifecycle()
     val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
@@ -321,6 +322,12 @@ fun SearchScreen(
                                         watchedKeys = watchedKeys,
                                         viewModel = viewModel
                                     ),
+                                    isPartiallyWatched = partialWatchedTile(
+                                        result = result,
+                                        resolvedIds = resolvedIds,
+                                        partialWatchedKeys = partialWatchedKeys,
+                                        viewModel = viewModel
+                                    ),
                                     onClick = {
                                         viewModel.onResultOpened(result)
                                         onItemClick(result.meta)
@@ -369,6 +376,12 @@ fun SearchScreen(
                                         result = result,
                                         resolvedIds = resolvedIds,
                                         watchedKeys = watchedKeys,
+                                        viewModel = viewModel
+                                    ),
+                                    isPartiallyWatched = partialWatchedTile(
+                                        result = result,
+                                        resolvedIds = resolvedIds,
+                                        partialWatchedKeys = partialWatchedKeys,
                                         viewModel = viewModel
                                     ),
                                     onClick = {
@@ -551,6 +564,27 @@ private fun watchedTile(
     } ?: return false
 
     return viewModel.watchedKey(keyId, result.type) in watchedKeys
+}
+
+/**
+ * Eye-badge twin of [watchedTile]: same id resolution, compared against the
+ * partially-watched key set. The tile only shows the eye when the completed
+ * checkmark is absent.
+ */
+private fun partialWatchedTile(
+    result: SearchTitleResult,
+    resolvedIds: Map<String, String>,
+    partialWatchedKeys: Set<String>,
+    viewModel: SearchViewModel
+): Boolean {
+    val tmdbId = result.id.removePrefix("tmdb:").toIntOrNull()
+    val keyId = if (tmdbId != null) {
+        resolvedIds[viewModel.lookupKey(tmdbId, result.type)]
+    } else {
+        result.id
+    } ?: return false
+
+    return viewModel.watchedKey(keyId, result.type) in partialWatchedKeys
 }
 
 @Composable
@@ -964,7 +998,8 @@ private fun TitlePosterTile(
     watched: Boolean,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isPartiallyWatched: Boolean = false
 ) {
     Column(
         modifier = Modifier.width(124.dp)
@@ -973,6 +1008,7 @@ private fun TitlePosterTile(
             posterUrl = result.poster,
             contentDescription = result.name,
             isWatched = watched,
+            isPartiallyWatched = isPartiallyWatched,
             onClick = onClick,
             onLongClick = onLongClick,
             modifier = modifier

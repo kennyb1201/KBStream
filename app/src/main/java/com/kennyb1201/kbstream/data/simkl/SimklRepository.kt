@@ -2005,12 +2005,45 @@ class SimklRepository(
             requireAccessToken()
     ) {
         getAllShowItemsCached(
-            accessToken =
-                accessToken,
+            accessToken = accessToken,
 
-            forceRefresh =
-                true
+            forceRefresh = true
         )
+    }
+
+    /**
+     * IMDB ids of shows the user has STARTED on Simkl but not finished:
+     * watchedEpisodesCount > 0 while [isShowFullyWatched] is false. Reads
+     * the same cached all-shows response as [getCompletedShowImdbIds], so
+     * this costs no extra network round-trip — the eye badge (partially
+     * watched) and the checkmark (fully watched) resolve together.
+     */
+    suspend fun getPartiallyWatchedShowImdbIds(
+        accessToken: String =
+            requireAccessToken()
+    ): Set<String> {
+
+        val body =
+            getAllShowItemsCached(
+                accessToken = accessToken
+            )
+                ?: return emptySet()
+
+        return body.shows
+            .asSequence()
+            .filter { item ->
+                !isShowFullyWatched(item) &&
+                    (item.watchedEpisodesCount ?: 0) > 0
+            }
+            .mapNotNull { item ->
+                item.show
+                    ?.ids
+                    ?.imdb
+                    ?.takeIf {
+                        it.isNotBlank()
+                    }
+            }
+            .toSet()
     }
 
     suspend fun getCompletedMovieKeys(

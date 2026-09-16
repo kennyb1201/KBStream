@@ -73,6 +73,7 @@ fun TagScreen(
     val sections by viewModel.sections.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
+    val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
     val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
     val pagingStates by viewModel.pagingStates.collectAsStateWithLifecycle()
 
@@ -422,6 +423,12 @@ private fun TagRailRow(
                     viewModel.watchedKey(it, normalizedType) in watchedKeys
                 } == true
 
+                // Eye badge: started but not finished. The completed
+                // checkmark wins when the title is fully watched.
+                val watchedPartially = !watched && imdbId?.let {
+                    viewModel.watchedKey(it, normalizedType) in partialWatchedKeys
+                } == true
+
                 val isFirstItem =
                     isFirstSection && studioItem == section.items.firstOrNull()
 
@@ -434,6 +441,7 @@ private fun TagRailRow(
                         contentDescription = studioItem.item.title
                             ?: studioItem.item.name,
                         isWatched = watched,
+                        isPartiallyWatched = watchedPartially,
                         onClick = {
                             viewModel.resolveAndNavigate(
                                 tmdbId = studioItem.item.id,
