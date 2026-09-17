@@ -1,6 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#0D1B2A</color>
+    <color name="kb_accent">#FFE8A33D</color>
+    <color name="kb_danger">#FFB0453C</color>
+    <color name="kb_overlay_gradient_bottom">#F50A0E14</color>
+    <color name="kb_overlay_gradient_mid">#2E0A0E14</color>
+    <color name="kb_overlay_gradient_top">#EB0A0E14</color>
+    <color name="kb_overlay_scrim">#C00A0E14</color>
+    <color name="kb_surface">#FF141A24</color>
+    <color name="kb_surface_raised">#FF1D2530</color>
+    <color name="kb_text_hi">#FFF3EFE4</color>
+    <color name="kb_text_lo">#FF8891A0</color>
+    <color name="kb_void">#FF0A0E14</color>
     <string name="app_name">KBStream</string>
     <style name="Theme.KBStream" parent="android:Theme.Material.NoActionBar">
         <item name="android:colorBackground">#000000</item>

@@ -933,3 +933,248 @@ val BROWSE_CATEGORIES: List<BrowseCategory> = listOf(
     BrowseCategory("decades", "Decades", BROWSE_DECADES),
     BrowseCategory("collections", "Collections", emptyList())
 )
+
+// ---------------------------------------------------------------------------
+// Kids Mode browse browser. A kids profile gets its own sidebar: every list
+// below is kid-focused end to end (kids collections, kid-focused services
+// and networks, kid-friendly keywords, family/animation studios) so the
+// chips themselves never point a child at adult slates.
+//
+// KIDS_* name lists are STRICT SUBSETS of the standard BROWSE_* name lists.
+// That matters because keyword/collection ids are runtime-resolved and
+// disk-cached per profile namespace: a subset guarantees the standard-mode
+// cache already holds every kids chip, so switching profiles renders both
+// modes instantly without a second resolve pass (see SearchViewModel).
+// ---------------------------------------------------------------------------
+
+/**
+ * Kid-friendly genre set: animation + family-first, plus the gentle
+ * adventure/comedy/music lanes. Everything hard (crime, horror, war,
+ * thrillers, news/reality/soap lanes) is excluded by construction.
+ */
+val KIDS_GENRES: List<BrowseEntry> = BROWSE_GENRES.filter { it.id in setOf(
+    16,      // Animation
+    10751,   // Family
+    12,      // Adventure
+    35,      // Comedy
+    14,      // Fantasy
+    10402,   // Music
+    10762,   // Kids (TV)
+    99       // Documentary (nature/space docs are a kids staple)
+)}
+
+/**
+ * Kid-focused streaming services and networks: all-ages and family
+ * slates only (kid brands, animation studios' streamers, family cable).
+ * providers/network ids follow the same verified-id conventions as
+ * BROWSE_SERVICES / BROWSE_NETWORKS above.
+ */
+val KIDS_SERVICES: List<BrowseService> = listOf(
+    BrowseService(
+        "Disney+",
+        providerId = 337,
+        networkOrCompanyId = 2739,
+        networkIsCompany = false
+    ),
+    // Nick's subscription streamer — all kids, all day.
+    BrowseService(
+        "Paramount+",
+        providerId = 2303,
+        networkOrCompanyId = 4330,
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "Netflix",
+        providerId = 8,
+        networkOrCompanyId = 213,
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "PBS KIDS / Family",
+        providerId = null,
+        networkOrCompanyId = 14,
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "Cartoon Network",
+        providerId = null,
+        networkOrCompanyId = 56,
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "Nickelodeon",
+        providerId = null,
+        networkOrCompanyId = 13,
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "Disney Channel",
+        providerId = null,
+        networkOrCompanyId = 54,
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "Disney Junior",
+        providerId = null,
+        networkOrCompanyId = 281,
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "Disney XD",
+        providerId = null,
+        networkOrCompanyId = 44,
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "Boomerang",
+        providerId = null,
+        networkOrCompanyId = 5459,
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "Universal Kids",
+        providerId = null,
+        networkOrCompanyId = 1279,
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "TeenNick",
+        providerId = null,
+        networkOrCompanyId = 159,
+        networkIsCompany = false
+    )
+)
+
+/**
+ * Kid-friendly studios: animation houses and family brands. Every entry
+ * already exists in BROWSE_STUDIOS except Universal Kids' company id,
+ * which is unused there.
+ */
+val KIDS_STUDIOS: List<BrowseEntry> = listOf(
+    BrowseEntry(2, "Walt Disney Pictures"),
+    BrowseEntry(3, "Pixar"),
+    BrowseEntry(6125, "Walt Disney Animation Studios"),
+    BrowseEntry(6704, "Illumination"),
+    BrowseEntry(521, "DreamWorks Animation"),
+    BrowseEntry(10342, "Studio Ghibli"),
+    BrowseEntry(2251, "Sony Pictures Animation"),
+    BrowseEntry(25120, "Warner Animation Group"),
+    BrowseEntry(24955, "Paramount Animation"),
+    BrowseEntry(2348, "Nickelodeon Movies"),
+    BrowseEntry(7899, "Cartoon Network Studios"),
+    BrowseEntry(12654, "The Pokémon Company"),
+    BrowseEntry(1, "Lucasfilm")
+)
+
+/**
+ * Kids collections: franchises a child knows, resolved at runtime exactly
+ * like the standard list (strict name subset of BROWSE_COLLECTION_NAMES).
+ */
+val KIDS_COLLECTION_NAMES = listOf(
+    "Toy Story Collection",
+    "The Avengers Collection",
+    "Spider-Man Collection",
+    "Jurassic Park Collection",
+    "Pirates of the Caribbean Collection",
+    "Indiana Jones Collection",
+    "Transformers Collection",
+    "Back to the Future Collection",
+    "Despicable Me Collection",
+    "How to Train Your Dragon Collection",
+    "Batman Collection",
+    "Superman Collection",
+    "Jumanji Collection",
+    "The Chronicles of Narnia Collection",
+    "Percy Jackson Collection",
+    "The Hunger Games Collection",
+    "Ice Age Collection",
+    "Madagascar Collection",
+    "Shrek Collection",
+    "Kung Fu Panda Collection",
+    "Finding Nemo Collection",
+    "Monsters, Inc. Collection",
+    "The Incredibles Collection",
+    "Cars Collection",
+    "The Hobbit Collection"
+)
+
+/**
+ * Kid-focused keywords: silly, warm, adventurous. No horror/war/crime
+ * keywords at all. Strict name subset of BROWSE_KEYWORD_NAMES.
+ */
+val KIDS_KEYWORD_NAMES = listOf(
+    "dinosaur",
+    "dragon",
+    "wizard",
+    "superhero",
+    "robot",
+    "pirate",
+    "mermaid",
+    "genie",
+    "space",
+    "time travel",
+    "alien",
+    "monster",
+    "kaiju",
+    "coming of age",
+    "friendship",
+    "wedding",
+    "dancing",
+    "sports",
+    "surfing",
+    "skateboarding",
+    "gymnastics",
+    "olympics",
+    "road trip",
+    "amusement park",
+    "circus",
+    "summer camp",
+    "island",
+    "snow",
+    "desert",
+    "school",
+    "high school",
+    "single father",
+    "single mother",
+    "body swap",
+    "shapeshifting",
+    "magical object",
+    "astronaut",
+    "moon landing",
+    "deep space",
+    "boxing",
+    "chef",
+    "band",
+    "musician",
+    "dancer",
+    "choir"
+)
+
+/** Decades are neutral; reuse the standard list. */
+val KIDS_DECADES: List<BrowseEntry> = BROWSE_DECADES
+
+/** Merged "Services & Networks" submenu for kids profiles. */
+val KIDS_PROVIDER_ENTRIES: List<BrowseEntry> = KIDS_SERVICES
+    .map { service ->
+        BrowseEntry(
+            service.networkOrCompanyId ?: -1,
+            service.name,
+            service.providerId,
+            service.networkOrCompanyId,
+            service.networkIsCompany
+        )
+    }
+
+/**
+ * The kids sidebar. Same six category keys as the standard browser so the
+ * ViewModel/screen/navigation plumbing is shared; only the chip lists and
+ * labels differ.
+ */
+val KIDS_BROWSE_CATEGORIES: List<BrowseCategory> = listOf(
+    BrowseCategory("genres", "Genres", KIDS_GENRES),
+    BrowseCategory("keywords", "Keywords", emptyList()),
+    BrowseCategory("services", "Services & Networks", KIDS_PROVIDER_ENTRIES),
+    BrowseCategory("studios", "Studios", KIDS_STUDIOS),
+    BrowseCategory("decades", "Decades", KIDS_DECADES),
+    BrowseCategory("collections", "Collections", emptyList())
+)

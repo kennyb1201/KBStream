@@ -1557,11 +1557,13 @@ Log.d(
                     if (
                         info.hideUpcoming
                     ) {
-                        applyDigitalAvailabilityFilter(
-                            filterUpcoming(metas)
+                        tmdbRepository.kidsFilterMetas(
+                            applyDigitalAvailabilityFilter(
+                                filterUpcoming(metas)
+                            )
                         )
                     } else {
-                        metas
+                        tmdbRepository.kidsFilterMetas(metas)
                     }
 
                 val existing =
@@ -1687,11 +1689,13 @@ Log.d(
                     if (
                         info.hideUpcoming
                     ) {
-                        applyDigitalAvailabilityFilter(
-                            filterUpcoming(metas)
+                        tmdbRepository.kidsFilterMetas(
+                            applyDigitalAvailabilityFilter(
+                                filterUpcoming(metas)
+                            )
                         )
                     } else {
-                        metas
+                        tmdbRepository.kidsFilterMetas(metas)
                     }
 
                 if (
@@ -5068,11 +5072,13 @@ private suspend fun calculateEpisodesRemaining(
 
         val filtered =
             if (hideUpcoming) {
-                applyDigitalAvailabilityFilter(
-                    filterUpcoming(metas)
+                tmdbRepository.kidsFilterMetas(
+                    applyDigitalAvailabilityFilter(
+                        filterUpcoming(metas)
+                    )
                 )
             } else {
-                metas
+                tmdbRepository.kidsFilterMetas(metas)
             }
 
         if (
@@ -5210,12 +5216,15 @@ private suspend fun calculateEpisodesRemaining(
                             }
 
                             // App-wide digital-release filter applies to the
-                            // pinned rails too (same toggle as addon rails).
+                            // pinned rails too (same toggle as addon rails),
+                            // followed by the kids-mode ceiling filter.
                             val filteredMetas =
                                 if (hideUpcoming) {
-                                    applyDigitalAvailabilityFilter(metas)
+                                    tmdbRepository.kidsFilterMetas(
+                                        applyDigitalAvailabilityFilter(metas)
+                                    )
                                 } else {
-                                    metas
+                                    tmdbRepository.kidsFilterMetas(metas)
                                 }
 
                             if (

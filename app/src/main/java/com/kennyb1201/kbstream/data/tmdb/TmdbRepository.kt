@@ -7,6 +7,8 @@ import com.kennyb1201.kbstream.data.cache.ImdbResolutionEntity
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheDao
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.sync.KidsMode
+import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
@@ -466,12 +468,24 @@ class TmdbRepository(context: Context) {
             runCatching { api.getCollection(collectionId, apiKey) }.getOrNull()
                 ?: return null
 
+        // Kids Mode first: a kids profile never sees franchise pages whose
+        // parts are rated above its ceiling (and the whole page drops when
+        // no part survives).
+        val kidsParts = if (kidsMaxAge() == null) {
+            detail.parts
+        } else {
+            kidsFilter(detail.parts) { it.id to "movie" }
+        }
+        if (kidsParts.isEmpty() && detail.parts.isNotEmpty()) {
+            return detail.copy(parts = emptyList())
+        }
+
         if (!isDigitalFilterEnabled()) {
-            return detail
+            return detail.copy(parts = kidsParts)
         }
 
         val filteredParts =
-            filterByHomeAvailability(detail.parts) {
+            filterByHomeAvailability(kidsParts) {
                 it.id to "movie"
             }
 
@@ -547,6 +561,15 @@ class TmdbRepository(context: Context) {
                 )
             }.results
         }.getOrNull()
+            ?.let { items ->
+                // Kids Mode: this is the raw loader behind every Nuvio
+                // folder rail, so the ceiling check runs here once and
+                // covers all folder screens (movies + series mixed).
+                if (kidsMaxAge() == null) items
+                else kidsFilterItems(
+                    items.map { StudioItem(it, if (isTv) "series" else "movie") }
+                ).map { it.item }
+            }
     }
 
     /** TMDB "LIST" source: items of a hosted TMDB list id. */
@@ -911,6 +934,106 @@ class TmdbRepository(context: Context) {
         }
     }
 
+    // ------------------------------------------------------------------
+    // Kids Mode enforcement. Every discover-backed rail (genres, keywords,
+    // studios, networks, services, decades, Nuvio folders) funnels through
+    // the *RailPage / *Section helpers below, so certifying each page once
+    // here covers the whole browse surface for the ACTIVE profile. Titles
+    // above the profile's rating ceiling are dropped; the check reuses the
+    // shared detail cache, so it costs nothing once a title has been
+    // enriched elsewhere (and each item is one cached TMDB detail fetch
+    // the first time it appears on any kids profile).
+    // ------------------------------------------------------------------
+
+    /** Kids Mode ceiling of the ACTIVE profile (null = off). */
+    fun kidsMaxAge(): Int? =
+        ProfileManager.activeProfile.value?.kidsMaxAge
+
+    /** True when kids mode is on and the ceiling is strict (PG/G). */
+    fun isKidsModeStrict(): Boolean = kidsMaxAge() != null && kidsMaxAge() != KidsMode.MAX_AGE_PG13
+
+    /** Certification check for one (tmdbId, mediaType) pair under the active ceiling. */
+    private suspend fun kidsAllowed(tmdbId: Int, mediaType: String): Boolean {
+        val ceiling = kidsMaxAge() ?: return true
+        val isSeries = mediaType.equals("series", ignoreCase = true) ||
+            mediaType.equals("tv", ignoreCase = true)
+        val detail = availabilitySemaphore.withPermit {
+            runCatching {
+                fetchEnrichedMetaCached(
+                    imdbId = "tmdb:$tmdbId",
+                    type = if (isSeries) "series" else "movie"
+                )
+            }.getOrNull()
+        } ?: return ceiling == KidsMode.MAX_AGE_PG13
+        return KidsMode.allowed(ceiling, detail.certification(isMovie = !isSeries))
+    }
+
+    /**
+     * Drop every item above the active profile's rating ceiling. Returns
+     * the list unchanged when kids mode is off, so non-kids profiles pay
+     * a single null-check per page.
+     */
+    suspend fun <T> kidsFilter(
+        items: List<T>,
+        key: (T) -> Pair<Int, String>
+    ): List<T> {
+        if (items.isEmpty() || kidsMaxAge() == null) return items
+        return coroutineScope {
+            items.map { item ->
+                async {
+                    val (tmdbId, mediaType) = key(item)
+                    if (kidsAllowed(tmdbId, mediaType)) item else null
+                }
+            }.awaitAll().filterNotNull()
+        }
+    }
+
+    /**
+     * Meta-level kids filter for Stremio catalog rails (Home, addon
+     * results): keys by the meta's raw id — IMDB ids resolve through TMDB
+     * /find, "tmdb:"/numeric ids fetch directly — via the same enriched-
+     * detail cache every other surface uses. The generic [kidsFilter]
+     * above only handles TMDB-id-keyed items, which catalog metas are not.
+     */
+    suspend fun kidsFilterMetas(metas: List<com.kennyb1201.kbstream.data.addon.MetaPreview>): List<com.kennyb1201.kbstream.data.addon.MetaPreview> {
+        if (metas.isEmpty() || kidsMaxAge() == null) return metas
+        return coroutineScope {
+            metas.map { meta ->
+                async {
+                    val isSeries = meta.type.equals("series", ignoreCase = true) ||
+                        meta.type.equals("tv", ignoreCase = true)
+                    val ceiling = kidsMaxAge()
+                    val detail = availabilitySemaphore.withPermit {
+                        runCatching {
+                            fetchEnrichedMetaCached(
+                                imdbId = meta.id,
+                                type = if (isSeries) "series" else "movie"
+                            )
+                        }.getOrNull()
+                    }
+                    val allowed = if (detail == null) {
+                        ceiling == KidsMode.MAX_AGE_PG13
+                    } else {
+                        KidsMode.allowed(ceiling, detail.certification(isMovie = !isSeries))
+                    }
+                    if (allowed) meta else null
+                }
+            }.awaitAll().filterNotNull()
+        }
+    }
+
+    /** Kids filter keyed on the discover item itself. */
+    private suspend fun kidsFilterItems(items: List<StudioItem>): List<StudioItem> {
+        if (items.isEmpty() || kidsMaxAge() == null) return items
+        return kidsFilter(items) { it.item.id to it.mediaType }
+    }
+
+    /** Kids filter for a rail page (shared return shape of every rail loader). */
+    private suspend fun kidsFilterPage(page: TagRailPage): TagRailPage {
+        if (page.items.isEmpty() || kidsMaxAge() == null) return page
+        return page.copy(items = kidsFilterItems(page.items))
+    }
+
     suspend fun getGenreRailPage(genreId: Int, title: String, page: Int): TagRailPage {
         if (apiKey.isBlank()) return TagRailPage(emptyList(), false)
 
@@ -995,9 +1118,11 @@ class TmdbRepository(context: Context) {
                 distinct
             }
 
-        return TagRailPage(
-            items = filtered,
-            hasMore = results.isNotEmpty()
+        return kidsFilterPage(
+            TagRailPage(
+                items = filtered,
+                hasMore = results.isNotEmpty()
+            )
         )
     }
 
@@ -1085,9 +1210,11 @@ class TmdbRepository(context: Context) {
                 distinct
             }
 
-        return TagRailPage(
-            items = filtered,
-            hasMore = results.isNotEmpty()
+        return kidsFilterPage(
+            TagRailPage(
+                items = filtered,
+                hasMore = results.isNotEmpty()
+            )
         )
     }
 
@@ -1142,9 +1269,11 @@ class TmdbRepository(context: Context) {
                 distinct
             }
 
-        return TagRailPage(
-            items = filtered,
-            hasMore = results.isNotEmpty()
+        return kidsFilterPage(
+            TagRailPage(
+                items = filtered,
+                hasMore = results.isNotEmpty()
+            )
         )
     }
 
@@ -1232,9 +1361,11 @@ class TmdbRepository(context: Context) {
                 distinct
             }
 
-        return TagRailPage(
-            items = filtered,
-            hasMore = results.isNotEmpty()
+        return kidsFilterPage(
+            TagRailPage(
+                items = filtered,
+                hasMore = results.isNotEmpty()
+            )
         )
     }
 
@@ -1294,7 +1425,7 @@ class TmdbRepository(context: Context) {
             .distinctBy { it.item.id }
 
         // A discover page caps at 20 items; a full page means more exist.
-        return TagRailPage(items, items.size >= 20)
+        return kidsFilterPage(TagRailPage(items, items.size >= 20))
     }
 
     /**
@@ -1379,7 +1510,7 @@ class TmdbRepository(context: Context) {
             .distinctBy { it.item.id }
 
         // A discover page caps at 20 items; a full page means more exist.
-        return TagRailPage(items, items.size >= 20)
+        return kidsFilterPage(TagRailPage(items, items.size >= 20))
     }
 
     // ------------------------------------------------------------------
@@ -1432,7 +1563,7 @@ class TmdbRepository(context: Context) {
             } else {
                 result.items
             }
-        return TagRailPage(filtered, result.hasMore)
+        return kidsFilterPage(TagRailPage(filtered, result.hasMore))
     }
 
     // ------------------------------------------------------------------
@@ -1492,7 +1623,7 @@ class TmdbRepository(context: Context) {
             } else {
                 result.items
             }
-        return TagRailPage(filtered, result.hasMore)
+        return kidsFilterPage(TagRailPage(filtered, result.hasMore))
     }
 
     suspend fun searchCollection(query: String): List<TmdbSearchCollectionResult> {

@@ -210,6 +210,14 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         // repairs gaps after the TTL.
         loadBrowseCatalogCache()
 
+        // Kids Mode follows the ACTIVE profile: on every switch the browse
+        // browser swaps to (or from) the kid-focused chip set and any adult
+        // content still on screen is dropped, so a profile change can never
+        // leave a child staring at the previous profile's results.
+        com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile
+            .onEach { refreshKidsMode() }
+            .launchIn(viewModelScope)
+
         WatchStateBus.updates
             .onEach { (key, isWatched) ->
                 val current = _watchedKeys.value.toMutableSet()
@@ -507,13 +515,25 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
                 // Cap result counts so the list stays instantly scrollable
                 // even for very broad queries (e.g. one-letter searches).
+                // Kids Mode additionally certification-checks every title
+                // before it renders (search endpoints carry no rating),
+                // reusing the shared detail cache so repeat searches are
+                // cheap. The cap runs AFTER filtering so a strict profile
+                // still sees a full page of allowed hits.
+                val mergedTitles = mergeTitles(
+                    query = normalized,
+                    movies = tmdbMovies,
+                    tv = tmdbTv
+                )
                 _results.value =
-                    mergeTitles(
-                        query = normalized,
-                        movies = tmdbMovies,
-                        tv = tmdbTv
-                    )
-                        .take(MAX_TITLE_RESULTS)
+                    if (tmdbRepository.kidsMaxAge() == null) {
+                        mergedTitles.take(MAX_TITLE_RESULTS)
+                    } else {
+                        tmdbRepository.kidsFilterMetas(mergedTitles.map { it.meta })
+                            .toSet()
+                            .let { allowed -> mergedTitles.filter { it.meta in allowed } }
+                            .take(MAX_TITLE_RESULTS)
+                    }
                 _actorResults.value = personResults.distinctBy { it.id }.take(MAX_PERSON_RESULTS)
                 _studioResults.value = studioResults.distinctBy { it.id }.take(MAX_STUDIO_RESULTS)
                 _collectionResults.value = collectionResults.distinctBy { it.id }.take(MAX_COLLECTION_RESULTS)
@@ -546,6 +566,13 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         tmdbTvDeferred: Deferred<List<TmdbSearchTitleResult>>
     ) {
         addonSearchJob?.cancel()
+        // Kids Mode suppresses add-on rails entirely: third-party catalogs
+        // (AIOMetadata, AIOStreams, ...) carry no certification data, so
+        // their rails cannot be vetted against the profile's ceiling.
+        if (tmdbRepository.kidsMaxAge() != null) {
+            _addonResultGroups.value = emptyList()
+            return
+        }
         addonSearchJob = viewModelScope.launch {
             // The add-on probes start immediately now — they used to wait
             // for BOTH TMDB searches to finish before firing a single
@@ -1032,7 +1059,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                     !it.equals(q, ignoreCase = true)
             }
             .distinctBy { it.lowercase() }
-        val keywords = BROWSE_KEYWORD_NAMES
+        val keywords = activeKeywordNames()
             .filter { it.startsWith(lower) && !it.equals(q, ignoreCase = true) }
             .map { it.replaceFirstChar { c -> c.uppercase() } }
 
@@ -1060,6 +1087,65 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
     val browseCategories: StateFlow<List<BrowseCategory>> =
         _browseCategories.asStateFlow()
+
+    /**
+     * True while the ACTIVE profile is a kids profile (kidsMaxAge set).
+     * Drives the kid-focused browse chips, keyword suggestions, search
+     * certification filtering, and add-on rail suppression.
+     */
+    @Volatile
+    var isKidsMode: Boolean = false
+        private set
+
+    /** Chip name lists for the current mode (kids lists are strict subsets). */
+    private fun activeKeywordNames(): List<String> =
+        if (isKidsMode) KIDS_KEYWORD_NAMES else BROWSE_KEYWORD_NAMES
+
+    private fun activeCollectionNames(): List<String> =
+        if (isKidsMode) KIDS_COLLECTION_NAMES else BROWSE_COLLECTION_NAMES
+
+    private fun baseBrowseCategories(): List<BrowseCategory> =
+        if (isKidsMode) KIDS_BROWSE_CATEGORIES else BROWSE_CATEGORIES
+
+    /**
+     * Re-evaluate kids mode after a profile (or its kids setting) changed:
+     * swap the browse chip base and re-apply the profile-scoped disk cache
+     * onto it. Cached keyword/collection ids are keyed by NAME, and the
+     * kids name lists are strict subsets of the standard ones, so a cache
+     * resolved in either mode fully serves both — a mode flip never needs
+     * a second resolve pass.
+     */
+    private fun refreshKidsMode() {
+        val kids = com.kennyb1201.kbstream.data.sync.ProfileManager
+            .activeProfile.value?.kidsMaxAge != null
+        if (kids == isKidsMode) return
+        isKidsMode = kids
+
+        // Drop any in-flight results first: adult content from the previous
+        // profile must not survive into the kids view (or vice versa).
+        searchJob?.cancel()
+        addonSearchJob?.cancel()
+        _searchQuery.value = ""
+        _results.value = emptyList()
+        _actorResults.value = emptyList()
+        _studioResults.value = emptyList()
+        _collectionResults.value = emptyList()
+        _suggestions.value = emptyList()
+        _addonResultGroups.value = emptyList()
+        _isLoading.value = false
+        browseReturnChip = null
+        _selectedBrowseCategoryKey.value = null
+
+        browseCacheFresh = false
+        _browseCategories.value = baseBrowseCategories()
+        loadBrowseCatalogCache()
+
+        val needsResolve = !catalogResolveStarted && !browseCacheFresh
+        _browseSubmenuLoading.value = needsResolve
+        if (needsResolve) {
+            viewModelScope.launch { resolveCatalogEntries() }
+        }
+    }
 
     private val _browseSubmenuLoading =
         MutableStateFlow(false)
@@ -1168,6 +1254,9 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         if (catalogResolveStarted) return
         catalogResolveStarted = true
 
+        // Always resolve the STANDARD name lists: the kids chip lists are
+        // strict subsets, so a standard resolve serves both modes and a
+        // profile switch never needs a second resolve pass.
         val keywordEntries = coroutineScope {
             BROWSE_KEYWORD_NAMES.map { name ->
                 async {
@@ -1200,7 +1289,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             }.awaitAll().filterNotNull()
         }
 
-        _browseCategories.value = BROWSE_CATEGORIES.map { category ->
+        _browseCategories.value = baseBrowseCategories().map { category ->
             when (category.key) {
                 "keywords" -> category.copy(entries = keywordEntries)
                 "collections" -> category.copy(entries = collectionEntries)
@@ -1267,17 +1356,25 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             val ageOk =
                 savedAt > 0 && System.currentTimeMillis() - savedAt < BROWSE_CACHE_TTL_MS
             val keywordsComplete =
-                keywords.size * 10 >= BROWSE_KEYWORD_NAMES.size * 9
+                keywords.size * 10 >= activeKeywordNames().size * 9
             val collectionsComplete =
-                collections.size * 10 >= BROWSE_COLLECTION_NAMES.size * 9
+                collections.size * 10 >= activeCollectionNames().size * 9
             browseCacheFresh = ageOk && keywordsComplete && collectionsComplete
 
-            _browseCategories.value = BROWSE_CATEGORIES.map { category ->
+            // The cache is keyed by name; a mode flip re-filters it onto the
+            // active chip list (kids lists are strict subsets of the
+            // standard ones, so one cache serves both directions).
+            val activeKeywords = activeKeywordNames().toSet()
+            val activeCollections = activeCollectionNames().toSet()
+            val keywordsForMode = keywords.filter { it.name in activeKeywords }
+            val collectionsForMode = collections.filter { it.name in activeCollections }
+
+            _browseCategories.value = baseBrowseCategories().map { category ->
                 when (category.key) {
                     "keywords" ->
-                        category.copy(entries = keywords.ifEmpty { category.entries })
+                        category.copy(entries = keywordsForMode.ifEmpty { category.entries })
                     "collections" ->
-                        category.copy(entries = collections.ifEmpty { category.entries })
+                        category.copy(entries = collectionsForMode.ifEmpty { category.entries })
                     else -> category
                 }
             }

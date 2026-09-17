@@ -36,6 +36,10 @@ object ProfileManager {
         val customAvatarUrl: String? = null, // remote https URL (if ever used)
         val avatarData: String? = null,      // uploaded avatar as data:image/jpeg;base64 — syncs with the blob
         val pinHash: String? = null,         // SHA-256 of the 4-digit PIN; null = no lock
+        // Kids Mode ceiling: null = off. Non-null means the profile is a
+        // kids profile — discover/search/browse surfaces are kid-filtered.
+        // Set through [setKidsMaxAge] so the legal value set is enforced.
+        val kidsMaxAge: Int? = null,
         val createdAt: Long = System.currentTimeMillis()
     )
 
@@ -155,6 +159,31 @@ object ProfileManager {
         if (clean.isNotEmpty() && (clean.length != 4 || clean.any { !it.isDigit() })) return false
         val updated = loadProfiles(context).map { p ->
             if (p.id != profileId) p else p.copy(pinHash = clean.takeIf { it.isNotEmpty() }?.let { hashPin(it) })
+        }
+        saveProfiles(context, updated)
+        _profiles.value = updated
+        pushProfilesBlob(context, updated)
+        if (_activeProfile.value?.id == profileId) {
+            _activeProfile.value = updated.firstOrNull { it.id == profileId }
+        }
+        return true
+    }
+
+    /**
+     * Sets (or clears, null) a profile's Kids Mode rating ceiling. Only
+     * the three levels the profile builder offers are legal: PG-13/PG/G
+     * ("or lower"). Returns false on an unsupported value.
+     */
+    fun setKidsMaxAge(context: Context, profileId: String, kidsMaxAge: Int?): Boolean {
+        if (kidsMaxAge != null &&
+            kidsMaxAge != KidsMode.MAX_AGE_PG13 &&
+            kidsMaxAge != KidsMode.MAX_AGE_PG &&
+            kidsMaxAge != KidsMode.MAX_AGE_G
+        ) {
+            return false
+        }
+        val updated = loadProfiles(context).map { p ->
+            if (p.id != profileId) p else p.copy(kidsMaxAge = kidsMaxAge)
         }
         saveProfiles(context, updated)
         _profiles.value = updated
@@ -353,6 +382,7 @@ object ProfileManager {
                             put("avatarIndex", p.avatarIndex)
                             p.customAvatarUrl?.let { put("customAvatarUrl", it) }
                             p.avatarData?.let { put("avatarData", it) }
+                            p.kidsMaxAge?.let { put("kidsMaxAge", it) }
                             put("createdAt", p.createdAt)
                         }
                     )
@@ -434,6 +464,9 @@ object ProfileManager {
 
     const val AVATAR_COUNT = 8
 
+    /** Ceiling preselected when Kids Mode is first switched on (PG). */
+    const val KIDS_DEFAULT_MAX_AGE = KidsMode.MAX_AGE_PG
+
     // Avatar hue pairs (background, accent) for the 8 generic avatars.
     val AVATAR_COLORS: List<Pair<Long, Long>> = listOf(
         0xFFE8A33D to 0xFF1A1208L, // brass
@@ -460,6 +493,7 @@ object ProfileManager {
                 avatarIndex = (lng("avatarIndex") ?: 0L).toInt(),
                 customAvatarUrl = str("customAvatarUrl"),
                 avatarData = str("avatarData"),
+                kidsMaxAge = str("kidsMaxAge")?.toIntOrNull(),
                 createdAt = lng("createdAt") ?: 0L
             )
         }

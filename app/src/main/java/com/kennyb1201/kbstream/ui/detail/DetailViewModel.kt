@@ -13,6 +13,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
+import com.kennyb1201.kbstream.data.sync.KidsMode
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbCollectionDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
@@ -24,6 +25,7 @@ import com.kennyb1201.kbstream.data.trakt.TraktCommentsClient
 import com.kennyb1201.kbstream.data.omdb.OmdbClient
 import com.kennyb1201.kbstream.data.omdb.OmdbRatings
 import com.kennyb1201.kbstream.data.tmdb.TmdbSeasonSummary
+import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.async
@@ -328,6 +330,32 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 tmdbDetailResult.onSuccess { earlyDetail ->
                     if (earlyDetail != null && _tmdbDetail.value == null) {
                         _tmdbDetail.value = earlyDetail
+                    }
+                }
+
+                // Kids Mode gate: once the TMDB detail (with US
+                // certifications) is in hand, a kids profile may not open a
+                // title rated above its ceiling. Fails OPEN like every
+                // other surface: an unresolvable rating keeps the title
+                // unless the ceiling is strict (PG/G hides unknowns).
+                val ceiling = tmdbRepository.kidsMaxAge()
+                val gatedDetail = tmdbDetailResult.getOrNull()
+                if (ceiling != null && gatedDetail != null) {
+                    val isSeriesType = normalizedType == "series"
+                    if (!KidsMode.allowed(
+                            ceiling,
+                            gatedDetail.certification(isMovie = !isSeriesType)
+                        )
+                    ) {
+                        _meta.value = null
+                        _tmdbDetail.value = null
+                        _error.value =
+                            "This title isn't available on this profile."
+                        Log.i(
+                            "KBStream",
+                            "detail blocked by kids mode type=$normalizedType id=$id"
+                        )
+                        return@launch
                     }
                 }
 

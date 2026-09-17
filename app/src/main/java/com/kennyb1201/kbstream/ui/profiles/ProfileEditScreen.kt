@@ -46,6 +46,7 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import com.kennyb1201.kbstream.data.sync.KidsMode
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBTextField
@@ -100,6 +101,15 @@ fun ProfileEditScreen(
     var currentPinInput by remember(effectiveEditId) { mutableStateOf("") }
     var newPinInput by remember(effectiveEditId) { mutableStateOf("") }
     var confirmPinInput by remember(effectiveEditId) { mutableStateOf("") }
+    // Kids Mode: on/off toggle plus the chosen rating ceiling. The stored
+    // value only ever carries one of the three legal ceilings (PG-13 / PG
+    // / G "or lower"); OFF is null on the profile.
+    var kidsModeOn by remember(effectiveEditId) {
+        mutableStateOf(editing?.kidsMaxAge != null)
+    }
+    var kidsLevel by remember(effectiveEditId) {
+        mutableStateOf(editing?.kidsMaxAge ?: ProfileManager.KIDS_DEFAULT_MAX_AGE)
+    }
     // Tracks whether the custom photo is in effect; selecting a color tile
     // flips this off so a color choice actually replaces the photo on save.
     var useCustomAvatar by remember(effectiveEditId) {
@@ -233,6 +243,61 @@ fun ProfileEditScreen(
                 keyboardType = KeyboardType.NumberPassword,
                 visualTransformation = PasswordVisualTransformation(),
                 modifier = Modifier.weight(1f)
+            )
+        }
+
+        // ── Kids Mode ──────────────────────────────────────────────
+        Text(
+            text = "Kids Mode",
+            style = MaterialTheme.typography.titleMedium,
+            color = KBTextHi,
+            modifier = Modifier.padding(top = 24.dp)
+        )
+        Text(
+            text = if (kidsModeOn)
+                "Search, discover and home rails only show titles rated at or " +
+                    "below the chosen rating for this profile."
+            else
+                "Turn on to filter search and discover to kid-friendly content " +
+                    "with a maximum rating.",
+            color = KBTextLo,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = 2.dp)
+        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier
+                .padding(top = 10.dp)
+                .focusGroup()
+        ) {
+            ProfileChip(
+                label = "Off",
+                selected = !kidsModeOn,
+                onClick = { kidsModeOn = false }
+            )
+            ProfileChip(
+                label = "PG-13 & under",
+                selected = kidsModeOn && kidsLevel == KidsMode.MAX_AGE_PG13,
+                onClick = {
+                    kidsModeOn = true
+                    kidsLevel = KidsMode.MAX_AGE_PG13
+                }
+            )
+            ProfileChip(
+                label = "PG & under",
+                selected = kidsModeOn && kidsLevel == KidsMode.MAX_AGE_PG,
+                onClick = {
+                    kidsModeOn = true
+                    kidsLevel = KidsMode.MAX_AGE_PG
+                }
+            )
+            ProfileChip(
+                label = "G & under",
+                selected = kidsModeOn && kidsLevel == KidsMode.MAX_AGE_G,
+                onClick = {
+                    kidsModeOn = true
+                    kidsLevel = KidsMode.MAX_AGE_G
+                }
             )
         }
 
@@ -395,8 +460,10 @@ fun ProfileEditScreen(
                 }
                 // Precedence: typed URL > uploaded image > color/clear.
                 val typedUrl = avatarUrlInput.trim().takeIf { it.startsWith("http") }
+                val kidsTargetId: String?
                 if (editing == null) {
                     val created = ProfileManager.createAndMigrateLegacy(context, name, avatarIndex)
+                    kidsTargetId = created.id
                     when {
                         typedUrl != null ->
                             ProfileManager.finalizeAvatar(context, created.id, typedUrl)
@@ -404,6 +471,7 @@ fun ProfileEditScreen(
                             ProfileManager.finalizeAvatar(context, created.id, pendingAvatarUrl)
                     }
                 } else {
+                    kidsTargetId = editing.id
                     ProfileManager.rename(context, editing.id, name, avatarIndex)
                     when {
                         typedUrl != null ->
@@ -414,6 +482,14 @@ fun ProfileEditScreen(
                             (editing.customAvatarUrl != null || editing.avatarData != null) ->
                             ProfileManager.setCustomAvatar(context, editing.id, null)
                     }
+                }
+                // Apply Kids Mode after the profile itself is saved.
+                kidsTargetId?.let { id ->
+                    ProfileManager.setKidsMaxAge(
+                        context,
+                        id,
+                        if (kidsModeOn) kidsLevel else null
+                    )
                 }
                 // Apply the PIN after the profile itself is saved.
                 when {

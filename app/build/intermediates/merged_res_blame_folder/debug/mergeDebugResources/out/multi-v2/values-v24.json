@@ -1,10 +1,10 @@
 {
     "logs": [
         {
-            "outputFile": "com.kennyb1201.kbstream.app-mergeDebugResources-50:/values-v24/values-v24.xml",
+            "outputFile": "com.kennyb1201.kbstream.app-mergeDebugResources-2:/values-v24/values-v24.xml",
             "map": [
                 {
-                    "source": "/home/codespace/.gradle/caches/transforms-4/bda8d7659fa7167dc5d19a8ac46d953b/transformed/media-1.7.0/res/values-v24/values-v24.xml",
+                    "source": "/root/.gradle/caches/transforms-4/8ba007a247a1b8c637d19f72c352d248/transformed/media3-session-1.9.0/res/values-v24/values-v24.xml",
                     "from": {
                         "startLines": "2,3,4,5",
                         "startColumns": "4,4,4,4",
