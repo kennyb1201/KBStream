@@ -132,8 +132,10 @@ fun ProfilePickerScreen(
                     selected = active?.id == profile.id,
                     onClick = {
                         when {
-                            // Re-entering the same profile is a no-op.
-                            active?.id == profile.id -> Unit
+                            // Already-active profile: just enter the app —
+                            // re-running setActive would needlessly rebind
+                            // every singleton mid-session.
+                            active?.id == profile.id -> onSelect()
                             // Destination PIN gate takes priority (entering
                             // a PIN'd profile asks for THAT profile's code).
                             ProfileManager.hasPin(profile) -> {

@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -169,7 +171,9 @@ fun ProfileEditScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(KBVoid)
-            .padding(48.dp),
+            .padding(48.dp)
+            .verticalScroll(rememberScrollState())
+            .focusGroup(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         // Manage-mode header row: chips to pick which profile to edit or
