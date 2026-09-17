@@ -826,7 +826,13 @@ for (metaAddon in metaAddons) {
                     .maxWithOrNull(compareBy<Pair<Int, Int>> { it.first }.thenBy { it.second })
                     ?.first
 
-                listOfNotNull(latestLocal, latestSimkl).maxOrNull() ?: seasons.first()
+                val latestWatched =
+                    listOfNotNull(latestLocal, latestSimkl).maxOrNull() ?: seasons.first()
+
+                advancePastWatchedSeasons(
+                    startSeason = latestWatched,
+                    seasons = seasons
+                )
             }
         }
 
@@ -837,6 +843,71 @@ for (metaAddon in metaAddons) {
         // season, which is why episodes could show empty until the user
         // manually switched seasons.
         loadEpisodesForSeason(targetSeason)
+    }
+
+    /**
+     * When the "latest watched" season is already fully watched, a newly
+     * released season would never become the default target (the episode
+     * picker inside a finished season falls back to its episode 1): e.g. a
+     * show whose S2 just dropped opens S1E1 for users who finished S1.
+     * Instead, walk forward from the latest watched season and open the
+     * first RELEASED season that still has unwatched episodes - announced
+     * but unreleased seasons (future air_date) are skipped and can never
+     * become the default target.
+     */
+    private fun advancePastWatchedSeasons(
+        startSeason: Int,
+        seasons: List<Int>
+    ): Int {
+        val completedIds = _completedEpisodeIds.value
+        val watchedKeys = _watchedEpisodeKeys.value
+
+        fun isWatched(season: Int, episode: Int): Boolean =
+            computeEpisodeWatched(
+                parentId = imdbId,
+                season = season,
+                episode = episode,
+                episodeStreamId = null,
+                completedIds = completedIds,
+                watchedKeys = watchedKeys
+            )
+
+        fun isSeasonReleased(season: Int): Boolean {
+            val premiere = _tmdbDetail.value?.seasons
+                ?.firstOrNull { it.seasonNumber == season }
+                ?.airDate
+                ?: return true
+            return runCatching { java.time.LocalDate.parse(premiere) }
+                .map { !it.isAfter(java.time.LocalDate.now()) }
+                .getOrDefault(true)
+        }
+
+        fun seasonEpisodeNumbers(season: Int): List<Int> {
+            val summary = _tmdbDetail.value?.seasons
+                ?.firstOrNull { it.seasonNumber == season }
+                ?: return emptyList()
+            val count = summary.episodeCount ?: return emptyList()
+            return if (count > 0) (1..count).toList() else emptyList()
+        }
+
+        for (next in seasons.filter { it > startSeason }.sorted()) {
+            if (!isSeasonReleased(next)) continue
+
+            val eps = seasonEpisodeNumbers(next)
+            if (eps.isEmpty()) {
+                // No reliable episode list: opening the season directly is
+                // still better than replaying a finished one.
+                return next
+            }
+
+            if (eps.any { !isWatched(next, it) }) {
+                return next
+            }
+        }
+
+        // Everything after the watched season is either fully watched or
+        // unreleased: stay on the latest watched season.
+        return startSeason
     }
 
     /**
