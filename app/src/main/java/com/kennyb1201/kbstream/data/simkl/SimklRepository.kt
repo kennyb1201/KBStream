@@ -5,6 +5,7 @@ import android.util.Log
 import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheDao
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheEntity
+import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
@@ -97,6 +98,54 @@ class SimklRepository(
                     .getInstance(it)
                     .tmdbJsonCacheDao()
             }
+
+    // Scoped history DAO resolved per access so Continue Watching filtering
+    // sees the ACTIVE profile's completed episodes (same per-access
+    // rebinding pattern the other history consumers rely on).
+    private val scopedHistoryDao: WatchHistoryDao?
+        get() = context
+            ?.applicationContext
+            ?.let { appContext ->
+                runCatching {
+                    WatchHistoryDatabase
+                        .getInstanceScoped(appContext)
+                        .watchHistoryDao()
+                }.getOrNull()
+            }
+
+    /**
+     * True when the active profile's local history has a completed row for
+     * the given episode of a show. Accepts both id flavors local rows use
+     * (the raw imdb id and a "tmdb:<id>" parent). Failures read as false so
+     * a DB problem can never blank the Continue Watching rail.
+     */
+    private suspend fun localCompletedEpisodeExists(
+        parentIds: List<String>,
+        season: Int,
+        episode: Int
+    ): Boolean {
+
+        if (
+            parentIds.isEmpty()
+        ) {
+            return false
+        }
+
+        val dao =
+            scopedHistoryDao
+                ?: return false
+
+        return parentIds.any { parentId ->
+            runCatching {
+                dao
+                    .getCompletedForParent(parentId)
+                    .any { row ->
+                        row.season == season &&
+                            row.episode == episode
+                    }
+            }.getOrDefault(false)
+        }
+    }
 
     private val allShowsJsonAdapter:
         JsonAdapter<SimklAllShowsResponse> =
@@ -426,6 +475,23 @@ class SimklRepository(
                 }
                 Log.e("SIMKL_REPO", "pushWatchedMovie failed code=${response.code()} body=$errorText")
             } else {
+                // A fresh watched write invalidates the completed-movie
+                // snapshot and the Continue Watching feed so watched markers
+                // and the rail reflect the new state immediately.
+                cachedCompletedMovieKeys = null
+                cachedCompletedMovieKeysFetchedAt = 0L
+                clearContinueWatchingCache()
+
+                // Close any open playback session for the movie so the just-
+                // watched title can't resurface in Continue Watching at its
+                // pre-completion progress (e.g. "99% watched").
+                runCatching {
+                    deleteOpenPlaybackSessionsForWatched(
+                        parentId = imdbId,
+                        tmdbId = tmdbId
+                    )
+                }
+
                 Log.d("SIMKL_REPO", "pushWatchedMovie ok imdb=$imdbId")
             }
 
@@ -482,6 +548,23 @@ class SimklRepository(
                 }
                 Log.e("SIMKL_REPO", "pushWatchedShow failed code=${response.code()} body=$errorText")
             } else {
+                // A fresh watched write invalidates the cached show library
+                // and the Continue Watching feed so episode-watched filters
+                // and the rail reflect the new state immediately.
+                cachedAllShowItems = null
+                cachedAllShowItemsFetchedAt = 0L
+                clearContinueWatchingCache()
+
+                // Close any open playback sessions for the show so the just-
+                // watched title can't resurface in Continue Watching at its
+                // pre-completion progress (e.g. "99% watched").
+                runCatching {
+                    deleteOpenPlaybackSessionsForWatched(
+                        parentId = showImdbId,
+                        tmdbId = tmdbId
+                    )
+                }
+
                 Log.d("SIMKL_REPO", "pushWatchedShow ok show=$showImdbId")
             }
 
@@ -690,6 +773,25 @@ class SimklRepository(
                 }
                 Log.e("SIMKL_REPO", "pushWatchedEpisode failed code=${response.code()} body=$errorText")
             } else {
+                // A fresh watched write invalidates the cached show library
+                // and the Continue Watching feed so episode-watched filters
+                // and the rail reflect the new state immediately.
+                cachedAllShowItems = null
+                cachedAllShowItemsFetchedAt = 0L
+                clearContinueWatchingCache()
+
+                // Close the open playback session for this episode so the
+                // just-watched episode can't resurface in Continue Watching
+                // at its pre-completion progress (e.g. "99% watched").
+                runCatching {
+                    deleteOpenPlaybackSessionsForWatched(
+                        parentId = showImdbId,
+                        tmdbId = tmdbId,
+                        season = season,
+                        episode = episode
+                    )
+                }
+
                 Log.d("SIMKL_REPO", "pushWatchedEpisode ok show=$showImdbId s=$season e=$episode")
             }
 
@@ -764,9 +866,25 @@ class SimklRepository(
             } else {
                 // Drop the in-memory show snapshot so the next detail load
                 // re-fetches fresh per-episode state from Simkl instead of
-                // serving the pre-mark snapshot.
+                // serving the pre-mark snapshot, and drop the Continue
+                // Watching feed so any stale playback session for the just-
+                // marked episodes gets filtered (and deleted) on the next
+                // rail refresh instead of lingering at its old progress.
                 cachedAllShowItems = null
                 cachedAllShowItemsFetchedAt = 0L
+                clearContinueWatchingCache()
+
+                // Close open playback sessions for the marked episodes so
+                // they can't resurface in Continue Watching at their old
+                // progress.
+                runCatching {
+                    deleteOpenPlaybackSessionsForWatched(
+                        parentId = showImdbId,
+                        tmdbId = tmdbId,
+                        season = season,
+                        episodes = validEpisodes
+                    )
+                }
 
                 Log.d("SIMKL_REPO", "pushWatchedSeason ok show=$showImdbId s=$season eps=${validEpisodes.size}")
             }
@@ -1010,6 +1128,98 @@ class SimklRepository(
             Log.e(
                 "SIMKL_REPO",
                 "deletePlaybackSessionsForParent error: ${e.message}",
+                e
+            )
+            0
+        }
+    }
+
+    /**
+     * Deletes every open Simkl playback session for a title whose watched
+     * position has passed the given threshold. Called right after a title
+     * (or a specific episode of a show) is marked completed so the paused
+     * pre-completion session record can't keep resurfacing in Continue
+     * Watching at its old progress (e.g. "99% watched"). Returns the number
+     * of sessions removed. Failures are logged, never thrown.
+     */
+    suspend fun deleteOpenPlaybackSessionsForWatched(
+        parentId: String,
+        tmdbId: Int? = null,
+        season: Int? = null,
+        episode: Int? = null,
+        episodes: List<Int>? = null,
+        minProgress: Float = 95f
+    ): Int {
+
+        if (
+            !isConfigured() ||
+            !hasToken()
+        ) {
+            return 0
+        }
+
+        val ref =
+            parsePlaybackIds(parentId, tmdbId)
+                ?: return 0
+
+        val episodeSet =
+            episodes?.toSet()
+
+        return try {
+            val matchingSessions =
+                getPlaybackItems()
+                    .filter { item ->
+                        playbackItemMatchesParent(
+                            item = item,
+                            imdb = ref.imdb,
+                            tmdb = ref.tmdb,
+                            title = null
+                        ) &&
+                            // When specific episode(s) were completed, only
+                            // those episodes' sessions are stale; a paused
+                            // session on another episode must survive.
+                            when {
+                                episodeSet != null && season != null ->
+                                    item.episode?.season == season &&
+                                        item.episode?.episode
+                                            ?.let { it in episodeSet } == true
+
+                                season != null && episode != null ->
+                                    item.episode?.season == season &&
+                                        item.episode?.episode == episode
+
+                                else -> true
+                            }
+                    }
+                    .filter { item ->
+                        (item.progress ?: 0f) >= minProgress
+                    }
+
+            var removed = 0
+
+            matchingSessions.forEach { item ->
+                if (deletePlaybackSession(item.id)) {
+                    removed += 1
+                }
+            }
+
+            if (removed > 0) {
+                Log.d(
+                    "SIMKL_REPO",
+                    "deleteOpenPlaybackSessionsForWatched " +
+                        "parent=$parentId s=$season e=$episode removed=$removed"
+                )
+            }
+
+            removed
+        } catch (
+            e: kotlinx.coroutines.CancellationException
+        ) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(
+                "SIMKL_REPO",
+                "deleteOpenPlaybackSessionsForWatched error: ${e.message}",
                 e
             )
             0
@@ -2357,6 +2567,39 @@ class SimklRepository(
                                         it.isNotBlank()
                                     }
 
+                            // A paused session for a movie this profile has
+                            // already completed locally is a leftover record
+                            // (e.g. finished on another device). Drop it and
+                            // delete it server-side so the movie doesn't
+                            // linger in Continue Watching at its old
+                            // progress.
+                            val movieParentIds =
+                                listOfNotNull(
+                                    imdbId,
+                                    movie.ids?.tmdb?.let { "tmdb:$it" }
+                                )
+
+                            val movieLocallyCompleted =
+                                movieParentIds.any { parentId ->
+                                    runCatching {
+                                        scopedHistoryDao
+                                            ?.getCompletedForParent(parentId)
+                                            ?.isNotEmpty() == true
+                                    }.getOrDefault(false)
+                                }
+
+                            if (movieLocallyCompleted) {
+                                Log.d(
+                                    "SIMKL_REPO",
+                                    "continueWatching: dropping stale movie " +
+                                        "session movie=$simklId (completed locally)"
+                                )
+
+                                deletePlaybackSession(item.id)
+
+                                return@mapNotNull null
+                            }
+
                             SimklContinueWatchingItem(
                                 id =
                                     "movie-$simklId",
@@ -2444,9 +2687,71 @@ class SimklRepository(
                                         it.isNotBlank()
                                     }
 
-                            SimklContinueWatchingItem(
-                                id =
-                                    "show-$simklId",
+                            // Episode-level staleness: a paused playback
+                            // session for an episode that is ALREADY watched
+                            // — either marked watched on Simkl (the
+                            // completion synced a moment after the scrobble
+                            // stop, or the episode was finished on another
+                            // device) or completed locally on this profile —
+                            // is a leftover session record, not a resume
+                            // point. Drop it — and delete it server-side —
+                            // so Continue Watching doesn't show the episode
+                            // stuck at its pre-completion progress (e.g.
+                            // "99% watched") forever.
+                            val sessionSeason =
+                                item.episode
+                                    ?.season
+
+                            val sessionEpisode =
+                                item.episode
+                                    ?.episode
+
+                            if (
+                                sessionSeason != null &&
+                                sessionEpisode != null
+                            ) {
+                                val watchedEpisodes =
+                                    runCatching {
+                                        getWatchedEpisodesForShowByImdb(
+                                            imdbId = imdbId.orEmpty(),
+                                            tmdbId = show.ids?.tmdb
+                                        )
+                                    }
+                                        .getOrDefault(
+                                        emptySet()
+                                    )
+
+                            val locallyCompleted =
+                                localCompletedEpisodeExists(
+                                    parentIds = listOfNotNull(
+                                        imdbId,
+                                        show.ids?.tmdb?.let { "tmdb:$it" }
+                                    ),
+                                    season = sessionSeason,
+                                    episode = sessionEpisode
+                                )
+
+                            if (
+                                (sessionSeason to sessionEpisode) in watchedEpisodes ||
+                                locallyCompleted
+                            ) {
+                                Log.d(
+                                    "SIMKL_REPO",
+                                    "continueWatching: dropping stale session " +
+                                        "show=$simklId s=$sessionSeason e=$sessionEpisode " +
+                                        "(episode already watched: " +
+                                        if (locallyCompleted) "local)" else "simkl)"
+                                )
+
+                                deletePlaybackSession(item.id)
+
+                                return@mapNotNull null
+                            }
+                        }
+
+                        SimklContinueWatchingItem(
+                            id =
+                                "show-$simklId",
 
                                 playbackId =
                                     item.id,
