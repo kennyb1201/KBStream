@@ -113,6 +113,33 @@ fun ProfileEditScreen(
                 ?: ProfileManager.KIDS_DEFAULT_MAX_AGE
         )
     }
+    // Kids Mode option toggles (each only read when kids mode is on).
+    var kidsHideAddons by remember(effectiveEditId) {
+        mutableStateOf(editing?.kidsHideAddons ?: true)
+    }
+    var kidsLockLiveTv by remember(effectiveEditId) {
+        mutableStateOf(editing?.kidsLockLiveTv ?: true)
+    }
+    var kidsRequirePinToExit by remember(effectiveEditId) {
+        mutableStateOf(editing?.kidsRequirePinToExit ?: false)
+    }
+    var kidsDailyLimitHours by remember(effectiveEditId) {
+        // Stored as minutes; edited in whole hours (0 = no limit).
+        mutableStateOf((editing?.kidsDailyLimitMinutes ?: 0) / 60)
+    }
+    var kidsBedtime by remember(effectiveEditId) {
+        // Stored as minutes-after-midnight; edited as (hour, minute) on a
+        // 12h clock. 0 = no bedtime.
+        val mins = editing?.kidsBedtimeMinutes ?: 0
+        mutableStateOf(if (mins == 0) 21 else mins / 60)   // default 9 PM
+    }
+    var kidsBedtimeMinute by remember(effectiveEditId) {
+        val mins = editing?.kidsBedtimeMinutes ?: 0
+        mutableStateOf(if (mins == 0) 0 else mins % 60)
+    }
+    var kidsBedtimeOn by remember(effectiveEditId) {
+        mutableStateOf((editing?.kidsBedtimeMinutes ?: 0) > 0)
+    }
     // Tracks whether the custom photo is in effect; selecting a color tile
     // flips this off so a color choice actually replaces the photo on save.
     var useCustomAvatar by remember(effectiveEditId) {
@@ -300,6 +327,77 @@ fun ProfileEditScreen(
                 onClick = {
                     kidsModeOn = true
                     kidsLevel = KidsMode.CEIL_G
+                }
+            )
+        }
+
+        // ── Kids Mode options (visible only while Kids Mode is on) ──
+        if (kidsModeOn) {
+            Text(
+                text = "Kids Mode options",
+                style = MaterialTheme.typography.titleSmall,
+                color = KBTextLo,
+                modifier = Modifier.padding(top = 18.dp)
+            )
+
+            KidsOptionChipRow(
+                title = "Lock add-ons",
+                hint = "Hides the Add-ons screen for this profile so new " +
+                    "catalogs can't be installed.",
+                options = listOf("On" to true, "Off" to false),
+                selected = kidsHideAddons,
+                onSelect = { kidsHideAddons = it }
+            )
+            KidsOptionChipRow(
+                title = "Kid-safe Live TV",
+                hint = "Hides live TV channel groups that don't look " +
+                    "kid-focused (cartoons, family, kids).",
+                options = listOf("On" to true, "Off" to false),
+                selected = kidsLockLiveTv,
+                onSelect = { kidsLockLiveTv = it }
+            )
+            KidsOptionChipRow(
+                title = "PIN to leave profile",
+                hint = "Asks for this profile's PIN before switching to a " +
+                    "different profile. Requires a PIN below.",
+                options = listOf("On" to true, "Off" to false),
+                selected = kidsRequirePinToExit,
+                onSelect = { kidsRequirePinToExit = it }
+            )
+            KidsOptionChipRow(
+                title = "Daily watch limit",
+                hint = "Locks this profile once the daily watch time is " +
+                    "used up. A PIN unlocks it early.",
+                options = listOf(
+                    "Off" to 0,
+                    "1h" to 1,
+                    "2h" to 2,
+                    "3h" to 3,
+                    "4h" to 4
+                ),
+                selected = kidsDailyLimitHours,
+                onSelect = { kidsDailyLimitHours = it }
+            )
+            KidsOptionChipRow(
+                title = "Bedtime lock",
+                hint = "Locks this profile from bedtime until 4:00 AM. " +
+                    "A PIN unlocks it early.",
+                options = (0..11).map { h ->
+                    val label = when (h) {
+                        0 -> "Off"
+                        9 -> "9 PM"
+                        else -> "$h PM"
+                    }
+                    label to h
+                },
+                selected = if (kidsBedtimeOn) kidsBedtime else -1,
+                onSelect = { picked ->
+                    if (picked < 0) {
+                        kidsBedtimeOn = false
+                    } else {
+                        kidsBedtimeOn = true
+                        kidsBedtime = picked
+                    }
                 }
             )
         }
@@ -493,6 +591,18 @@ fun ProfileEditScreen(
                         id,
                         if (kidsModeOn) kidsLevel else null
                     )
+                    ProfileManager.setKidsOptions(
+                        context,
+                        id,
+                        hideAddons = kidsHideAddons,
+                        lockLiveTv = kidsLockLiveTv,
+                        requirePinToExit = kidsRequirePinToExit,
+                        dailyLimitMinutes = kidsDailyLimitHours * 60,
+                        bedtimeMinutes = if (kidsBedtimeOn) {
+                            val h = if (kidsBedtime == 0) 12 else kidsBedtime
+                            ((h + 12) % 24) * 60 + kidsBedtimeMinute
+                        } else 0
+                    )
                 }
                 // Apply the PIN after the profile itself is saved.
                 when {
@@ -548,7 +658,47 @@ fun ProfileEditScreen(
     }
 }
 
-/** Chip-style selector for the manage-mode "which profile" row. */
+/**
+ * One Kids Mode option: bold title, hint line, and a single-select chip
+ * row (generic over the option value type — booleans for toggles, Ints
+ * for the hour pickers).
+ */
+@Composable
+private fun <T> KidsOptionChipRow(
+    title: String,
+    hint: String,
+    options: List<Pair<String, T>>,
+    selected: T,
+    onSelect: (T) -> Unit
+) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.bodyLarge,
+        color = KBTextHi,
+        modifier = Modifier.padding(top = 12.dp)
+    )
+    Text(
+        text = hint,
+        style = MaterialTheme.typography.bodySmall,
+        color = KBTextLo
+    )
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier
+            .padding(top = 6.dp)
+            .focusGroup()
+    ) {
+        options.forEach { (label, value) ->
+            ProfileChip(
+                label = label,
+                selected = selected == value,
+                onClick = { onSelect(value) }
+            )
+        }
+    }
+}
+
+/** Chip-style selector used across the profile editor. */
 @Composable
 private fun ProfileChip(
     label: String,

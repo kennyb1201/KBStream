@@ -79,6 +79,12 @@ fun ProfilePickerScreen(
     var pinEntry by remember { mutableStateOf("") }
     var pinError by remember { mutableStateOf(false) }
 
+    // Kids Mode exit gate: what to do once the CURRENT profile's PIN is
+    // verified (switch to a target profile, or open Manage).
+    var exitGateAction by remember {
+        mutableStateOf<ExitGateAction?>(null)
+    }
+
     val firstRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) { firstRequester.requestFocus() }
 
@@ -109,6 +115,15 @@ fun ProfilePickerScreen(
                 // ring grows into scrollable space instead.
                 .padding(top = 40.dp, bottom = 12.dp)
         ) {
+            // Exit gate: when the CURRENTLY ACTIVE kids profile opts into
+            // "PIN to leave profile", leaving it (switching to any other
+            // profile, or opening Manage) first requires that profile's
+            // PIN. ExitGateAction records what to run after verification.
+            val exitGateActive = active?.let {
+                it.kidsMaxAge != null && it.kidsRequirePinToExit &&
+                    ProfileManager.hasPin(it)
+            } == true
+
             val tiles = profiles.map { profile ->
                 PickerTile(
                     name = profile.name,
@@ -116,13 +131,27 @@ fun ProfilePickerScreen(
                     customAvatarUrl = profile.customAvatarUrl ?: profile.avatarData,
                     selected = active?.id == profile.id,
                     onClick = {
-                        if (ProfileManager.hasPin(profile)) {
-                            pinTarget = profile
-                            pinEntry = ""
-                            pinError = false
-                        } else {
-                            ProfileManager.setActive(pickerContext, profile)
-                            onSelect()
+                        when {
+                            // Re-entering the same profile is a no-op.
+                            active?.id == profile.id -> Unit
+                            // Destination PIN gate takes priority (entering
+                            // a PIN'd profile asks for THAT profile's code).
+                            ProfileManager.hasPin(profile) -> {
+                                pinTarget = profile
+                                pinEntry = ""
+                                pinError = false
+                            }
+                            // Leaving a gated kids profile asks for ITS pin.
+                            exitGateActive -> {
+                                pinTarget = null
+                                exitGateAction = ExitGateAction.Switch(profile)
+                                pinEntry = ""
+                                pinError = false
+                            }
+                            else -> {
+                                ProfileManager.setActive(pickerContext, profile)
+                                onSelect()
+                            }
                         }
                     }
                 )
@@ -131,7 +160,16 @@ fun ProfilePickerScreen(
                 avatarIndex = -1,
                 customAvatarUrl = null,
                 selected = false,
-                onClick = onManage
+                onClick = {
+                    if (exitGateActive) {
+                        pinTarget = null
+                        exitGateAction = ExitGateAction.Manage
+                        pinEntry = ""
+                        pinError = false
+                    } else {
+                        onManage()
+                    }
+                }
             )
 
             tiles.chunked(PROFILES_PER_ROW).forEachIndexed { rowIndex, rowTiles ->
@@ -154,10 +192,18 @@ fun ProfilePickerScreen(
         }
     }
 
-    pinTarget?.let { pinProfile ->
+    // PIN dialog target: the DESTINATION profile (enter gate) when
+    // pinTarget is set, or the CURRENT profile (kids exit gate) when
+    // exitGateAction is set.
+    val pinDialogProfile = pinTarget
+        ?: exitGateAction?.let { active }
+
+    pinDialogProfile?.let { pinProfile ->
+        val isExitGate = exitGateAction != null && pinTarget == null
         androidx.compose.ui.window.Dialog(
             onDismissRequest = {
                 pinTarget = null
+                exitGateAction = null
                 pinEntry = ""
                 pinError = false
             }
@@ -177,7 +223,15 @@ fun ProfilePickerScreen(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Text("Enter PIN", color = KBTextLo, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    text = if (isExitGate) {
+                        "Enter this profile's PIN to leave it"
+                    } else {
+                        "Enter PIN"
+                    },
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodyMedium
+                )
                 KBTextField(
                     value = pinEntry,
                     onValueChange = {
@@ -198,6 +252,7 @@ fun ProfilePickerScreen(
                 KBCard(
                     onClick = {
                         pinTarget = null
+                        exitGateAction = null
                         pinEntry = ""
                         pinError = false
                     },
@@ -218,9 +273,29 @@ fun ProfilePickerScreen(
         LaunchedEffect(pinEntry, pinProfile) {
             if (pinEntry.length == 4) {
                 if (ProfileManager.verifyPin(pinProfile, pinEntry)) {
+                    val action = exitGateAction
+                    val wasExitGate = action != null && pinTarget == null
                     pinTarget = null
-                    ProfileManager.setActive(pickerContext, pinProfile)
-                    onSelect()
+                    exitGateAction = null
+                    pinEntry = ""
+                    pinError = false
+                    if (wasExitGate) {
+                        // Exit gate verified: run the held action (the
+                        // destination profile has no PIN of its own — that
+                        // case was routed to the enter gate above).
+                        when (action) {
+                            is ExitGateAction.Switch -> {
+                                ProfileManager.setActive(pickerContext, action.target)
+                                onSelect()
+                            }
+                            ExitGateAction.Manage -> onManage()
+                            null -> Unit
+                        }
+                    } else {
+                        // Enter gate verified: activate the destination.
+                        ProfileManager.setActive(pickerContext, pinProfile)
+                        onSelect()
+                    }
                 } else {
                     pinError = true
                     pinEntry = ""
@@ -228,6 +303,12 @@ fun ProfilePickerScreen(
             }
         }
     }
+}
+
+/** What to run after the CURRENT kids profile's exit PIN is verified. */
+private sealed class ExitGateAction {
+    data class Switch(val target: ProfileManager.Profile) : ExitGateAction()
+    object Manage : ExitGateAction()
 }
 
 private const val PROFILES_PER_ROW = 5

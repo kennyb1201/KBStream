@@ -236,13 +236,36 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         allChannels,
         _hiddenChannelIds
     ) { channels, hiddenIds ->
-        if (hiddenIds.isEmpty()) channels else channels.filterNot { it.channel.id in hiddenIds }
+        val base =
+            if (hiddenIds.isEmpty()) channels else channels.filterNot { it.channel.id in hiddenIds }
+        kidsFilterChannels(base)
     }.flowOn(Dispatchers.Default)
         .stateIn(
             viewModelScope,
             SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
             emptyList()
         )
+
+    /**
+     * Kids Mode Live TV filter (profile toggle "Kid-safe Live TV"). An
+     * M3U guide can't be rated, so when the active kids profile opts in,
+     * only channel groups that LOOK kid-focused survive — group titles
+     * are matched loosely (case, spaces, separators) against kid brand
+     * words. Groups with no recognizable kid signal are hidden: for a
+     * curated playlist a parent can turn the toggle off; for a random
+     * playlist the safe direction is hiding the unclassifiable.
+     */
+    private fun kidsFilterChannels(
+        channels: List<IptvChannelWithEpg>
+    ): List<IptvChannelWithEpg> {
+        val profile = com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value
+        if (profile?.kidsMaxAge == null || !profile.kidsLockLiveTv) return channels
+        return channels.filter { ch ->
+            val group = ch.channel.groupTitle?.trim().orEmpty()
+            val haystack = "${ch.channel.displayName} $group".lowercase()
+            KID_TV_SIGNALS.any { haystack.contains(it) }
+        }
+    }
 
     init {
         viewModelScope.launch {
@@ -817,6 +840,14 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private companion object {
         const val TAG = "IptvViewModel"
+
+        /** Substrings that mark a channel/group as plausibly kid-focused. */
+        val KID_TV_SIGNALS = listOf(
+            "kid", "child", "cartoon", "nick", "disney", "junior", "jr",
+            "baby", "toddler", "family", "boomerang", "poko", "sprout",
+            "animation", "anime kids", "cbeebies", "cbbc", "boing",
+            "milk", "minimax", "gulli", "toon", "peppa", "paw"
+        )
         const val PREFS_NAME = "iptv_prefs"
         const val KEY_PLAYLIST_URL = "playlist_url"
         const val KEY_EPG_URL = "epg_url"

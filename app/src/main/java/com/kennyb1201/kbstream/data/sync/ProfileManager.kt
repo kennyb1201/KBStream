@@ -40,6 +40,21 @@ object ProfileManager {
         // kids profile — discover/search/browse surfaces are kid-filtered.
         // Set through [setKidsMaxAge] so the legal value set is enforced.
         val kidsMaxAge: Int? = null,
+        // ── Kids Mode options (only read when kidsMaxAge != null) ──────
+        // Hide the Settings Add-ons entry so a kid cannot install/enable
+        // catalogs that carry no certification data. Default: locked.
+        val kidsHideAddons: Boolean = true,
+        // Live TV: show only channel groups that look kid-focused. The
+        // guide is impossible to certify, so the safe default is ON.
+        val kidsLockLiveTv: Boolean = true,
+        // Require THIS profile's PIN before switching away from it (a kid
+        // cannot hop into an unrestricted profile). Needs a PIN to matter.
+        val kidsRequirePinToExit: Boolean = false,
+        // Daily watch-time ceiling in minutes; 0 = no limit.
+        val kidsDailyLimitMinutes: Int = 0,
+        // Bedtime as minutes after midnight (e.g. 1260 = 9:00 PM);
+        // 0 = no bedtime. Locks the app from bedtime until 4:00 AM.
+        val kidsBedtimeMinutes: Int = 0,
         val createdAt: Long = System.currentTimeMillis()
     )
 
@@ -180,6 +195,38 @@ object ProfileManager {
         val normalized = KidsMode.normalize(kidsMaxAge)
         val updated = loadProfiles(context).map { p ->
             if (p.id != profileId) p else p.copy(kidsMaxAge = normalized)
+        }
+        saveProfiles(context, updated)
+        _profiles.value = updated
+        pushProfilesBlob(context, updated)
+        if (_activeProfile.value?.id == profileId) {
+            _activeProfile.value = updated.firstOrNull { it.id == profileId }
+        }
+        return true
+    }
+
+    /**
+     * Persists the five Kids Mode option toggles in one write. Each value
+     * is only honored when the profile has a kids ceiling, so stray writes
+     * for non-kids profiles are harmless (but still stored/synced).
+     */
+    fun setKidsOptions(
+        context: Context,
+        profileId: String,
+        hideAddons: Boolean,
+        lockLiveTv: Boolean,
+        requirePinToExit: Boolean,
+        dailyLimitMinutes: Int,
+        bedtimeMinutes: Int
+    ): Boolean {
+        val updated = loadProfiles(context).map { p ->
+            if (p.id != profileId) p else p.copy(
+                kidsHideAddons = hideAddons,
+                kidsLockLiveTv = lockLiveTv,
+                kidsRequirePinToExit = requirePinToExit,
+                kidsDailyLimitMinutes = dailyLimitMinutes.coerceIn(0, 24 * 60),
+                kidsBedtimeMinutes = bedtimeMinutes.coerceIn(0, 24 * 60 - 1)
+            )
         }
         saveProfiles(context, updated)
         _profiles.value = updated
@@ -399,6 +446,11 @@ object ProfileManager {
                             p.customAvatarUrl?.let { put("customAvatarUrl", it) }
                             p.avatarData?.let { put("avatarData", it) }
                             p.kidsMaxAge?.let { put("kidsMaxAge", it) }
+                            put("kidsHideAddons", p.kidsHideAddons)
+                            put("kidsLockLiveTv", p.kidsLockLiveTv)
+                            put("kidsRequirePinToExit", p.kidsRequirePinToExit)
+                            put("kidsDailyLimitMinutes", p.kidsDailyLimitMinutes)
+                            put("kidsBedtimeMinutes", p.kidsBedtimeMinutes)
                             put("createdAt", p.createdAt)
                         }
                     )
@@ -502,6 +554,8 @@ object ProfileManager {
             val obj = el as? kotlinx.serialization.json.JsonObject ?: return@mapNotNull null
             fun str(k: String) = (obj[k] as? JsonPrimitive)?.content
             fun lng(k: String) = str(k)?.toLongOrNull()
+            fun bool(k: String, default: Boolean) =
+                (obj[k] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() ?: default
             val id = str("id") ?: return@mapNotNull null
             Profile(
                 id = id,
@@ -510,6 +564,15 @@ object ProfileManager {
                 customAvatarUrl = str("customAvatarUrl"),
                 avatarData = str("avatarData"),
                 kidsMaxAge = KidsMode.normalize(str("kidsMaxAge")?.toIntOrNull()),
+                kidsHideAddons = bool("kidsHideAddons", default = true),
+                kidsLockLiveTv = bool("kidsLockLiveTv", default = true),
+                kidsRequirePinToExit = bool("kidsRequirePinToExit", default = false),
+                kidsDailyLimitMinutes =
+                    (str("kidsDailyLimitMinutes")?.toIntOrNull() ?: 0)
+                        .coerceIn(0, 24 * 60),
+                kidsBedtimeMinutes =
+                    (str("kidsBedtimeMinutes")?.toIntOrNull() ?: 0)
+                        .coerceIn(0, 24 * 60 - 1),
                 createdAt = lng("createdAt") ?: 0L
             )
         }

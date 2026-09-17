@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -60,6 +61,7 @@ import com.kennyb1201.kbstream.ui.actor.ActorScreen
 import com.kennyb1201.kbstream.ui.addons.AddonsScreen
 import com.kennyb1201.kbstream.ui.collection.CollectionScreen
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
 import com.kennyb1201.kbstream.ui.detail.DetailScreen
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
@@ -91,6 +93,7 @@ import com.kennyb1201.kbstream.ui.studio.StudioScreen
 import com.kennyb1201.kbstream.ui.tag.TagScreen
 import com.kennyb1201.kbstream.ui.theme.KBStreamTheme
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
@@ -684,6 +687,16 @@ private fun PulsingClearLogo(
 
 class MainActivity : ComponentActivity() {
 
+    override fun onStart() {
+        super.onStart()
+        com.kennyb1201.kbstream.data.sync.KidsTimeGuard.onAppStart()
+    }
+
+    override fun onStop() {
+        com.kennyb1201.kbstream.data.sync.KidsTimeGuard.onAppStop()
+        super.onStop()
+    }
+
     /// Latched by the exit dialog: while true, every key event is consumed
     /// here at the Activity level for a short settle window before
     /// finishAndRemoveTask() runs. Without this, stray key events from the
@@ -724,6 +737,10 @@ class MainActivity : ComponentActivity() {
         // AMOLED only "kicked in" after visiting Settings, whose own read
         // then mirrored the correct scoped value into the live theme state.
         com.kennyb1201.kbstream.data.sync.ProfileManager.init(applicationContext)
+
+        // Kids Mode time guard: owns daily-limit/bedtime tracking and the
+        // lock overlay state. Lifecycle callbacks below drive accumulation.
+        com.kennyb1201.kbstream.data.sync.KidsTimeGuard.start(applicationContext)
 
         setContent {
             // Sync the AMOLED toggle into the theme's live state BEFORE the
@@ -1010,6 +1027,12 @@ fun AppRoot() {
         }
     }
 
+    // Kids Mode time lock: a full-screen overlay that covers every screen
+    // (home, player, settings) while the active kids profile's daily limit
+    // is spent or the bedtime window is active. A parent can enter the
+    // profile's PIN to unlock for this session.
+    KidsTimeLockOverlay()
+
     // The exit prompt sits before the onboarding early-return so Back is also
     // confirmed while the onboarding guide stands in for Home.
     if (confirmExit) {
@@ -1169,7 +1192,18 @@ fun AppRoot() {
         is Screen.Settings -> {
             SettingsScreen(
                 onBack = { screen = Screen.Home },
-                onOpenAddons = { screen = Screen.Addons },
+                onOpenAddons = {
+                    // Kids Mode "Lock add-ons": a kids profile with the
+                    // lock on cannot reach addon management (defense in
+                    // depth alongside the hidden Settings row).
+                    val active =
+                        com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value
+                    if (active?.kidsMaxAge != null && active.kidsHideAddons) {
+                        screen = Screen.Home
+                    } else {
+                        screen = Screen.Addons
+                    }
+                },
                 onOpenSimkl = { screen = Screen.Simkl },
                 onOpenProfiles = {
                     screen = Screen.ProfileEdit(returnTo = Screen.Settings)
@@ -2024,6 +2058,104 @@ fun AppRoot() {
             }
         }
     }
+    }
+}
+
+@Composable
+private fun KidsTimeLockOverlay() {
+    val guard = com.kennyb1201.kbstream.data.sync.KidsTimeGuard
+    val lockState by guard.state.collectAsState()
+
+    val profile = com.kennyb1201.kbstream.data.sync.ProfileManager.profiles
+        .collectAsState().value
+        .firstOrNull { it.id == lockState.profileId }
+
+    var pin by remember(lockState.profileId) { mutableStateOf("") }
+    var pinError by remember(lockState.profileId) { mutableStateOf(false) }
+
+    if (!lockState.locked) return
+
+    LaunchedEffect(pin, profile) {
+        if (pin.length == 4 && profile != null) {
+            if (guard.overrideForSession(profile, pin)) {
+                pin = ""
+                pinError = false
+            } else {
+                pinError = true
+                pin = ""
+            }
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(KBVoid.copy(alpha = 0.97f))
+    ) {
+        Column(
+            modifier = Modifier.align(Alignment.Center),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = when (lockState.reason) {
+                    com.kennyb1201.kbstream.data.sync.KidsTimeGuard.LockState.Reason.BEDTIME ->
+                        "TIME FOR BED"
+                    else -> "WATCH TIME IS DONE"
+                },
+                color = KBAccent,
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = when (lockState.reason) {
+                    com.kennyb1201.kbstream.data.sync.KidsTimeGuard.LockState.Reason.BEDTIME ->
+                        "${lockState.profileName ?: "This profile"} is resting until 4:00 AM."
+                    else ->
+                        "${lockState.profileName ?: "This profile"} used its " +
+                            "${lockState.dailyLimitMinutes} min today. Come back tomorrow!"
+                },
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.padding(top = 10.dp)
+            )
+
+            if (profile != null &&
+                com.kennyb1201.kbstream.data.sync.ProfileManager.hasPin(profile)
+            ) {
+                Text(
+                    text = "Parent PIN to unlock",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 26.dp)
+                )
+                KBTextField(
+                    value = pin,
+                    onValueChange = {
+                        pin = it.filter(Char::isDigit).take(4)
+                        pinError = false
+                    },
+                    placeholder = "••••",
+                    keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword,
+                    visualTransformation =
+                        androidx.compose.ui.text.input.PasswordVisualTransformation()
+                )
+                if (pinError) {
+                    Text(
+                        text = "Wrong PIN — try again",
+                        color = KBDanger,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                }
+            } else {
+                Text(
+                    text = "A parent can remove the limit in profile settings.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 26.dp)
+                )
+            }
+        }
     }
 }
 

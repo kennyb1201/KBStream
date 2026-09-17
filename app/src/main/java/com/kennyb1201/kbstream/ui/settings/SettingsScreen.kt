@@ -215,11 +215,20 @@ fun SettingsScreen(
                         onClick = onOpenProfiles
                     )
 
-                    NavigationRow(
-                        label = "Add-ons",
-                        description = "Manage add-ons, import collections, and arrange the home screen",
-                        onClick = onOpenAddons
-                    )
+                    // Kids Mode "Lock add-ons": hide the management entry
+                    // entirely. The deep-link path is gated in MainActivity;
+                    // this hides the visible door.
+                    val profile = com.kennyb1201.kbstream.data.sync.ProfileManager
+                        .activeProfile.value
+                    val kidsAddonLock =
+                        profile?.kidsMaxAge != null && profile.kidsHideAddons
+                    if (!kidsAddonLock) {
+                        NavigationRow(
+                            label = "Add-ons",
+                            description = "Manage add-ons, import collections, and arrange the home screen",
+                            onClick = onOpenAddons
+                        )
+                    }
 
                     NavigationRow(
                         label = "Simkl",
