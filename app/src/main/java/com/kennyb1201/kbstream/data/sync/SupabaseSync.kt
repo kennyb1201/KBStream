@@ -59,6 +59,17 @@ object SupabaseSync {
 
     private const val TAG = "SUPABASE_SYNC"
 
+    // Session-restore retry: a TV box is often still offline for the first
+    // seconds after boot / an app-update restart. Transient refresh failures
+    // are retried with exponential backoff so the saved session signs back
+    // in automatically instead of leaving the user manually re-authing.
+    @Volatile
+    private var restoreAttempts = 0
+
+    private const val MAX_RESTORE_ATTEMPTS = 5
+    private const val RESTORE_RETRY_BASE_MS = 15_000L
+    private const val RESTORE_RETRY_MAX_MS = 120_000L
+
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
@@ -148,6 +159,8 @@ object SupabaseSync {
                         startRealtime()
                         startPeriodicFlush()
                         pullAll(context)
+
+                        restoreAttempts = 0
                     }.onFailure { e ->
                         // Only a HARD rejection means the token is truly
                         // dead (revoked, password changed, or reuse
@@ -172,12 +185,37 @@ object SupabaseSync {
                                 msg.contains("server error") ||
                                 msg.contains("http 5")
                         if (transient) {
-                            Log.w(
-                                TAG,
-                                "session restore transient failure " +
-                                    "(keeping token for retry): ${e.message}"
-                            )
-                            _authState.value = AuthState.SignedOut
+                            // Offline at launch (TV boots before its network
+                            // is up, or the update restart raced the Wi-Fi).
+                            // The token is kept, so schedule automatic retries
+                            // with backoff — no manual sign-in needed. Success
+                            // or a hard rejection stops the loop.
+                            if (restoreAttempts < MAX_RESTORE_ATTEMPTS) {
+                                restoreAttempts += 1
+                                val backoffMs = minOf(
+                                    RESTORE_RETRY_BASE_MS shl (restoreAttempts - 1),
+                                    RESTORE_RETRY_MAX_MS
+                                )
+                                Log.w(
+                                    TAG,
+                                    "session restore transient failure " +
+                                        "(attempt $restoreAttempts/$MAX_RESTORE_ATTEMPTS, " +
+                                        "retrying in ${backoffMs / 1000}s): ${e.message}"
+                                )
+                                _authState.value = AuthState.SignedOut
+                                scope.launch {
+                                    delay(backoffMs)
+                                    restoreSession(context)
+                                }
+                            } else {
+                                Log.w(
+                                    TAG,
+                                    "session restore gave up after $restoreAttempts " +
+                                        "transient failures (token kept for next launch)"
+                                )
+                                restoreAttempts = 0
+                                _authState.value = AuthState.SignedOut
+                            }
                         } else {
                             Log.w(TAG, "session restore failed: ${e.message}")
                             context.getSharedPreferences(SYNC_PREFS, Context.MODE_PRIVATE)
