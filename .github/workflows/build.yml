@@ -50,6 +50,21 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      # Unit-test gate: run the JVM tests (KidsMode rating matrix, kids
+      # catalog invariants) BEFORE spending time on the APK builds. A
+      # red test fails the workflow with the HTML report attached.
+      - name: Run unit tests
+        run: ./gradlew testDebugUnitTest --stacktrace
+        env:
+          GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
+
+      - name: Upload test report (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report
+          path: app/build/reports/tests/testDebugUnitTest/
+
       - name: Build debug APK
         run: ./gradlew assembleDebug --stacktrace
         env:

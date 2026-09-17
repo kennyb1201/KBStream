@@ -204,5 +204,8 @@ implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.26.4")
 
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.4")
 
+    // JVM unit tests (KidsMode rating matrix, catalog invariants).
+    testImplementation("junit:junit:4.13.2")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
