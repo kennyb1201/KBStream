@@ -362,6 +362,29 @@ fun DetailScreen(
             .sortedWith(compareBy({ it == 0 }, { it }))
     }
 
+    // Seasons TMDB lists with a future air_date are announced but not yet
+    // released (e.g. Silo S4). Keep their premiere dates so the UI can dim
+    // those chips and explain why the episode list is empty instead of a
+    // bare "No episodes found for this season."
+    val today = remember { LocalDate.now() }
+    val seasonPremiereDates = remember(tmdbDetail) {
+        tmdbDetail?.seasons.orEmpty()
+            .mapNotNull { season ->
+                val raw = season.airDate ?: return@mapNotNull null
+                val date = runCatching { LocalDate.parse(raw) }.getOrNull()
+                    ?: return@mapNotNull null
+                season.seasonNumber to date
+            }
+            .toMap()
+    }
+
+    fun seasonUnavailable(season: Int): Boolean =
+        seasonPremiereDates[season]?.isAfter(today) == true
+
+    val premiereDateFormatter = remember {
+        DateTimeFormatter.ofPattern("MMMM d, yyyy", Locale.getDefault())
+    }
+
     val movieDetailsFocusRequester = remember { FocusRequester() }
     val playButtonFocusRequester = remember { FocusRequester() }
 
@@ -381,7 +404,7 @@ fun DetailScreen(
                 ?: initialTarget?.season?.takeIf { it in seasons }
                 ?: resumeInfo?.season?.takeIf { it in seasons }
                 ?: vmLoadedSeason?.takeIf { it in seasons }
-                ?: seasons.firstOrNull().takeIf { !isLoading }
+                ?: seasons.firstOrNull { !seasonUnavailable(it) }.takeIf { !isLoading }
         }
     }
 
@@ -1575,6 +1598,8 @@ fun DetailScreen(
                             item(key = "seasonrow") {
                                 SeasonRow(
                                     seasons = seasons,
+                                    seasonPremiereDates = seasonPremiereDates,
+                                    today = today,
                                     currentSelectedSeason =
                                         effectiveSeason,
                                     onSeasonSelected = {
@@ -1648,6 +1673,27 @@ fun DetailScreen(
                                             message =
                                                 "Couldn't load episodes: $episodeError"
                                         )
+                                    }
+                                }
+
+                                effectiveSeason != null &&
+                                    seasonUnavailable(effectiveSeason) -> {
+                                    // Announced-but-unreleased season: TMDB still returns a
+                                    // placeholder episode row for these, so intercept BEFORE the
+                                    // episode list renders and explain with the premiere date.
+                                    item(
+                                        key = "seasonunavailable"
+                                    ) {
+                                        val premiere =
+                                            seasonPremiereDates[effectiveSeason]
+                                        if (premiere != null) {
+                                            EpisodesStatusMessage(
+                                                icon = "📅",
+                                                message = "Season $effectiveSeason airs soon — premieres " +
+                                                    premiere.format(premiereDateFormatter) +
+                                                    ". Episodes will appear here once they're released."
+                                            )
+                                        }
                                     }
                                 }
 
@@ -3047,6 +3093,7 @@ private fun SeasonChip(
     seasonNumber: Int,
     seasonName: String,
     isSelected: Boolean,
+    available: Boolean = true,
     onClick: () -> Unit,
     onFocus: () -> Unit,
     onLongClick: (() -> Unit)? = null,
@@ -3068,7 +3115,12 @@ private fun SeasonChip(
                 text = seasonName,
                 style = MaterialTheme.typography.bodyMedium,
                 color =
-                    if (isSelected) KBAccent else KBTextHi,
+                    when {
+                        isSelected -> KBAccent
+                        // Dimmed label for announced-but-not-yet-released
+                        // seasons (their premiere year is in the chip text).
+                        else -> if (available) KBTextHi else KBTextLo
+                    },
                 fontWeight =
                     if (isSelected) {
                         FontWeight.SemiBold
@@ -3106,6 +3158,8 @@ private fun SeasonChip(
 @Composable
 private fun SeasonRow(
     seasons: List<Int>,
+    seasonPremiereDates: Map<Int, LocalDate>,
+    today: LocalDate,
     currentSelectedSeason: Int?,
     onSeasonSelected: (Int) -> Unit,
     onSeasonFocused: (Int) -> Unit,
@@ -3139,6 +3193,12 @@ private fun SeasonRow(
             val selected =
                 season == currentSelectedSeason
 
+            val seasonPremiere =
+                seasonPremiereDates[season]
+
+            val seasonUnavailable =
+                seasonPremiere?.isAfter(today) == true
+
             val chipFocusRequester =
                 remember(season) {
                     FocusRequester()
@@ -3149,10 +3209,10 @@ private fun SeasonRow(
             ] = chipFocusRequester
 
             val seasonName =
-                if (season == 0) {
-                    "SPECIALS"
-                } else {
-                    "SEASON $season"
+                when {
+                    season == 0 -> "SPECIALS"
+                    seasonUnavailable -> "SEASON $season \u00b7 ${seasonPremiere?.year}"
+                    else -> "SEASON $season"
                 }
 
             val episodeNumbers =
@@ -3184,26 +3244,33 @@ private fun SeasonRow(
                 seasonNumber = season,
                 seasonName = seasonName,
                 isSelected = selected,
+                available = !seasonUnavailable,
                 onClick = {
                     onSeasonSelected(season)
                 },
                 onFocus = {
                     onSeasonFocused(season)
                 },
-                onLongClick = {
-                    val numbers =
-                        episodeNumbers
-                            ?: (1..(watchedSet
-                                .maxOrNull()
-                                ?: 0)
-                                .coerceAtLeast(1))
-                                .toList()
-                    onSeasonLongPress(
-                        season,
-                        seasonName,
-                        numbers,
-                        chipFocusRequester
-                    )
+                onLongClick = if (seasonUnavailable) {
+                    // No episodes to mark yet - hide the watch-menu gesture
+                    // on not-yet-released seasons.
+                    null
+                } else {
+                    {
+                        val numbers =
+                            episodeNumbers
+                                ?: (1..(watchedSet
+                                    .maxOrNull()
+                                    ?: 0)
+                                    .coerceAtLeast(1))
+                                    .toList()
+                        onSeasonLongPress(
+                            season,
+                            seasonName,
+                            numbers,
+                            chipFocusRequester
+                        )
+                    }
                 },
                 modifier = Modifier
                     .padding(end = 8.dp)

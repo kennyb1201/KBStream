@@ -114,7 +114,12 @@ data class TmdbRecommendations(
 data class TmdbSeasonSummary(
     @Json(name = "season_number") val seasonNumber: Int,
     val name: String? = null,
-    @Json(name = "episode_count") val episodeCount: Int? = null
+    @Json(name = "episode_count") val episodeCount: Int? = null,
+    // Premiere date of the season ("yyyy-MM-dd"). Seasons whose air_date is
+    // in the future are announced-but-unreleased (e.g. Silo S4); the detail
+    // screen dims their chips and shows a "Premieres <date>" note instead of
+    // an empty episode list.
+    @Json(name = "air_date") val airDate: String? = null
 )
 
 @JsonClass(generateAdapter = true)
