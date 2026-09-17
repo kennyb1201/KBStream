@@ -61,3 +61,14 @@
 # SLF4J 1.x runtime bindings (logback etc.). No Android build ever ships
 # them, and Ktor's Android engine never touches this code path at runtime.
 -dontwarn org.slf4j.**
+
+# --- Strip verbose/debug logs from release ---
+# R8 removes Log.v/Log.d call sites entirely in minified builds: zero
+# logcat noise and no viewing-behavior breadcrumbs in shipped APKs.
+# Log.i/w/e stay — they carry genuine runtime diagnostics.
+-assumenosideeffects class android.util.Log {
+    public static int v(java.lang.String, java.lang.String);
+    public static int d(java.lang.String, java.lang.String);
+    public static int v(java.lang.String, java.lang.String, java.lang.Throwable);
+    public static int d(java.lang.String, java.lang.String, java.lang.Throwable);
+}

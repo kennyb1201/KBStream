@@ -127,10 +127,6 @@ class TmdbRepository(context: Context) {
     private var movieGenresCache: List<TmdbGenre>? = null
     private var tvGenresCache: List<TmdbGenre>? = null
 
-    private var trendingCache:
-        Pair<Long, List<Pair<String, TmdbSearchTitleResult>>>? =
-        null
-
     private val cachePruned = AtomicBoolean(false)
     private val jsonCachePruned = AtomicBoolean(false)
 
@@ -386,44 +382,6 @@ class TmdbRepository(context: Context) {
         if (apiKey.isBlank()) return emptyList()
         return runCatching { api.searchTv(query, apiKey).results }
             .getOrDefault(emptyList())
-    }
-
-    /*
-     * Weekly trending titles for the search screen's idle state. Tagged with
-     * the type ("movie"/"series") since trending/movie and trending/tv don't
-     * reliably carry media_type on every result. Memory-cached briefly so the
-     * idle state doesn't re-hit TMDB on every screen visit.
-     */
-    suspend fun getTrendingTitles(): List<Pair<String, TmdbSearchTitleResult>> {
-        if (apiKey.isBlank()) return emptyList()
-
-        val now = System.currentTimeMillis()
-        trendingCache?.let { (fetchedAt, items) ->
-            if (now - fetchedAt < TRENDING_CACHE_TTL_MS) {
-                return items
-            }
-        }
-
-        val movies = runCatching { api.getTrendingMovies(apiKey).results }
-            .getOrDefault(emptyList())
-        val tv = runCatching { api.getTrendingTv(apiKey).results }
-            .getOrDefault(emptyList())
-
-        val merged = movies.map { "movie" to it } + tv.map { "series" to it }
-
-        val filtered =
-            if (isDigitalFilterEnabled()) {
-                filterByHomeAvailability(merged) {
-                    it.second.id to it.first
-                }
-            } else {
-                merged
-            }
-
-        // Cache the unfiltered list: trending is shared across screens, and
-        // each consumer re-checks the toggle cheaply.
-        trendingCache = now to merged
-        return filtered
     }
 
     suspend fun getMovieGenres(): List<TmdbGenre> {
@@ -774,61 +732,6 @@ class TmdbRepository(context: Context) {
     suspend fun getByCompany(companyId: Int): List<StudioSection> =
         getInitialCompanySections(companyId)
 
-    suspend fun getHomeRails(): List<StudioSection> {
-        if (apiKey.isBlank()) return emptyList()
-
-        suspend fun toItems(
-            fetch: suspend () -> TmdbDiscoverResponse,
-            mediaType: String
-        ): List<StudioItem> =
-            runCatching { fetch().results }
-                .getOrDefault(emptyList())
-                .map { StudioItem(it, mediaType) }
-
-        return listOf(
-            StudioSection("TRENDING NOW", toItems({ api.getTrending(apiKey) }, "movie")),
-            StudioSection("POPULAR MOVIES", toItems({ api.getPopularMovies(apiKey) }, "movie")),
-            StudioSection("POPULAR SERIES", toItems({ api.getPopularTv(apiKey) }, "series")),
-            // "Most voted", not TMDB's /top_rated endpoints: those sort by
-            // vote AVERAGE and surface obscure 10-vote 10/10 titles (heavily
-            // anime). vote_count.desc with a floor is what people expect from
-            // a "Top Rated" rail.
-            StudioSection(
-                "TOP RATED MOVIES",
-                toItems(
-                    {
-                        discoverNuvio(
-                            mediaType = "movie",
-                            sortBy = "vote_count.desc",
-                            filters = com.kennyb1201.kbstream.data.nuvio.NuvioFilters(
-                                voteCountGte = minTopRatedVoteCount,
-                                releaseDateLte = today
-                            )
-                        )?.let { TmdbDiscoverResponse(results = it) }
-                            ?: TmdbDiscoverResponse()
-                    },
-                    "movie"
-                )
-            ),
-            StudioSection(
-                "TOP RATED SERIES",
-                toItems(
-                    {
-                        discoverNuvio(
-                            mediaType = "tv",
-                            sortBy = "vote_count.desc",
-                            filters = com.kennyb1201.kbstream.data.nuvio.NuvioFilters(
-                                voteCountGte = minTopRatedVoteCount,
-                                releaseDateLte = today
-                            )
-                        )?.let { TmdbDiscoverResponse(results = it) }
-                            ?: TmdbDiscoverResponse()
-                    },
-                    "series"
-                )
-            )
-        ).filter { it.items.isNotEmpty() }
-    }
 
     // The six rail fetches used to run serially, making screen load time
     // the SUM of all round-trips. In parallel it is just the slowest one
@@ -1825,6 +1728,5 @@ class TmdbRepository(context: Context) {
         const val POSTER_BASE = "https://image.tmdb.org/t/p/w500"
         const val LOGO_BASE = "https://image.tmdb.org/t/p/original"
         private const val MAX_IMDB_DISK_AGE_MS = 90L * 24L * 60L * 60L * 1000L
-        private const val TRENDING_CACHE_TTL_MS = 30L * 60L * 1000L
     }
 }
