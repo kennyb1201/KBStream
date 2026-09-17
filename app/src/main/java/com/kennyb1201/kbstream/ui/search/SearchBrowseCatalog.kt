@@ -336,7 +336,31 @@ val BROWSE_KEYWORD_NAMES = listOf(
     "surfing",
     "skateboarding",
     "gymnastics",
-    "olympics"
+    "olympics",
+    // Fourth wave (2026-09) — all-ages/family keywords, every name
+    // verified to resolve EXACTLY via /search/keyword with real discover
+    // depth ("soccer" does not resolve; "toys" has only 9 movies — use
+    // "toy"). Doubles as the source pool for the kids list below.
+    "fairy",
+    "unicorn",
+    "pony",
+    "puppy",
+    "kitten",
+    "zoo",
+    "toy",
+    "birthday",
+    "baking",
+    "vacation",
+    "summer vacation",
+    "baseball",
+    "basketball",
+    "swimming",
+    "treasure hunt",
+    "magic",
+    "santa claus",
+    "puppet",
+    "bicycle",
+    "sleepover"
 )
 
 // ---------------------------------------------------------------------------
@@ -907,7 +931,24 @@ val BROWSE_COLLECTION_NAMES = listOf(
     "Star Trek: The Next Generation Collection",
     "Star Trek: Alternate Reality Collection",
     "Prometheus Collection",
-    "AVP Collection"
+    "AVP Collection",
+    // Fourth wave (2026-09) — family franchises, every name verified to
+    // resolve EXACTLY via /search/collection; misses were skipped (e.g.
+    // "The Smurfs Collection" only resolves to '(Animated)', "PAW Patrol
+    // Collection" to '(Theatrical)', "Night at the Museum Collection"
+    // resolves to a creation-museum page — all left out).
+    "The Land Before Time Collection",
+    "Alvin and the Chipmunks Collection",
+    "The Secret Life of Pets Collection",
+    "Hotel Transylvania Collection",
+    "Cloudy with a Chance of Meatballs Collection",
+    "Paddington Collection",
+    "Diary of a Wimpy Kid Collection",
+    "Scooby-Doo Collection",
+    "The LEGO Movie Collection", // TMDB canonical: 'The Lego Movie Collection'
+    "The Boss Baby Collection",
+    "The Croods Collection",
+    "Sing Collection"
 )
 
 /**
@@ -967,7 +1008,12 @@ val KIDS_GENRES: List<BrowseEntry> = BROWSE_GENRES.filter { it.id in setOf(
  * Kid-focused streaming services and networks: all-ages and family
  * slates only (kid brands, animation studios' streamers, family cable).
  * providers/network ids follow the same verified-id conventions as
- * BROWSE_SERVICES / BROWSE_NETWORKS above.
+ * BROWSE_SERVICES / BROWSE_NETWORKS above. All ids re-verified live
+ * against TMDB (2026-09): PBS Kids is network 122 (14 is plain PBS with
+ * an adult slate), Universal Kids is network 2133 (1279 is an unrelated
+ * company), TeenNick is network 234 (159 resolves to Indian StarPlus),
+ * and Nick Jr. (35) / Nicktoons (224) were probed in via their flagship
+ * shows.
  */
 val KIDS_SERVICES: List<BrowseService> = listOf(
     BrowseService(
@@ -990,9 +1036,9 @@ val KIDS_SERVICES: List<BrowseService> = listOf(
         networkIsCompany = false
     ),
     BrowseService(
-        "PBS KIDS / Family",
+        "PBS Kids",
         providerId = null,
-        networkOrCompanyId = 14,
+        networkOrCompanyId = 122, // TMDB 'PBS Kids' — 14 is plain PBS (adult slate)
         networkIsCompany = false
     ),
     BrowseService(
@@ -1032,23 +1078,37 @@ val KIDS_SERVICES: List<BrowseService> = listOf(
         networkIsCompany = false
     ),
     BrowseService(
+        "Nick Jr.",
+        providerId = null,
+        networkOrCompanyId = 35, // flagship probes: Bubble Guppies / Team Umizoomi
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "Nicktoons",
+        providerId = null,
+        networkOrCompanyId = 224, // flagship probes: T.U.F.F. Puppy / Robot and Monster
+        networkIsCompany = false
+    ),
+    BrowseService(
         "Universal Kids",
         providerId = null,
-        networkOrCompanyId = 1279,
+        networkOrCompanyId = 2133, // Top Chef Junior / Where's Waldo? — 1279 is a dead company id
         networkIsCompany = false
     ),
     BrowseService(
         "TeenNick",
         providerId = null,
-        networkOrCompanyId = 159,
+        networkOrCompanyId = 234, // Hollywood Heights probe — 159 is Indian 'StarPlus'
         networkIsCompany = false
     )
 )
 
 /**
- * Kid-friendly studios: animation houses and family brands. Every entry
- * already exists in BROWSE_STUDIOS except Universal Kids' company id,
- * which is unused there.
+ * Kid-friendly studios: animation houses and family brands. Every id
+ * verified live against /company/{id} (2026-09). The tail entries are
+ * family-house additions resolved via /search/company with a discover
+ * depth check (Toei Animation's company candidates were 0-movie pages,
+ * so the anime studios stay on the standard list instead).
  */
 val KIDS_STUDIOS: List<BrowseEntry> = listOf(
     BrowseEntry(2, "Walt Disney Pictures"),
@@ -1063,7 +1123,11 @@ val KIDS_STUDIOS: List<BrowseEntry> = listOf(
     BrowseEntry(2348, "Nickelodeon Movies"),
     BrowseEntry(7899, "Cartoon Network Studios"),
     BrowseEntry(12654, "The Pokémon Company"),
-    BrowseEntry(1, "Lucasfilm")
+    BrowseEntry(1, "Lucasfilm"),
+    BrowseEntry(297, "Aardman"),
+    BrowseEntry(11537, "LAIKA"),
+    BrowseEntry(2785, "Warner Bros. Animation"),
+    BrowseEntry(6254, "The Jim Henson Company")
 )
 
 /**
@@ -1095,7 +1159,21 @@ val KIDS_COLLECTION_NAMES = listOf(
     "Monsters, Inc. Collection",
     "The Incredibles Collection",
     "Cars Collection",
-    "The Hobbit Collection"
+    "The Hobbit Collection",
+    // 2026-09 additions — exact-resolving family franchises (see the
+    // fourth wave on BROWSE_COLLECTION_NAMES). Strict subset maintained.
+    "The Land Before Time Collection",
+    "Alvin and the Chipmunks Collection",
+    "The Secret Life of Pets Collection",
+    "Hotel Transylvania Collection",
+    "Cloudy with a Chance of Meatballs Collection",
+    "Paddington Collection",
+    "Diary of a Wimpy Kid Collection",
+    "Scooby-Doo Collection",
+    "The LEGO Movie Collection",
+    "The Boss Baby Collection",
+    "The Croods Collection",
+    "Sing Collection"
 )
 
 /**
@@ -1147,7 +1225,30 @@ val KIDS_KEYWORD_NAMES = listOf(
     "band",
     "musician",
     "dancer",
-    "choir"
+    "choir",
+    // 2026-09 additions — animals, holidays, and everyday-kid topics
+    // (see the fourth wave on BROWSE_KEYWORD_NAMES). Strict subset of the
+    // standard list so one resolve pass serves both modes.
+    "fairy",
+    "unicorn",
+    "pony",
+    "puppy",
+    "kitten",
+    "zoo",
+    "toy",
+    "birthday",
+    "baking",
+    "vacation",
+    "summer vacation",
+    "baseball",
+    "basketball",
+    "swimming",
+    "treasure hunt",
+    "magic",
+    "santa claus",
+    "puppet",
+    "bicycle",
+    "sleepover"
 )
 
 /** Decades are neutral; reuse the standard list. */

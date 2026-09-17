@@ -170,20 +170,16 @@ object ProfileManager {
     }
 
     /**
-     * Sets (or clears, null) a profile's Kids Mode rating ceiling. Only
-     * the three levels the profile builder offers are legal: PG-13/PG/G
-     * ("or lower"). Returns false on an unsupported value.
+     * Sets (or clears, null) a profile's Kids Mode rating ceiling. The
+     * value is coerced through [KidsMode.normalize] so legacy "age"-era
+     * ints synced from older builds and any unknown junk map onto a legal
+     * current ceiling (junk degrades to the default PG) — a stale synced
+     * value can never widen the ceiling.
      */
     fun setKidsMaxAge(context: Context, profileId: String, kidsMaxAge: Int?): Boolean {
-        if (kidsMaxAge != null &&
-            kidsMaxAge != KidsMode.MAX_AGE_PG13 &&
-            kidsMaxAge != KidsMode.MAX_AGE_PG &&
-            kidsMaxAge != KidsMode.MAX_AGE_G
-        ) {
-            return false
-        }
+        val normalized = KidsMode.normalize(kidsMaxAge)
         val updated = loadProfiles(context).map { p ->
-            if (p.id != profileId) p else p.copy(kidsMaxAge = kidsMaxAge)
+            if (p.id != profileId) p else p.copy(kidsMaxAge = normalized)
         }
         saveProfiles(context, updated)
         _profiles.value = updated
@@ -342,8 +338,21 @@ object ProfileManager {
     private fun loadProfiles(context: Context): List<Profile> {
         val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getString(KEY_PROFILES, null) ?: return emptyList()
-        return runCatching { json.decodeFromString(kotlinx.serialization.builtins.ListSerializer(Profile.serializer()), raw) }
+        return runCatching {
+            json.decodeFromString(
+                kotlinx.serialization.builtins.ListSerializer(Profile.serializer()),
+                raw
+            )
+        }
             .getOrDefault(emptyList())
+            // Kids ceilings written by older builds carry the legacy
+            // "age"-era ints; coerce once at the read source so every
+            // consumer (filtering, strictness checks, editor preselect)
+            // only ever sees current ordinals.
+            .map { p ->
+                if (p.kidsMaxAge == null) p
+                else p.copy(kidsMaxAge = KidsMode.normalize(p.kidsMaxAge))
+            }
     }
 
     private fun saveProfiles(context: Context, profiles: List<Profile>) {
@@ -359,9 +368,16 @@ object ProfileManager {
         }.getOrDefault(emptyList())
         if (synced.isEmpty()) return
 
+        // Normalize kids ceilings defensively: a device on an older build
+        // may still push "age"-era ints inside its profiles blob.
+        val syncedNormalized = synced.map { p ->
+            if (p.kidsMaxAge == null) p
+            else p.copy(kidsMaxAge = KidsMode.normalize(p.kidsMaxAge))
+        }
+
         val local = loadProfiles(context)
         // Merge by id, newest createdAt wins; keep local-only profiles too.
-        val byId = (local + synced).associateBy { it.id }
+        val byId = (local + syncedNormalized).associateBy { it.id }
         val merged = byId.values.sortedBy { it.createdAt }
         saveProfiles(context, merged)
         _profiles.value = merged
@@ -465,7 +481,7 @@ object ProfileManager {
     const val AVATAR_COUNT = 8
 
     /** Ceiling preselected when Kids Mode is first switched on (PG). */
-    const val KIDS_DEFAULT_MAX_AGE = KidsMode.MAX_AGE_PG
+    const val KIDS_DEFAULT_MAX_AGE = KidsMode.CEIL_PG
 
     // Avatar hue pairs (background, accent) for the 8 generic avatars.
     val AVATAR_COLORS: List<Pair<Long, Long>> = listOf(
@@ -493,7 +509,7 @@ object ProfileManager {
                 avatarIndex = (lng("avatarIndex") ?: 0L).toInt(),
                 customAvatarUrl = str("customAvatarUrl"),
                 avatarData = str("avatarData"),
-                kidsMaxAge = str("kidsMaxAge")?.toIntOrNull(),
+                kidsMaxAge = KidsMode.normalize(str("kidsMaxAge")?.toIntOrNull()),
                 createdAt = lng("createdAt") ?: 0L
             )
         }

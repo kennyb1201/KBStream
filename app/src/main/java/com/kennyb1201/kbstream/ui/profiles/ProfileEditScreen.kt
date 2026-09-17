@@ -108,7 +108,10 @@ fun ProfileEditScreen(
         mutableStateOf(editing?.kidsMaxAge != null)
     }
     var kidsLevel by remember(effectiveEditId) {
-        mutableStateOf(editing?.kidsMaxAge ?: ProfileManager.KIDS_DEFAULT_MAX_AGE)
+        mutableStateOf(
+            editing?.kidsMaxAge.let(KidsMode::normalize)
+                ?: ProfileManager.KIDS_DEFAULT_MAX_AGE
+        )
     }
     // Tracks whether the custom photo is in effect; selecting a color tile
     // flips this off so a color choice actually replaces the photo on save.
@@ -277,26 +280,26 @@ fun ProfileEditScreen(
             )
             ProfileChip(
                 label = "PG-13 & under",
-                selected = kidsModeOn && kidsLevel == KidsMode.MAX_AGE_PG13,
+                selected = kidsModeOn && kidsLevel == KidsMode.CEIL_PG13,
                 onClick = {
                     kidsModeOn = true
-                    kidsLevel = KidsMode.MAX_AGE_PG13
+                    kidsLevel = KidsMode.CEIL_PG13
                 }
             )
             ProfileChip(
                 label = "PG & under",
-                selected = kidsModeOn && kidsLevel == KidsMode.MAX_AGE_PG,
+                selected = kidsModeOn && kidsLevel == KidsMode.CEIL_PG,
                 onClick = {
                     kidsModeOn = true
-                    kidsLevel = KidsMode.MAX_AGE_PG
+                    kidsLevel = KidsMode.CEIL_PG
                 }
             )
             ProfileChip(
                 label = "G & under",
-                selected = kidsModeOn && kidsLevel == KidsMode.MAX_AGE_G,
+                selected = kidsModeOn && kidsLevel == KidsMode.CEIL_G,
                 onClick = {
                     kidsModeOn = true
-                    kidsLevel = KidsMode.MAX_AGE_G
+                    kidsLevel = KidsMode.CEIL_G
                 }
             )
         }

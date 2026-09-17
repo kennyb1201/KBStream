@@ -331,7 +331,23 @@ class TmdbRepository(context: Context) {
 
     suspend fun getPerson(personId: Int): TmdbPersonDetail? {
         if (apiKey.isBlank()) return null
-        return api.getPerson(personId, apiKey)
+        val loaded = api.getPerson(personId, apiKey) ?: return null
+        // Kids Mode: trim the combined filmography to the active ceiling at
+        // the source. One chokepoint covers every consumer — the actor
+        // screen, detail person chips, and Nuvio PERSON/DIRECTOR/WRITER
+        // rails (which read combinedCredits straight off this payload).
+        val ceiling = kidsMaxAge()
+        val credits = loaded.combinedCredits
+        return if (ceiling != null && credits != null) {
+            loaded.copy(
+                combinedCredits = TmdbCombinedCredits(
+                    cast = kidsFilterPersonCredits(credits.cast),
+                    crew = kidsFilterPersonCredits(credits.crew)
+                )
+            )
+        } else {
+            loaded
+        }
     }
 
     suspend fun searchPerson(query: String): List<TmdbSearchPersonResult> {
@@ -572,12 +588,25 @@ class TmdbRepository(context: Context) {
             }
     }
 
-    /** TMDB "LIST" source: items of a hosted TMDB list id. */
+    /**
+     * TMDB "LIST" source: items of a hosted TMDB list id. Kids Mode note:
+     * /list items are heterogeneous (movies + series mixed), so the ceiling
+     * check keys off each item's own media type — inferred the same way the
+     * rail renderer does (first_air_date present => series) since /list
+     * results carry no media_type field.
+     */
     suspend fun getNuvioListItems(listId: Int, page: Int = 1): List<TmdbDiscoverItem>? {
         if (apiKey.isBlank()) return null
         return runCatching {
             api.getListItems(listId, apiKey, page).results
-        }.getOrNull()
+        }.getOrNull()?.let { items ->
+            if (kidsMaxAge() == null) items
+            else kidsFilterItems(
+                items.map {
+                    StudioItem(it, if (it.firstAirDate != null) "series" else "movie")
+                }
+            ).map { it.item }
+        }
     }
 
     /** TMDB "COLLECTION" source: the collection's parts. */
@@ -950,7 +979,12 @@ class TmdbRepository(context: Context) {
         ProfileManager.activeProfile.value?.kidsMaxAge
 
     /** True when kids mode is on and the ceiling is strict (PG/G). */
-    fun isKidsModeStrict(): Boolean = kidsMaxAge() != null && kidsMaxAge() != KidsMode.MAX_AGE_PG13
+    /**
+     * True when kids mode is on and the ceiling is strict (PG/G): strict
+     * ceilings drop titles whose certification cannot be resolved, and
+     * hide person credits that carry no media type at all.
+     */
+    fun isKidsModeStrict(): Boolean = kidsMaxAge() != null && kidsMaxAge() != KidsMode.CEIL_PG13
 
     /** Certification check for one (tmdbId, mediaType) pair under the active ceiling. */
     private suspend fun kidsAllowed(tmdbId: Int, mediaType: String): Boolean {
@@ -964,7 +998,7 @@ class TmdbRepository(context: Context) {
                     type = if (isSeries) "series" else "movie"
                 )
             }.getOrNull()
-        } ?: return ceiling == KidsMode.MAX_AGE_PG13
+        } ?: return ceiling == KidsMode.CEIL_PG13
         return KidsMode.allowed(ceiling, detail.certification(isMovie = !isSeries))
     }
 
@@ -1012,11 +1046,33 @@ class TmdbRepository(context: Context) {
                         }.getOrNull()
                     }
                     val allowed = if (detail == null) {
-                        ceiling == KidsMode.MAX_AGE_PG13
+                        ceiling == KidsMode.CEIL_PG13
                     } else {
                         KidsMode.allowed(ceiling, detail.certification(isMovie = !isSeries))
                     }
                     if (allowed) meta else null
+                }
+            }.awaitAll().filterNotNull()
+        }
+    }
+
+    /**
+     * Kids filter for person combined-credits (cast or crew). Credits carry
+     * media_type on /person/{id}?append_to_response=combined_credits; items
+     * without one are dropped only under a strict ceiling (PG/G hides
+     * unknowns), matching the known-unknown rule elsewhere.
+     */
+    suspend fun kidsFilterPersonCredits(credits: List<TmdbPersonCredit>): List<TmdbPersonCredit> {
+        if (credits.isEmpty() || kidsMaxAge() == null) return credits
+        return coroutineScope {
+            credits.map { credit ->
+                async {
+                    val mediaType = when (credit.mediaType?.lowercase()) {
+                        "movie" -> "movie"
+                        "tv", "series" -> "series"
+                        else -> return@async if (isKidsModeStrict()) null else credit
+                    }
+                    if (kidsAllowed(credit.id, mediaType)) credit else null
                 }
             }.awaitAll().filterNotNull()
         }
