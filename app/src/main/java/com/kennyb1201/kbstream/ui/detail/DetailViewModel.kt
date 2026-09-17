@@ -373,6 +373,10 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                             id = id,
                             type = normalizedType,
                             tmdbId = tmdbDetailResult.getOrNull()?.id
+                        ) ?: mdbListPlaybackResumeFor(
+                            id = id,
+                            type = normalizedType,
+                            tmdbId = tmdbDetailResult.getOrNull()?.id
                         )
                     }
                 // Per-episode in-progress map for the episode cards: every
@@ -409,12 +413,67 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 _simklWatchedEpisodes.value = simklCompleted
                 _simklSeriesWatched.value = simklCompleted.isNotEmpty()
 
+                // MDBList watched episodes for this show, merged alongside
+                // the Simkl set so episode badges reflect both trackers.
+                val mdbListCompleted = if (
+                    normalizedType == "series" &&
+                    MdbListClient.isConfigured(getApplication())
+                ) {
+                    val tmdbShowId = tmdbDetailResult.getOrNull()?.id
+                    runCatching {
+                        MdbListClient.getWatchedSnapshot(getApplication())
+                    }.getOrNull()
+                        ?.episodeKeys
+                        .orEmpty()
+                        .mapNotNull { key ->
+                            // Key shapes from MdbListClient.addKey():
+                            // "tt123:S:E" and "tmdb:456:S:E".
+                            val parts = key.split(":")
+                            if (parts.size < 3) return@mapNotNull null
+
+                            val isImdbKey = key.startsWith("tt")
+                            val isTmdbKey = key.startsWith("tmdb:")
+                            if (!isImdbKey && !isTmdbKey) {
+                                return@mapNotNull null
+                            }
+
+                            val seasonIdx = if (isImdbKey) 1 else 2
+                            val season = parts.getOrNull(seasonIdx)
+                                ?.toIntOrNull() ?: return@mapNotNull null
+                            val episode = parts.getOrNull(seasonIdx + 1)
+                                ?.toIntOrNull() ?: return@mapNotNull null
+
+                            // Only keep entries anchored to THIS show.
+                            if (isImdbKey) {
+                                val showId = parts[0]
+                                if (!showId.equals(id, ignoreCase = true)) {
+                                    return@mapNotNull null
+                                }
+                            } else {
+                                val keyTmdbId = parts.getOrNull(1)
+                                    ?.toIntOrNull()
+                                if (tmdbShowId == null ||
+                                    keyTmdbId != tmdbShowId
+                                ) {
+                                    return@mapNotNull null
+                                }
+                            }
+                            season to episode
+                        }
+                        .toSet()
+                } else {
+                    emptySet()
+                }
+
                 // 3. Build merged keys *before* evaluating target episodes or seasons
-                _watchedEpisodeKeys.value = WatchedEpisodeState.buildMergedWatchedKeys(
-                    parentId = id,
-                    localCompletedEntries = localCompletedEntries,
-                    simklCompletedEpisodes = simklCompleted
-                )
+                _watchedEpisodeKeys.value =
+                    WatchedEpisodeState.buildMergedWatchedKeys(
+                        parentId = id,
+                        localCompletedEntries = localCompletedEntries,
+                        simklCompletedEpisodes = simklCompleted
+                    ) + mdbListCompleted.map { (season, episode) ->
+                        "$id:$season:$episode"
+                    }
 
                 // 4. Handle Meta addon loading asynchronously in background
                 val addons = addonsDeferred.await()
@@ -1064,6 +1123,128 @@ for (metaAddon in metaAddons) {
             type = normalizedType,
             name = name,
             episodeTitle = episodeTitle?.takeIf { it.isNotBlank() },
+            overview = null,
+            clearLogo = null,
+            backdropUrl = null,
+            totalEpisodesInSeason = null,
+            poster = null,
+            streamUrl = null,
+            season = season,
+            episode = episode,
+            // Same "imdbId:season:episode" convention TMDB-resolved
+            // rows use, so the per-episode progress bar binds.
+            episodeStreamId =
+                if (normalizedType == "series" && season != null && episode != null) {
+                    "$id:$season:$episode"
+                } else {
+                    null
+                },
+            positionMs = positionMs,
+            durationMs = durationMs,
+            updatedAt = System.currentTimeMillis(),
+            isCompleted = false,
+            completedAt = null
+        )
+    }
+
+    /**
+     * MDBList playback fallback for the Detail screen.
+     *
+     * Same synthetic-row contract as [simklPlaybackResumeFor]: when local
+     * history and the Simkl cloud session have no in-progress position for
+     * this title, derive a display-only resume row from the paused MDBList
+     * playback session (GET /sync/playback) so Detail shows RESUME +
+     * progress for MDBList-tracked progress too. Never written to disk.
+     */
+    private suspend fun mdbListPlaybackResumeFor(
+        id: String,
+        type: String,
+        tmdbId: Int?
+    ): WatchHistoryEntity? {
+
+        val appContext = getApplication<Application>()
+
+        if (!MdbListClient.isConfigured(appContext)) {
+            return null
+        }
+
+        val sessions = runCatching {
+            MdbListClient.getPlaybackSessions(appContext)
+        }.getOrDefault(emptyList())
+
+        val normalizedType = type.lowercase()
+        val match = sessions.firstOrNull { session ->
+            val idMatch =
+                session.imdbId?.equals(id, ignoreCase = true) == true ||
+                    (tmdbId != null && session.tmdbId == tmdbId)
+
+            when (normalizedType) {
+                "movie" -> session.isMovie && idMatch
+                "series" -> !session.isMovie &&
+                    session.season != null &&
+                    session.episode != null &&
+                    idMatch
+                else -> false
+            }
+        } ?: return null
+
+        val progress = match.progress
+            .takeIf { it > 0.0 && it < 100.0 }
+            ?: return null
+
+        val season: Int?
+        val episode: Int?
+        val name: String
+        var runtimeMinutes: Int? = match.runtimeMinutes.takeIf { it > 0 }
+
+        if (normalizedType == "movie") {
+            season = null
+            episode = null
+            name = match.title ?: "movie-$id"
+            // Position estimate needs the movie runtime.
+            val movieDetail = tmdbId?.let {
+                runCatching { tmdbRepository.getDetailByTmdbId(it, "movie") }.getOrNull()
+            }
+            runtimeMinutes = movieDetail?.displayRuntimeMinutes()
+                ?: runtimeMinutes
+        } else {
+            season = match.season
+            episode = match.episode
+            name = match.title ?: "show-$id"
+            // Position estimate needs an episode runtime; TMDB episode
+            // runtime is often empty for TV, so also try the show-level
+            // episode_run_time list.
+            val detail = tmdbId?.let {
+                runCatching { tmdbRepository.getDetailByTmdbId(it, "tv") }.getOrNull()
+            }
+            runtimeMinutes = detail?.displayRuntimeMinutes()
+                ?: runtimeMinutes
+        }
+
+        val durationMs = runtimeMinutes?.times(60_000L)?.takeIf { it > 0L } ?: 0L
+        val positionMs = if (durationMs > 0L) {
+            (durationMs * (progress / 100.0)).toLong()
+        } else {
+            0L
+        }
+
+        // Synthetic row: display-only. Keep positionMs even when the
+        // runtime estimate is missing (positionMs = 0) ONLY when a
+        // duration exists; otherwise the UI would show a bar with no time.
+        if (positionMs <= 0L && durationMs <= 0L) {
+            return null
+        }
+
+        val syntheticId =
+            if (normalizedType == "movie") "mdblist-playback:$id"
+            else "mdblist-playback:$id:$season:$episode"
+
+        return WatchHistoryEntity(
+            id = syntheticId,
+            parentId = id,
+            type = normalizedType,
+            name = name,
+            episodeTitle = null,
             overview = null,
             clearLogo = null,
             backdropUrl = null,

@@ -13,6 +13,8 @@ import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
+import com.kennyb1201.kbstream.data.mdblist.MdbListClient
+import com.kennyb1201.kbstream.data.mdblist.MdbListPlaybackItem
 import com.kennyb1201.kbstream.data.simkl.SimklContinueWatchingItem
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
@@ -1090,6 +1092,28 @@ Log.d(
                     item.playbackId?.let { playbackId ->
                         simklRepository.deletePlaybackSession(
                             playbackId
+                        )
+                    }
+                }
+
+                // MDBList-backed cards come back from its paused playback
+                // feed the same way; POST /scrobble/clear drops that session
+                // so the removed title stops resurfacing.
+                if (MdbListClient.isConfigured(getApplication())) {
+                    runCatching {
+                        MdbListClient.scrobbleClear(
+                            getApplication(),
+                            isMovie = item.parentType?.lowercase() == "movie",
+                            imdbId = item.parentId
+                                ?.takeIf { it.startsWith("tt") },
+                            tmdbId = item.tmdbId,
+                            season = item.season,
+                            episode = item.episode
+                        )
+                    }.onFailure {
+                        Log.w(
+                            "HOME_UPNEXT",
+                            "MDBList scrobble/clear failed: ${it.message}"
                         )
                     }
                 }
@@ -2568,11 +2592,15 @@ Log.d(
                                 // rather than dropping them. Removals are
                                 // still honored by applyContinueWatching
                                 // Dismissals.
+                                val mdbListItems =
+                                    loadMdbListUpNextItems()
+
                                 _upNext.value =
                                     applyContinueWatchingDismissals(
                                         dedupeAndSortUpNext(
                                             localItems +
-                                                previousSimklUpNextItems()
+                                                previousSimklUpNextItems() +
+                                                mdbListItems
                                         )
                                     )
                             }
@@ -2587,8 +2615,13 @@ Log.d(
                                 is SimklUpNextResult.Failed -> emptyList()
                             }
 
+                        // Paused MDBList sessions merge alongside the Simkl
+                        // cards; dedupe keeps the richer local/Simkl twin.
+                        val mdbListItems =
+                            loadMdbListUpNextItems()
+
                         val merged =
-                            dedupeAndSortUpNext(localItems + simklItems)
+                            dedupeAndSortUpNext(localItems + simklItems + mdbListItems)
 
                         if (!isLatestUpNextRequest(requestVersion)) {
                             return@collect
@@ -2725,6 +2758,183 @@ Log.d(
                 e
             )
         }
+    }
+
+    /**
+     * Paused MDBList playback sessions (GET /sync/playback), shaped for the
+     * same Continue Watching merge as the Simkl cards. Runs alongside the
+     * Simkl loader when an MDBList key is set, so progress paused on either
+     * tracker (including another device) surfaces here.
+     */
+    private suspend fun loadMdbListUpNextItems(): List<UpNextItem> {
+        val appContext = getApplication<Application>()
+
+        if (!MdbListClient.isConfigured(appContext)) {
+            return emptyList()
+        }
+
+        return try {
+            val sessions =
+                runCatching { MdbListClient.getPlaybackSessions(appContext) }
+                    .getOrDefault(emptyList())
+
+            val items = sessions
+                .take(MAX_MDBLIST_UP_NEXT_ITEMS)
+                .mapNotNull { session ->
+                    buildMdbListUpNextItem(appContext, session)
+                }
+
+            Log.d(
+                "HOME_UPNEXT",
+                "MDBList load succeeded: raw=${sessions.size}, resolved=${items.size}"
+            )
+
+            items
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e("HOME_UPNEXT", "MDBList load failed: ${e.message}", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * Builds one Continue Watching card from a paused MDBList session.
+     * Drops sessions whose episode is already completed locally (the stale
+     * 99%-watched leftover the completion push created), mirrors the same
+     * guard the Simkl playback path uses. The TMDB lookup reuses the same
+     * enrichment cache the Simkl cards use.
+     */
+    private suspend fun buildMdbListUpNextItem(
+        appContext: Context,
+        session: MdbListPlaybackItem
+    ): UpNextItem? {
+
+        val navigationId = session.imdbId
+            ?: session.tmdbId?.let { "tmdb:$it" }
+            ?: return null
+
+        val isExplicitResume = session.progress > 0.0
+
+        if (!session.isMovie &&
+            session.season != null &&
+            session.episode != null
+        ) {
+            val parentIds = listOfNotNull(
+                session.imdbId,
+                session.tmdbId?.let { "tmdb:$it" }
+            )
+            val stale = parentIds.any { parentId ->
+                runCatching {
+                    historyDao
+                        .getCompletedForParent(parentId)
+                        .any { row ->
+                            row.season == session.season &&
+                                row.episode == session.episode
+                        }
+                }.getOrDefault(false)
+            }
+            if (stale) {
+                // Server-side mirror of the local drop: the completion
+                // push already fired, so the leftover paused session would
+                // otherwise resurface forever.
+                runCatching {
+                    MdbListClient.scrobbleClear(
+                        appContext,
+                        isMovie = false,
+                        imdbId = session.imdbId,
+                        tmdbId = session.tmdbId,
+                        season = session.season,
+                        episode = session.episode
+                    )
+                }
+                return null
+            }
+        }
+
+        var posterUrl: String? = null
+        var backdropUrl: String? = null
+        var showTitle: String? = null
+        var episodeTitle: String? = null
+        var runtimeMinutes: Int? = session.runtimeMinutes.takeIf { it > 0 }
+        var resolvedSeason = session.season
+        var resolvedEpisode = session.episode
+        var resolvedStartPositionMs = 0L
+
+        val detail = runCatching {
+            tmdbLookupSemaphore.withPermit {
+                tmdbRepository.fetchEnrichedMetaCached(
+                    navigationId,
+                    if (session.isMovie) "movie" else "series"
+                )
+            }
+        }.getOrNull()
+
+        if (detail != null) {
+            posterUrl = detail.posterPath
+                ?.takeIf { it.isNotBlank() }
+                ?.let { "${TmdbRepository.POSTER_BASE}$it" }
+            backdropUrl = detail.backdropPath
+                ?.takeIf { it.isNotBlank() }
+                ?.let { "https://image.tmdb.org/t/p/w780$it" }
+            if (!session.isMovie) {
+                showTitle = detail.name
+                runtimeMinutes = detail.displayRuntimeMinutes()
+                    ?: runtimeMinutes
+            }
+        }
+
+        if (!session.isMovie) {
+            resolvedSeason = session.season ?: 1
+            resolvedEpisode = session.episode ?: 1
+        }
+
+        val progressFraction =
+            (session.progress / 100.0).coerceIn(0.0, 1.0)
+
+        val durationMs = runtimeMinutes
+            ?.takeIf { it > 0 }
+            ?.times(60_000L)
+            ?: 0L
+        resolvedStartPositionMs =
+            (durationMs * progressFraction).toLong()
+
+        val subtitle = if (session.isMovie) {
+            "Resume movie"
+        } else {
+            "Resume - ${formatSeasonEpisode(resolvedSeason, resolvedEpisode)}"
+        }
+
+        return UpNextItem(
+            id = "mdblist:${session.sessionId}",
+            title = session.title ?: navigationId,
+            poster = posterUrl,
+            badge = UpNextBadge.CONTINUE_WATCHING,
+            showTitle = if (session.isMovie) null
+            else showTitle ?: session.title,
+            episodeTitle = episodeTitle,
+            tmdbRating = detail?.voteAverage?.takeIf { it > 0.0 },
+            runtimeMinutes = runtimeMinutes,
+            remainingMinutes = calculateRemainingMinutesFromProgress(
+                runtimeMinutes = runtimeMinutes,
+                progress = session.progress.toFloat()
+            ),
+            subtitle = subtitle,
+            progressPercent = if (isExplicitResume) {
+                progressFraction.toFloat()
+            } else {
+                null
+            },
+            parentId = navigationId,
+            parentType = if (session.isMovie) "movie" else "series",
+            season = if (session.isMovie) null else resolvedSeason,
+            episode = if (session.isMovie) null else resolvedEpisode,
+            startPositionMs = resolvedStartPositionMs,
+            recencyTimestamp = session.updatedAtMs,
+            backdrop = backdropUrl,
+            tmdbId = session.tmdbId,
+            playbackId = null
+        )
     }
 
     private suspend fun buildSimklUpNextItem(
@@ -5555,6 +5765,9 @@ private suspend fun calculateEpisodesRemaining(
 
         private const val UP_NEXT_SEASON_BATCH =
             4
+
+        private const val MAX_MDBLIST_UP_NEXT_ITEMS =
+            30
 
         private const val PERIODIC_SIMKL_REFRESH_MS =
             15 * 60 * 1000L

@@ -71,6 +71,7 @@ import com.kennyb1201.kbstream.ui.player.PickerAdapter.Companion.bindBadgeRow
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
+import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
@@ -4391,6 +4392,30 @@ class NativePlayerActivity : ComponentActivity() {
         return resolvedParentTmdbId
     }
 
+    /**
+     * Mirror the current scrobble action to MDBList. Its API behaves like
+     * Trakt's: start/pause/stop sessions, with pause & stop marking the item
+     * watched at >= 80% progress server-side. Runs alongside the Simkl
+     * scrobble; failures are logged, never thrown.
+     */
+    private suspend fun scrobbleMdbList(action: String, progress: Double) {
+        if (MdbListClient.apiKey(this).isBlank() || parentId.isBlank()) return
+        val imdbId = parentId.takeIf { it.startsWith("tt") }
+        val tmdbId = resolveParentTmdbId()
+        val isMovie = parentType.lowercase() == "movie"
+        when (action) {
+            "start" -> MdbListClient.scrobbleStart(
+                this, isMovie, imdbId, tmdbId, season, episode, progress
+            )
+            "pause" -> MdbListClient.scrobblePause(
+                this, isMovie, imdbId, tmdbId, season, episode, progress
+            )
+            "stop" -> MdbListClient.scrobbleStop(
+                this, isMovie, imdbId, tmdbId, season, episode, progress
+            )
+        }
+    }
+
     private fun scrobbleSimkl(action: String, progressOverride: Double? = null) {
         if (isLiveChannel || parentId.isBlank()) return
         if (action == "start" && simklScrobbleActive && !simklScrobblePaused) return
@@ -4429,6 +4454,10 @@ class NativePlayerActivity : ComponentActivity() {
                     tmdbId = tmdbId
                 )
             }.getOrDefault(false)
+            // Independent MDBList scrobble — same session events, separate
+            // tracker. Mirrors Simkl only when a key is set.
+            runCatching { scrobbleMdbList(action, progress) }
+                .onFailure { Log.w(TAG, "MDBList scrobble/$action error: ${it.message}") }
             if (!ok && action == "start") {
                 simklScrobbleActive = false
                 Log.e(TAG, "Simkl scrobble start failed; will retry on next play")
@@ -4457,6 +4486,21 @@ class NativePlayerActivity : ComponentActivity() {
                     else -> false
                 }
             }.getOrDefault(false)
+            // Mirror the completion to MDBList (POST /sync/watched) so both
+            // trackers record finished movies/episodes.
+            runCatching {
+                if (MdbListClient.apiKey(this@NativePlayerActivity).isNotBlank()) {
+                    val isMovie = parentType.lowercase() == "movie"
+                    MdbListClient.pushWatched(
+                        this@NativePlayerActivity,
+                        mediaType = if (isMovie) "movie" else "episode",
+                        imdbId = parentId.takeIf { it.startsWith("tt") },
+                        tmdbId = resolveParentTmdbId(),
+                        season = season,
+                        episode = episode
+                    )
+                }
+            }.onFailure { Log.w(TAG, "MDBList completion sync error: ${it.message}") }
             if (!ok) {
                 simklScrobbleSent = false
                 Log.e(TAG, "Simkl completion sync failed; will retry")

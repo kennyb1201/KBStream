@@ -6,6 +6,7 @@ import com.kennyb1201.kbstream.data.cache.WatchedStatusEntity
 import com.kennyb1201.kbstream.data.cache.WatchedStatusDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -118,6 +119,27 @@ class WatchedStatusRepository(
         0L
 
     /*
+     * MDBList watch-history snapshot (GET /sync/watched), fetched alongside
+     * the Simkl sets so a title watched through another client (or marked
+     * on MDBList directly) shows the same watched badge here. Movies are
+     * completed; show entries only prove progress; episode entries carry
+     * the real per-episode watch state ("tt123:1:2" / "tmdb:456:1:2").
+     */
+    private var mdbListMovieKeys:
+        Set<String> =
+        emptySet()
+
+    private var mdbListEpisodeKeys:
+        Set<String> =
+        emptySet()
+
+    private var mdbListStartedShowKeys:
+        Set<String> =
+        emptySet()
+
+    private var mdbListFetchedAt = 0L
+
+    /*
      * Backup restore replaces the Room watched tables while repository
      * instances may still hold in-memory snapshots. This tracks the global
      * invalidation epoch so stale memory state is dropped on the next
@@ -221,6 +243,9 @@ class WatchedStatusRepository(
         val now =
             System.currentTimeMillis()
 
+        val appContext =
+            com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext
+
         if (cacheEpochObserved != globalCacheEpoch) {
             cacheMutex.withLock {
                 cache.clear()
@@ -235,6 +260,18 @@ class WatchedStatusRepository(
                     emptySet()
 
                 simklSetsFetchedAt =
+                    0L
+
+                mdbListMovieKeys =
+                    emptySet()
+
+                mdbListEpisodeKeys =
+                    emptySet()
+
+                mdbListStartedShowKeys =
+                    emptySet()
+
+                mdbListFetchedAt =
                     0L
             }
 
@@ -391,6 +428,16 @@ class WatchedStatusRepository(
             simklRepository.isConfigured() &&
                 simklRepository.hasToken()
 
+        // MDBList watched snapshot: refreshed on the same cadence as the
+        // Simkl sets so badges merge both trackers. Fetched BEFORE the
+        // Simkl early-return below — a user with only an MDBList key set
+        // (no Simkl auth) must still get MDBList-backed badges.
+        refreshMdbListSetsIfNeeded(
+            appContext = appContext,
+            now = now,
+            force = forceRemoteRefresh
+        )
+
         if (
             !simklConfigured
         ) {
@@ -399,6 +446,22 @@ class WatchedStatusRepository(
                 "Skipping SIMKL watched preload: " +
                     "not authenticated"
             )
+
+            // Still resolve + persist: with only an MDBList key set (no
+            // Simkl auth) this is the ONLY remote badge source.
+            val mdbListOnlyEntities =
+                resolveWithMergedRemoteSets(
+                    items = needsLookup,
+                    now = now
+                )
+
+            persistResolvedEntities(
+                entities = mdbListOnlyEntities,
+                now = now
+            )
+
+            _watchedStateVersion.value =
+                System.currentTimeMillis()
 
             return
         }
@@ -524,152 +587,16 @@ class WatchedStatusRepository(
             )
         }
 
-        val remoteSnapshot =
-            cacheMutex.withLock {
-                Triple(
-                    completedMovieKeys,
-                    completedShowImdbIds,
-                    partialShowImdbIds
-                )
-            }
-
-        val movieKeys =
-            remoteSnapshot.first
-
-        val showImdbIds =
-            remoteSnapshot.second
-
-        val partialShowIds =
-            remoteSnapshot.third
-
-        val localOverrideKeys =
-            localWatchedOverrideKeys()
-
         val resolvedEntities =
-            needsLookup.map {
-                (id, normalizedType) ->
-
-                val key =
-                    cacheKey(
-                        id,
-                        normalizedType
-                    )
-
-                val manuallyWatched =
-                    key in localOverrideKeys
-
-                val watched =
-                    when (
-                        normalizedType
-                    ) {
-
-                        "movie" -> {
-                            val localWatched =
-                                isMovieLocallyWatched(
-                                    id
-                                )
-
-                            val simklWatched =
-                                id in movieKeys ||
-                                    "imdb:$id" in
-                                    movieKeys
-
-                            manuallyWatched ||
-                                localWatched ||
-                                simklWatched
-                        }
-
-                        "series" -> {
-                            /*
-                             * Membership-only lookup:
-                             * no individual network call.
-                             */
-                            manuallyWatched ||
-                                id in showImdbIds
-                        }
-
-                        else ->
-                            false
-                    }
-
-                /*
-                 * Eye badge: a series the user has started but not
-                 * finished. Simkl side first (free membership lookup in
-                 * the all-shows snapshot); when Simkl has no entry, fall
-                 * back to local history — any in-progress episode row
-                 * (resume position saved, not completed) means "in the
-                 * middle of it". Movies resolve watched-or-not, nothing
-                 * in between.
-                 */
-                val partialShow =
-                    normalizedType == "series" &&
-                        !watched &&
-                        (
-                            id in partialShowIds ||
-                                hasLocalInProgressEpisode(id)
-                            )
-
-                WatchedStatusEntity(
-                    key =
-                        cacheKey(
-                            id,
-                            normalizedType
-                        ),
-
-                    imdbId =
-                        id,
-
-                    mediaType =
-                        normalizedType,
-
-                    isWatched =
-                        watched,
-
-                    isPartiallyWatched =
-                        partialShow,
-
-                    updatedAt =
-                        now
-                )
-            }
-
-        cacheMutex.withLock {
-            resolvedEntities.forEach { entity ->
-                cache[entity.key] =
-                    entity.updatedAt to
-                        WatchedCacheEntry(
-                            entity.isWatched,
-                            entity.isPartiallyWatched
-                        )
-            }
-        }
-
-        try {
-            // Room's generated INSERT OR REPLACE also binds one "?" per
-            // column per row, so a large batch can hit the same 999-limit
-            // as the SELECT above. Chunk this write the same way.
-            resolvedEntities
-                .chunked(
-                    SQLITE_MAX_UPSERT_ROWS
-                )
-                .forEach { chunk ->
-                    watchedStatusDao.upsertAll(
-                        chunk
-                    )
-                }
-
-            watchedStatusDao.deleteOlderThan(
-                now - MAX_DISK_AGE_MS
+            resolveWithMergedRemoteSets(
+                items = needsLookup,
+                now = now
             )
 
-        } catch (e: Exception) {
-            Log.e(
-                "WATCHED_REPO",
-                "disk cache write failed: " +
-                    e.message,
-                e
-            )
-        }
+        persistResolvedEntities(
+            entities = resolvedEntities,
+            now = now
+        )
 
         if (
             forceRemoteRefresh ||
@@ -1272,6 +1199,34 @@ class WatchedStatusRepository(
                 )
             }
         }
+
+        // Mirror whole-title marks to MDBList when a key is set. Movies
+        // push directly; whole-show marks need per-season data MDBList's
+        // ids-only body can't express, so series rely on the per-episode
+        // pushes from the player completion path instead.
+        com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext
+            ?.let { mdbListContext ->
+                if (
+                    MdbListClient.isConfigured(mdbListContext) &&
+                    normalizedType == "movie"
+                ) {
+                    try {
+                        MdbListClient.pushWatched(
+                            mdbListContext,
+                            mediaType = "movie",
+                            imdbId = normalizedId.takeIf { it.startsWith("tt") },
+                            tmdbId = normalizedId.removePrefix("tmdb:").toIntOrNull()
+                                ?.takeIf { normalizedId.startsWith("tmdb:") }
+                        )
+                    } catch (e: Exception) {
+                        Log.e(
+                            "WATCHED_REPO",
+                            "MDBList mark-watched push failed for $key",
+                            e
+                        )
+                    }
+                }
+            }
     }
 
     /**
@@ -1436,6 +1391,39 @@ class WatchedStatusRepository(
                 )
             }
         }
+
+        // Mirror the removal to MDBList when a key is set (movies and
+        // whole shows — its /sync/watched/remove accepts ids-only entries
+        // for both).
+        com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext
+            ?.let { mdbListContext ->
+                if (MdbListClient.isConfigured(mdbListContext)) {
+                    try {
+                        when (normalizedType) {
+                            "movie" -> MdbListClient.removeWatched(
+                                mdbListContext,
+                                mediaType = "movie",
+                                imdbId = normalizedId.takeIf { it.startsWith("tt") },
+                                tmdbId = normalizedId.removePrefix("tmdb:").toIntOrNull()
+                                    ?.takeIf { normalizedId.startsWith("tmdb:") }
+                            )
+
+                            "series" -> MdbListClient.removeWatchedShow(
+                                mdbListContext,
+                                imdbId = normalizedId.takeIf { it.startsWith("tt") },
+                                tmdbId = normalizedId.removePrefix("tmdb:").toIntOrNull()
+                                    ?.takeIf { normalizedId.startsWith("tmdb:") }
+                            )
+                        }
+                    } catch (e: Exception) {
+                        Log.e(
+                            "WATCHED_REPO",
+                            "MDBList remove-watched push failed for $key",
+                            e
+                        )
+                    }
+                }
+            }
     }
 
     private fun normalizeType(
@@ -1456,6 +1444,243 @@ class WatchedStatusRepository(
                 type.lowercase()
         }
     }
+
+    /**
+     * Fetches (or reuses) the MDBList watched snapshot on the same TTL
+     * cadence as the Simkl sets, merging it into [mdbListMovieKeys],
+     * [mdbListEpisodeKeys] and [mdbListStartedShowKeys]. Fails soft: any
+     * network/parse problem keeps the previous snapshot and only advances
+     * the timestamp after a successful fetch. No-op when no key is set.
+     */
+    private suspend fun refreshMdbListSetsIfNeeded(
+        appContext: Context?,
+        now: Long,
+        force: Boolean
+    ) {
+        if (appContext == null) {
+            return
+        }
+
+        if (!MdbListClient.isConfigured(appContext)) {
+            return
+        }
+
+        val stale = now - mdbListFetchedAt >= REMOTE_SET_TTL_MS
+
+        if (!force && !stale) {
+            return
+        }
+
+        val snapshot =
+            try {
+                MdbListClient.getWatchedSnapshot(appContext)
+            } catch (e: Exception) {
+                Log.e(
+                    "WATCHED_REPO",
+                    "MDBList watched snapshot fetch failed: " +
+                        e.message,
+                    e
+                )
+
+                null
+            }
+
+        if (snapshot == null || snapshot.isEmpty) {
+            return
+        }
+
+        cacheMutex.withLock {
+            mdbListMovieKeys = snapshot.movieKeys
+            mdbListEpisodeKeys = snapshot.episodeKeys
+            mdbListStartedShowKeys = snapshot.startedShowKeys
+            mdbListFetchedAt = now
+        }
+
+        Log.d(
+            "WATCHED_REPO",
+            "MDBList marker sets refreshed: " +
+                "movies=${snapshot.movieKeys.size}, " +
+                "episodes=${snapshot.episodeKeys.size}, " +
+                "shows=${snapshot.startedShowKeys.size}"
+        )
+    }
+
+    /**
+     * Shared resolver for the watched badges: local state first (manual
+     * overrides, Room history), then the Simkl sets, then the MDBList
+     * snapshot. Runs on every [preload] path — including the
+     * Simkl-not-authenticated early return, where MDBList is the only
+     * remote source.
+     */
+    private suspend fun resolveWithMergedRemoteSets(
+        items: List<Pair<String, String>>,
+        now: Long
+    ): List<WatchedStatusEntity> {
+
+        val remoteSnapshot =
+            cacheMutex.withLock {
+                MergedRemoteSets(
+                    completedMovieKeys,
+                    completedShowImdbIds,
+                    partialShowImdbIds,
+                    mdbListMovieKeys,
+                    mdbListEpisodeKeys,
+                    mdbListStartedShowKeys
+                )
+            }
+
+        val localOverrideKeys =
+            localWatchedOverrideKeys()
+
+        return items.map { (id, normalizedType) ->
+
+            val key =
+                cacheKey(
+                    id,
+                    normalizedType
+                )
+
+            val manuallyWatched =
+                key in localOverrideKeys
+
+            val watched =
+                when (normalizedType) {
+
+                    "movie" -> {
+                        val localWatched =
+                            isMovieLocallyWatched(
+                                id
+                            )
+
+                        val simklWatched =
+                            id in remoteSnapshot.simklMovieKeys ||
+                                "imdb:$id" in
+                                remoteSnapshot.simklMovieKeys
+
+                        val mdbListWatched =
+                            id in remoteSnapshot.mdbListMovieKeys
+
+                        manuallyWatched ||
+                            localWatched ||
+                            simklWatched ||
+                            mdbListWatched
+                    }
+
+                    "series" -> {
+                        /*
+                         * Membership-only lookup:
+                         * no individual network call.
+                         */
+                        manuallyWatched ||
+                            id in remoteSnapshot.simklShowKeys ||
+                            id in remoteSnapshot.mdbListStartedShowKeys
+                    }
+
+                    else ->
+                        false
+                }
+
+            /*
+             * Eye badge: a series the user has started but not finished.
+             * Simkl side first (free membership lookup in the all-shows
+             * snapshot); when Simkl has no entry, fall back to local
+             * history — any in-progress episode row (resume position
+             * saved, not completed) means "in the middle of it". Movies
+             * resolve watched-or-not, nothing in between.
+             */
+            val partialShow =
+                normalizedType == "series" &&
+                    !watched &&
+                    (
+                        id in remoteSnapshot.simklPartialShowKeys ||
+                            id in remoteSnapshot.mdbListStartedShowKeys ||
+                            hasLocalInProgressEpisode(id)
+                        )
+
+            WatchedStatusEntity(
+                key =
+                    cacheKey(
+                        id,
+                        normalizedType
+                    ),
+
+                imdbId =
+                    id,
+
+                mediaType =
+                    normalizedType,
+
+                isWatched =
+                    watched,
+
+                isPartiallyWatched =
+                    partialShow,
+
+                updatedAt =
+                    now
+            )
+        }
+    }
+
+    /**
+     * Writes resolved entities into the memory cache and the Room disk
+     * cache (chunked under SQLite's bind-variable cap).
+     */
+    private suspend fun persistResolvedEntities(
+        entities: List<WatchedStatusEntity>,
+        now: Long
+    ) {
+        cacheMutex.withLock {
+            entities.forEach { entity ->
+                cache[entity.key] =
+                    entity.updatedAt to
+                        WatchedCacheEntry(
+                            entity.isWatched,
+                            entity.isPartiallyWatched
+                        )
+            }
+        }
+
+        try {
+            // Room's generated INSERT OR REPLACE also binds one "?" per
+            // column per row, so a large batch can hit the same 999-limit
+            // as the SELECT above. Chunk this write the same way.
+            entities
+                .chunked(
+                    SQLITE_MAX_UPSERT_ROWS
+                )
+                .forEach { chunk ->
+                    watchedStatusDao.upsertAll(
+                        chunk
+                    )
+                }
+
+            watchedStatusDao.deleteOlderThan(
+                now - MAX_DISK_AGE_MS
+            )
+        } catch (e: Exception) {
+            Log.e(
+                "WATCHED_REPO",
+                "disk cache write failed: " +
+                    e.message,
+                e
+            )
+        }
+    }
+
+    /**
+     * Immutable snapshot of every remote watched set read under one
+     * [cacheMutex] acquisition, so the resolver works from a coherent
+     * Simkl + MDBList state even if a background refresh lands mid-loop.
+     */
+    private data class MergedRemoteSets(
+        val simklMovieKeys: Set<String>,
+        val simklShowKeys: Set<String>,
+        val simklPartialShowKeys: Set<String>,
+        val mdbListMovieKeys: Set<String>,
+        val mdbListEpisodeKeys: Set<String>,
+        val mdbListStartedShowKeys: Set<String>
+    )
 
     companion object {
 
