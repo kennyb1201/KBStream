@@ -2,7 +2,11 @@
 """Pass 2: resolve NEW networks via flagship-show probes (no /search/network on TMDB)."""
 import json, time, urllib.request, urllib.parse
 
-API = "7539ae4ce828a013443d8e496396b125"
+import os
+
+# Key comes from the environment (never commit it) — e.g. export it from
+# local.properties's TMDB_API_KEY before running.
+API = os.environ.get("TMDB_API_KEY", "")
 BASE = "https://api.themoviedb.org/3"
 TODAY = "2026-09-16"
 

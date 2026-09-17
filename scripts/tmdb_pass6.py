@@ -2,7 +2,11 @@
 """Pass 6 micro-probes: last stubborn networks."""
 import json, time, urllib.request, urllib.parse
 
-API = "7539ae4ce828a013443d8e496396b125"
+import os
+
+# Key comes from the environment (never commit it) — e.g. export it from
+# local.properties's TMDB_API_KEY before running.
+API = os.environ.get("TMDB_API_KEY", "")
 BASE = "https://api.themoviedb.org/3"
 TODAY = "2026-09-16"
 
