@@ -1181,22 +1181,28 @@ Log.d(
      * fresh local resume row or a new Simkl pause/session - at which point
      * the marker is cleared and the card is allowed back onto the rail.
      */
-    private fun applyContinueWatchingDismissals(
+    private suspend fun applyContinueWatchingDismissals(
         items: List<UpNextItem>
     ): List<UpNextItem> {
 
+        // Kids Mode gate runs before dismissal filtering: the Simkl feed
+        // merged into this list is account-wide, so a kids profile must not
+        // inherit adult titles from a shared Simkl account (local history is
+        // already profile-scoped; Simkl is not).
+        val kidsSafe = kidsFilterUpNext(items)
+
         if (
             dismissedContinueWatching.isEmpty() ||
-            items.isEmpty()
+            kidsSafe.isEmpty()
         ) {
-            return items
+            return kidsSafe
         }
 
         var changed =
             false
 
         val filtered =
-            items.filter { item ->
+            kidsSafe.filter { item ->
 
                 val key =
                     showDedupeKey(item)
@@ -1225,6 +1231,38 @@ Log.d(
         }
 
         return filtered
+    }
+
+    /**
+     * Kids Mode gate for the Continue Watching / Upcoming rails. Both rails
+     * derive from [_upNext], which merges the account-wide Simkl feed, so
+     * each item's parent title is checked against the active profile's
+     * rating ceiling through the repository's cached-detail lookup (no-op
+     * when kids mode is off). Titles resolve via the same MetaPreview path
+     * the catalog rails use; episodes of one show collapse onto a single
+     * lookup because they share a parent id.
+     */
+    private suspend fun kidsFilterUpNext(
+        items: List<UpNextItem>
+    ): List<UpNextItem> {
+        if (items.isEmpty() || tmdbRepository.kidsMaxAge() == null) return items
+        val surviving = tmdbRepository.kidsFilterMetas(
+            items.map { item ->
+                MetaPreview(
+                    id = item.parentId?.takeIf { it.isNotBlank() } ?: item.id,
+                    type = item.parentType?.takeIf { it.isNotBlank() } ?: "movie",
+                    name = item.title,
+                    poster = item.poster,
+                    background = item.backdrop,
+                    logo = item.clearLogo
+                )
+            }
+        ).mapTo(HashSet()) { it.id.trim() }
+        return items.filter { item ->
+            surviving.contains(
+                (item.parentId?.takeIf { it.isNotBlank() } ?: item.id).trim()
+            )
+        }
     }
 
     /**

@@ -619,14 +619,17 @@ for (metaAddon in metaAddons) {
                         return@onSuccess
                     }
 
-                    // App-wide digital-release filter: trim "More Like This"
+                    // "More Like This" trimming, two filters composed:
+                    // Kids Mode drops recs rated above the active profile's
+                    // ceiling (no-op otherwise), then the app-wide digital-
+                    // release filter trims movies not yet available at home
                     // when the Settings toggle is on. Recs inherit this
-                    // screen's media type; movies not yet available at home
-                    // are dropped via the shared availability check.
+                    // screen's media type.
                     val shownDetail =
                         if (
                             detail != null &&
-                            tmdbRepository.isDigitalFilterEnabled()
+                            (tmdbRepository.isDigitalFilterEnabled() ||
+                                tmdbRepository.kidsMaxAge() != null)
                         ) {
                             val recs =
                                 detail.recommendations?.results.orEmpty()
@@ -634,13 +637,29 @@ for (metaAddon in metaAddons) {
                             if (recs.isEmpty()) {
                                 detail
                             } else {
-                                detail.copy(
-                                    recommendations = detail.recommendations?.copy(
-                                        results = tmdbRepository.filterByHomeAvailability(
-                                            recs
-                                        ) { it.id to normalizedType }
+                                // Kids Mode first (cached certification
+                                // lookups); kidsFilter no-ops when the
+                                // active profile has no ceiling.
+                                val kidsFiltered =
+                                    tmdbRepository.kidsFilter(
+                                        recs
+                                    ) { it.id to normalizedType }
+
+                                if (tmdbRepository.isDigitalFilterEnabled()) {
+                                    detail.copy(
+                                        recommendations = detail.recommendations?.copy(
+                                            results = tmdbRepository.filterByHomeAvailability(
+                                                kidsFiltered
+                                            ) { it.id to normalizedType }
+                                        )
                                     )
-                                )
+                                } else {
+                                    detail.copy(
+                                        recommendations = detail.recommendations?.copy(
+                                            results = kidsFiltered
+                                        )
+                                    )
+                                }
                             }
                         } else {
                             detail
