@@ -1601,6 +1601,27 @@ for (metaAddon in metaAddons) {
                     )
                 }
             }
+
+            // 4. Mirror to MDBList when a key is set: one bulk
+            // /sync/watched call per batch, episode-level via the nested
+            // shows payload.
+            if (MdbListClient.isConfigured(getApplication())) {
+                runCatching {
+                    MdbListClient.pushWatchedEpisodes(
+                        getApplication(),
+                        imdbId = parentId.takeIf { it.startsWith("tt") },
+                        tmdbId = showTmdbId,
+                        season = season,
+                        episodes = validEpisodes
+                    )
+                }.onFailure { e ->
+                    Log.e(
+                        "KBStream",
+                        "markSeasonWatched mdblist failed s=$season",
+                        e
+                    )
+                }
+            }
         }
     }
 
@@ -1689,6 +1710,26 @@ for (metaAddon in metaAddons) {
                     Log.e(
                         "KBStream",
                         "markSeasonUnwatched simkl failed s=$season",
+                        e
+                    )
+                }
+            }
+
+            // 4. Mirror the removal to MDBList when a key is set: one
+            // bulk /sync/watched/remove call per batch.
+            if (MdbListClient.isConfigured(getApplication())) {
+                runCatching {
+                    MdbListClient.removeWatchedEpisodes(
+                        getApplication(),
+                        imdbId = parentId.takeIf { it.startsWith("tt") },
+                        tmdbId = showTmdbId,
+                        season = season,
+                        episodes = validEpisodes
+                    )
+                }.onFailure { e ->
+                    Log.e(
+                        "KBStream",
+                        "markSeasonUnwatched mdblist failed s=$season",
                         e
                     )
                 }
@@ -1843,6 +1884,26 @@ for (metaAddon in metaAddons) {
                     Log.e(
                         "KBStream",
                         "markSpecificEpisodesUnwatched simkl failed s=$season",
+                        e
+                    )
+                }
+            }
+
+            // 4. Mirror the removal to MDBList when a key is set: one
+            // bulk /sync/watched/remove call per batch.
+            if (MdbListClient.isConfigured(getApplication())) {
+                runCatching {
+                    MdbListClient.removeWatchedEpisodes(
+                        getApplication(),
+                        imdbId = parentId.takeIf { it.startsWith("tt") },
+                        tmdbId = showTmdbId,
+                        season = season,
+                        episodes = validEpisodes
+                    )
+                }.onFailure { e ->
+                    Log.e(
+                        "KBStream",
+                        "markSpecificEpisodesUnwatched mdblist failed s=$season",
                         e
                     )
                 }
