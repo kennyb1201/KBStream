@@ -30,8 +30,8 @@ val sentryDsn = localProps.getProperty("SENTRY_DSN")
     ?: System.getenv("SENTRY_DSN")
     ?: ""
 
-val omdbApiKey = localProps.getProperty("OMDB_API_KEY")
-    ?: System.getenv("OMDB_API_KEY")
+val mdbListApiKey = localProps.getProperty("MDBLIST_API_KEY")
+    ?: System.getenv("MDBLIST_API_KEY")
     ?: ""
 
 // Trim(): a pasted secret or local.properties value with a trailing
@@ -88,7 +88,7 @@ android {
         buildConfigField("String", "SIMKL_CLIENT_ID", "\"$simklClientId\"")
         buildConfigField("String", "SIMKL_CLIENT_SECRET", "\"$simklClientSecret\"")
         buildConfigField("String", "SENTRY_DSN", "\"$sentryDsn\"")
-        buildConfigField("String", "OMDB_API_KEY", "\"$omdbApiKey\"")
+        buildConfigField("String", "MDBLIST_API_KEY", "\"$mdbListApiKey\"")
         buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"$supabaseAnonKey\"")
     }

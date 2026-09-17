@@ -20,7 +20,7 @@ import java.util.concurrent.TimeUnit
  *   GET /movies/{id}/comments?sort=likes&page=N
  *   GET /shows/{id}/comments?sort=likes&page=N
  * The {id} path segment accepts an IMDb id (tt...), which the app already
- * resolves for OMDb. Auth is the same unauthenticated client-id header the
+ * resolves for ratings. Auth is the same unauthenticated client-id header the
  * KB list browsing uses (see KBContentLoader.TRAKT_CLIENT_ID) —
  * comments are public data, no OAuth needed.
  *

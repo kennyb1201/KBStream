@@ -22,8 +22,8 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
 import com.kennyb1201.kbstream.data.reddit.RedditDiscussionsClient
 import com.kennyb1201.kbstream.data.trakt.TraktCommentsClient
-import com.kennyb1201.kbstream.data.omdb.OmdbClient
-import com.kennyb1201.kbstream.data.omdb.OmdbRatings
+import com.kennyb1201.kbstream.data.mdblist.MdbListClient
+import com.kennyb1201.kbstream.data.mdblist.MdbListRatings
 import com.kennyb1201.kbstream.data.tmdb.TmdbSeasonSummary
 import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
@@ -138,8 +138,8 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
     private val _collection = MutableStateFlow<TmdbCollectionDetail?>(null)
     val collection: StateFlow<TmdbCollectionDetail?> = _collection.asStateFlow()
 
-    private val _omdbRatings = MutableStateFlow<OmdbRatings?>(null)
-    val omdbRatings: StateFlow<OmdbRatings?> = _omdbRatings.asStateFlow()
+    private val _mdbListRatings = MutableStateFlow<MdbListRatings?>(null)
+    val mdbListRatings: StateFlow<MdbListRatings?> = _mdbListRatings.asStateFlow()
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
@@ -294,7 +294,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         _inProgressByStreamId.value = emptyMap()
         latestEpisodeSeasonRequest = initialSeason
         _collection.value = null
-        _omdbRatings.value = null
+        _mdbListRatings.value = null
         _allReviews.value = emptyList()
         _simklSeriesWatched.value = false
         _resolvedPosterIds.value = emptyMap()
@@ -681,7 +681,7 @@ for (metaAddon in metaAddons) {
                             .onSuccess { collection -> _collection.value = collection }
                     }
                     refreshPosterWatchedStatus(normalizedType)
-                    fetchOmdbRatings(normalizedType)
+                    fetchMdbListRatings(normalizedType)
                     fetchExtraReviews(normalizedType)
                 }
 
@@ -705,30 +705,31 @@ for (metaAddon in metaAddons) {
     }
 
     /**
-     * OMDb ratings (IMDb / Rotten Tomatoes / Metacritic). Key comes from the
-     * Settings screen (stored in prefs) first, falling back to the
-     * OMDb_API_KEY BuildConfig field; blank in both = feature silently off.
-     * IMDb id: addon meta ids are already tt-id based for movies/series; for
-     * TMDB-only ids fall back to the external_ids lookup.
+     * MDBList ratings (IMDb / TMDB / Rotten Tomatoes / Metacritic / Trakt /
+     * Letterboxd / MyAnimeList). Key comes from the Settings screen (stored
+     * in prefs) first, falling back to the MDBLIST_API_KEY BuildConfig
+     * field; blank in both = feature silently off. IMDb id: addon meta ids
+     * are already tt-id based for movies/series; for TMDB-only ids fall back
+     * to the external_ids lookup.
      */
-    private fun omdbApiKey(): String {
+    private fun mdbListApiKey(): String {
         val fromPrefs = runCatching {
             com.kennyb1201.kbstream.ui.settings.AppPreferences
-                .getOmdbApiKey(getApplication())
+                .getMdbListApiKey(getApplication())
         }.getOrDefault("")
         if (fromPrefs.isNotBlank()) return fromPrefs
 
         return runCatching {
-            com.kennyb1201.kbstream.BuildConfig.OMDB_API_KEY
+            com.kennyb1201.kbstream.BuildConfig.MDBLIST_API_KEY
         }.getOrDefault("")
     }
 
-    private fun fetchOmdbRatings(normalizedType: String) {
-        val key = omdbApiKey()
+    private fun fetchMdbListRatings(normalizedType: String) {
+        val key = mdbListApiKey()
         if (key.isBlank()) {
             Log.i(
                 "KBStream",
-                "OMDb ratings skipped: no API key (add one in Settings or OMDb_API_KEY build field)"
+                "MDBList ratings skipped: no API key (add one in Settings or MDBLIST_API_KEY build field)"
             )
             return
         }
@@ -741,7 +742,7 @@ for (metaAddon in metaAddons) {
                     normalizedType
                 ).orEmpty()
             if (!resolved.startsWith("tt")) return@launch
-            _omdbRatings.value = OmdbClient.fetchRatings(resolved, key)
+            _mdbListRatings.value = MdbListClient.fetchRatings(resolved, normalizedType, key)
         }
     }
 

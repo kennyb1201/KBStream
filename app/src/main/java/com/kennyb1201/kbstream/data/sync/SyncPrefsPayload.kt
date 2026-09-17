@@ -63,7 +63,7 @@ object PrefsPayloadBuilder {
         "poster_partial_watch_badge",
         "amoled_black",                      // AMOLED theme toggle (pure display pref)
         "pure_black_surface",                // Pure black cards/panels/containers toggle
-        "omdb_api_key",
+        "mdblist_api_key",
         "opensubtitles_api_key"              // player → search subtitles online
     )
 

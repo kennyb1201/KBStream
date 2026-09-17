@@ -49,7 +49,9 @@ object AppPreferences {
     private const val KEY_POSTER_CAPTION_TITLE = "poster_caption_title"
     private const val KEY_POSTER_CAPTION_YEAR = "poster_caption_year"
     private const val KEY_POSTER_CAPTION_RATING = "poster_caption_rating"
+    // Back-compat: a key pasted into the old OMDb field pre-migration.
     private const val KEY_OMDB_API_KEY = "omdb_api_key"
+    private const val KEY_MDBLIST_API_KEY = "mdblist_api_key"
     private const val KEY_OPENSUBTITLES_API_KEY = "opensubtitles_api_key"
     private const val KEY_HIDE_UPCOMING = "home_rail_hide_upcoming"
     private const val KEY_LANDSCAPE_CARDS = "home_landscape_cards"
@@ -458,16 +460,26 @@ object AppPreferences {
         prefs(context).edit().putBoolean(KEY_POSTER_CAPTION_RATING, enabled).apply()
     }
 
-    // ── OMDb API key (critic ratings: RT / Metacritic / IMDb) ─────────
-    // Stored here so the user can paste a free key from omdbapi.com without
+    // ── MDBList API key (critic ratings: IMDb / RT / Metacritic / more) ─
+    // Stored here so the user can paste their mdblist.com key without
     // rebuilding. The build-time BuildConfig key (local.properties / env)
-    // takes precedence when present.
-    fun getOmdbApiKey(context: Context): String =
-        prefs(context).getString(KEY_OMDB_API_KEY, "")?.trim().orEmpty()
+    // takes precedence when present. A key left over in the old OMDb slot
+    // migrates once so nobody silently loses their ratings row.
+    fun getMdbListApiKey(context: Context): String {
+        val current = prefs(context).getString(KEY_MDBLIST_API_KEY, "")?.trim().orEmpty()
+        if (current.isNotBlank()) return current
 
-    fun setOmdbApiKey(context: Context, key: String) {
+        val legacyOmdb = prefs(context).getString(KEY_OMDB_API_KEY, "")?.trim().orEmpty()
+        if (legacyOmdb.isNotBlank()) {
+            prefs(context).edit().putString(KEY_MDBLIST_API_KEY, legacyOmdb).apply()
+            return legacyOmdb
+        }
+        return ""
+    }
+
+    fun setMdbListApiKey(context: Context, key: String) {
         syncDisplayPrefsBlob(context)
-        prefs(context).edit().putString(KEY_OMDB_API_KEY, key.trim()).apply()
+        prefs(context).edit().putString(KEY_MDBLIST_API_KEY, key.trim()).apply()
     }
 
     // ── OpenSubtitles API key (in-player online subtitle search) ─────

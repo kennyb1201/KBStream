@@ -90,7 +90,7 @@ import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbCastMember
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
-import com.kennyb1201.kbstream.data.omdb.OmdbRatings
+import com.kennyb1201.kbstream.data.mdblist.MdbListRatings
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
 import com.kennyb1201.kbstream.data.tmdb.bestReleaseDate
@@ -311,7 +311,7 @@ fun DetailScreen(
     var seasonSwapSinkArmed by remember { mutableStateOf(false) }
 
     val meta by viewModel.meta.collectAsState()
-    val omdbRatings by viewModel.omdbRatings.collectAsState()
+    val mdbListRatings by viewModel.mdbListRatings.collectAsState()
     val allReviews by viewModel.allReviews.collectAsState()
     val tmdbDetail by viewModel.tmdbDetail.collectAsState()
     // TMDB clearlogo first (more reliable); add-on logo (fanart.tv etc.) as
@@ -2362,7 +2362,7 @@ fun DetailScreen(
                         val reviews = allReviews
                             .ifEmpty { tmdbDetail?.reviews?.results.orEmpty() }
 
-                        if (reviews.isNotEmpty() || omdbRatings?.hasAny == true) {
+                        if (reviews.isNotEmpty() || mdbListRatings?.hasAny == true) {
                             item(key = "reviewsheader") {
                                 Text(
                                     "REVIEWS",
@@ -2377,7 +2377,7 @@ fun DetailScreen(
                                 )
                             }
 
-                            if (omdbRatings?.hasAny == true) {
+                            if (mdbListRatings?.hasAny == true) {
                                 item(key = "criticratingsrow") {
                                     Row(
                                         modifier = Modifier
@@ -2385,9 +2385,13 @@ fun DetailScreen(
                                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
                                         listOf(
-                                            "IMDb" to omdbRatings?.imdb,
-                                            "RT" to omdbRatings?.rottenTomatoes,
-                                            "MC" to omdbRatings?.metacritic
+                                            "IMDb" to mdbListRatings?.imdb,
+                                            "RT" to mdbListRatings?.rottenTomatoes,
+                                            "TMDB" to mdbListRatings?.tmdb,
+                                            "Trakt" to mdbListRatings?.trakt,
+                                            "LB" to mdbListRatings?.letterboxd,
+                                            "MAL" to mdbListRatings?.myAnimeList,
+                                            "MC" to mdbListRatings?.metacritic
                                         ).forEach { (label, value) ->
                                             if (value != null) {
                                                 // Pure status chip: a Box can never

@@ -135,8 +135,8 @@ fun SettingsScreen(
     var preferredAudioLang by remember { mutableStateOf(AppPreferences.getPreferredAudioLanguage(context)) }
     var preferredSubtitleLang by remember { mutableStateOf(AppPreferences.getPreferredSubtitleLanguage(context)) }
     var backupStatus by remember { mutableStateOf<String?>(null) }
-    var omdbKeyInput by remember { mutableStateOf(AppPreferences.getOmdbApiKey(context)) }
-    var omdbKeySaved by remember { mutableStateOf(false) }
+    var mdbListKeyInput by remember { mutableStateOf(AppPreferences.getMdbListApiKey(context)) }
+    var mdbListKeySaved by remember { mutableStateOf(false) }
     var subsKeyInput by remember { mutableStateOf(AppPreferences.getOpensubtitlesApiKey(context)) }
     var subsKeySaved by remember { mutableStateOf(false) }
 
@@ -235,13 +235,14 @@ fun SettingsScreen(
                         description = "Connect your Simkl account for scrobbling",
                         onClick = onOpenSimkl
                     )
-                // OMDb API key: free key from omdbapi.com enables the critic
-                // ratings row (Rotten Tomatoes / Metacritic / IMDb) on detail pages.
-                // Declared before the card so the card's click can request focus —
-                // the field itself lives further down in the card's content.
-                val omdbFocusRequester = remember { FocusRequester() }
+                // MDBList API key: mdblist.com key enables the critic ratings
+                // row (IMDb / RT / Metacritic / TMDB / Trakt / Letterboxd / MAL)
+                // on detail pages. Declared before the card so the card's click
+                // can request focus — the field itself lives further down in the
+                // card's content.
+                val mdbListFocusRequester = remember { FocusRequester() }
                 KBCard(
-                    onClick = { omdbFocusRequester.requestFocus() },
+                    onClick = { mdbListFocusRequester.requestFocus() },
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
@@ -251,13 +252,13 @@ fun SettingsScreen(
                             .padding(horizontal = 14.dp, vertical = 10.dp)
                     ) {
                         Text(
-                            text = "OMDb API Key",
+                            text = "MDBList API Key",
                             color = KBTextHi,
                             style = MaterialTheme.typography.bodyMedium
                         )
                         Text(
-                            text = "Free key from omdbapi.com — enables Rotten Tomatoes " +
-                                "and Metacritic ratings on detail pages.",
+                            text = "Key from mdblist.com — enables IMDb, Rotten Tomatoes, " +
+                                "Metacritic, Trakt and more on detail pages.",
                             color = KBTextLo,
                             style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.padding(top = 2.dp)
@@ -266,10 +267,10 @@ fun SettingsScreen(
                         // Shared KB field: same look/behavior everywhere. Card OK
                         // requests focus (raises the IME); PASTE chip reads the
                         // clipboard; blur and Done both save.
-                        val omdbPaste: (String) -> Unit = { pasted ->
-                            omdbKeyInput = pasted.trim()
-                            AppPreferences.setOmdbApiKey(context, omdbKeyInput)
-                            omdbKeySaved = omdbKeyInput.isNotBlank()
+                        val mdbListPaste: (String) -> Unit = { pasted ->
+                            mdbListKeyInput = pasted.trim()
+                            AppPreferences.setMdbListApiKey(context, mdbListKeyInput)
+                            mdbListKeySaved = mdbListKeyInput.isNotBlank()
                         }
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -278,32 +279,32 @@ fun SettingsScreen(
                                 .fillMaxWidth()
                         ) {
                             KBTextField(
-                                value = omdbKeyInput,
+                                value = mdbListKeyInput,
                                 onValueChange = {
-                                    omdbKeyInput = it.trim()
-                                    omdbKeySaved = false
+                                    mdbListKeyInput = it.trim()
+                                    mdbListKeySaved = false
                                 },
-                                placeholder = "Paste key (e.g. a1b2c3d4)",
+                                placeholder = "Paste key (e.g. 12345)",
                                 modifier = Modifier.weight(1f),
-                                focusRequester = omdbFocusRequester,
+                                focusRequester = mdbListFocusRequester,
                                 onDone = {
-                                    AppPreferences.setOmdbApiKey(context, omdbKeyInput)
-                                    omdbKeySaved = omdbKeyInput.isNotBlank()
+                                    AppPreferences.setMdbListApiKey(context, mdbListKeyInput)
+                                    mdbListKeySaved = mdbListKeyInput.isNotBlank()
                                 },
                                 onFocusChanged = { focusedNow ->
                                     // Save on focus loss too — remote users often
                                     // just navigate away after pasting.
                                     if (!focusedNow) {
-                                        AppPreferences.setOmdbApiKey(context, omdbKeyInput)
-                                        omdbKeySaved = omdbKeyInput.isNotBlank()
+                                        AppPreferences.setMdbListApiKey(context, mdbListKeyInput)
+                                        mdbListKeySaved = mdbListKeyInput.isNotBlank()
                                     }
                                 }
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            KBPasteChip(onPaste = omdbPaste)
+                            KBPasteChip(onPaste = mdbListPaste)
                         }
 
-                        if (omdbKeySaved) {
+                        if (mdbListKeySaved) {
                             Text(
                                 text = "Saved — ratings appear the next time you open a title.",
                                 color = KBAccent,

@@ -756,7 +756,7 @@ class MainActivity : ComponentActivity() {
                             .fillMaxSize()
                             // Insets-based IME handling app-wide: with
                             // adjustResize, every screen's fields (sign-in,
-                            // OMDb key, addon URLs, profile names) stay above
+                            // API keys, addon URLs, profile names) stay above
                             // the keyboard via insets — no legacy window pan,
                             // which landed the scroll at the column bottom when
                             // the keyboard dismissed.
