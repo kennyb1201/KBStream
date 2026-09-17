@@ -240,6 +240,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
 
     fun getInstalledAddons():
             List<InstalledAddon> {
+        synchronized(stateLock) {
 
         return _installedAddons.value.ifEmpty {
 
@@ -248,11 +249,13 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                     _installedAddons.value = it
                 }
         }
+        }
     }
 
     fun saveInstalledAddons(
         addons: List<InstalledAddon>
     ) {
+        synchronized(stateLock) {
         val normalized =
             normalizeGlobalCatalogOrder(
                 addons
@@ -271,11 +274,35 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                 com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildAddons(appContext)
             )
         }
+        }
+    }
+
+    /**
+     * Atomic read-modify-write helper for callers that need to compute the
+     * next addon list from the CURRENT one (add/refresh flows that fetch a
+     * manifest first, then mutate). The transform runs under the same
+     * [stateLock] as every other mutator, so a background manifest apply or
+     * cloud-sync apply that lands between the caller's fetch and this call
+     * can no longer be clobbered by a stale list written back afterwards.
+     *
+     * Return null from [transform] to abort without writing (e.g. the addon
+     * vanished while the manifest was downloading).
+     */
+    fun updateInstalled(
+        transform: (List<InstalledAddon>) -> List<InstalledAddon>?
+    ) {
+        synchronized(stateLock) {
+            val next = transform(getInstalledAddons())
+            if (next != null) {
+                saveInstalledAddons(next)
+            }
+        }
     }
 
     fun removeAddon(
         id: String
     ) {
+        synchronized(stateLock) {
 
         saveInstalledAddons(
             getInstalledAddons()
@@ -283,12 +310,14 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                     it.id == id
                 }
         )
+        }
     }
 
     fun renameAddon(
         id: String,
         newName: String?
     ) {
+        synchronized(stateLock) {
 
         val cleaned =
             newName
@@ -314,6 +343,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                 }
 
         saveInstalledAddons(updated)
+        }
     }
 
     /**
@@ -326,6 +356,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         id: String,
         direction: Int
     ) {
+        synchronized(stateLock) {
 
         val current =
             getInstalledAddons()
@@ -356,6 +387,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         )
 
         saveInstalledAddons(current)
+        }
     }
 
     /**
@@ -367,6 +399,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         catalogId: String,
         showOnHome: Boolean
     ) {
+        synchronized(stateLock) {
 
         val updated =
             getInstalledAddons()
@@ -400,6 +433,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                 }
 
         saveInstalledAddons(updated)
+        }
     }
 
     /**
@@ -414,6 +448,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         catalogId: String,
         direction: Int
     ) {
+        synchronized(stateLock) {
 
         val configurations =
             getCatalogConfigurations()
@@ -450,6 +485,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         )
 
         refreshAddons()
+        }
     }
 
     /**
@@ -461,6 +497,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         catalogId: String,
         targetIndex: Int
     ) {
+        synchronized(stateLock) {
 
         val configurations =
             getCatalogConfigurations()
@@ -504,6 +541,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
             configurations
         )
           refreshAddons()
+        }
     }
 
     /**
@@ -517,6 +555,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         catalogId: String,
         name: String?
     ) {
+        synchronized(stateLock) {
 
         val updated =
             getInstalledAddons()
@@ -555,6 +594,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         )
 
         refreshAddons()
+        }
     }
 
     /**
@@ -569,6 +609,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         manifestUrl: String,
         manifest: AddonManifest
     ) {
+        synchronized(stateLock) {
 
         val current =
             getInstalledAddons()
@@ -704,6 +745,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         }
 
         saveInstalledAddons(current)
+        }
     }
 
     /**
@@ -714,6 +756,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         catalogType: String,
         catalogId: String
     ) {
+        synchronized(stateLock) {
 
         val updated =
             getInstalledAddons()
@@ -734,6 +777,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                 }
 
         saveInstalledAddons(updated)
+        }
     }
 
     /**
@@ -777,8 +821,10 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
     }
 
     fun refreshAddons() {
+        synchronized(stateLock) {
     _installedAddons.value = loadFromPreferencesOrDefaults()
     _catalogOrderVersion.value += 1
+        }
 }
 
     /**
@@ -819,6 +865,15 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
      *
      * Fire-and-forget: call from application startup or the periodic worker.
      */
+    // Guards every read-modify-write of the addon list (UI mutators on the
+    // main thread AND background writers like auto-update / cloud-sync
+    // apply). Without it, a UI mutation that read the list before a
+    // background manifest apply finishes would write back a stale copy and
+    // silently drop that apply (lost update). JVM monitors are reentrant, so
+    // nested locked calls (moveCatalog -> getCatalogConfigurations ->
+    // saveInstalledAddons) are safe.
+    private val stateLock = Any()
+
     private val applyMutex = Mutex()
 
     /**

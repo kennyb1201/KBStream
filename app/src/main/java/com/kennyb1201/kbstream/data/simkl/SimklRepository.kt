@@ -78,9 +78,13 @@ class SimklRepository(
     private val allShowItemsMutex =
         Mutex()
 
+    // Written under allShowItemsMutex, also read bare for cache checks;
+    // @Volatile gives cross-thread visibility of the published list.
+    @Volatile
     private var cachedAllShowItems:
         SimklAllShowsResponse? = null
 
+    @Volatile
     private var cachedAllShowItemsFetchedAt =
         0L
 
@@ -121,10 +125,12 @@ class SimklRepository(
     private val completedMovieKeysMutex =
         Mutex()
 
+    @Volatile
     private var cachedCompletedMovieKeys:
         Set<String>? =
         null
 
+    @Volatile
     private var cachedCompletedMovieKeysFetchedAt =
         0L
 
@@ -3181,6 +3187,10 @@ class SimklRepository(
         private const val COMPLETED_MOVIES_DISK_KEY =
             "simkl:completed_movies"
 
+        // Companion-level and read/written from arbitrary coroutines
+        // without a mutex: @Volatile guarantees visibility and atomic
+        // publication of the immutable list reference.
+        @Volatile
         private var cachedContinueWatching:
             List<SimklContinueWatchingItem>? =
             null

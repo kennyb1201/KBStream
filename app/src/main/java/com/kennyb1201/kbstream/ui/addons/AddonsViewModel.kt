@@ -502,47 +502,54 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                     return@launch
                 }
 
-                val current = addonManager.getInstalledAddons()
-                val existing = current.firstOrNull { it.id == manifest.id }
+                // Compute the next list INSIDE the manager's state lock so a
+                // background manifest apply / cloud apply that lands while
+                // this manifest was downloading can't be clobbered here.
+                var added = false
+                var updatedName = ""
+                addonManager.updateInstalled { current ->
+                    val existing = current.firstOrNull { it.id == manifest.id }
 
-                val catalogs = mergeCatalogSettings(
-                    oldCatalogs = existing?.catalogs.orEmpty(),
-                    newCatalogs = manifest.catalogs
-                )
+                    val catalogs = mergeCatalogSettings(
+                        oldCatalogs = existing?.catalogs.orEmpty(),
+                        newCatalogs = manifest.catalogs
+                    )
 
-                val installed = InstalledAddon(
-                    manifestUrl = cleanUrl,
-                    id = manifest.id,
-                    name = manifest.name,
-                    resources = manifest.resources,
-                    catalogs = catalogs,
-                    customName = existing?.customName,
-                    version = manifest.version,
-                    description = manifest.description,
-                    types = manifest.types,
-                    idPrefixes = manifest.idPrefixes,
-                    logo = manifest.logo ?: manifest.icon
-                )
+                    val installed = InstalledAddon(
+                        manifestUrl = cleanUrl,
+                        id = manifest.id,
+                        name = manifest.name,
+                        resources = manifest.resources,
+                        catalogs = catalogs,
+                        customName = existing?.customName,
+                        version = manifest.version,
+                        description = manifest.description,
+                        types = manifest.types,
+                        idPrefixes = manifest.idPrefixes,
+                        logo = manifest.logo ?: manifest.icon
+                    )
 
-                val updated = if (existing == null) {
-                    current + installed
-                } else {
-                    current.map {
-                        if (it.id == manifest.id) {
-                            installed
-                        } else {
-                            it
+                    added = existing == null
+                    updatedName = installed.displayName
+
+                    if (existing == null) {
+                        current + installed
+                    } else {
+                        current.map {
+                            if (it.id == manifest.id) {
+                                installed
+                            } else {
+                                it
+                            }
                         }
                     }
                 }
-
-                addonManager.saveInstalledAddons(updated)
                 refresh()
 
-                _status.value = if (existing == null) {
-                    "Added ${installed.displayName}"
+                _status.value = if (added) {
+                    "Added $updatedName"
                 } else {
-                    "Updated ${installed.displayName}"
+                    "Updated $updatedName"
                 }
                 checkHealth()
             } catch (e: Exception) {
@@ -884,34 +891,42 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         // in the catalog manager. Keeping the addon's other catalogs at their
         // current global offsets and spacing the edited set between them
         // preserves everything else exactly.
-        val currentAddon = _addons.value.firstOrNull { it.id == addonId }
-        val previousGlobalOrders = currentAddon
-            ?.catalogs
-            ?.map { "${it.type.trim().lowercase()}::${it.id.trim().lowercase()}" to it.order }
-            ?.toMap()
-            .orEmpty()
-        val previousMax = previousGlobalOrders.values.maxOrNull() ?: -1
+        //
+        // The whole read-modify-write runs under the manager's state lock and
+        // reads the MANAGER's current list (not this VM's snapshot), so a
+        // background manifest apply that landed since the last refresh() can
+        // never be clobbered by a stale write-back here.
+        var updated: List<InstalledAddon>? = null
+        addonManager.updateInstalled { current ->
+            val currentAddon = current.firstOrNull { it.id == addonId }
+            val previousGlobalOrders = currentAddon
+                ?.catalogs
+                ?.map { "${it.type.trim().lowercase()}::${it.id.trim().lowercase()}" to it.order }
+                ?.toMap()
+                .orEmpty()
+            val previousMax = previousGlobalOrders.values.maxOrNull() ?: -1
 
-        val updated = _addons.value.map { addon ->
-            if (addon.id == addonId) {
-                addon.copy(
-                    catalogs = catalogs
-                        .sortedBy { it.order }
-                        .mapIndexed { index, catalog ->
-                            val key = "${catalog.type.trim().lowercase()}::${catalog.id.trim().lowercase()}"
-                            val previous = previousGlobalOrders[key]
-                            catalog.copy(
-                                order = previous ?: (previousMax + 1 + index)
-                            )
-                        }
-                )
-            } else {
-                addon
+            updated = current.map { addon ->
+                if (addon.id == addonId) {
+                    addon.copy(
+                        catalogs = catalogs
+                            .sortedBy { it.order }
+                            .mapIndexed { index, catalog ->
+                                val key = "${catalog.type.trim().lowercase()}::${catalog.id.trim().lowercase()}"
+                                val previous = previousGlobalOrders[key]
+                                catalog.copy(
+                                    order = previous ?: (previousMax + 1 + index)
+                                )
+                            }
+                    )
+                } else {
+                    addon
+                }
             }
+            updated
         }
 
-        addonManager.saveInstalledAddons(updated)
-        _addons.value = updated
+        updated?.let { _addons.value = it }
     }
 
     /**
@@ -1048,7 +1063,18 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                     }
                 }
 
-                addonManager.saveInstalledAddons(refreshed)
+                // Rebase the refreshed copies onto the CURRENT list under the
+                // manager's state lock: manifests were fetched outside it, so
+                // a background apply meanwhile must not be overwritten.
+                addonManager.updateInstalled { current ->
+                    // Iterate the CURRENT list and overlay the refreshed
+                    // copies by id: addons added while fetching are kept,
+                    // addons removed while fetching stay removed, and only
+                    // entries we actually re-fetched get new data.
+                    current.map { live ->
+                        refreshed.firstOrNull { it.id == live.id } ?: live
+                    }
+                }
                 refresh()
 
                 _status.value = when {
@@ -1108,8 +1134,10 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                         }
                     }
 
-                addonManager.saveInstalledAddons(
-                    addonManager.getInstalledAddons().map { old ->
+                // Atomic RMW: the manifest was fetched outside the state
+                // lock, so apply it to the CURRENT list inside the lock.
+                addonManager.updateInstalled { current ->
+                    current.map { old ->
                         if (old.id == id) {
                             old.copy(
                                 name = manifest.name,
@@ -1127,7 +1155,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                             old
                         }
                     }
-                )
+                }
 
                 refresh()
 

@@ -300,7 +300,11 @@ object SupabaseSync {
         val table: String,
         val keyColumn: String,
         val key: String,
-        val payload: JsonObject
+        val payload: JsonObject,
+        // Wall clock at enqueue time. Uploaded as the row's updated_at column
+        // so a retried STALE flush can never carry a newer timestamp than a
+        // fresh row that was enqueued and flushed later.
+        val enqueuedAtMs: Long = System.currentTimeMillis()
     )
 
     private val outbox = ConcurrentHashMap<String, OutboxRow>()
@@ -445,10 +449,18 @@ object SupabaseSync {
                         row.key
                     )
                     put("payload", row.payload)
-                    put("updated_at", java.time.Instant.now().toString())
+                    put(
+                        "updated_at",
+                        java.time.Instant.ofEpochMilli(row.enqueuedAtMs).toString()
+                    )
                 }
                 c.from(row.table).upsert(body)
-                outbox.remove(outboxId(row))
+                // Remove only if the slot still maps to the EXACT row we just
+                // uploaded. If a newer write for the same key was enqueued
+                // while this upload was in flight, the slot now holds that
+                // newer row — removing by key alone would silently drop a
+                // write that never reached the cloud (lost update).
+                outbox.remove(outboxId(row), row)
             } catch (e: Exception) {
                 Log.w(TAG, "flush ${row.table}/${row.key} failed: ${e.message}")
                 // Keep in outbox; retried by the periodic sync loop.
