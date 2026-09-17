@@ -387,7 +387,7 @@ fun SettingsScreen(
                     }
                 }
 
-                // ── STREAM BADGES (Nuvio-compatible packs) ────────────────
+                // ── STREAM BADGES (KB-compatible packs) ────────────────
                 val badgeFocusRequester = remember { FocusRequester() }
                 KBCard(
                     onClick = { badgeFocusRequester.requestFocus() },
@@ -403,7 +403,7 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.bodyMedium
                         )
                         Text(
-                            text = "Import a Nuvio-compatible badge pack JSON — matched " +
+                            text = "Import a KB-compatible badge pack JSON — matched " +
                                 "badges show on sources and in the player overlay.",
                             color = KBTextLo,
                             style = MaterialTheme.typography.bodySmall,

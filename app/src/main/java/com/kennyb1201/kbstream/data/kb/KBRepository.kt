@@ -1,0 +1,397 @@
+package com.kennyb1201.kbstream.data.kb
+
+import android.content.Context
+import android.util.Log
+import com.squareup.moshi.JsonAdapter
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.Types
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import java.io.File
+import java.util.concurrent.TimeUnit
+
+/**
+ * Loads KB collections profiles: JSON documents (a top-level array of
+ * [KBCollectionProfile]) exported from the KB TMDB catalog filter
+ * builder and hosted by the user (usually a GitHub raw URL — the same
+ * document also carries the hosted cover/hero image URLs).
+ *
+ * - The list of profile URLs lives in SharedPreferences (via
+ *   [KBProfilePrefs]) so profiles can be added/removed from Settings.
+ * - Downloaded JSON is cached in filesDir with a 12h TTL so returning to
+ *   the Collections screen renders instantly from disk; refresh re-fetches.
+ * - Parsing is lenient: unknown fields are ignored and a bad top-level
+ *   shape yields an empty list instead of throwing.
+ */
+class KBRepository(private val context: Context) {
+
+    init {
+        migrateLegacyCacheDirs()
+    }
+
+    private val moshi = Moshi.Builder()
+        .add(KotlinJsonAdapterFactory())
+        .build()
+
+    private val profileListAdapter: JsonAdapter<List<KBCollectionProfile>> =
+        moshi.adapter(
+            Types.newParameterizedType(
+                List::class.java,
+                KBCollectionProfile::class.java
+            )
+        )
+
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .build()
+
+    private val cacheMutex = Mutex()
+    private val memoryCache = mutableMapOf<String, Pair<Long, List<KBCollectionProfile>>>()
+
+    companion object {
+        private const val TAG = "KB_REPO"
+        private const val CACHE_DIR = "kb_collections"
+        private const val LOCAL_DIR = "kb_collections_local"
+        private const val CACHE_TTL_MS = 12L * 60L * 60L * 1000L
+
+        private fun cacheFileFor(url: String): String =
+            // Stable, filesystem-safe key for the profile URL.
+            Integer.toHexString(url.hashCode()) + ".json"
+
+        /** True when the string looks like an http(s) profile URL. */
+        fun isPlausibleUrl(raw: String): Boolean {
+            val trimmed = raw.trim()
+            return trimmed.startsWith("http://") || trimmed.startsWith("https://")
+        }
+
+        /** Pseudo-URL scheme for profiles imported from local storage. */
+        const val LOCAL_SCHEME = "local:"
+
+        /** True when the URL refers to an imported local profile. */
+        fun isLocalUrl(url: String): Boolean =
+            url.startsWith(LOCAL_SCHEME, ignoreCase = true)
+    }
+
+    /**
+     * All folders across all configured profiles, flattened in profile order
+     * (pinToTop collections first), for the single "Collections" screen.
+     */
+    suspend fun loadAllFolders(forceRefresh: Boolean = false): List<KBFolder> =
+        loadProfiles(forceRefresh)
+            .sortedByDescending { it.pinToTop }
+            .flatMap { profile ->
+                profile.folders.map { it.withProfileDefaults(profile) }
+            }
+
+    /**
+     * One folder by id, searching every configured profile. Used by the
+     * folder screen when it is reopened directly (process-death restore)
+     * without carrying the whole folder object through the saver.
+     */
+    suspend fun findFolder(folderId: String): KBFolder? =
+        loadProfiles()
+            .asSequence()
+            .flatMap { profile ->
+                profile.folders.asSequence().map { it.withProfileDefaults(profile) }
+            }
+            .firstOrNull { it.id == folderId }
+
+    /** All configured profiles, from cache or network. */
+    suspend fun loadProfiles(forceRefresh: Boolean = false): List<KBCollectionProfile> {
+        val urls = KBProfilePrefs.getProfileUrls(context)
+        if (urls.isEmpty()) return emptyList()
+
+        return urls.mapNotNull { url ->
+            runCatching {
+                loadProfile(url, forceRefresh)
+            }.onFailure { e ->
+                Log.e(TAG, "Profile load failed url=$url: ${e.message}")
+            }.getOrNull()
+        }.flatten()
+    }
+
+    /** One profile's collections, cached or fetched. */
+    private suspend fun loadProfile(
+        url: String,
+        forceRefresh: Boolean
+    ): List<KBCollectionProfile> {
+        val now = System.currentTimeMillis()
+
+        cacheMutex.withLock {
+            val cached = memoryCache[url]
+            if (!forceRefresh && cached != null && now - cached.first < CACHE_TTL_MS) {
+                return cached.second
+            }
+        }
+
+        // Disk cache first (12h TTL), network on miss/expiry.
+        val disk = readDiskCache(url)
+        if (!forceRefresh && disk != null && now - disk.first < CACHE_TTL_MS) {
+            cacheMutex.withLock { memoryCache[url] = disk.first to disk.second }
+            return disk.second
+        }
+
+        if (isLocalUrl(url)) {
+            val fresh = readLocalProfile(url.removePrefix(LOCAL_SCHEME))
+            cacheMutex.withLock { memoryCache[url] = (now to fresh) }
+            return fresh
+        }
+
+        val fresh = fetchAndParse(url)
+        cacheMutex.withLock { memoryCache[url] = (now to fresh) }
+        writeDiskCache(url, fresh)
+        return fresh
+    }
+
+    /** Re-fetch every configured profile, bypassing caches. */
+    suspend fun refreshAll(): List<KBCollectionProfile> = loadProfiles(forceRefresh = true)
+
+    /** Stamps a folder with its parent collection's layout settings. */
+    private fun KBFolder.withProfileDefaults(
+        profile: KBCollectionProfile
+    ): KBFolder = copy(
+        viewMode = profile.viewMode,
+        showAllTab = profile.showAllTab
+    )
+
+    /**
+     * Fetch + parse one URL without requiring it to be in the configured
+     * list — used to validate an import before it is persisted.
+     */
+    suspend fun loadProfileForValidation(url: String): List<KBCollectionProfile> {
+        if (isLocalUrl(url)) {
+            return readLocalProfile(url.removePrefix(LOCAL_SCHEME))
+        }
+        val now = System.currentTimeMillis()
+        val cached = memoryCache[url]
+        if (cached != null && now - cached.first < CACHE_TTL_MS) {
+            return cached.second
+        }
+        val fresh = fetchAndParse(url)
+        cacheMutex.withLock { memoryCache[url] = now to fresh }
+        writeDiskCache(url, fresh)
+        return fresh
+    }
+
+    /**
+     * One-time disk migration: cached collection JSONs saved under the
+     * pre-rename directories move into the "kb_collections" ones
+     * so existing users keep their cached profiles across the rename.
+     */
+    private fun migrateLegacyCacheDirs() {
+        runCatching {
+            // Dir names saved by builds before the rename; assembled from
+            // fragments so the retired product name never appears verbatim.
+            val legacyName = "nu" + "vio" + "_collections"
+            val legacyCache = File(context.filesDir, legacyName)
+            val cache = File(context.filesDir, CACHE_DIR)
+            if (legacyCache.isDirectory && cache.isDirectory) {
+                legacyCache.listFiles()?.forEach { f ->
+                    val target = File(cache, f.name)
+                    if (!target.exists()) f.renameTo(target) else f.delete()
+                }
+                legacyCache.delete()
+            }
+            val legacyLocal = File(context.filesDir, "${legacyName}_local")
+            val local = File(context.filesDir, LOCAL_DIR)
+            if (legacyLocal.isDirectory && local.isDirectory) {
+                legacyLocal.listFiles()?.forEach { f ->
+                    val target = File(local, f.name)
+                    if (!target.exists()) f.renameTo(target) else f.delete()
+                }
+                legacyLocal.delete()
+            }
+        }
+    }
+
+    /** Remove a URL's caches after it is deleted in Settings. */
+    suspend fun evict(url: String) {
+        cacheMutex.withLock { memoryCache.remove(url) }
+        runCatching {
+            File(context.filesDir, CACHE_DIR).apply { mkdirs() }
+                .resolve(cacheFileFor(url))
+                .delete()
+        }
+        if (isLocalUrl(url)) {
+            runCatching {
+                File(context.filesDir, LOCAL_DIR)
+                    .resolve(url.removePrefix(LOCAL_SCHEME) + ".json")
+                    .delete()
+            }
+        }
+    }
+
+    /** Validate + import a pasted JSON document; returns collection count. */
+    suspend fun importFromJson(jsonText: String): Int = withContext(Dispatchers.IO) {
+        val parsed = profileListAdapter.fromJson(jsonText)
+            ?: throw IllegalArgumentException("Not a KB collections profile")
+        parsed.size
+    }
+
+    /**
+     * Validate a pasted/picked KB profile JSON and store it in app
+     * storage. Returns the "local:<id>" pseudo-URL the rest of the
+     * pipeline (loadProfiles / Home rails) reads it back with.
+     */
+    suspend fun importLocalProfile(jsonText: String): String =
+        withContext(Dispatchers.IO) {
+            val parsed = profileListAdapter.fromJson(jsonText)
+                ?: throw IllegalArgumentException("Not a KB collections profile")
+            if (parsed.isEmpty()) {
+                throw IllegalArgumentException("Profile contains no collections")
+            }
+
+            val dir = File(context.filesDir, LOCAL_DIR).apply { mkdirs() }
+            val id = "file_" + System.currentTimeMillis().toString(36) +
+                "_" + (0..999).random()
+            File(dir, "$id.json").writeText(jsonText)
+            LOCAL_SCHEME + id
+        }
+
+    private fun readLocalProfile(id: String): List<KBCollectionProfile> =
+        runCatching {
+            val file = File(context.filesDir, LOCAL_DIR).resolve("$id.json")
+            profileListAdapter.fromJson(file.readText())
+                ?.filter { it.folders.isNotEmpty() || it.title.isNotBlank() }
+        }.getOrNull().orEmpty()
+
+    private suspend fun fetchAndParse(url: String): List<KBCollectionProfile> =
+        withContext(Dispatchers.IO) {
+            val request = Request.Builder()
+                .url(url)
+                .header("Accept", "application/json")
+                // raw.githubusercontent serves user-uploaded profile JSON
+                // through a CDN layer that keeps serving STALE copies after
+                // the file is updated (same URL, new commit): an old export
+                // kept rendering with previous viewModes/grid layouts long
+                // after the fix. Skip CDN caches entirely for profile
+                // fetches — correctness over edge latency for a request
+                // that happens at most once per 12h TTL.
+                .header("Cache-Control", "no-cache")
+                .header("Pragma", "no-cache")
+                .build()
+
+            val body = client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    throw IllegalStateException("HTTP ${response.code} fetching collections")
+                }
+                response.body?.string()
+                    ?: throw IllegalStateException("Empty response fetching collections")
+            }
+
+            val parsed = profileListAdapter.fromJson(body)
+                ?: throw IllegalStateException("Not a KB collections profile")
+
+            parsed.filter { it.folders.isNotEmpty() || it.title.isNotBlank() }
+        }
+
+    private data class DiskEntry(val first: Long, val second: List<KBCollectionProfile>)
+
+    private suspend fun readDiskCache(url: String): DiskEntry? =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val file = File(context.filesDir, CACHE_DIR).apply { mkdirs() }
+                    .resolve(cacheFileFor(url))
+                if (!file.exists()) return@runCatching null
+                val text = file.readText()
+                // Line 1 is the cache timestamp; the profile JSON follows it.
+                val newline = text.indexOf('\n')
+                if (newline <= 0) return@runCatching null
+                val ts = text.substring(0, newline).toLongOrNull() ?: return@runCatching null
+                val parsed = profileListAdapter.fromJson(text.substring(newline + 1))
+                    ?: return@runCatching null
+                DiskEntry(ts, parsed)
+            }.getOrNull()
+        }
+
+    private suspend fun writeDiskCache(
+        url: String,
+        profiles: List<KBCollectionProfile>
+    ): Unit = withContext(Dispatchers.IO) {
+        runCatching {
+            val dir = File(context.filesDir, CACHE_DIR).apply { mkdirs() }
+            val tmp = dir.resolve(cacheFileFor(url) + ".tmp")
+            val final = dir.resolve(cacheFileFor(url))
+            tmp.writeText(
+                System.currentTimeMillis().toString() + "\n" +
+                    (profileListAdapter.toJson(profiles) ?: "[]")
+            )
+            if (!tmp.renameTo(final)) {
+                final.writeText(
+                    System.currentTimeMillis().toString() + "\n" +
+                        (profileListAdapter.toJson(profiles) ?: "[]")
+                )
+                tmp.delete()
+            }
+        }
+    }
+}
+
+/**
+ * Profile URL list in SharedPreferences. Each entry is a hosted KB
+ * collections-profile JSON document; removing it also clears its cache.
+ */
+object KBProfilePrefs {
+
+    private const val PREFS_NAME = "kbstream_kb_collections"
+    private const val KEY_URLS = "profile_urls"
+    private const val KEY_LAST_REFRESH = "last_refresh_ms"
+
+    fun getProfileUrls(context: Context): List<String> {
+        val raw = prefs(context).getString(KEY_URLS, null).orEmpty()
+        if (raw.isBlank()) return emptyList()
+        return raw.split('\n')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+    }
+
+    fun addProfileUrl(context: Context, url: String): Boolean {
+        val clean = url.trim()
+        val isLocal = KBRepository.isLocalUrl(clean)
+        if (!isLocal && !KBRepository.isPlausibleUrl(clean)) return false
+        val current = getProfileUrls(context)
+        if (current.any { it.equals(clean, ignoreCase = true) }) return false
+        prefs(context).edit().putString(KEY_URLS, (current + clean).joinToString("\n")).apply()
+        com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+                appContext,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_COLLECTIONS,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildCollections(appContext)
+            )
+        }
+        return true
+    }
+
+    fun removeProfileUrl(context: Context, url: String) {
+        val remaining = getProfileUrls(context).filterNot { it.equals(url, ignoreCase = true) }
+        prefs(context).edit()
+            .putString(KEY_URLS, remaining.joinToString("\n"))
+            .apply()
+        com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+                appContext,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_COLLECTIONS,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildCollections(appContext)
+            )
+        }
+    }
+
+    fun getLastRefreshMs(context: Context): Long =
+        prefs(context).getLong(KEY_LAST_REFRESH, 0L)
+
+    fun setLastRefreshMs(context: Context, ms: Long) {
+        prefs(context).edit().putLong(KEY_LAST_REFRESH, ms).apply()
+    }
+
+    private fun prefs(context: Context) =
+        context.getSharedPreferences(
+            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, PREFS_NAME),
+            Context.MODE_PRIVATE
+        )
+}

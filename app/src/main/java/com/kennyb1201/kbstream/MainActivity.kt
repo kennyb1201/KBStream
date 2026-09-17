@@ -81,7 +81,7 @@ import com.kennyb1201.kbstream.ui.player.PlayerCastMember
 import android.content.Intent
 import org.json.JSONArray
 import org.json.JSONObject
-import com.kennyb1201.kbstream.ui.nuvio.NuvioFolderScreen
+import com.kennyb1201.kbstream.ui.kb.KBFolderScreen
 import com.kennyb1201.kbstream.ui.settings.SettingsScreen
 import com.kennyb1201.kbstream.ui.search.SearchScreen
 import com.kennyb1201.kbstream.ui.search.SearchViewModel
@@ -177,8 +177,8 @@ sealed class Screen {
         val returnTo: Screen = Home
     ) : Screen()
 
-    /** One imported Nuvio collection folder (its own layout mode). */
-    data class NuvioFolder(
+    /** One imported KB collection folder (its own layout mode). */
+    data class KBFolder(
         val folderId: String,
         val returnTo: Screen = Home
     ) : Screen()
@@ -323,7 +323,7 @@ private fun encodeScreen(
                 }
             }
         }
-        is Screen.NuvioFolder -> {
+        is Screen.KBFolder -> {
             put("folderId", screen.folderId)
             if (depth < MAX_RETURN_DEPTH) {
                 put("returnTo", encodeScreen(screen.returnTo, depth + 1))
@@ -423,12 +423,12 @@ private fun decodeScreen(
                 returnTo = json.optJSONObject("returnTo")
                     ?.let { decodeScreen(it, depth + 1) }
             )
-            "nuvioFolder" -> Screen.NuvioFolder(
+            "kbFolder" -> Screen.KBFolder(
                 folderId = json.optString("folderId"),
                 returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
             )
             // Legacy saved state from when the manager was its own screen.
-            "nuvioManager" -> Screen.Addons
+            "kbManager" -> Screen.Addons
             "streams" -> {
                 val target = json.optJSONObject("target")
                     ?.let { decodeTarget(it) }
@@ -517,7 +517,7 @@ private fun Screen.typeName(): String = when (this) {
     is Screen.Tag -> "tag"
     is Screen.Collection -> "collection"
     is Screen.CatalogGrid -> "catalogGrid"
-    is Screen.NuvioFolder -> "nuvioFolder"
+    is Screen.KBFolder -> "kbFolder"
     is Screen.Streams -> "streams"
     is Screen.Player -> "player"
 }
@@ -984,7 +984,7 @@ fun AppRoot() {
             is Screen.CatalogGrid ->
                 current.returnTo
 
-            is Screen.NuvioFolder ->
+            is Screen.KBFolder ->
                 current.returnTo
 
             is Screen.ProfileEdit ->
@@ -1172,8 +1172,8 @@ fun AppRoot() {
                     screen = Screen.Settings
                 },
 
-                onOpenNuvioFolder = { folderId ->
-                    screen = Screen.NuvioFolder(
+                onOpenKBFolder = { folderId ->
+                    screen = Screen.KBFolder(
                         folderId = folderId,
                         returnTo = Screen.Home
                     )
@@ -1228,8 +1228,8 @@ fun AppRoot() {
             )
         }
 
-        is Screen.NuvioFolder -> {
-            NuvioFolderScreen(
+        is Screen.KBFolder -> {
+            KBFolderScreen(
                 folderId = current.folderId,
                 onBack = { screen = stableBackDestination(current.returnTo) },
                 onItemClick = { type, imdbId, poster, backdrop, title ->

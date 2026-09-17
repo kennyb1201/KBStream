@@ -31,7 +31,7 @@ private val KBSurfaceRaisedPureBlack = Color(0xFF050505)
 val kbAmoledBlackState = mutableStateOf(false)
 
 /**
- * Backing state for the Pure Black Surface toggle (Nuvio-style): when on,
+ * Backing state for the Pure Black Surface toggle (KB-style): when on,
  * cards / panels / containers join the background at true black. Requires
  * the AMOLED toggle — the getters below enforce that dependency, so a
  * synced blob that flips AMOLED off also lifts pure black.

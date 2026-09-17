@@ -148,8 +148,8 @@ dependencies {
 
     implementation("androidx.tv:tv-material:1.0.0")
     implementation("androidx.tv:tv-foundation:1.0.0")
-    // 1.7.x BOM: BringIntoViewSpec (Nuvio-style focus landing on the Home
-    // rails) was finalized in Compose 1.7; 1.6 shipped only the old
+    // 1.7.x BOM: BringIntoViewSpec (streaming-app-style focus landing on the
+    // Home rails) was finalized in Compose 1.7; 1.6 shipped only the old
     // BringIntoViewResponder API.
     implementation(platform("androidx.compose:compose-bom:2024.09.03"))
     implementation("androidx.compose.ui:ui")
@@ -195,10 +195,11 @@ implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.26.4")
     implementation("io.coil-kt.coil3:coil-compose:3.0.0")
     implementation("io.coil-kt.coil3:coil:3.0.0")
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.0.0")
-    // SVG badge art: several popular Nuvio badge packs serve chips as .svg,
-    // which base Coil cannot decode — without this those badges render blank.
+    // SVG badge art: several popular KB-compatible badge packs serve chips
+    // as .svg, which base Coil cannot decode — without this those badges
+    // render blank.
     implementation("io.coil-kt.coil3:coil-svg:3.0.0")
-    // Animated focus GIFs on Nuvio collection folder tiles (manifest
+    // Animated focus GIFs on KB collection folder tiles (manifest
     // focusGifUrl / focusGifEnabled); base Coil shows only the first frame.
     implementation("io.coil-kt.coil3:coil-gif:3.0.0")
 

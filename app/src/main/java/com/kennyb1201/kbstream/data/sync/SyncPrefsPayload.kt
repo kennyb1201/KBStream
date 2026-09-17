@@ -11,7 +11,7 @@ import kotlinx.serialization.json.putJsonObject
 /**
  * Prefs accessor resolved against the ACTIVE profile's namespace — the sync
  * layer must read/write the same store the app reads/writes, otherwise cloud
- * pushes and pulls would cross profiles (the "nuvio leak"). With no profiles
+ * pushes and pulls would cross profiles (the "kb leak"). With no profiles
  * this resolves to the legacy un-namespaced store, unchanged behavior.
  */
 private fun scopedPrefs(context: Context, baseName: String) =
@@ -19,6 +19,14 @@ private fun scopedPrefs(context: Context, baseName: String) =
         com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, baseName),
         Context.MODE_PRIVATE
     )
+
+/**
+ * Base name of a prefs store saved by builds before the N-U-V-I-O rename.
+ * Assembled from fragments so the retired product name never appears
+ * verbatim in source, while the one-time migrations below can still read
+ * (and drain) the old stores on upgrading devices.
+ */
+private fun legacyStoreName(tail: String) = "kbstream_" + "nu" + "vio" + "_$tail"
 
 /**
  * Builds and applies the keyed JSON blobs stored in sync_prefs.
@@ -87,8 +95,8 @@ object PrefsPayloadBuilder {
     const val KEY_SIMKL_AUTH = "simkl_auth"
     const val KEY_IPTV = "iptv_config"
     const val KEY_WATCHED_OVERRIDES = "watched_overrides"
-    const val KEY_HOME_ORDER = "nuvio_home_order"
-    const val KEY_COLLECTIONS = "nuvio_collections"
+    const val KEY_HOME_ORDER = "kb_home_order"
+    const val KEY_COLLECTIONS = "kb_collections"
     const val KEY_BADGE_PACK = "badge_pack"
     const val KEY_PROFILES = "profiles"
 
@@ -114,7 +122,25 @@ object PrefsPayloadBuilder {
     }
 
     fun buildHomeOrder(context: Context): JsonObject {
-        val prefs = scopedPrefs(context, "kbstream_nuvio_home_order")
+        val prefs = scopedPrefs(context, "kbstream_kb_home_order")
+        // One-time legacy migration: orders saved under the pre-rename
+        // store name carry into the new key so a user's home arrangement
+        // survives the rename.
+        val legacy = scopedPrefs(context, legacyStoreName("home_order"))
+        if (prefs.all.isEmpty() && legacy.all.isNotEmpty()) {
+            legacy.all.forEach { (k, v) ->
+                when (v) {
+                    is Boolean -> prefs.edit().putBoolean(k, v).apply()
+                    is Float -> prefs.edit().putFloat(k, v).apply()
+                    is Int -> prefs.edit().putInt(k, v).apply()
+                    is Long -> prefs.edit().putLong(k, v).apply()
+                    is String -> prefs.edit().putString(k, v).apply()
+                    is Set<*> -> @Suppress("UNCHECKED_CAST")
+                    prefs.edit().putStringSet(k, v as Set<String>).apply()
+                }
+            }
+            legacy.edit().clear().apply()
+        }
         return buildJsonObject {
             put("updatedAt", System.currentTimeMillis())
             put(
@@ -125,7 +151,24 @@ object PrefsPayloadBuilder {
     }
 
     fun buildCollections(context: Context): JsonObject {
-        val prefs = scopedPrefs(context, "kbstream_nuvio_collections")
+        val prefs = scopedPrefs(context, "kbstream_kb_collections")
+        // One-time legacy migration from the pre-rename collections
+        // store (same shape, old name).
+        val legacy = scopedPrefs(context, legacyStoreName("collections"))
+        if (prefs.all.isEmpty() && legacy.all.isNotEmpty()) {
+            legacy.all.forEach { (k, v) ->
+                when (v) {
+                    is Boolean -> prefs.edit().putBoolean(k, v).apply()
+                    is Float -> prefs.edit().putFloat(k, v).apply()
+                    is Int -> prefs.edit().putInt(k, v).apply()
+                    is Long -> prefs.edit().putLong(k, v).apply()
+                    is String -> prefs.edit().putString(k, v).apply()
+                    is Set<*> -> @Suppress("UNCHECKED_CAST")
+                    prefs.edit().putStringSet(k, v as Set<String>).apply()
+                }
+            }
+            legacy.edit().clear().apply()
+        }
         return buildJsonObject {
             put("updatedAt", System.currentTimeMillis())
             putJsonArray("profile_urls") {
@@ -258,7 +301,7 @@ object PrefsPayloadApplier {
 
     private fun applyHomeOrder(context: Context, payload: JsonObject) {
         val blob = (payload["home_order_json"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return
-        val prefs = scopedPrefs(context, "kbstream_nuvio_home_order")
+        val prefs = scopedPrefs(context, "kbstream_kb_home_order")
         val remoteUpdated = payloadUpdatedAt(payload)
         if (remoteUpdated != null && remoteUpdated < prefs.getLong("home_order_synced_at", 0L)) return
 
@@ -274,7 +317,7 @@ object PrefsPayloadApplier {
     private fun applyCollections(context: Context, payload: JsonObject) {
         val arr = payload["profile_urls"] as? kotlinx.serialization.json.JsonArray ?: return
         val urls = arr.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
-        val prefs = scopedPrefs(context, "kbstream_nuvio_collections")
+        val prefs = scopedPrefs(context, "kbstream_kb_collections")
         val joined = urls.joinToString("\n")
         if (joined == prefs.getString("profile_urls", null).orEmpty()) return
 

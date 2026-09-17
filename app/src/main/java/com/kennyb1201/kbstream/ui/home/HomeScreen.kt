@@ -98,7 +98,7 @@ import com.kennyb1201.kbstream.data.tmdb.displaySeasonEpisodeCount
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.MetaPreview
-import com.kennyb1201.kbstream.data.nuvio.NuvioFolder
+import com.kennyb1201.kbstream.data.kb.KBFolder
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.tmdb.movieStatusTag
@@ -107,7 +107,7 @@ import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.LandscapeCard
 import com.kennyb1201.kbstream.ui.components.PosterCard
-import com.kennyb1201.kbstream.ui.nuvio.NuvioHomeCollectionRail
+import com.kennyb1201.kbstream.ui.kb.KBHomeCollectionRail
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
@@ -143,14 +143,14 @@ private val RailBottomContentPadding = 12.dp
 private val RailHorizontalStartPadding = 12.dp
 private val RailSectionGap = 20.dp
 
-// Nuvio parity: MODERN_ROW_HEADER_FOCUS_INSET. When a row takes focus, its
+// KB parity: MODERN_ROW_HEADER_FOCUS_INSET. When a row takes focus, its
 // header lands this far below the rails viewport top — deterministic landing
 // kills both the CW/Upcoming sliver and the per-focus-step bounce.
 private val RailHeaderFocusInset = 40.dp
 
 private val HeroToFirstRailGap = 2.dp
 
-// Hero clearlogo box (ContentScale.Fit inside). Collection (Nuvio folder)
+// Hero clearlogo box (ContentScale.Fit inside). Collection (KB folder)
 // manifests supply their own titleLogoUrl, which is frequently a wordmark
 // that reads small at the shared size — render it noticeably larger.
 private val HeroLogoWidth = 300.dp
@@ -598,7 +598,7 @@ private fun isDarkMonochromeArtwork(bitmap: android.graphics.Bitmap): Boolean {
 }
 
 /**
- * Public alias so Nuvio FOLLOW_LAYOUT folder screens can render the exact
+ * Public alias so KB FOLLOW_LAYOUT folder screens can render the exact
  * same hero (clearlogo, gradients, metadata, inline trailer) as Home —
  * keeping one implementation guarantees the two stay identical.
  */
@@ -1898,16 +1898,16 @@ fun HomeScreen(
     onSearch: () -> Unit = {},
     onOpenGuide: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
-    onOpenNuvioFolder: (String) -> Unit = {},
+    onOpenKBFolder: (String) -> Unit = {},
     onOpenCatalogGrid: (Rail) -> Unit = {},
     viewModel: HomeViewModel =
         androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
     val context = LocalContext.current
 
-    // Nuvio collections (imported from a profile URL) interleaved with the
+    // KB collections (imported from a profile URL) interleaved with the
     // addon rails below; arrangement (pin/reorder/hide) from the manager.
-    val nuvioViewModel: com.kennyb1201.kbstream.ui.nuvio.NuvioHomeViewModel =
+    val kbViewModel: com.kennyb1201.kbstream.ui.kb.KBHomeViewModel =
         androidx.lifecycle.viewmodel.compose.viewModel()
 
     val showRailType by remember {
@@ -1956,14 +1956,14 @@ fun HomeScreen(
         }
     }
 
-    // Nuvio collections interleaved with addon rails (merged order from the
+    // KB collections interleaved with addon rails (merged order from the
     // Collections manager: pin / reorder / hide). Computed in composable
     // context — the LazyColumn builder lambda below is LazyListScope, not
     // composable, so it must receive only finished values.
-    val nuvioState by nuvioViewModel.state.collectAsStateWithLifecycle()
-    val mergedEntries = remember(rails, nuvioState) {
-        com.kennyb1201.kbstream.ui.nuvio.NuvioHomeSlots
-            .buildMergedEntries(rails, nuvioState)
+    val kbState by kbViewModel.state.collectAsStateWithLifecycle()
+    val mergedEntries = remember(rails, kbState) {
+        com.kennyb1201.kbstream.ui.kb.KBHomeSlots
+            .buildMergedEntries(rails, kbState)
     }
 
     // The up-onto-topbar hook belongs to the first rail in DISPLAY order,
@@ -1971,13 +1971,13 @@ fun HomeScreen(
     val firstDisplayedRailSourceIndex =
         mergedEntries
             .indexOfFirst {
-                it is com.kennyb1201.kbstream.ui.nuvio.HomeEntry.AddonRail
+                it is com.kennyb1201.kbstream.ui.kb.HomeEntry.AddonRail
             }
             .takeIf { it >= 0 }
             ?.let { index ->
                 (
                     mergedEntries[index] as
-                        com.kennyb1201.kbstream.ui.nuvio.HomeEntry.AddonRail
+                        com.kennyb1201.kbstream.ui.kb.HomeEntry.AddonRail
                     ).sourceIndex
             }
             ?: -1
@@ -2030,13 +2030,13 @@ fun HomeScreen(
         mutableStateOf<MetaPreview?>(firstHomeItem)
     }
 
-    // Nuvio folder tile currently under focus (null = a normal catalog item
+    // KB folder tile currently under focus (null = a normal catalog item
     // owns the hero). The manifest supplies the folder's heroBackdropUrl /
     // titleLogoUrl directly, so the hero swaps to the collection's own
     // artwork without probing addons — no meta/trailer resolution happens
     // for folders.
     var focusedFolder by remember {
-        mutableStateOf<NuvioFolder?>(null)
+        mutableStateOf<KBFolder?>(null)
     }
 
     var focusedContinueWatchingItem by remember {
@@ -2088,7 +2088,7 @@ fun HomeScreen(
         lastPosterFocusRequester?.requestFocus()
     }
 
-    // Nuvio-style focus landing (ported from NuvioTV's ModernHomeContent /
+    // KB-style focus landing (ported from KBTV's ModernHomeContent /
     // ModernHomeRowsList). No snap scrolls anywhere: the rows LazyColumn is
     // wrapped in a BringIntoViewSpec so that when a catalog rail takes
     // focus, Compose's native focus bring-into-view scroll lands the row
@@ -2097,8 +2097,8 @@ fun HomeScreen(
     //    (landing on a catalog rail always pushes those rows fully above),
     //  - no bounce (the spec returns the same distance for every child of
     //    the focused row, so the scroll target never changes mid-flight),
-    //  - the hero stays visible above the first rail exactly like Nuvio.
-    // Nuvio uses MODERN_ROW_HEADER_FOCUS_INSET = 40.dp for the same job;
+    //  - the hero stays visible above the first rail exactly like KB.
+    // KB uses MODERN_ROW_HEADER_FOCUS_INSET = 40.dp for the same job;
     // RailHeaderFocusInset mirrors that (defined with the Home constants).
     val density = LocalDensity.current
     val railRowsBringIntoViewSpec = remember(density) {
@@ -2114,7 +2114,7 @@ fun HomeScreen(
                 // the spring quiet during horizontal focus moves (no bounce).
                 if (abs(currentLeadingEdge - topInsetPx) < 1f) return 0f
                 val distance = currentLeadingEdge - topInsetPx
-                // Never force the list above its start (mirrors Nuvio's
+                // Never force the list above its start (mirrors KB's
                 // canScrollBackward guard).
                 if (distance < 0f && !railListState.canScrollBackward) return 0f
                 return distance
@@ -2122,9 +2122,9 @@ fun HomeScreen(
         }
     }
 
-    // Horizontal counterpart (Nuvio's ModernHomeRows horizontalBringIntoViewSpec):
+    // Horizontal counterpart (KB's ModernHomeRows horizontalBringIntoViewSpec):
     // a focused card lands with its leading edge at the rail's start padding,
-    // so the row tracks focus like Nuvio's rails instead of the minimal
+    // so the row tracks focus like KB's rails instead of the minimal
     // default scroll (cards never disappear past the left edge). Wrapping
     // each rail's LazyRow with this also SHADOWS the vertical spec above,
     // which would otherwise leak into the rows via CompositionLocalProvider.
@@ -2182,7 +2182,7 @@ fun HomeScreen(
         viewModel.onHomeResumed()
         // Pick up Collections-manager edits (import / pin / reorder / hide)
         // made while we were away.
-        nuvioViewModel.load()
+        kbViewModel.load()
     }
 
     LaunchedEffect(showTopBar) {
@@ -2347,7 +2347,7 @@ fun HomeScreen(
         Column(
             modifier = Modifier.fillMaxSize()
         ) {
-            // Hero owner: a focused Nuvio folder tile (manifest artwork)
+            // Hero owner: a focused KB folder tile (manifest artwork)
             // or a focused catalog/Continue-Watching item. Folders render
             // even when no catalog item has been focused yet.
             val heroFolder = focusedFolder
@@ -2356,18 +2356,18 @@ fun HomeScreen(
                     ?: f.coverImageUrl?.takeIf { it.isNotBlank() }
             }
             val folderLogo = heroFolder?.titleLogoUrl?.takeIf { it.isNotBlank() }
-            // Nuvio's ModernHomeModels blanks the hero title for
+            // KB's ModernHomeModels blanks the hero title for
             // hideTitle folders (the clearlogo stands alone; with no logo
             // the hero shows artwork only).
             val folderPreview = heroFolder?.let { f ->
                 MetaPreview(
-                    id = "nuvio-folder:${f.id ?: f.title}",
+                    id = "kb-folder:${f.id ?: f.title}",
                     type = "movie",
                     name = if (f.hideTitle) "" else f.title
                 )
             }
             (folderPreview ?: focusedItem)?.let {
-                // Nuvio-style proportional hero: give the rails a fixed
+                // KB-style proportional hero: give the rails a fixed
                 // fraction of the real screen height, and the hero whatever
                 // remains (minus one row title + breathing room). Scales to
                 // any TV density, unlike the old fixed 300.dp which pushed
@@ -2417,16 +2417,16 @@ fun HomeScreen(
                 )
             }
 
-            // Nuvio parity: the rows list gets the custom vertical
+            // KB parity: the rows list gets the custom vertical
             // BringIntoViewSpec (fixed header landing inset). The opaque
-            // hero spacer below is what lets Nuvio's fixed-viewport trick
+            // hero spacer below is what lets KB's fixed-viewport trick
             // work with a flowing hero: focus scrolling the catalog rails
             // slides the spacer under the hero instead of leaving the
             // CW/Upcoming sliver peeking out from behind it.
             CompositionLocalProvider(
                 LocalBringIntoViewSpec provides railRowsBringIntoViewSpec
             ) {
-                // Nuvio parity: bottom contentPadding equals the rows
+                // KB parity: bottom contentPadding equals the rows
                 // viewport so the LAST rail can also land at the focus
                 // inset — without it the tail rows stop short and leave a
                 // sliver of the rows above them peeking under the hero.
@@ -2755,7 +2755,7 @@ fun HomeScreen(
                         }
 
                         else -> {
-                            // Nuvio collections interleave with addon rails:
+                            // KB collections interleave with addon rails:
                             // the merged order was computed above in composable
                             // context (pin / reorder / hide from the manager;
                             // unarranged collections sit after the addon rails).
@@ -2763,27 +2763,27 @@ fun HomeScreen(
                                 items = mergedEntries,
                                 key = { _, entry ->
                                     when (entry) {
-                                        is com.kennyb1201.kbstream.ui.nuvio.HomeEntry.AddonRail ->
+                                        is com.kennyb1201.kbstream.ui.kb.HomeEntry.AddonRail ->
                                             "rail|" + entry.sourceIndex + "|" +
                                                 entry.rail.addonName + ":" +
                                                 entry.rail.catalogName + ":" + entry.rail.type
-                                        is com.kennyb1201.kbstream.ui.nuvio.HomeEntry.Collection ->
-                                            "nuvio|" + (entry.collection.id ?: entry.collection.title)
+                                        is com.kennyb1201.kbstream.ui.kb.HomeEntry.Collection ->
+                                            "kb|" + (entry.collection.id ?: entry.collection.title)
                                     }
                                 }
                             ) { _, entry ->
                                 when (val e = entry) {
-                                    is com.kennyb1201.kbstream.ui.nuvio.HomeEntry.Collection ->
-                                        NuvioHomeCollectionRail(
+                                    is com.kennyb1201.kbstream.ui.kb.HomeEntry.Collection ->
+                                        KBHomeCollectionRail(
                                             collection = e.collection,
-                                            onOpenFolder = onOpenNuvioFolder,
-                                            onFolderFocused = { folder: NuvioFolder ->
+                                            onOpenFolder = onOpenKBFolder,
+                                            onFolderFocused = { folder: KBFolder ->
                                                 userAdjustedFocus = true
                                                 focusedFolder = folder
                                                 focusedContinueWatchingItem = null
                                             }
                                         )
-                                    is com.kennyb1201.kbstream.ui.nuvio.HomeEntry.AddonRail -> {
+                                    is com.kennyb1201.kbstream.ui.kb.HomeEntry.AddonRail -> {
                                         val rail = e.rail
                                         val railIndex = e.sourceIndex
 

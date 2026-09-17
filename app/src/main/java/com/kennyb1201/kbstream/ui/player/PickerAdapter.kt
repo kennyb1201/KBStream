@@ -50,7 +50,7 @@ class PickerAdapter(
     companion object {
         /**
          * Fills a horizontal LinearLayout with badge chips (hosted image art,
-         * Nuvio-style), mirroring the Compose StreamBadgeChip visuals.
+         * KB-style), mirroring the Compose StreamBadgeChip visuals.
          */
         fun bindBadgeRow(row: LinearLayout, badges: List<StreamBadge>) {
             row.removeAllViews()

@@ -91,7 +91,7 @@ import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.addon.CatalogConfiguration
 import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.data.addon.ManifestCatalog
-import com.kennyb1201.kbstream.data.nuvio.NuvioHomeOrderPrefs
+import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
@@ -1732,7 +1732,7 @@ private fun CatalogManagerDialog(
         remember(configurations, collectionsState, homeOrderVersion) {
         val collectionByKey = collectionsState.collections.associateBy { it.key }
         val addonByKey = configurations.associateBy {
-            NuvioHomeOrderPrefs.addonKeyFromManifest(
+            KBHomeOrderPrefs.addonKeyFromManifest(
                 it.addonManifestUrl,
                 it.catalog.type,
                 it.catalog.id
@@ -1741,7 +1741,7 @@ private fun CatalogManagerDialog(
         val known = addonByKey.keys + collectionsState.collections.map { it.key }
         // Best-effort merged order read (same prefs the ViewModel writes);
         // keys not found keep their default slot at the end.
-        val prefs = NuvioHomeOrderPrefs.readOrder()
+        val prefs = KBHomeOrderPrefs.readOrder()
         val orderedKeys = buildList {
             prefs.pinned.filter { it in known }.forEach { add(it) }
             prefs.order.filter { it in known && it !in prefs.pinned }.forEach { add(it) }
@@ -1749,7 +1749,7 @@ private fun CatalogManagerDialog(
         }
 
         orderedKeys.mapNotNull { key ->
-            if (key.startsWith("nuvio:")) {
+            if (key.startsWith("kb:")) {
                 val collection = collectionByKey[key] ?: return@mapNotNull null
                 // Hidden/pinned derive from the FRESH home-order prefs (the
                 // same rule Home and the ViewModel use: hidden-set membership,
@@ -1970,7 +1970,7 @@ private fun CatalogManagerDialog(
                 KBTextField(
                     value = collectionUrlInput,
                     onValueChange = onCollectionUrlChange,
-                    placeholder = "https://…/nuvio-collections.json",
+                    placeholder = "https://…/kb-collections.json",
                     modifier = Modifier.weight(1f),
                     onDone = onImportCollectionUrl
                 )

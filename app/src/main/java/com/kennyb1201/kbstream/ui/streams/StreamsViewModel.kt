@@ -167,7 +167,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
 
         val useRanker = AppPreferences.getUseStreamRanker(getApplication())
         val preppedStreams = if (useRanker) StreamRanker.rank(allStreams) else allStreams
-        // Nuvio-compatible badge packs: attach matched badge chips before
+        // KB-compatible badge packs: attach matched badge chips before
         // the list reaches the UI.
         val withBadges = StreamBadgeEngine.apply(preppedStreams, getApplication())
         val rankedMsg = if (useRanker) "ranked total = ${withBadges.size}" else "unranked total = ${withBadges.size}"

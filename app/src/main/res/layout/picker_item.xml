@@ -20,7 +20,7 @@
         android:maxLines="5"
         android:ellipsize="end" />
 
-    <!-- Nuvio-compatible stream badge chips row -->
+    <!-- KB-compatible stream badge chips row -->
     <LinearLayout
         android:id="@+id/picker_item_badges"
         android:layout_width="match_parent"

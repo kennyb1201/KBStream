@@ -344,7 +344,7 @@
                 android:paddingTop="8dp"
                 android:paddingBottom="10dp">
 
-                <!-- Nuvio-compatible stream badge chips for the current
+                <!-- KB-compatible stream badge chips for the current
                      source (above the source line, per design ask) -->
                 <LinearLayout
                     android:id="@+id/badge_row"

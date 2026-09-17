@@ -2037,7 +2037,7 @@ class NativePlayerActivity : ComponentActivity() {
             p5GlesActive = false
         }
         // Audio extension mode follows the independent audio decoder priority
-        // (Nuvio-style): 0 = device only (no FFmpeg at all), 1 = FFmpeg
+        // (KB-style): 0 = device only (no FFmpeg at all), 1 = FFmpeg
         // fallback behind MediaCodec, 2 = prefer FFmpeg — decoding DTS/TrueHD
         // ahead of MediaCodec passthrough, which is silent on TVs without a
         // DTS-capable sink.
@@ -2226,7 +2226,7 @@ class NativePlayerActivity : ComponentActivity() {
                 // a MediaCodec decoder inside the hardware tunnel, so a
                 // software-decoded PCM track gets created with FLAG_HW_AV_SYNC
                 // and AudioFlinger refuses it (createTrack error -38,
-                // "Cannot create AudioTrack"). Same rule Nuvio uses.
+                // "Cannot create AudioTrack"). Same rule KB uses.
                 if (enableTunneling && !isLiveChannel &&
                     audioExtMode != DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
                 ) {
@@ -3716,7 +3716,7 @@ class NativePlayerActivity : ComponentActivity() {
          * grows with the longest line and leaves ragged text edges. [padded]
          * adds a non-breaking-space cushion on each authored line's ends so
          * the strip reads as a soft rectangle; the unpadded variant is the
-         * tight letters-only Nuvio look.
+         * tight letters-only KB look.
          */
         private fun renderStrip(text: CharSequence, color: Int, padded: Boolean) {
             subtitleText.background = null

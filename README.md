@@ -1,7 +1,7 @@
 # KBStream
 
 A media streaming app for Android TV / Fire TV. Discovers movies and series
-via TMDB, resolves playback through Stremio-style addons and Nuvio
+via TMDB, resolves playback through Stremio-style addons and KB
 collections, tracks watching across devices via Simkl and Supabase sync, and
 plays it all in a native ExoPlayer-based player (including IPTV live TV with
 EPG).
@@ -9,7 +9,7 @@ EPG).
 ## Features
 
 - **Discover / Home** — TMDB-powered rails by genre, network, studio,
-  collection, decade, and streaming service, plus addon catalogs and Nuvio
+  collection, decade, and streaming service, plus addon catalogs and KB
   collections; Continue Watching and an Upcoming-episodes rail.
 - **Search** — unified TMDB + addon search with a browsable catalog
   (genres, keywords, services, networks, studios, collections, decades).

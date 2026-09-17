@@ -104,7 +104,7 @@ data class Stream(
     @Json(name = "drm")
     val drm: StreamDrm? = null,
 
-    // Resolved badge chips (Nuvio-compatible badge packs); never arrives
+    // Resolved badge chips (KB-compatible badge packs); never arrives
     // from addon JSON — attached client-side by StreamBadgeEngine.
     val badges: List<com.kennyb1201.kbstream.data.badges.StreamBadge> = emptyList()
 )
@@ -167,7 +167,7 @@ data class ManifestCatalog(
     val customName: String? = null,
 
     /**
-     * Nuvio per-catalog home visibility hint (BingeCat, Ultra MAX, ...).
+     * KB per-catalog home visibility hint (BingeCat, Ultra MAX, ...).
      * Catalogs that are only reachable via search/person deep-links
      * (director rails, "because you watched" seeds, ...) declare
      * showInHome=false so hosts don't put them on the home screen.
@@ -177,7 +177,7 @@ data class ManifestCatalog(
     val showInHomeHint: Boolean? = null,
 
     /**
-     * Nuvio search-catalog marker. Search-placeholder catalogs are driven
+     * KB search-catalog marker. Search-placeholder catalogs are driven
      * through the search extra and return nothing on a plain browse call,
      * so they must never become Home rails by default.
      */

@@ -672,7 +672,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                 manifestCatalog.copy(
                     // User's pinned/unpinned choice wins for existing
                     // catalogs; a brand-new catalog honors the manifest's
-                    // Nuvio hints (showInHome/isSearch) so hidden-by-design
+                    // KB hints (showInHome/isSearch) so hidden-by-design
                     // rails (director/seed catalogs, search placeholders)
                     // don't flood Home on install. This is only the DEFAULT:
                     // the user can still pin any of them via the manager.

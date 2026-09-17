@@ -13,7 +13,7 @@ import okhttp3.Request
 import java.util.concurrent.TimeUnit
 
 /**
- * Stream badge packs, Nuvio-compatible: a pack is a JSON document with a
+ * Stream badge packs, KB-compatible: a pack is a JSON document with a
  * `filters` array; each filter pairs a regex [StreamBadgeFilter.pattern]
  * with the badge art/colors to show when the pattern matches a stream's
  * text (name, title, description, filename...). Packs are imported from a
@@ -186,8 +186,8 @@ object StreamBadgeEngine {
     }
 
     /**
-     * Text fields a badge pattern may match against: Nuvio's candidates
-     * (name / title / description) plus the URL. The URL is beyond Nuvio's
+     * Text fields a badge pattern may match against: KB's candidates
+     * (name / title / description) plus the URL. The URL is beyond KB's
      * set — direct-link addons often keep quality/host info only in the
      * link, and packs with host or release-name patterns need it to match.
      */

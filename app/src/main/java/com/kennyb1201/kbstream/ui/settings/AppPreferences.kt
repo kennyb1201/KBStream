@@ -134,8 +134,8 @@ object AppPreferences {
         prefs(context).edit().putBoolean(KEY_ENABLE_PIP, enabled).apply()
     }
 
-    // ── Decoder priority (Nuvio-style) ───────────────────────────────
-    // Audio decoder priority (Nuvio-style): position of the FFmpeg audio
+    // ── Decoder priority (KB-style) ───────────────────────────────
+    // Audio decoder priority (KB-style): position of the FFmpeg audio
     // extension relative to MediaCodec.
     // 0 = Device decoders only (no FFmpeg audio)
     // 1 = Prefer device decoders (FFmpeg fallback behind MediaCodec)

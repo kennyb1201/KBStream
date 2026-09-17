@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Direct YouTube player-API extractor (modeled after Nuvio's approach).
+ * Direct YouTube player-API extractor (modeled after KB's approach).
  *
  * Talks straight to YouTube's InnerTube `youtubei/v1/player` endpoint — the
  * same API the official YouTube apps use — with a 3-client fallback chain

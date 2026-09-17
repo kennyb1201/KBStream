@@ -21,7 +21,7 @@ import java.util.concurrent.TimeUnit
  *   GET /shows/{id}/comments?sort=likes&page=N
  * The {id} path segment accepts an IMDb id (tt...), which the app already
  * resolves for OMDb. Auth is the same unauthenticated client-id header the
- * Nuvio list browsing uses (see NuvioContentLoader.TRAKT_CLIENT_ID) —
+ * KB list browsing uses (see KBContentLoader.TRAKT_CLIENT_ID) —
  * comments are public data, no OAuth needed.
  *
  * Everything fails soft (empty list): reviews are supplementary and must
@@ -35,7 +35,7 @@ object TraktCommentsClient {
         .callTimeout(8, TimeUnit.SECONDS)
         .build()
 
-    // Nuvio's own bundled Trakt app client id — the same key NuvioContentLoader
+    // KB's own bundled Trakt app client id — the same key KBContentLoader
     // already uses for unauthenticated public-list browsing. NOTE: Trakt now
     // rejects many widely-copied third-party client ids (403); requests here
     // fail soft so that only costs the supplementary Trakt comments.

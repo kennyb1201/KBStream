@@ -330,7 +330,7 @@ class TmdbRepository(context: Context) {
         val loaded = api.getPerson(personId, apiKey) ?: return null
         // Kids Mode: trim the combined filmography to the active ceiling at
         // the source. One chokepoint covers every consumer — the actor
-        // screen, detail person chips, and Nuvio PERSON/DIRECTOR/WRITER
+        // screen, detail person chips, and KB PERSON/DIRECTOR/WRITER
         // rails (which read combinedCredits straight off this payload).
         val ceiling = kidsMaxAge()
         val credits = loaded.combinedCredits
@@ -467,17 +467,17 @@ class TmdbRepository(context: Context) {
     }
 
     // ------------------------------------------------------------------
-    // Nuvio collections: raw TMDB source loaders (discover / list /
+    // KB collections: raw TMDB source loaders (discover / list /
     // collection / company / network). A null return means the request
     // failed; an empty list means the query legitimately has no results.
     // ------------------------------------------------------------------
 
-    /** Generic /discover with the full Nuvio filter-builder parameter set. */
-    suspend fun discoverNuvio(
+    /** Generic /discover with the full KB filter-builder parameter set. */
+    suspend fun discoverKB(
         mediaType: String,
         page: Int = 1,
         sortBy: String? = null,
-        filters: com.kennyb1201.kbstream.data.nuvio.NuvioFilters? = null
+        filters: com.kennyb1201.kbstream.data.kb.KBFilters? = null
     ): List<TmdbDiscoverItem>? {
         if (apiKey.isBlank()) return null
         val isTv = mediaType.lowercase() == "tv"
@@ -536,7 +536,7 @@ class TmdbRepository(context: Context) {
             }.results
         }.getOrNull()
             ?.let { items ->
-                // Kids Mode: this is the raw loader behind every Nuvio
+                // Kids Mode: this is the raw loader behind every KB
                 // folder rail, so the ceiling check runs here once and
                 // covers all folder screens (movies + series mixed).
                 if (kidsMaxAge() == null) items
@@ -553,7 +553,7 @@ class TmdbRepository(context: Context) {
      * rail renderer does (first_air_date present => series) since /list
      * results carry no media_type field.
      */
-    suspend fun getNuvioListItems(listId: Int, page: Int = 1): List<TmdbDiscoverItem>? {
+    suspend fun getKBListItems(listId: Int, page: Int = 1): List<TmdbDiscoverItem>? {
         if (apiKey.isBlank()) return null
         return runCatching {
             api.getListItems(listId, apiKey, page).results
@@ -568,7 +568,7 @@ class TmdbRepository(context: Context) {
     }
 
     /** TMDB "COLLECTION" source: the collection's parts. */
-    suspend fun getNuvioCollectionItems(collectionId: Int): List<TmdbCollectionPart>? {
+    suspend fun getKBCollectionItems(collectionId: Int): List<TmdbCollectionPart>? {
         if (apiKey.isBlank()) return null
         return runCatching {
             getCollection(collectionId)?.parts
@@ -868,7 +868,7 @@ class TmdbRepository(context: Context) {
 
     // ------------------------------------------------------------------
     // Kids Mode enforcement. Every discover-backed rail (genres, keywords,
-    // studios, networks, services, decades, Nuvio folders) funnels through
+    // studios, networks, services, decades, KB folders) funnels through
     // the *RailPage / *Section helpers below, so certifying each page once
     // here covers the whole browse surface for the ACTIVE profile. Titles
     // above the profile's rating ceiling are dropped; the check reuses the
@@ -1342,7 +1342,7 @@ class TmdbRepository(context: Context) {
 
     /**
      * One decade rail, single media type — movies and series stay separate
-     * like the genre/keyword screens. Decades reuse the Nuvio filter
+     * like the genre/keyword screens. Decades reuse the KB filter
      * plumbing: year="1980-1989" becomes primary_release_date /
      * first_air_date bounds. [mediaType] is "movie" or "tv".
      */
@@ -1367,13 +1367,13 @@ class TmdbRepository(context: Context) {
         } else {
             minVoteCount
         }
-        val filters = com.kennyb1201.kbstream.data.nuvio.NuvioFilters(
+        val filters = com.kennyb1201.kbstream.data.kb.KBFilters(
             year = yearRange,
             voteCountGte = voteFloor
         )
 
         val items = runCatching {
-            discoverNuvio(
+            discoverKB(
                 mediaType = if (isTv) "tv" else "movie",
                 page = page,
                 sortBy = sortBy,
@@ -1429,7 +1429,7 @@ class TmdbRepository(context: Context) {
             else -> minRecentVoteCount
         }
 
-        val base = com.kennyb1201.kbstream.data.nuvio.NuvioFilters(
+        val base = com.kennyb1201.kbstream.data.kb.KBFilters(
             voteCountGte = voteFloor
         )
         val filters = if (mode == "originals") {
@@ -1458,7 +1458,7 @@ class TmdbRepository(context: Context) {
             )
         }
         val items = runCatching {
-            discoverNuvio(
+            discoverKB(
                 mediaType = if (isTv) "tv" else "movie",
                 page = page,
                 sortBy = sortBy,

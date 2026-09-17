@@ -226,7 +226,7 @@ suspend fun searchCollection(
         @Query("api_key") apiKey: String
     ): TmdbGenreListResponse
 
-    // ---- Nuvio collections: generic discover with the full filter set ----
+    // ---- KB collections: generic discover with the full filter set ----
 
     @GET("discover/movie")
     suspend fun discoverMovieGeneric(
@@ -255,7 +255,7 @@ suspend fun searchCollection(
     ): TmdbDiscoverResponse
 
     // TV twin of the generic discover: TV date filters (first_air_date.*)
-    // only exist on /discover/tv, so Nuvio TV sources must hit that endpoint.
+    // only exist on /discover/tv, so KB TV sources must hit that endpoint.
     @GET("discover/tv")
     suspend fun discoverTvGeneric(
         @Query("api_key") apiKey: String,
@@ -280,7 +280,7 @@ suspend fun searchCollection(
         @Query("first_air_date.lte") firstAirDateLte: String? = null
     ): TmdbDiscoverResponse
 
-    // Nuvio "LIST" sources point at a TMDB list id (/list/{id} items).
+    // KB "LIST" sources point at a TMDB list id (/list/{id} items).
     @GET("list/{id}")
     suspend fun getListItems(
         @Path("id") id: Int,

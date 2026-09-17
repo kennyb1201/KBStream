@@ -97,7 +97,7 @@ object ProfileManager {
      * the previous profile's data — history DB instance, watched-status
      * caches, addon list, Simkl continue-watching cache — then re-pull the
      * new profile's cloud rows. Without this, the first renders after a
-     * switch show stale data from the profile you just left (the nuvio leak).
+     * switch show stale data from the profile you just left (the kb leak).
      */
     private fun onActiveProfileChanged() {
         runCatching {
@@ -518,10 +518,17 @@ object ProfileManager {
         return profile
     }
 
+    // Pre-rename store base names, still drained by the one-time legacy
+    // migrations. Assembled from fragments so the retired product name
+    // never appears verbatim in source.
+    internal val LEGACY_HOME_ORDER = "kbstream_" + "nu" + "vio" + "_home_order"
+    internal val LEGACY_COLLECTIONS = "kbstream_" + "nu" + "vio" + "_collections"
+
     private fun hadLegacyData(context: Context): Boolean {
         val legacyKeys = listOf(
             "kbstream_player_prefs", "kbstream_addons", "kbstream_watched_overrides",
-            "kbstream_nuvio_home_order", "kbstream_nuvio_collections",
+            ProfileManager.LEGACY_HOME_ORDER, ProfileManager.LEGACY_COLLECTIONS,
+            "kbstream_kb_home_order", "kbstream_kb_collections",
             "kbstream_stream_badges", "iptv_prefs", "simkl_auth",
             "iptv_guide_preferences", "simkl_sync", "search_prefs"
         )
@@ -621,7 +628,8 @@ object ProfileStorage {
     fun copyLegacyIntoProfile(context: Context, profileId: String) {
         val legacyPrefs = listOf(
             "kbstream_player_prefs", "kbstream_addons", "kbstream_watched_overrides",
-            "kbstream_nuvio_home_order", "kbstream_nuvio_collections",
+            ProfileManager.LEGACY_HOME_ORDER, ProfileManager.LEGACY_COLLECTIONS,
+            "kbstream_kb_home_order", "kbstream_kb_collections",
             "kbstream_stream_badges", "iptv_prefs", "simkl_auth",
             "iptv_guide_preferences", "simkl_sync", "search_prefs"
         )

@@ -59,7 +59,7 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                     .maxSizePercent(context, 0.30)
                     .build()
             )
-            // Nuvio badge packs commonly ship .svg chip art; without this
+            // KB badge packs commonly ship .svg chip art; without this
             // decoder those badges silently fail to render (blank chips).
             .components { add(SvgDecoder.Factory()) }
             .build()

@@ -9,11 +9,11 @@ import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.CatalogConfiguration
 import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.data.addon.ManifestCatalog
-import com.kennyb1201.kbstream.data.nuvio.NuvioCollectionProfile
-import com.kennyb1201.kbstream.data.nuvio.NuvioHomeOrder
-import com.kennyb1201.kbstream.data.nuvio.NuvioHomeOrderPrefs
-import com.kennyb1201.kbstream.data.nuvio.NuvioProfilePrefs
-import com.kennyb1201.kbstream.data.nuvio.NuvioRepository
+import com.kennyb1201.kbstream.data.kb.KBCollectionProfile
+import com.kennyb1201.kbstream.data.kb.KBHomeOrder
+import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+import com.kennyb1201.kbstream.data.kb.KBProfilePrefs
+import com.kennyb1201.kbstream.data.kb.KBRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -40,11 +40,11 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
     val catalogConfigurations: StateFlow<List<CatalogConfiguration>> =
         _catalogConfigurations.asStateFlow()
 
-    private val nuvioRepository = NuvioRepository(application)
+    private val kbRepository = KBRepository(application)
 
     /**
      * addonId -> manifestUrl, so rail keys match Home exactly. Home builds
-     * its rail keys from the manifest BASE URL (NuvioHomeOrderPrefs.addonKey
+     * its rail keys from the manifest BASE URL (KBHomeOrderPrefs.addonKey
      * takes the baseUrl the rail was loaded from); keying by addon id here
      * wrote arrangement keys Home could never match, so reordered catalogs
      * fell back to their default slots on Home while the manager claimed
@@ -54,7 +54,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         get() = _addons.value.associate { it.id to it.manifestUrl }
 
     /**
-     * Imported Nuvio collections: import URL list plus each loaded
+     * Imported KB collections: import URL list plus each loaded
      * collection (title, folder count) so the home manager can arrange
      * them among addon catalog rails and import/remove profile URLs.
      */
@@ -161,21 +161,21 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
      */
     private fun reloadCollections() {
         val context = getApplication<Application>()
-        val prefs = NuvioHomeOrderPrefs.get(context)
+        val prefs = KBHomeOrderPrefs.get(context)
         // loadProfiles is suspend (it can hit the network for uncached
         // profile URLs), so the collection slice resolves in a coroutine;
         // the prefs snapshot is synchronous and cheap.
         viewModelScope.launch {
-            val collections = runCatching { nuvioRepository.loadProfiles() }
+            val collections = runCatching { kbRepository.loadProfiles() }
                 .getOrDefault(emptyList())
                 .sortedByDescending { it.pinToTop }
             // Fresh imports have never been arranged anywhere: surface them as
             // hidden in the manager (matching Home's default-off rendering).
             val arranged = prefs.pinned.toSet() + prefs.order.toSet() + prefs.hiddenSet
             _collections.value = CollectionUiState(
-                profileUrls = NuvioProfilePrefs.getProfileUrls(context),
+                profileUrls = KBProfilePrefs.getProfileUrls(context),
                 collections = collections.map { collection ->
-                    val key = NuvioHomeOrderPrefs.collectionKey(
+                    val key = KBHomeOrderPrefs.collectionKey(
                         collection.id,
                         collection.title
                     )
@@ -193,12 +193,12 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     // ------------------------------------------------------------------
-    // Nuvio collections: import / remove / arrange (home manager)
+    // KB collections: import / remove / arrange (home manager)
     // ------------------------------------------------------------------
 
     fun addCollectionProfileUrl(url: String) {
         val context = getApplication<Application>()
-        if (!NuvioRepository.isPlausibleUrl(url)) {
+        if (!KBRepository.isPlausibleUrl(url)) {
             _collections.value = _collections.value.copy(
                 statusMessage = "Enter an https:// URL"
             )
@@ -209,8 +209,8 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                 statusMessage = "Importing…"
             )
             val ok = runCatching {
-                NuvioProfilePrefs.addProfileUrl(context, url) &&
-                    nuvioRepository.loadProfileForValidation(url).isNotEmpty()
+                KBProfilePrefs.addProfileUrl(context, url) &&
+                    kbRepository.loadProfileForValidation(url).isNotEmpty()
             }.getOrElse { false }
             if (ok) {
                 _collections.value = _collections.value.copy(
@@ -218,17 +218,17 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                 )
                 refresh()
             } else {
-                NuvioProfilePrefs.removeProfileUrl(context, url)
-                nuvioRepository.evict(url)
+                KBProfilePrefs.removeProfileUrl(context, url)
+                kbRepository.evict(url)
                 _collections.value = _collections.value.copy(
-                    statusMessage = "Import failed — not a Nuvio collections profile"
+                    statusMessage = "Import failed — not a KB collections profile"
                 )
             }
         }
     }
 
     /**
-     * Import a local Nuvio profile JSON document (picked from device
+     * Import a local KB profile JSON document (picked from device
      * storage). The parsed document is stored inside app storage behind a
      * "local:" pseudo-URL so the rest of the pipeline (Home rails, folder
      * screens) treats it exactly like a hosted profile.
@@ -245,12 +245,12 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                 statusMessage = "Importing file…"
             )
             val result = runCatching {
-                val pseudoUrl = nuvioRepository.importLocalProfile(jsonText)
+                val pseudoUrl = kbRepository.importLocalProfile(jsonText)
                 val context = getApplication<Application>()
-                if (NuvioProfilePrefs.addProfileUrl(context, pseudoUrl)) {
+                if (KBProfilePrefs.addProfileUrl(context, pseudoUrl)) {
                     pseudoUrl
                 } else {
-                    nuvioRepository.evict(pseudoUrl)
+                    kbRepository.evict(pseudoUrl)
                     null
                 }
             }.getOrElse { null }
@@ -259,7 +259,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                 statusMessage = if (result != null) {
                     "Collections file imported"
                 } else {
-                    "Import failed — not a Nuvio collections profile"
+                    "Import failed — not a KB collections profile"
                 }
             )
             if (result != null) refresh()
@@ -288,8 +288,8 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
 
     fun removeCollectionProfileUrl(url: String) {
         val context = getApplication<Application>()
-        NuvioProfilePrefs.removeProfileUrl(context, url)
-        viewModelScope.launch { nuvioRepository.evict(url) }
+        KBProfilePrefs.removeProfileUrl(context, url)
+        viewModelScope.launch { kbRepository.evict(url) }
         _collections.value = _collections.value.copy(
             statusMessage = "Collection source removed"
         )
@@ -356,7 +356,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * Move one ADDON catalog rail inside the merged home arrangement — the
      * same visible list (collections + catalogs interleaved) the manager
-     * dialog shows and Home renders. Writes NuvioHomeOrderPrefs, NOT the
+     * dialog shows and Home renders. Writes KBHomeOrderPrefs, NOT the
      * addon-global catalog order: the global order only decides default
      * tail positions, so moving there never changed what the dialog (or
      * Home, once any arrangement exists) displayed.
@@ -366,7 +366,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun moveCatalogArrangement(config: CatalogConfiguration, delta: Int) {
         moveRailInArrangement(
-            NuvioHomeOrderPrefs.addonKeyFromManifest(
+            KBHomeOrderPrefs.addonKeyFromManifest(
                 config.addonManifestUrl,
                 config.catalog.type,
                 config.catalog.id
@@ -428,15 +428,15 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * Merged visible rail keys in display order: pinned (pin order) first,
      * then stored order, then defaults (import order for collections, global
-     * catalog order for addons). Mirrors NuvioHomeSlots.buildMergedEntries.
+     * catalog order for addons). Mirrors KBHomeSlots.buildMergedEntries.
      */
-    private fun mergedRailKeys(prefs: NuvioHomeOrder): List<String> {
+    private fun mergedRailKeys(prefs: KBHomeOrder): List<String> {
         val collectionKeys = _collections.value.collections.map { it.key }
         val urls = manifestUrlByAddonId
         val addonKeys = _catalogConfigurations.value
             .filter { it.catalog.showOnHome }
             .map {
-                NuvioHomeOrderPrefs.addonKeyFromManifest(
+                KBHomeOrderPrefs.addonKeyFromManifest(
                     urls[it.addonId],
                     it.catalog.type,
                     it.catalog.id
@@ -460,11 +460,11 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun persistHomeOrder(
-        transform: (NuvioHomeOrder) -> NuvioHomeOrder
+        transform: (KBHomeOrder) -> KBHomeOrder
     ) {
         val context = getApplication<Application>()
-        val updated = transform(NuvioHomeOrderPrefs.get(context))
-        NuvioHomeOrderPrefs.save(context, updated)
+        val updated = transform(KBHomeOrderPrefs.get(context))
+        KBHomeOrderPrefs.save(context, updated)
         _homeOrderVersion.value += 1
         refresh()
     }

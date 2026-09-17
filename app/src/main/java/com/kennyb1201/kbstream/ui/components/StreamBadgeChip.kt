@@ -38,7 +38,7 @@ private fun String.toBadgeColorOrNull(): Color? {
 }
 
 /**
- * One Nuvio-compatible stream badge: hosted image art sized like Nuvio's
+ * One KB-compatible stream badge: hosted image art sized like KB's
  * chips, with the filter's optional tag/border colors. Text-only filters
  * (no imageURL) render their name in a colored pill instead.
  */
