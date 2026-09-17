@@ -343,7 +343,12 @@ object MdbListClient {
                 "movies",
                 JSONArray().put(JSONObject().put("ids", ids).put("watched_at", now))
             )
-            "episode" -> episodeWatchedPayload(ids, season, episode, now)
+            "episode" -> episodeWatchedPayload(
+                ids,
+                season,
+                listOfNotNull(episode?.takeIf { it >= 0 }),
+                now
+            )
                 ?: return false
             else -> return false
         }
@@ -378,19 +383,25 @@ object MdbListClient {
     private fun episodeWatchedPayload(
         showIds: JSONObject,
         season: Int?,
-        episode: Int?,
+        episodes: List<Int>,
         watchedAt: String
     ): JSONObject? {
-        if (season == null || episode == null || season < 0 || episode < 0) {
+        if (season == null || season < 0 || episodes.isEmpty()) {
             return null
         }
-        val episodeEntry = JSONObject().put("number", episode)
-        if (watchedAt.isNotBlank()) {
-            episodeEntry.put("watched_at", watchedAt)
+        val episodeEntries = JSONArray()
+        for (episode in episodes) {
+            if (episode < 0) continue
+            val episodeEntry = JSONObject().put("number", episode)
+            if (watchedAt.isNotBlank()) {
+                episodeEntry.put("watched_at", watchedAt)
+            }
+            episodeEntries.put(episodeEntry)
         }
+        if (episodeEntries.length() == 0) return null
         val seasonEntry = JSONObject()
             .put("number", season)
-            .put("episodes", JSONArray().put(episodeEntry))
+            .put("episodes", episodeEntries)
         return JSONObject().put(
             "shows",
             JSONArray().put(
@@ -399,6 +410,77 @@ object MdbListClient {
                     JSONArray().put(seasonEntry)
                 )
             )
+        )
+    }
+
+    /** Shared OkHttp POST for the /sync/watched[-/remove] endpoints. */
+    private suspend fun postSync(
+        apiKey: String,
+        url: String,
+        payload: JSONObject
+    ): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            val request = Request.Builder()
+                .url(url)
+                .post(payload.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    Log.w(
+                        TAG,
+                        "sync post failed code=${response.code} " +
+                            response.body?.string().orEmpty().take(200)
+                    )
+                }
+                response.isSuccessful
+            }
+        }.getOrDefault(false)
+    }
+
+    /**
+     * POST /sync/watched — record several episodes of one season in a
+     * single call (season mark / mark-previous mirrors). Watched-at is
+     * "now" for every episode in the batch.
+     */
+    suspend fun pushWatchedEpisodes(
+        context: Context,
+        imdbId: String?,
+        tmdbId: Int?,
+        season: Int,
+        episodes: List<Int>
+    ): Boolean {
+        val apiKey = apiKey(context)
+        if (apiKey.isBlank()) return false
+        val ids = idsNode(imdbId, tmdbId) ?: return false
+        val payload = episodeWatchedPayload(
+            ids,
+            season,
+            episodes,
+            java.time.Instant.now().toString()
+        ) ?: return false
+        return postSync(apiKey, "$BASE/sync/watched?apikey=$apiKey", payload)
+    }
+
+    /**
+     * POST /sync/watched/remove — clear several episodes of one season
+     * in a single call (season unmark / mark-previous-unwatched mirrors).
+     */
+    suspend fun removeWatchedEpisodes(
+        context: Context,
+        imdbId: String?,
+        tmdbId: Int?,
+        season: Int,
+        episodes: List<Int>
+    ): Boolean {
+        val apiKey = apiKey(context)
+        if (apiKey.isBlank()) return false
+        val ids = idsNode(imdbId, tmdbId) ?: return false
+        val payload = episodeWatchedPayload(ids, season, episodes, "")
+            ?: return false
+        return postSync(
+            apiKey,
+            "$BASE/sync/watched/remove?apikey=$apiKey",
+            payload
         )
     }
 
@@ -423,7 +505,12 @@ object MdbListClient {
                 "movies",
                 JSONArray().put(JSONObject().put("ids", ids))
             )
-            "episode" -> episodeWatchedPayload(ids, season, episode, "")
+            "episode" -> episodeWatchedPayload(
+                ids,
+                season,
+                listOfNotNull(episode?.takeIf { it >= 0 }),
+                ""
+            )
                 ?: return false
             else -> return false
         }
