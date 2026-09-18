@@ -607,6 +607,23 @@ class HomeViewModel(
                         }
                     }
 
+                    // Early publish: backdrop + clearlogo go up the moment
+                    // the artwork fetch answers, NOT when the whole meta
+                    // chain finishes — the addon probe / detail lookup are
+                    // the slow legs, and holding the art hostage behind
+                    // them is what made the hero show a plain title for a
+                    // beat before the backdrop/logo appeared. Metadata
+                    // (year, synopsis, cast) still lands with finalMeta.
+                    launch {
+                        val earlyArt = artworkDeferred.await()
+                        earlyArt?.backdropUrl
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { _heroBackdropUrl.value = it }
+                        earlyArt?.logoUrl
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { _heroLogoUrl.value = it }
+                    }
+
                     val resolvedAddonMeta = addonMetaDeferred.await()
                     val resolvedTmdbDetail = tmdbDetailDeferred.await()
 
@@ -5882,7 +5899,11 @@ private suspend fun calculateEpisodesRemaining(
     companion object {
 
         // Dwell before hero network resolution kicks in (see resolveHeroMeta).
-        private const val HERO_RESOLVE_DWELL_MS = 250L
+        // 150ms: still rides out fast D-pad scrolls (one focus event per
+        // card), but 100ms less dead time per resolve than the old 250ms —
+        // artwork+detail are cached/aggressive enough to absorb the extra
+        // in-flight requests.
+        private const val HERO_RESOLVE_DWELL_MS = 150L
 
         private const val NEW_RELEASE_WINDOW_DAYS =
             7

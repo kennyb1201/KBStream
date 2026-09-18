@@ -15,7 +15,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.util.concurrent.TimeUnit
 
 /**
  * Resolves transparent TMDB logos and clean title-free backdrops for the Home Hero.
@@ -30,11 +29,11 @@ class TmdbHeroArtworkRepository(
         .add(KotlinJsonAdapterFactory())
         .build()
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(8, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
-        .callTimeout(12, TimeUnit.SECONDS)
-        .build()
+    // The process-wide TMDB client (shared with TmdbRepository): reuses its
+    // pooled connections so a hero-artwork fetch after ANY other TMDB call
+    // (rails, detail, prefetch) rides an already-warm TLS session instead of
+    // paying its own cold handshake on a private client.
+    private val client get() = TmdbRepository.sharedOkHttpClient()
 
     private val imagesAdapter = moshi.adapter(TmdbImagesResponse::class.java)
     private val artworkAdapter = moshi.adapter(HeroArtwork::class.java)
