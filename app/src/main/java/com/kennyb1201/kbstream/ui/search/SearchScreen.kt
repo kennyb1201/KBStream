@@ -68,6 +68,8 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.KBTextField
+import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
+import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
@@ -128,6 +130,11 @@ fun SearchScreen(
         mutableStateOf<SearchTitleResult?>(
             null
         )
+    }
+
+    // "Add to list…" picker target (title + which lists to offer).
+    var addToListTarget by remember {
+        mutableStateOf<LibraryAddTarget?>(null)
     }
 
     var lastPosterFocusRequester by remember {
@@ -506,6 +513,21 @@ fun SearchScreen(
                         lastPosterFocusRequester?.requestFocus()
                     },
                     PosterContextAction(
+                        label = "Add to list…",
+                        description = "Pick a personal list or watchlist"
+                    ) {
+                        val selected = result
+                        menuResult = null
+                        addToListTarget = LibraryAddTarget(
+                            mediaType = selected.type,
+                            imdbId = null,
+                            tmdbId = selected.id.removePrefix("tmdb:").toIntOrNull(),
+                            title = selected.name,
+                            year = selected.year,
+                            posterUrl = selected.poster
+                        )
+                    },
+                    PosterContextAction(
                         label = "Go to Details",
                         description = "Open this title's detail page"
                     ) {
@@ -539,6 +561,18 @@ fun SearchScreen(
                 onDismiss = {
                     dismissTitleMenu()
                 }
+            )
+        }
+
+        addToListTarget?.let { target ->
+            LibraryAddToListDialog(
+                mediaType = target.mediaType,
+                imdbId = target.imdbId,
+                tmdbId = target.tmdbId,
+                title = target.title,
+                year = target.year,
+                posterUrl = target.posterUrl,
+                onDismiss = { addToListTarget = null }
             )
         }
     }

@@ -105,6 +105,8 @@ import com.kennyb1201.kbstream.data.tmdb.movieStatusTag
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
+import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.LandscapeCard
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.kb.KBHomeCollectionRail
@@ -2092,6 +2094,11 @@ fun HomeScreen(
         mutableStateOf<PosterMenuTarget?>(null)
     }
 
+    // "Add to list…" picker target (title + which lists to offer).
+    var addToListTarget by remember {
+        mutableStateOf<LibraryAddTarget?>(null)
+    }
+
     fun dismissPosterMenu() {
         posterMenu = null
         lastPosterFocusRequester?.requestFocus()
@@ -3096,6 +3103,31 @@ fun HomeScreen(
                         )
                     },
                     PosterContextAction(
+                        label = "Add to list…",
+                        description = "Pick a personal list or watchlist"
+                    ) {
+                        val selectedItem = menuItem
+                        continueWatchingMenu = null
+                        // parentId is a stream key ("tmdb:123:S:E"); take
+                        // its numeric head, falling back to the item id.
+                        val showTmdbId = selectedItem.parentId
+                            ?.substringBefore(':')
+                            ?.removePrefix("tmdb:")
+                            ?.toIntOrNull()
+                            ?: selectedItem.id
+                                .substringBefore(':')
+                                .removePrefix("tmdb:")
+                                .toIntOrNull()
+                        addToListTarget = LibraryAddTarget(
+                            mediaType = selectedItem.parentType?.lowercase()
+                                ?: selectedItem.id.substringBefore(':').lowercase(),
+                            imdbId = null,
+                            tmdbId = showTmdbId,
+                            title = selectedItem.showTitle ?: selectedItem.title,
+                            posterUrl = selectedItem.poster
+                        )
+                    },
+                    PosterContextAction(
                         label = "Go to Details",
                         description = "Open this title's detail page"
                     ) {
@@ -3201,6 +3233,21 @@ fun HomeScreen(
                         lastPosterFocusRequester?.requestFocus()
                     },
                     PosterContextAction(
+                        label = "Add to list…",
+                        description = "Pick a personal list or watchlist"
+                    ) {
+                        val selected = target
+                        posterMenu = null
+                        addToListTarget = LibraryAddTarget(
+                            mediaType = selected.meta.type,
+                            imdbId = null,
+                            tmdbId = selected.meta.id.removePrefix("tmdb:").toIntOrNull(),
+                            title = selected.meta.name,
+                            year = selected.meta.yearOrNull,
+                            posterUrl = selected.meta.poster
+                        )
+                    },
+                    PosterContextAction(
                         label = "Open in Grid",
                         description = "Browse this whole catalog as a poster grid"
                     ) {
@@ -3239,6 +3286,18 @@ fun HomeScreen(
                 onDismiss = {
                     dismissPosterMenu()
                 }
+            )
+        }
+
+        addToListTarget?.let { target ->
+            LibraryAddToListDialog(
+                mediaType = target.mediaType,
+                imdbId = target.imdbId,
+                tmdbId = target.tmdbId,
+                title = target.title,
+                year = target.year,
+                posterUrl = target.posterUrl,
+                onDismiss = { addToListTarget = null }
             )
         }
     }

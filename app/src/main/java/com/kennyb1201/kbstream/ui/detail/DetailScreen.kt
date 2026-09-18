@@ -103,6 +103,8 @@ import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.tmdb.tmdbImageOriginal
 import com.kennyb1201.kbstream.data.tmdb.writers
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
+import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
@@ -232,6 +234,11 @@ fun DetailScreen(
         mutableStateOf<PosterMenuTarget?>(
             null
         )
+    }
+
+    // "Add to list…" picker target (title + which lists to offer).
+    var addToListTarget by remember {
+        mutableStateOf<LibraryAddTarget?>(null)
     }
 
     var lastPosterFocusRequester by remember {
@@ -2786,6 +2793,21 @@ fun DetailScreen(
                                 lastPosterFocusRequester?.requestFocus()
                             },
                             PosterContextAction(
+                                label = "Add to list…",
+                                description = "Pick a personal list or watchlist"
+                            ) {
+                                val selected = target
+                                posterMenu = null
+                                addToListTarget = LibraryAddTarget(
+                                    mediaType = selected.mediaType,
+                                    imdbId = null,
+                                    tmdbId = selected.tmdbId,
+                                    title = selected.name.ifBlank { "Untitled" },
+                                    posterUrl = viewModel.currentPosterUrl()
+                                )
+                                lastPosterFocusRequester?.requestFocus()
+                            },
+                            PosterContextAction(
                                 label = "Go to Details",
                                 description = "Open this title's detail page"
                             ) {
@@ -2837,6 +2859,18 @@ fun DetailScreen(
                         onDismiss = {
                             dismissPosterMenu()
                         }
+                    )
+                }
+
+                addToListTarget?.let { target ->
+                    LibraryAddToListDialog(
+                        mediaType = target.mediaType,
+                        imdbId = target.imdbId,
+                        tmdbId = target.tmdbId,
+                        title = target.title,
+                        year = target.year,
+                        posterUrl = target.posterUrl,
+                        onDismiss = { addToListTarget = null }
                     )
                 }
 

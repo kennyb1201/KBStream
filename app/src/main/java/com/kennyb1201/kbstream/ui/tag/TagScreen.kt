@@ -55,6 +55,8 @@ import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
+import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
+import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
@@ -84,6 +86,11 @@ fun TagScreen(
         mutableStateOf<StudioItem?>(
             null
         )
+    }
+
+    // "Add to list…" picker target (title + which lists to offer).
+    var addToListTarget by remember {
+        mutableStateOf<LibraryAddTarget?>(null)
     }
 
     var lastRailFocusRequester by remember {
@@ -259,11 +266,45 @@ fun TagScreen(
                             )
                         }
                         lastRailFocusRequester?.requestFocus()
+                    },
+                    PosterContextAction(
+                        label = "Add to list…",
+                        description = "Pick a personal list or watchlist"
+                    ) {
+                        val selected = studioItem
+                        menuItem = null
+                        addToListTarget = LibraryAddTarget(
+                            mediaType = selected.mediaType,
+                            imdbId = null,
+                            tmdbId = selected.item.id,
+                            title = selected.item.title
+                                ?: selected.item.name
+                                ?: "Untitled",
+                            year = (selected.item.releaseDate
+                                ?: selected.item.firstAirDate)
+                                ?.take(4)?.toIntOrNull(),
+                            posterUrl = selected.item.posterPath
+                                ?.takeIf { it.isNotBlank() }
+                                ?.let { TmdbRepository.POSTER_BASE + it }
+                        )
+                        lastRailFocusRequester?.requestFocus()
                     }
                 ),
                 onDismiss = {
                     dismissRailMenu()
                 }
+            )
+        }
+
+        addToListTarget?.let { target ->
+            LibraryAddToListDialog(
+                mediaType = target.mediaType,
+                imdbId = target.imdbId,
+                tmdbId = target.tmdbId,
+                title = target.title,
+                year = target.year,
+                posterUrl = target.posterUrl,
+                onDismiss = { addToListTarget = null }
             )
         }
     }

@@ -1917,6 +1917,12 @@ for (metaAddon in metaAddons) {
     suspend fun resolveImdbId(tmdbId: Int, type: String): String? =
         tmdbRepository.resolveImdbId(tmdbId, type.lowercase())
 
+    /** Full poster URL for the loaded title (null when unavailable). */
+    fun currentPosterUrl(): String? =
+        _tmdbDetail.value?.posterPath
+            ?.takeIf { it.isNotBlank() }
+            ?.let { TmdbRepository.POSTER_BASE + it }
+
     /** Simkl is signed in, so long-press adds will mirror there too. */
     fun simklConnectedForLibrary(): Boolean =
         simklRepository.isConfigured() && simklRepository.hasToken()

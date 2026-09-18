@@ -51,6 +51,8 @@ import com.kennyb1201.kbstream.data.library.LibraryList
 import com.kennyb1201.kbstream.data.library.LibrarySource
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBTextField
+import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -119,6 +121,18 @@ fun LibraryScreen(
 
             Spacer(modifier = Modifier.weight(1f))
 
+            // Sort chips: Added / Title / Date / Rating.
+            LibrarySort.entries.forEach { sort ->
+                LibraryFilterChip(
+                    label = sort.label,
+                    selected = state.sort == sort,
+                    onClick = { viewModel.setSort(sort) },
+                    modifier = Modifier.padding(end = 8.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
             // Connection status line.
             val connections = buildList {
                 if (state.simklConnected) add("SIMKL")
@@ -147,14 +161,10 @@ fun LibraryScreen(
                     sourceLabel = { it.source.label },
                     onItemClick = onItemClick,
                     onItemLongClick = { item ->
-                        LocalLibraryStore.removeFromMyList(
-                            context,
-                            item.mediaType,
-                            item.imdbId,
-                            item.tmdbId
-                        )
-                        viewModel.refresh()
-                    }
+                        viewModel.removeItem(item)
+                    },
+                    ratings = state.ratings,
+                    watchedKeys = state.watchedKeys
                 )
             }
 
@@ -175,7 +185,14 @@ fun LibraryScreen(
                     },
                     sourceLabel = { it.source.label },
                     onItemClick = onItemClick,
-                    onItemLongClick = null
+                    onItemLongClick = { item ->
+                        // Simkl rows are add-only (no API to remove).
+                        if (item.source != LibrarySource.SIMKL_WATCHLIST) {
+                            viewModel.removeItem(item)
+                        }
+                    },
+                    ratings = state.ratings,
+                    watchedKeys = state.watchedKeys
                 )
             }
 
@@ -186,7 +203,18 @@ fun LibraryScreen(
                     listItems = state.selectedListItems,
                     loading = state.loading,
                     onListSelect = { viewModel.selectList(it) },
-                    onItemClick = onItemClick
+                    onListLongPress = { list ->
+                        // Local lists can be deleted; MDBList lists are
+                        // managed on MDBList.
+                        if (list.id < 0) {
+                            viewModel.deleteLocalList(list.id)
+                        }
+                    },
+                    onCreateList = { viewModel.createLocalList(it) },
+                    onItemClick = onItemClick,
+                    onItemLongClick = { item -> viewModel.removeItem(item) },
+                    ratings = state.ratings,
+                    watchedKeys = state.watchedKeys
                 )
             }
         }
@@ -247,7 +275,9 @@ private fun ItemGrid(
     emptyText: String,
     sourceLabel: (LibraryItem) -> String,
     onItemClick: (String, String) -> Unit,
-    onItemLongClick: ((LibraryItem) -> Unit)?
+    onItemLongClick: ((LibraryItem) -> Unit)?,
+    ratings: Map<String, Double> = emptyMap(),
+    watchedKeys: Set<String> = emptySet()
 ) {
     if (items.isEmpty()) {
         Box(
@@ -275,6 +305,8 @@ private fun ItemGrid(
                     LibraryPosterCard(
                         item = item,
                         sourceLabel = sourceLabel(item),
+                        rating = ratings[LocalLibraryStore.dedupeKey(item)],
+                        isWatched = item.watchedKey() in watchedKeys,
                         onClick = {
                             item.navigationId?.let { id ->
                                 onItemClick(item.mediaType, id)
@@ -291,8 +323,8 @@ private fun ItemGrid(
 }
 
 /**
- * PERSONAL LISTS: left rail of MDBList lists, right pane of the selected
- * list's items.
+ * PERSONAL LISTS: left rail of local + MDBList lists (plus a create-list
+ * row), right pane of the selected list's items.
  */
 @Composable
 private fun ListsPane(
@@ -301,8 +333,16 @@ private fun ListsPane(
     listItems: List<LibraryItem>,
     loading: Boolean,
     onListSelect: (LibraryList) -> Unit,
-    onItemClick: (String, String) -> Unit
+    onListLongPress: (LibraryList) -> Unit,
+    onCreateList: (String) -> Unit,
+    onItemClick: (String, String) -> Unit,
+    onItemLongClick: (LibraryItem) -> Unit,
+    ratings: Map<String, Double>,
+    watchedKeys: Set<String>
 ) {
+    var showCreateField by remember { mutableStateOf(false) }
+    var newListName by remember { mutableStateOf("") }
+
     Row(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -310,9 +350,10 @@ private fun ListsPane(
                 .width(280.dp)
                 .fillMaxSize()
         ) {
-            items(lists) { list ->
+            items(lists, key = { list -> list.id }) { list ->
                 var focused by remember { mutableStateOf(false) }
                 val selected = selectedList?.id == list.id
+                val sourceLabel = if (list.id < 0) "This device" else "MDBList"
                 Surface(
                     onClick = { onListSelect(list) },
                     shape = ClickableSurfaceDefaults.shape(
@@ -340,11 +381,52 @@ private fun ListsPane(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "${list.itemCount} titles · MDBList",
+                            text = "${list.itemCount} titles · $sourceLabel",
                             style = MaterialTheme.typography.labelSmall,
                             color = KBTextLo
                         )
                     }
+                }
+            }
+
+            // Create-list affordance at the bottom of the rail.
+            item(key = "create_list") {
+                if (showCreateField) {
+                    Column {
+                        KBTextField(
+                            value = newListName,
+                            onValueChange = { newListName = it },
+                            placeholder = "New list name",
+                            modifier = Modifier.fillMaxWidth(),
+                            onDone = {
+                                if (newListName.isNotBlank()) {
+                                    onCreateList(newListName)
+                                }
+                                newListName = ""
+                                showCreateField = false
+                            }
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        LibraryFilterChip(
+                            label = "CREATE",
+                            selected = false,
+                            onClick = {
+                                if (newListName.isNotBlank()) {
+                                    onCreateList(newListName)
+                                }
+                                newListName = ""
+                                showCreateField = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                } else {
+                    LibraryFilterChip(
+                        label = "+ NEW LIST",
+                        selected = false,
+                        onClick = { showCreateField = true },
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
             }
         }
@@ -356,11 +438,14 @@ private fun ListsPane(
             emptyText = when {
                 loading && selectedList == null -> "Loading lists…"
                 selectedList == null -> "Select a list on the left."
-                else -> "This list is empty."
+                else -> "This list is empty. Long-press any poster app-wide " +
+                    "and choose \"Add to list…\" to fill it."
             },
             sourceLabel = { it.source.label },
             onItemClick = onItemClick,
-            onItemLongClick = null
+            onItemLongClick = onItemLongClick,
+            ratings = ratings,
+            watchedKeys = watchedKeys
         )
     }
 }
@@ -369,6 +454,8 @@ private fun ListsPane(
 private fun LibraryPosterCard(
     item: LibraryItem,
     sourceLabel: String,
+    rating: Double?,
+    isWatched: Boolean,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)?
 ) {
@@ -384,6 +471,23 @@ private fun LibraryPosterCard(
                 .aspectRatio(2f / 3f)
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
+                if (isWatched) {
+                    // Same checkmark badge language the other poster grids
+                    // use for fully-watched titles.
+                    Text(
+                        text = "✓",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = KBAccent,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(6.dp)
+                            .background(
+                                Color.Black.copy(alpha = 0.65f),
+                                RoundedCornerShape(10.dp)
+                            )
+                            .padding(horizontal = 6.dp, vertical = 1.dp)
+                    )
+                }
                 if (!item.posterUrl.isNullOrBlank()) {
                     AsyncImage(
                         model = ImageRequest.Builder(LocalContext.current)
@@ -414,19 +518,18 @@ private fun LibraryPosterCard(
             }
         }
 
-        Text(
-            text = item.title,
-            style = MaterialTheme.typography.labelMedium,
-            color = KBTextHi,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+        // Captions go through the shared PosterCaptions block so the
+        // Settings toggles (poster titles / years / star ratings) behave
+        // here exactly like on every other screen. The source tag rides
+        // below, un-gated, so tracker origin stays visible.
+        PosterCaptions(
+            title = item.title,
+            year = item.year?.toString(),
+            rating = rating,
             modifier = Modifier.padding(top = 6.dp)
         )
         Text(
-            text = buildString {
-                append(sourceLabel)
-                item.year?.let { append(" · ${it}") }
-            },
+            text = sourceLabel,
             style = MaterialTheme.typography.labelSmall,
             color = KBTextLo,
             maxLines = 1,

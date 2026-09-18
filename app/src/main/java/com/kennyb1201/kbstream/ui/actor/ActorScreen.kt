@@ -61,6 +61,8 @@ import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
+import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
+import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -112,6 +114,11 @@ fun ActorScreen(
         mutableStateOf<TmdbPersonCredit?>(
             null
         )
+    }
+
+    // "Add to list…" picker target (title + which lists to offer).
+    var addToListTarget by remember {
+        mutableStateOf<LibraryAddTarget?>(null)
     }
 
     var lastCreditFocusRequester by remember {
@@ -508,11 +515,45 @@ fun ActorScreen(
                                         )
                                     }
                                     lastCreditFocusRequester?.requestFocus()
+                                },
+                                PosterContextAction(
+                                    label = "Add to list…",
+                                    description = "Pick a personal list or watchlist"
+                                ) {
+                                    val selected = credit
+                                    menuCredit = null
+                                    addToListTarget = LibraryAddTarget(
+                                        mediaType = selected.mediaType ?: "movie",
+                                        imdbId = null,
+                                        tmdbId = selected.id,
+                                        title = selected.title
+                                            ?: selected.name
+                                            ?: "Untitled",
+                                        year = (selected.releaseDate
+                                            ?: selected.firstAirDate)
+                                            ?.take(4)?.toIntOrNull(),
+                                        posterUrl = selected.posterPath
+                                            ?.takeIf { it.isNotBlank() }
+                                            ?.let { TmdbRepository.POSTER_BASE + it }
+                                    )
+                                    lastCreditFocusRequester?.requestFocus()
                                 }
                             ),
                             onDismiss = {
                                 dismissCreditMenu()
                             }
+                        )
+                    }
+
+                    addToListTarget?.let { target ->
+                        LibraryAddToListDialog(
+                            mediaType = target.mediaType,
+                            imdbId = target.imdbId,
+                            tmdbId = target.tmdbId,
+                            title = target.title,
+                            year = target.year,
+                            posterUrl = target.posterUrl,
+                            onDismiss = { addToListTarget = null }
                         )
                     }
                 }
