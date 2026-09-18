@@ -55,6 +55,7 @@ object PrefsPayloadBuilder {
         "home_rail_show_addon_name",
         "search_rail_show_catalog_type",
         "search_rail_show_addon_name",
+        "poster_size",                       // Small/Medium/Large poster tiles
         "poster_caption_title",
         "poster_caption_year",
         "poster_caption_rating",

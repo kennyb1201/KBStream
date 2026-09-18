@@ -53,6 +53,7 @@ import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
+import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -490,16 +491,17 @@ private fun LibraryPosterCard(
     onClick: () -> Unit,
     onLongClick: (() -> Unit)?
 ) {
+    val posterSize = rememberPosterSize()
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.width(118.dp)
+        modifier = Modifier.width(posterSize.width)
     ) {
         KBCard(
             onClick = onClick,
             onLongClick = onLongClick,
             modifier = Modifier
-                .width(118.dp)
-                .aspectRatio(2f / 3f)
+                .width(posterSize.width)
+                .height(posterSize.height)
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 if (isWatched) {

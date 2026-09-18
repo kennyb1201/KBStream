@@ -47,6 +47,8 @@ import com.kennyb1201.kbstream.data.tmdb.StudioItem
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TmdbCompanyDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.ui.components.PosterSize
+import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
@@ -552,6 +554,8 @@ private fun StudioRailRow(
                 val isFirstItem =
                     isFirstSection && studioItem == section.items.firstOrNull()
 
+                val posterSize = rememberPosterSize()
+
                 Column(
                     modifier = Modifier.padding(end = 12.dp)
                 ) {
@@ -573,8 +577,8 @@ private fun StudioRailRow(
                             onOpenPosterMenu(studioItem, requester)
                         },
                         modifier = Modifier
-                            .width(120.dp)
-                            .height(180.dp)
+                            .width(posterSize.width)
+                            .height(posterSize.height)
                             .focusRequester(requester)
                             .then(
                                 if (isFirstItem) {
@@ -591,7 +595,7 @@ private fun StudioRailRow(
                             ?: studioItem.item.firstAirDate)?.take(4),
                         rating = studioItem.item.voteAverage,
                         modifier = Modifier
-                            .width(120.dp)
+                            .width(posterSize.width)
                             .padding(top = 5.dp)
                     )
                 }

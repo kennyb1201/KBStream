@@ -107,6 +107,7 @@ fun SettingsScreen(
     var captionTitle by remember { mutableStateOf(AppPreferences.getPosterCaptionTitle(context)) }
     var captionYear by remember { mutableStateOf(AppPreferences.getPosterCaptionYear(context)) }
     var captionRating by remember { mutableStateOf(AppPreferences.getPosterCaptionRating(context)) }
+    var posterSizeIdx by remember { mutableStateOf(AppPreferences.getPosterSize(context).toInt()) }
     var railHideUpcoming by remember { mutableStateOf(AppPreferences.getHomeRailHideUpcoming(context)) }
     var landscapeCards by remember { mutableStateOf(AppPreferences.getHomeLandscapeCards(context)) }
     var partialWatchBadge by remember { mutableStateOf(AppPreferences.getPosterPartialWatchBadge(context)) }
@@ -921,6 +922,25 @@ fun SettingsScreen(
                         AppPreferences.setPosterCaptionRating(context, it)
                     }
                 )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = "Poster Size",
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("Small", "Medium", "Large").forEachIndexed { index, label ->
+                        KBCard(onClick = {
+                            posterSizeIdx = index
+                            AppPreferences.setPosterSize(context, index.toLong())
+                        }) {
+                            PillChip(label, posterSizeIdx == index)
+                        }
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(8.dp))
 

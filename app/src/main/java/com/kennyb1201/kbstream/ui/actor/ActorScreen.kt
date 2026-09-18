@@ -59,6 +59,8 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.metaLine
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
+import com.kennyb1201.kbstream.ui.components.PosterSize
+import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
@@ -599,9 +601,10 @@ private fun ActorCreditCard(
     focusRequester: FocusRequester? = null,
     isPartiallyWatched: Boolean = false
 ) {
+    val posterSize = rememberPosterSize()
     Column(
         modifier = Modifier
-            .width(124.dp)
+            .width(posterSize.width)
             .padding(end = 12.dp)
     ) {
         PosterCard(
@@ -612,8 +615,8 @@ private fun ActorCreditCard(
             onClick = onClick,
             onLongClick = onLongClick,
             modifier = Modifier
-                .width(124.dp)
-                .height(180.dp)
+                .width(posterSize.width)
+                .height(posterSize.height)
                 .then(
                     if (focusRequester != null) {
                         Modifier.focusRequester(focusRequester)

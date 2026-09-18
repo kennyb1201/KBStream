@@ -73,6 +73,8 @@ import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
+import com.kennyb1201.kbstream.ui.components.PosterSize
+import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -1092,8 +1094,9 @@ private fun TitlePosterTile(
     modifier: Modifier = Modifier,
     isPartiallyWatched: Boolean = false
 ) {
+    val posterSize = rememberPosterSize()
     Column(
-        modifier = Modifier.width(124.dp)
+        modifier = Modifier.width(posterSize.width)
     ) {
         PosterCard(
             posterUrl = result.poster,
@@ -1103,8 +1106,8 @@ private fun TitlePosterTile(
             onClick = onClick,
             onLongClick = onLongClick,
             modifier = modifier
-                .width(124.dp)
-                .height(186.dp)
+                .width(posterSize.width)
+                .height(posterSize.height)
         )
 
         PosterCaptions(
@@ -1232,14 +1235,15 @@ private fun CollectionPosterTile(
     collection: TmdbSearchCollectionResult,
     onClick: () -> Unit
 ) {
+    val posterSize = rememberPosterSize()
     PosterCard(
         posterUrl = collection.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" },
         contentDescription = collection.name,
         isWatched = false,
         onClick = onClick,
         modifier = Modifier
-            .width(124.dp)
-            .height(186.dp)
+            .width(posterSize.width)
+            .height(posterSize.height)
     )
 }
 

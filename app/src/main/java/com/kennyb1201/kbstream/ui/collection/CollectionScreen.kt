@@ -38,6 +38,8 @@ import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.tmdb.TmdbCollectionPart
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
+import com.kennyb1201.kbstream.ui.components.PosterSize
+import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -360,8 +362,9 @@ private fun CollectionPosterTile(
     modifier: Modifier = Modifier,
     isPartiallyWatched: Boolean = false
 ) {
+    val posterSize = rememberPosterSize()
     Column(
-        modifier = modifier.width(124.dp)
+        modifier = modifier.width(posterSize.width)
     ) {
         PosterCard(
             posterUrl = part.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" },
@@ -373,8 +376,8 @@ private fun CollectionPosterTile(
             onClick = onClick,
             onLongClick = onLongClick,
             modifier = Modifier
-                .width(124.dp)
-                .height(186.dp)
+                .width(posterSize.width)
+                .height(posterSize.height)
         )
 
         PosterCaptions(

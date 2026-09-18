@@ -36,6 +36,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.ui.components.PosterCard
+import com.kennyb1201.kbstream.ui.components.PosterSize
+import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -212,7 +214,8 @@ fun CatalogGridScreen(
                         items = state.items,
                         key = { "${it.type}:${it.id}" }
                     ) { meta ->
-                        Column {
+                            val posterSize = rememberPosterSize()
+                            Column {
                             PosterCard(
                                 posterUrl = meta.poster,
                                 contentDescription = meta.name,
@@ -230,8 +233,8 @@ fun CatalogGridScreen(
                                 },
                                 modifier = Modifier
                                     .size(
-                                        width = 124.dp,
-                                        height = 180.dp
+                                        width = posterSize.width,
+                                        height = posterSize.height
                                     )
                             )
                             Text(
@@ -241,7 +244,7 @@ fun CatalogGridScreen(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier
-                                    .width(124.dp)
+                                    .width(posterSize.width)
                                     .padding(top = 2.dp)
                             )
                         }

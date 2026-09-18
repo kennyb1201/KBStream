@@ -107,6 +107,7 @@ import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
+import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -4089,7 +4090,7 @@ private fun PosterGridCard(
     // The Column must be pinned to the poster width: a LazyRow measures
     // children with unbounded width, so an unconstrained caption would let
     // single-line titles run wide and overlap the next tile.
-    Column(modifier = Modifier.width(124.dp)) {
+    Column(modifier = Modifier.width(rememberPosterSize().width)) {
         PosterCard(
             posterUrl = remember(posterPath) {
                 posterPath?.let {
@@ -4102,11 +4103,10 @@ private fun PosterGridCard(
             onClick = onClick,
             onLongClick = onLongClick,
             modifier = modifier
-                // Match the regular home-rail poster size (124x180) so the
-                // "More Like This" and collection rows don't look shrunken
-                // next to the rails everywhere else in the app.
-                .width(124.dp)
-                .height(180.dp)
+                // Follow the app-wide Settings poster size so these rails
+                // match every other poster surface.
+                .width(rememberPosterSize().width)
+                .height(rememberPosterSize().height)
         )
 
         PosterCaptions(

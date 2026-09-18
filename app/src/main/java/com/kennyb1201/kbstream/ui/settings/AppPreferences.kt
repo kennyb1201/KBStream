@@ -46,6 +46,7 @@ object AppPreferences {
     private const val KEY_SHOW_ADDON_NAME = "home_rail_show_addon_name"
     private const val KEY_SEARCH_SHOW_CATALOG_TYPE = "search_rail_show_catalog_type"
     private const val KEY_SEARCH_SHOW_ADDON_NAME = "search_rail_show_addon_name"
+    private const val KEY_POSTER_SIZE = "poster_size"                       // 0=small, 1=medium, 2=large
     private const val KEY_POSTER_CAPTION_TITLE = "poster_caption_title"
     private const val KEY_POSTER_CAPTION_YEAR = "poster_caption_year"
     private const val KEY_POSTER_CAPTION_RATING = "poster_caption_rating"
@@ -430,6 +431,18 @@ object AppPreferences {
     fun setSearchRailShowAddonName(context: Context, enabled: Boolean) {
         syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_SEARCH_SHOW_ADDON_NAME, enabled).apply()
+    }
+
+    // ── Poster size (all screens) ─────────────────────────────────────
+    // 0=small 110x165, 1=medium 124x186 (default), 2=large 140x210. Stored
+    // as a Long because the display-prefs sync blob round-trips numbers as
+    // Long on the receiving device.
+    fun getPosterSize(context: Context): Long =
+        prefs(context).getLong(KEY_POSTER_SIZE, 1L)
+
+    fun setPosterSize(context: Context, size: Long) {
+        syncDisplayPrefsBlob(context)
+        prefs(context).edit().putLong(KEY_POSTER_SIZE, size).apply()
     }
 
     // ── Poster captions (all screens except Home rails) ───────────────
