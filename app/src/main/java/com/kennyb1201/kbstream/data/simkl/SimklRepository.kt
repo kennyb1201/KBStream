@@ -7,6 +7,8 @@ import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheDao
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.library.LibraryItem
+import com.kennyb1201.kbstream.data.library.LibrarySource
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
@@ -145,6 +147,97 @@ class SimklRepository(
                     }
             }.getOrDefault(false)
         }
+    }
+
+    /**
+     * Watchlist (Plan to Watch) items for the Library tab: movies and
+     * shows currently on the account's plan-to-watch list. Two GETs,
+     * one per type; failures fail soft per type so a partial result
+     * still renders.
+     */
+    suspend fun getWatchlistItems(): List<LibraryItem> {
+        if (!isConfigured() || !hasToken()) return emptyList()
+        val token = requireAccessToken()
+
+        val out = mutableListOf<LibraryItem>()
+
+        runCatching {
+            api.getWatchlistMovies(bearer(token)).let { resp ->
+                if (resp.isSuccessful) {
+                    resp.body()?.movies?.forEach { entry ->
+                        val movie = entry.movie ?: return@forEach
+                        out += LibraryItem(
+                            source = LibrarySource.SIMKL_WATCHLIST,
+                            mediaType = "movie",
+                            title = movie.title ?: "Untitled",
+                            year = movie.year,
+                            posterUrl = normalizePosterUrl(movie.poster),
+                            imdbId = movie.ids?.imdb?.takeIf { it.isNotBlank() },
+                            tmdbId = movie.ids?.tmdb?.takeIf { it > 0 },
+                            simklId = movie.ids?.simkl
+                        )
+                    }
+                }
+            }
+        }
+
+        runCatching {
+            api.getWatchlistShows(bearer(token)).let { resp ->
+                if (resp.isSuccessful) {
+                    resp.body()?.shows?.forEach { item ->
+                        val show = item.show ?: return@forEach
+                        out += LibraryItem(
+                            source = LibrarySource.SIMKL_WATCHLIST,
+                            mediaType = "series",
+                            title = show.title ?: "Untitled",
+                            year = show.year,
+                            posterUrl = normalizePosterUrl(show.poster),
+                            imdbId = show.ids?.imdb?.takeIf { it.isNotBlank() },
+                            tmdbId = show.ids?.tmdb?.takeIf { it > 0 },
+                            simklId = show.ids?.simkl
+                        )
+                    }
+                }
+            }
+        }
+
+        return out
+    }
+
+    /**
+     * Add to Watchlist (Plan to Watch): POST /sync/add-to-list with the
+     * destination status on the request root. Title/year ride along so
+     * Simkl can resolve titles that only carry a TMDB id.
+     */
+    suspend fun addToWatchlist(
+        mediaType: String,
+        imdbId: String?,
+        tmdbId: Int?,
+        simklId: Int?,
+        title: String?,
+        year: Int?
+    ): Boolean {
+        if (!isConfigured() || !hasToken()) return false
+        val ids = SimklAddToListIds(
+            imdb = imdbId?.takeIf { it.isNotBlank() },
+            tmdb = tmdbId?.takeIf { it > 0 },
+            simkl = simklId
+        )
+        if (ids.imdb == null && ids.tmdb == null && ids.simkl == null) {
+            return false
+        }
+
+        val isMovie = mediaType.lowercase() == "movie"
+        val entry = SimklAddToListEntry(title = title, ids = ids)
+        val body = SimklAddToListRequest(
+            to = "plantowatch",
+            movies = if (isMovie) listOf(entry) else emptyList(),
+            shows = if (!isMovie) listOf(entry) else emptyList()
+        )
+
+        return runCatching {
+            api.addToWatchlist(bearer(requireAccessToken()), body).isSuccessful
+        }.getOrDefault(false)
     }
 
     private val allShowsJsonAdapter:

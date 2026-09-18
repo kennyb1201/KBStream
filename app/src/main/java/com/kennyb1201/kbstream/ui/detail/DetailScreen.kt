@@ -2748,9 +2748,43 @@ fun DetailScreen(
                             ) in watchedKeys
                         } == true
 
+                    val inLibrary = viewModel.isInLocalLibrary(
+                        target.mediaType.lowercase(),
+                        target.tmdbId
+                    )
+
                     PosterContextMenu(
                         title = target.name.ifBlank { "Untitled" },
                         actions = listOf(
+                            PosterContextAction(
+                                label = if (inLibrary) {
+                                    "In Library ✓"
+                                } else {
+                                    "Add to Library"
+                                },
+                                description = if (inLibrary) {
+                                    "Already on this profile's My List"
+                                } else {
+                                    "Save to My List" +
+                                        (if (viewModel.simklConnectedForLibrary()) {
+                                            ", Simkl"
+                                        } else { "" }) +
+                                        (if (viewModel.mdbListConnectedForLibrary()) {
+                                            " and MDBList"
+                                        } else { "" })
+                                }
+                            ) {
+                                val selected = target
+                                posterMenu = null
+                                if (!inLibrary) {
+                                    viewModel.addToLibrary(
+                                        selected.mediaType,
+                                        selected.tmdbId,
+                                        selected.name.ifBlank { "Untitled" }
+                                    )
+                                }
+                                lastPosterFocusRequester?.requestFocus()
+                            },
                             PosterContextAction(
                                 label = "Go to Details",
                                 description = "Open this title's detail page"

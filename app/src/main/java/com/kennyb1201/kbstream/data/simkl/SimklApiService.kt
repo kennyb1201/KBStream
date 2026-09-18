@@ -126,6 +126,35 @@ interface SimklApiService {
         @Header("Authorization") authorization: String
     ): Response<ResponseBody>
 
+    /*
+     * Watchlist (Plan to Watch) read: all-items with the plantowatch
+     * status. Covers both movies and shows in one call per type; movies
+     * use the movies type, series the shows type.
+     */
+    @GET("sync/all-items/movies/plantowatch")
+    suspend fun getWatchlistMovies(
+        @Header("Authorization") authorization: String,
+        @Query("extended") extended: String? = "full"
+    ): Response<SimklWatchlistMoviesResponse>
+
+    @GET("sync/all-items/shows/plantowatch")
+    suspend fun getWatchlistShows(
+        @Header("Authorization") authorization: String,
+        @Query("extended") extended: String? = "full"
+    ): Response<SimklWatchlistShowsResponse>
+
+    /*
+     * Watchlist write: POST /sync/add-to-list moves an item into a
+     * watchlist status (plantowatch here) WITHOUT recording a watch
+     * event — exactly the "Add to Library" semantics. The `to` field
+     * sits at the request root, not per item, on this endpoint family.
+     */
+    @POST("sync/add-to-list")
+    suspend fun addToWatchlist(
+        @Header("Authorization") authorization: String,
+        @Body body: SimklAddToListRequest
+    ): Response<ResponseBody>
+
     @POST("scrobble/start")
     suspend fun scrobbleStart(
         @Header("Authorization") authorization: String,

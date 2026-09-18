@@ -13,6 +13,8 @@ import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
+import com.kennyb1201.kbstream.data.library.LibraryMirror
+import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.mdblist.MdbListPlaybackItem
 import com.kennyb1201.kbstream.data.simkl.SimklContinueWatchingItem
@@ -1321,6 +1323,52 @@ Log.d(
                 )
             }
         }
+    }
+
+    /** Simkl is signed in, so long-press adds will mirror there too. */
+    fun simklConnectedForLibrary(): Boolean =
+        LibraryMirror.simklConnected(getApplication())
+
+    /** MDBList API key is set, so long-press adds will mirror there too. */
+    fun mdbListConnectedForLibrary(): Boolean =
+        LibraryMirror.mdbListConnected(getApplication())
+
+    /**
+     * True when the title is already on this profile's local My List.
+     * Accepts either id form (imdb or tmdb) so the check matches however
+     * the entry was saved.
+     */
+    fun isInLocalLibrary(mediaType: String, imdbId: String?, tmdbId: Int?): Boolean {
+        val appContext = getApplication<Application>()
+        return (tmdbId != null &&
+            LocalLibraryStore.isInMyList(appContext, mediaType, null, tmdbId)) ||
+            (imdbId != null &&
+                LocalLibraryStore.isInMyList(appContext, mediaType, imdbId, null))
+    }
+
+    /**
+     * Long-press "Add to Library" on a catalog poster: saves to this
+     * profile's local My List, then mirrors to the Simkl and/or MDBList
+     * watchlists when connected (best-effort; local write always wins).
+     */
+    fun addToLibrary(
+        mediaType: String,
+        imdbId: String?,
+        tmdbId: Int?,
+        title: String,
+        year: Int? = null,
+        posterUrl: String? = null
+    ) {
+        LibraryMirror.addToLibrary(
+            context = getApplication(),
+            scope = viewModelScope,
+            mediaType = mediaType,
+            imdbId = imdbId,
+            tmdbId = tmdbId,
+            title = title,
+            year = year,
+            posterUrl = posterUrl
+        )
     }
 
     /**

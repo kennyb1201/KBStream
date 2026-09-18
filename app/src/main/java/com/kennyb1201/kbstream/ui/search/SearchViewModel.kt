@@ -9,6 +9,8 @@ import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.addon.InstalledAddon
+import com.kennyb1201.kbstream.data.library.LibraryMirror
+import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.addon.ManifestCatalog
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
@@ -343,6 +345,66 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 Log.e("SEARCH_WATCHED", "watched preload failed: ${e.message}", e)
             }
+        }
+    }
+
+    /** Simkl is signed in, so long-press adds will mirror there too. */
+    fun simklConnectedForLibrary(): Boolean =
+        LibraryMirror.simklConnected(getApplication())
+
+    /** MDBList API key is set, so long-press adds will mirror there too. */
+    fun mdbListConnectedForLibrary(): Boolean =
+        LibraryMirror.mdbListConnected(getApplication())
+
+    /**
+     * True when the title is already on this profile's local My List.
+     * Accepts either id form (imdb or tmdb) so the check matches however
+     * the entry was saved.
+     */
+    fun isInLocalLibrary(mediaType: String, imdbId: String?, tmdbId: Int?): Boolean {
+        val appContext = getApplication<Application>()
+        return (tmdbId != null &&
+            LocalLibraryStore.isInMyList(appContext, mediaType, null, tmdbId)) ||
+            (imdbId != null &&
+                LocalLibraryStore.isInMyList(appContext, mediaType, imdbId, null))
+    }
+
+    /**
+     * Long-press "Add to Library" on a search/trending tile: resolves the
+     * TMDB id to its IMDB form when needed, saves to this profile's local
+     * My List, then mirrors to the Simkl and/or MDBList watchlists when
+     * connected (best-effort; local write always wins).
+     */
+    fun addToLibrary(result: SearchTitleResult) {
+        viewModelScope.launch {
+            val normalizedType = normalizedType(result.type) ?: return@launch
+            val tmdbId = result.id.removePrefix("tmdb:").toIntOrNull()
+
+            val imdbId: String? = if (tmdbId != null) {
+                val lookup = lookupKey(tmdbId, normalizedType)
+                val resolved = _resolvedIds.value[lookup]
+                    ?: runCatching {
+                        tmdbRepository.resolveImdbId(tmdbId, normalizedType)
+                    }.getOrNull()
+
+                if (resolved != null && _resolvedIds.value[lookup] == null) {
+                    _resolvedIds.value = _resolvedIds.value + (lookup to resolved)
+                }
+                resolved
+            } else {
+                result.id.trim().takeIf { it.isNotBlank() }
+            }
+
+            LibraryMirror.addToLibrary(
+                context = getApplication(),
+                scope = viewModelScope,
+                mediaType = normalizedType,
+                imdbId = imdbId,
+                tmdbId = tmdbId,
+                title = result.name,
+                year = result.year,
+                posterUrl = result.poster
+            )
         }
     }
 

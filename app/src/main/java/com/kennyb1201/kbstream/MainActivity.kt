@@ -82,6 +82,7 @@ import android.content.Intent
 import org.json.JSONArray
 import org.json.JSONObject
 import com.kennyb1201.kbstream.ui.kb.KBFolderScreen
+import com.kennyb1201.kbstream.ui.library.LibraryScreen
 import com.kennyb1201.kbstream.ui.settings.SettingsScreen
 import com.kennyb1201.kbstream.ui.search.SearchScreen
 import com.kennyb1201.kbstream.ui.search.SearchViewModel
@@ -112,6 +113,8 @@ sealed class Screen {
     object Simkl : Screen()
 
     object Guide : Screen()
+
+    object Library : Screen()
 
     object Settings : Screen()
 
@@ -370,6 +373,7 @@ private fun decodeScreen(
             "search" -> Screen.Search
             "simkl" -> Screen.Simkl
             "guide" -> Screen.Guide
+            "library" -> Screen.Library
             "settings" -> Screen.Settings
             "detail" -> Screen.Detail(
                 type = json.optString("type", "movie"),
@@ -509,6 +513,7 @@ private fun Screen.typeName(): String = when (this) {
     is Screen.Search -> "search"
     is Screen.Simkl -> "simkl"
     is Screen.Guide -> "guide"
+    is Screen.Library -> "library"
     is Screen.Settings -> "settings"
     is Screen.Detail -> "detail"
     is Screen.Actor -> "actor"
@@ -1168,6 +1173,10 @@ fun AppRoot() {
                     screen = Screen.Guide
                 },
 
+                onOpenLibrary = {
+                    screen = Screen.Library
+                },
+
                 onOpenSettings = {
                     screen = Screen.Settings
                 },
@@ -1325,6 +1334,19 @@ fun AppRoot() {
                 onBackToHome = {
                     screen = Screen.Settings
                 }
+            )
+        }
+
+        is Screen.Library -> {
+            LibraryScreen(
+                onItemClick = { mediaType, id ->
+                    screen = Screen.Detail(
+                        mediaType,
+                        id,
+                        returnTo = Screen.Library
+                    )
+                },
+                onBack = { screen = Screen.Home }
             )
         }
 

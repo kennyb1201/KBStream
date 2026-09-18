@@ -78,8 +78,47 @@ data class SimklPlaybackItem(
     @Json(name = "episode") val episode: SimklPlaybackEpisode?
 )
 
+/*
+ * Watchlist (Plan to Watch) reads — GET /sync/all-items/{movies|shows}/
+ * plantowatch. Mirrors the completed-movies response shape.
+ */
+@JsonClass(generateAdapter = true)
+data class SimklWatchlistMoviesResponse(
+    @Json(name = "movies") val movies: List<SimklCompletedMovieItem> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class SimklWatchlistShowsResponse(
+    @Json(name = "shows") val shows: List<SimklWatchingShowItem> = emptyList()
+)
+
+/*
+ * POST /sync/add-to-list request: per-type arrays of id-bearing entries;
+ * the destination status travels on the request ROOT, not per item.
+ */
+@JsonClass(generateAdapter = true)
+data class SimklAddToListRequest(
+    @Json(name = "to") val to: String,
+    @Json(name = "movies") val movies: List<SimklAddToListEntry> = emptyList(),
+    @Json(name = "shows") val shows: List<SimklAddToListEntry> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class SimklAddToListEntry(
+    @Json(name = "title") val title: String? = null,
+    @Json(name = "ids") val ids: SimklAddToListIds
+)
+
+@JsonClass(generateAdapter = true)
+data class SimklAddToListIds(
+    @Json(name = "imdb") val imdb: String? = null,
+    @Json(name = "tmdb") val tmdb: Int? = null,
+    @Json(name = "simkl") val simkl: Int? = null
+)
+
 @JsonClass(generateAdapter = true)
 data class SimklWatchingShowsResponse(
+
     @Json(name = "shows") val shows: List<SimklWatchingShowItem> = emptyList()
 )
 

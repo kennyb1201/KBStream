@@ -253,6 +253,7 @@ private fun TopActionItem(
 private fun TopActionBar(
     onSearch: () -> Unit,
     onOpenGuide: () -> Unit,
+    onOpenLibrary: () -> Unit,
     onOpenSettings: () -> Unit,
     firstActionFocusRequester: FocusRequester,
     onDismiss: () -> Unit
@@ -279,6 +280,13 @@ private fun TopActionBar(
         TopActionItem(
             label = "TV GUIDE",
             onClick = onOpenGuide,
+            onDismiss = onDismiss,
+            modifier = Modifier.padding(end = 8.dp)
+        )
+
+        TopActionItem(
+            label = "LIBRARY",
+            onClick = onOpenLibrary,
             onDismiss = onDismiss,
             modifier = Modifier.padding(end = 8.dp)
         )
@@ -1897,6 +1905,7 @@ fun HomeScreen(
     ) -> Unit = { _, _, _ -> },
     onSearch: () -> Unit = {},
     onOpenGuide: () -> Unit = {},
+    onOpenLibrary: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
     onOpenKBFolder: (String) -> Unit = {},
     onOpenCatalogGrid: (Rail) -> Unit = {},
@@ -3026,6 +3035,7 @@ fun HomeScreen(
                 TopActionBar(
                     onSearch = onSearch,
                     onOpenGuide = onOpenGuide,
+                    onOpenLibrary = onOpenLibrary,
                     onOpenSettings = onOpenSettings,
                     firstActionFocusRequester =
                         topBarFocusRequester,
@@ -3057,6 +3067,34 @@ fun HomeScreen(
                         }
                 }.ifBlank { null },
                 actions = listOf(
+                    PosterContextAction(
+                        label = "Add to Library",
+                        description = "Save the show to My List" +
+                            (if (viewModel.simklConnectedForLibrary()) ", Simkl" else "") +
+                            (if (viewModel.mdbListConnectedForLibrary()) " and MDBList" else "")
+                    ) {
+                        val selectedItem = menuItem
+                        continueWatchingMenu = null
+                        val showType = selectedItem.parentType?.lowercase()
+                            ?: selectedItem.id.substringBefore(':').lowercase()
+                        // parentId is a stream key ("tmdb:123:S:E"); take
+                        // its numeric head, falling back to the item id.
+                        val showTmdbId = selectedItem.parentId
+                            ?.substringBefore(':')
+                            ?.removePrefix("tmdb:")
+                            ?.toIntOrNull()
+                            ?: selectedItem.id
+                                .substringBefore(':')
+                                .removePrefix("tmdb:")
+                                .toIntOrNull()
+                        viewModel.addToLibrary(
+                            mediaType = showType,
+                            imdbId = null,
+                            tmdbId = showTmdbId,
+                            title = selectedItem.showTitle ?: selectedItem.title,
+                            posterUrl = selectedItem.poster
+                        )
+                    },
                     PosterContextAction(
                         label = "Go to Details",
                         description = "Open this title's detail page"
@@ -3125,9 +3163,43 @@ fun HomeScreen(
                     target.meta.type
                 ) in watchedKeys
 
+            val railInLibrary = viewModel.isInLocalLibrary(
+                target.meta.type,
+                null,
+                target.meta.id.removePrefix("tmdb:").toIntOrNull()
+            )
+
             PosterContextMenu(
                 title = target.meta.name,
                 actions = listOf(
+                    PosterContextAction(
+                        label = if (railInLibrary) {
+                            "In Library ✓"
+                        } else {
+                            "Add to Library"
+                        },
+                        description = if (railInLibrary) {
+                            "Already on this profile's My List"
+                        } else {
+                            "Save to My List" +
+                                (if (viewModel.simklConnectedForLibrary()) ", Simkl" else "") +
+                                (if (viewModel.mdbListConnectedForLibrary()) " and MDBList" else "")
+                        }
+                    ) {
+                        val selected = target
+                        posterMenu = null
+                        if (!railInLibrary) {
+                            viewModel.addToLibrary(
+                                mediaType = selected.meta.type,
+                                imdbId = null,
+                                tmdbId = selected.meta.id.removePrefix("tmdb:").toIntOrNull(),
+                                title = selected.meta.name,
+                                year = selected.meta.yearOrNull,
+                                posterUrl = selected.meta.poster
+                            )
+                        }
+                        lastPosterFocusRequester?.requestFocus()
+                    },
                     PosterContextAction(
                         label = "Open in Grid",
                         description = "Browse this whole catalog as a poster grid"

@@ -14,6 +14,28 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 /**
+ * One entry inside an MDBList list or watchlist (GET /lists/{id}/items,
+ * GET /watchlist/items). Only the fields the Library tab needs.
+ */
+data class MdbListEntry(
+    val title: String?,
+    val mediaType: String,
+    val year: Int?,
+    val poster: String?,
+    val imdbId: String?,
+    val tmdbId: Int?
+)
+
+/**
+ * One user list on the account (GET /lists/user).
+ */
+data class MdbListUserList(
+    val id: Int,
+    val name: String,
+    val itemCount: Int
+)
+
+/**
  * Critic/audience ratings pulled from MDBList for one title. All fields are
  * preformatted display strings so the UI can render them verbatim
  * ("8.1", "95%", "78/100").
@@ -711,6 +733,283 @@ object MdbListClient {
                 )
             }.getOrDefault(MdbListWatchedSnapshot())
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Lists + Watchlist section — Library tab reads and writes.
+    // ------------------------------------------------------------------
+
+    /** Shared GET returning a parsed body string, or null when not 2xx. */
+    private suspend fun getString(url: String): String? =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                client.newCall(Request.Builder().url(url).get().build())
+                    .execute()
+                    .use { response ->
+                        if (!response.isSuccessful) {
+                            Log.w(
+                                TAG,
+                                "GET ${'$'}{url.substringBefore('?')} " +
+                                    "failed code=${'$'}{response.code}"
+                            )
+                            null
+                        } else {
+                            response.body?.string()
+                        }
+                    }
+            }.getOrNull()
+        }
+
+    private fun entryFromJson(obj: JSONObject, fallbackType: String): MdbListEntry? {
+        val ids = obj.optJSONObject("ids")
+        val imdbId = ids?.optString("imdb")?.takeIf { it.startsWith("tt") }
+        val tmdbId = ids?.optInt("tmdb", -1)?.takeIf { it > 0 }
+        val mediatype = obj.optString("mediatype", fallbackType)
+        return MdbListEntry(
+            title = obj.optString("title", "").ifBlank {
+                obj.optString("name", "").ifBlank { null }
+            },
+            mediaType = if (mediatype.equals("show", true) || mediatype.equals("series", true)) {
+                "series"
+            } else {
+                "movie"
+            },
+            year = obj.optInt("release_year", -1).takeIf { it > 0 }
+                ?: obj.optInt("year", -1).takeIf { it > 0 },
+            poster = obj.optString("poster", "").ifBlank { null },
+            imdbId = imdbId,
+            tmdbId = tmdbId
+        )
+    }
+
+    /**
+     * GET /lists/user — the authenticated user's personal lists.
+     */
+    suspend fun getUserLists(context: Context): List<MdbListUserList> {
+        val apiKey = apiKey(context)
+        if (apiKey.isBlank()) return emptyList()
+        val body = getString("$BASE/lists/user?apikey=$apiKey") ?: return emptyList()
+        return runCatching {
+            val arr = JSONArray(body)
+            (0 until arr.length()).mapNotNull { i ->
+                val obj = arr.optJSONObject(i) ?: return@mapNotNull null
+                val id = obj.optInt("id", -1)
+                if (id <= 0) return@mapNotNull null
+                MdbListUserList(
+                    id = id,
+                    name = obj.optString("name", "").ifBlank { "List ${'$'}id" },
+                    itemCount = obj.optInt("items", 0)
+                )
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    /**
+     * GET /lists/{id}/items — titles in one personal list. Cursor
+     * pagination is followed so large lists aren't truncated.
+     */
+    suspend fun getListItems(
+        context: Context,
+        listId: Int
+    ): List<MdbListEntry> {
+        val apiKey = apiKey(context)
+        if (apiKey.isBlank()) return emptyList()
+
+        val out = mutableListOf<MdbListEntry>()
+        var cursor: String? = null
+        var guard = 0
+        do {
+            val url = buildString {
+                append("$BASE/lists/$listId/items?apikey=$apiKey&limit=1000")
+                if (!cursor.isNullOrBlank()) {
+                    append("&cursor=")
+                    append(java.net.URLEncoder.encode(cursor, "UTF-8"))
+                }
+            }
+            val body = getString(url) ?: break
+            val parsed = runCatching {
+                val root = JSONObject(body)
+                cursor = root.optJSONObject("pagination")
+                    ?.optString("next_cursor")
+                    ?.takeIf { it.isNotBlank() }
+
+                fun collect(key: String, fallbackType: String) {
+                    root.optJSONArray(key)?.let { arr ->
+                        for (i in 0 until arr.length()) {
+                            arr.optJSONObject(i)?.let {
+                                entryFromJson(it, fallbackType)?.let(out::add)
+                            }
+                        }
+                    }
+                }
+                // List items can arrive combined or split by mediatype.
+                collect("items", "movie")
+                collect("movies", "movie")
+                collect("shows", "series")
+            }
+            if (parsed.isFailure) break
+            guard += 1
+        } while (!cursor.isNullOrBlank() && guard < 30)
+        return out
+    }
+
+    /**
+     * POST /lists/{id}/items/add — add movies/shows (by imdb/tmdb ids)
+     * to one personal list in a single call.
+     */
+    suspend fun addToList(
+        context: Context,
+        listId: Int,
+        entries: List<MdbListEntry>
+    ): Boolean {
+        val apiKey = apiKey(context)
+        if (apiKey.isBlank() || entries.isEmpty()) return false
+        val (movies, shows) = entriesPayload(entries)
+        val payload = JSONObject()
+        if (movies.length() > 0) payload.put("movies", movies)
+        if (shows.length() > 0) payload.put("shows", shows)
+        if (payload.length() == 0) return false
+        return postSync(
+            apiKey,
+            "$BASE/lists/$listId/items/add?apikey=$apiKey",
+            payload
+        )
+    }
+
+    /** POST /lists/{id}/items/remove — remove entries from a list. */
+    suspend fun removeFromList(
+        context: Context,
+        listId: Int,
+        entries: List<MdbListEntry>
+    ): Boolean {
+        val apiKey = apiKey(context)
+        if (apiKey.isBlank() || entries.isEmpty()) return false
+        val (movies, shows) = entriesPayload(entries)
+        val payload = JSONObject()
+        if (movies.length() > 0) payload.put("movies", movies)
+        if (shows.length() > 0) payload.put("shows", shows)
+        if (payload.length() == 0) return false
+        return postSync(
+            apiKey,
+            "$BASE/lists/$listId/items/remove?apikey=$apiKey",
+            payload
+        )
+    }
+
+    /** POST /lists/user/add — create a new personal list. */
+    suspend fun createList(
+        context: Context,
+        name: String
+    ): MdbListUserList? {
+        val apiKey = apiKey(context)
+        if (apiKey.isBlank()) return null
+        val payload = JSONObject().put("name", name)
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                val request = Request.Builder()
+                    .url("$BASE/lists/user/add?apikey=$apiKey")
+                    .post(payload.toString().toRequestBody("application/json".toMediaType()))
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        Log.w(TAG, "lists/user/add failed code=${'$'}{response.code}")
+                        return@use null
+                    }
+                    val root = JSONObject(response.body?.string().orEmpty())
+                    val id = root.optInt("id", -1)
+                    if (id <= 0) null
+                    else MdbListUserList(
+                        id = id,
+                        name = root.optString("name", name),
+                        itemCount = 0
+                    )
+                }
+            }.getOrNull()
+        }
+    }
+
+    /**
+     * GET /watchlist/items — the account's MDBList watchlist.
+     */
+    suspend fun getWatchlist(context: Context): List<MdbListEntry> {
+        val apiKey = apiKey(context)
+        if (apiKey.isBlank()) return emptyList()
+        val body = getString("$BASE/watchlist/items?apikey=$apiKey&limit=1000")
+            ?: return emptyList()
+        return runCatching {
+            val root = JSONObject(body)
+            val out = mutableListOf<MdbListEntry>()
+            fun collect(key: String, fallbackType: String) {
+                root.optJSONArray(key)?.let { arr ->
+                    for (i in 0 until arr.length()) {
+                        arr.optJSONObject(i)?.let {
+                            entryFromJson(it, fallbackType)?.let(out::add)
+                        }
+                    }
+                }
+            }
+            collect("movies", "movie")
+            collect("shows", "series")
+            out
+        }.getOrDefault(emptyList())
+    }
+
+    /** POST /watchlist/items/add — add to the MDBList watchlist. */
+    suspend fun addToWatchlist(
+        context: Context,
+        entries: List<MdbListEntry>
+    ): Boolean {
+        val apiKey = apiKey(context)
+        if (apiKey.isBlank() || entries.isEmpty()) return false
+        val (movies, shows) = entriesPayload(entries)
+        val payload = JSONObject()
+        if (movies.length() > 0) payload.put("movies", movies)
+        if (shows.length() > 0) payload.put("shows", shows)
+        if (payload.length() == 0) return false
+        return postSync(
+            apiKey,
+            "$BASE/watchlist/items/add?apikey=$apiKey",
+            payload
+        )
+    }
+
+    /** POST /watchlist/items/remove — remove from the watchlist. */
+    suspend fun removeFromWatchlist(
+        context: Context,
+        entries: List<MdbListEntry>
+    ): Boolean {
+        val apiKey = apiKey(context)
+        if (apiKey.isBlank() || entries.isEmpty()) return false
+        val (movies, shows) = entriesPayload(entries)
+        val payload = JSONObject()
+        if (movies.length() > 0) payload.put("movies", movies)
+        if (shows.length() > 0) payload.put("shows", shows)
+        if (payload.length() == 0) return false
+        return postSync(
+            apiKey,
+            "$BASE/watchlist/items/remove?apikey=$apiKey",
+            payload
+        )
+    }
+
+    /** Builds {movies:[{ids:{...}}],shows:[...]} from library entries. */
+    private fun entriesPayload(
+        entries: List<MdbListEntry>
+    ): Pair<JSONArray, JSONArray> {
+        val movies = JSONArray()
+        val shows = JSONArray()
+        entries.forEach { entry ->
+            val ids = JSONObject()
+            if (!entry.imdbId.isNullOrBlank()) ids.put("imdb", entry.imdbId)
+            if (entry.tmdbId != null && entry.tmdbId > 0) ids.put("tmdb", entry.tmdbId)
+            if (ids.length() == 0) return@forEach
+            if (entry.mediaType.equals("series", true)) {
+                shows.put(JSONObject().put("ids", ids))
+            } else {
+                movies.put(JSONObject().put("ids", ids))
+            }
+        }
+        return movies to shows
     }
 
     /** Adds "tt123" and "tmdb:456" forms for [ids], optionally suffixed. */

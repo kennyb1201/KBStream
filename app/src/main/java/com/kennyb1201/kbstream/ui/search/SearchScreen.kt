@@ -474,9 +474,37 @@ fun SearchScreen(
                 viewModel = viewModel
             )
 
+            val resultTmdbId = result.id.removePrefix("tmdb:").toIntOrNull()
+            val resultInLibrary = viewModel.isInLocalLibrary(
+                result.type,
+                null,
+                resultTmdbId
+            )
+
             PosterContextMenu(
                 title = result.name,
                 actions = listOf(
+                    PosterContextAction(
+                        label = if (resultInLibrary) {
+                            "In Library ✓"
+                        } else {
+                            "Add to Library"
+                        },
+                        description = if (resultInLibrary) {
+                            "Already on this profile's My List"
+                        } else {
+                            "Save to My List" +
+                                (if (viewModel.simklConnectedForLibrary()) ", Simkl" else "") +
+                                (if (viewModel.mdbListConnectedForLibrary()) " and MDBList" else "")
+                        }
+                    ) {
+                        val selected = result
+                        menuResult = null
+                        if (!resultInLibrary) {
+                            viewModel.addToLibrary(selected)
+                        }
+                        lastPosterFocusRequester?.requestFocus()
+                    },
                     PosterContextAction(
                         label = "Go to Details",
                         description = "Open this title's detail page"

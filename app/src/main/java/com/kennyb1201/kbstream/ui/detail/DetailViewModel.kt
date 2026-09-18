@@ -22,9 +22,12 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
 import com.kennyb1201.kbstream.data.reddit.RedditDiscussionsClient
 import com.kennyb1201.kbstream.data.trakt.TraktCommentsClient
+import com.kennyb1201.kbstream.data.library.LibraryMirror
+import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.mdblist.MdbListRatings
 import com.kennyb1201.kbstream.data.tmdb.TmdbSeasonSummary
+import com.kennyb1201.kbstream.data.tmdb.bestReleaseDate
 import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
@@ -1913,4 +1916,54 @@ for (metaAddon in metaAddons) {
 
     suspend fun resolveImdbId(tmdbId: Int, type: String): String? =
         tmdbRepository.resolveImdbId(tmdbId, type.lowercase())
+
+    /** Simkl is signed in, so long-press adds will mirror there too. */
+    fun simklConnectedForLibrary(): Boolean =
+        simklRepository.isConfigured() && simklRepository.hasToken()
+
+    /** MDBList API key is set, so long-press adds will mirror there too. */
+    fun mdbListConnectedForLibrary(): Boolean =
+        MdbListClient.isConfigured(getApplication<Application>())
+
+    /**
+     * True when the title is already on this profile's local My List.
+     * Checks the tmdb id form directly and, when not yet resolved, the
+     * imdb form via the poster-lookup map.
+     */
+    fun isInLocalLibrary(mediaType: String, tmdbId: Int): Boolean {
+        val appContext = getApplication<Application>()
+        if (LocalLibraryStore.isInMyList(appContext, mediaType, null, tmdbId)) {
+            return true
+        }
+        val imdbId = _resolvedPosterIds.value[posterLookupKey(tmdbId, mediaType)]
+        return imdbId != null &&
+            LocalLibraryStore.isInMyList(appContext, mediaType, imdbId, null)
+    }
+
+    /**
+     * "Add to Library" from a long-press menu: saves to this profile's
+     * local My List, then mirrors the add to the Simkl watchlist and/or
+     * MDBList watchlist when those accounts are connected. Remote adds
+     * are best-effort; the local write always wins.
+     */
+    fun addToLibrary(mediaType: String, tmdbId: Int, title: String) {
+        val appContext = getApplication<Application>()
+        val normalizedType = mediaType.lowercase()
+        val imdbId = _resolvedPosterIds.value[posterLookupKey(tmdbId, mediaType)]
+
+        val year = _tmdbDetail.value?.bestReleaseDate()?.take(4)?.toIntOrNull()
+
+        LibraryMirror.addToLibrary(
+            context = appContext,
+            scope = viewModelScope,
+            mediaType = normalizedType,
+            imdbId = imdbId,
+            tmdbId = tmdbId,
+            title = title,
+            year = year,
+            posterUrl = _tmdbDetail.value?.posterPath
+                ?.takeIf { it.isNotBlank() }
+                ?.let { TmdbRepository.POSTER_BASE + it }
+        )
+    }
 }
