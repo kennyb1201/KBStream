@@ -1,4 +1,6 @@
 local.properties
+.env
+.env.*
 *.iml
 .gradle/
 .kotlin/

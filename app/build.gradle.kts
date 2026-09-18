@@ -150,7 +150,7 @@ android {
         projectName.set(
             System.getenv("SENTRY_PROJECT")
                 ?: localProps.getProperty("SENTRY_PROJECT")
-                ?: "kbstream"
+                ?: "android"
         )
         authToken.set(
             System.getenv("SENTRY_AUTH_TOKEN")

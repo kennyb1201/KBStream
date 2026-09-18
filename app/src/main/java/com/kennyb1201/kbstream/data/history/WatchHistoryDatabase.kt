@@ -6,6 +6,7 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.kennyb1201.kbstream.data.db.RoomBusyTimeout
 import com.kennyb1201.kbstream.data.cache.ImdbResolutionDao
 import com.kennyb1201.kbstream.data.cache.ImdbResolutionEntity
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheDao
@@ -33,6 +34,30 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
         @Volatile
         private var instance: WatchHistoryDatabase? = null
 
+        // Retired (to-be-closed) DBs are closed after a short grace period
+        // instead of synchronously on profile switch: a query that is
+        // mid-flight on the old instance (e.g. a large Continue-Watching
+        // cursor waiting for a connection) gets its connection pool yanked
+        // shut otherwise and crashes with "connection pool has been closed".
+        private const val RETIRE_GRACE_MS = 5_000L
+        private val closeExecutor =
+            java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+                Thread(r, "room-db-retire").apply { isDaemon = true }
+            }
+
+        /** Retire a DB: swap it out now, close it after the grace period. */
+        private fun retireGracefully(db: WatchHistoryDatabase?) {
+            if (db == null) return
+            closeExecutor.execute {
+                try {
+                    Thread.sleep(RETIRE_GRACE_MS)
+                } catch (_: InterruptedException) {
+                    // Fall through and close promptly on interrupt.
+                }
+                runCatching { db.close() }
+            }
+        }
+
         // Profile-scoped instances: one open DB per active profile, closed
         // when the profile switches.
         @Volatile
@@ -52,6 +77,10 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                         MIGRATION_9_10, MIGRATION_10_11
                     )
                     .fallbackToDestructiveMigration()
+                    // WAL lets readers and the sync writer proceed in
+                    // parallel instead of failing with SQLITE_BUSY.
+                    .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
+                    .addCallback(RoomBusyTimeout)
                     .build()
                     .also { instance = it }
             }
@@ -98,6 +127,8 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                     MIGRATION_9_10, MIGRATION_10_11
                 )
                 .fallbackToDestructiveMigration()
+                .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
+                .addCallback(RoomBusyTimeout)
                 .build()
 
         /**
@@ -107,7 +138,7 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
          */
         fun closeScopedInstance() {
             synchronized(this) {
-                runCatching { profileInstance?.close() }
+                retireGracefully(profileInstance)
                 profileInstance = null
                 profileInstanceName = null
             }
@@ -125,7 +156,7 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
          */
         fun closeScopedInstanceForSwitch() {
             synchronized(this) {
-                runCatching { profileInstance?.close() }
+                retireGracefully(profileInstance)
                 profileInstance = null
                 // Keep profileInstanceName as the tombstone; do not clear it.
             }
