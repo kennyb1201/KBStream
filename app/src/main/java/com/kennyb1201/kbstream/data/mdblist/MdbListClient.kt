@@ -4,6 +4,8 @@ import android.content.Context
 import android.util.Log
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -117,12 +119,55 @@ object MdbListClient {
 
     private const val WATCHED_AT_COMPLETE_THRESHOLD = 80.0
 
+    // ── Watched-snapshot cache ────────────────────────────────────────
+    // /sync/watched downloads the ENTIRE watch history (paginated). Detail
+    // loads used to hit it inline on every series open, adding seconds of
+    // latency the moment an API key was configured. The snapshot is now
+    // cached in-process for a short TTL; scrobble/mark actions invalidate
+    // it so badges never go stale within a session.
+    private const val SNAPSHOT_TTL_MS = 5 * 60 * 1000L
+    @Volatile private var cachedSnapshot: MdbListWatchedSnapshot? = null
+    @Volatile private var cachedSnapshotAt = 0L
+    private val snapshotMutex = kotlinx.coroutines.sync.Mutex()
+
     /** Reads the user-pasted (or build-injected) key, or "" when unset. */    fun apiKey(context: Context): String =
         AppPreferences.getMdbListApiKey(context)
 
     /** True when scrobbling/sync calls should be attempted. */
     fun isConfigured(context: Context): Boolean =
         apiKey(context).isNotBlank()
+
+    /**
+     * Connection check for the Settings panel: GET /user answers the
+     * account's username with a valid key and 403 "Invalid API key"
+     * otherwise. Returns the username, or null when the key is rejected
+     * (or the network fails — the error string distinguishes).
+     */
+    suspend fun verifyKey(context: Context): Pair<String?, String?> {
+        val key = apiKey(context)
+        if (key.isBlank()) return null to "No key pasted yet"
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                client.newCall(
+                    Request.Builder().url("$BASE/user?apikey=$key").get().build()
+                ).execute().use { response ->
+                    when {
+                        response.isSuccessful -> {
+                            val root = JSONObject(response.body?.string().orEmpty())
+                            val name = root.optString("username", "")
+                                .ifBlank { root.optString("name", "MDBList account") }
+                            name to null
+                        }
+                        response.code == 401 || response.code == 403 ->
+                            null to "Key rejected — check it on mdblist.com/settings"
+                        else -> null to "MDBList error HTTP ${response.code}"
+                    }
+                }
+            }.getOrElse { e ->
+                null to (e.message ?: "Network error reaching mdblist.com")
+            }
+        }
+    }
 
     private fun newEmptyObject(): JSONObject = JSONObject()
 
@@ -248,6 +293,10 @@ object MdbListClient {
                         "scrobble/$action failed code=${response.code} " +
                             response.body?.string().orEmpty().take(200)
                     )
+                } else {
+                    // Watch state just changed: force the next snapshot
+                    // read to re-download instead of serving the cache.
+                    invalidateWatchedSnapshot()
                 }
                 response.isSuccessful
             }
@@ -453,6 +502,8 @@ object MdbListClient {
                         "sync post failed code=${response.code} " +
                             response.body?.string().orEmpty().take(200)
                     )
+                } else {
+                    invalidateWatchedSnapshot()
                 }
                 response.isSuccessful
             }
@@ -537,7 +588,7 @@ object MdbListClient {
             else -> return false
         }
 
-        return withContext(Dispatchers.IO) {
+        val ok = withContext(Dispatchers.IO) {
             runCatching {
                 val request = Request.Builder()
                     .url("$BASE/sync/watched/remove?apikey=$apiKey")
@@ -546,6 +597,8 @@ object MdbListClient {
                 client.newCall(request).execute().use { it.isSuccessful }
             }.getOrDefault(false)
         }
+        if (ok) invalidateWatchedSnapshot()
+        return ok
     }
 
     /**
@@ -564,7 +617,7 @@ object MdbListClient {
             "shows",
             JSONArray().put(JSONObject().put("ids", ids))
         )
-        return withContext(Dispatchers.IO) {
+        val ok = withContext(Dispatchers.IO) {
             runCatching {
                 val request = Request.Builder()
                     .url("$BASE/sync/watched/remove?apikey=$apiKey")
@@ -573,6 +626,8 @@ object MdbListClient {
                 client.newCall(request).execute().use { it.isSuccessful }
             }.getOrDefault(false)
         }
+        if (ok) invalidateWatchedSnapshot()
+        return ok
     }
 
     /**
@@ -650,15 +705,37 @@ object MdbListClient {
      * pagination so large histories aren't silently truncated at the
      * first 100-item page.
      */
-    suspend fun getWatchedSnapshot(context: Context): MdbListWatchedSnapshot {
+    suspend fun getWatchedSnapshot(
+        context: Context,
+        forceRefresh: Boolean = false
+    ): MdbListWatchedSnapshot {
         val apiKey = apiKey(context)
         if (apiKey.isBlank()) return MdbListWatchedSnapshot()
 
-        val movieKeys = mutableSetOf<String>()
-        val startedShowKeys = mutableSetOf<String>()
-        val episodeKeys = mutableSetOf<String>()
+        // Fast path: a fresh cached snapshot answers instantly, so series
+        // detail loads never block on the full-history download.
+        val cached = cachedSnapshot
+        if (!forceRefresh && cached != null &&
+            System.currentTimeMillis() - cachedSnapshotAt < SNAPSHOT_TTL_MS
+        ) {
+            return cached
+        }
 
-        return withContext(Dispatchers.IO) {
+        return snapshotMutex.withLock {
+            // Re-check inside the lock: a parallel caller may have just
+            // refreshed it while this one waited.
+            val fresh = cachedSnapshot
+            if (!forceRefresh && fresh != null &&
+                System.currentTimeMillis() - cachedSnapshotAt < SNAPSHOT_TTL_MS
+            ) {
+                return@withLock fresh
+            }
+
+            val movieKeys = mutableSetOf<String>()
+            val startedShowKeys = mutableSetOf<String>()
+            val episodeKeys = mutableSetOf<String>()
+
+            val result = withContext(Dispatchers.IO) {
             runCatching {
                 var cursor: String? = null
                 var guard = 0
@@ -732,7 +809,26 @@ object MdbListClient {
                     episodeKeys = episodeKeys
                 )
             }.getOrDefault(MdbListWatchedSnapshot())
+            }
+
+            // Only cache successful non-empty fetches: an empty result from
+            // a transient API failure must not blank the badges for 5 min.
+            if (result != null && !result.isEmpty) {
+                cachedSnapshot = result
+                cachedSnapshotAt = System.currentTimeMillis()
+            }
+            result
         }
+    }
+
+    /**
+     * Drops the cached watched snapshot so the next read re-downloads it.
+     * Called after every successful scrobble/mark/unmark, keeping badges
+     * honest without a TTL shorter than the network cost justifies.
+     */
+    fun invalidateWatchedSnapshot() {
+        cachedSnapshot = null
+        cachedSnapshotAt = 0L
     }
 
     // ------------------------------------------------------------------

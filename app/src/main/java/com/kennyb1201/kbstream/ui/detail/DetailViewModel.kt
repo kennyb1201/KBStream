@@ -362,6 +362,13 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                     }
                 }
 
+                // MDBList ratings: fire EARLY, not buried behind the Simkl
+                // round-trip and the serial addon meta probes below. The row
+                // renders as soon as its own fetch answers; a blank IMDb id
+                // (TMDB-only titles) retries via the enrich pass once the
+                // external-ids lookup resolves.
+                fetchMdbListRatings(normalizedType)
+
                 val localResume = resumeDeferred.await().getOrNull()
 
                 // Simkl cloud-session fallback: when local history has no
@@ -743,7 +750,6 @@ for (metaAddon in metaAddons) {
                             .onSuccess { collection -> _collection.value = collection }
                     }
                     refreshPosterWatchedStatus(normalizedType)
-                    fetchMdbListRatings(normalizedType)
                     fetchExtraReviews(normalizedType)
                 }
 
@@ -786,7 +792,7 @@ for (metaAddon in metaAddons) {
         }.getOrDefault("")
     }
 
-    private fun fetchMdbListRatings(normalizedType: String) {
+    private fun fetchMdbListRatings(normalizedType: String, retryOnResolve: Boolean = true) {
         val key = mdbListApiKey()
         if (key.isBlank()) {
             Log.i(
@@ -799,12 +805,33 @@ for (metaAddon in metaAddons) {
             val meta = _meta.value
             val rawId = meta?.id ?: imdbId
             val resolved = rawId.takeIf { it.startsWith("tt") }
-                ?: tmdbRepository.resolveImdbId(
-                    _tmdbDetail.value?.id?.takeIf { it > 0 } ?: return@launch,
-                    normalizedType
-                ).orEmpty()
-            if (!resolved.startsWith("tt")) return@launch
-            _mdbListRatings.value = MdbListClient.fetchRatings(resolved, normalizedType, key)
+                ?: run {
+                    val tmdbId = _tmdbDetail.value?.id?.takeIf { it > 0 }
+                    if (tmdbId == null) {
+                        Log.i(
+                            "KBStream",
+                            "MDBList ratings waiting: no imdb id and no tmdb id yet"
+                        )
+                        return@launch
+                    }
+                    tmdbRepository.resolveImdbId(tmdbId, normalizedType).orEmpty()
+                }
+            if (!resolved.startsWith("tt")) {
+                Log.i(
+                    "KBStream",
+                    "MDBList ratings skipped: could not resolve an imdb id (raw=$rawId)"
+                )
+                return@launch
+            }
+            val ratings = MdbListClient.fetchRatings(resolved, normalizedType, key)
+            if (ratings?.hasAny != true) {
+                Log.i(
+                    "KBStream",
+                    "MDBList ratings empty for $resolved ($normalizedType) — " +
+                        "title may not be rated on mdblist.com"
+                )
+            }
+            _mdbListRatings.value = ratings
         }
     }
 

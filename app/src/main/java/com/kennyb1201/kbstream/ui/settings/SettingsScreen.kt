@@ -256,13 +256,15 @@ fun SettingsScreen(
                             .padding(horizontal = 14.dp, vertical = 10.dp)
                     ) {
                         Text(
-                            text = "MDBList API Key",
+                            text = if (mdbListKeySaved) "MDBList — Connected" else "MDBList — Not connected",
                             color = KBTextHi,
                             style = MaterialTheme.typography.bodyMedium
                         )
                         Text(
-                            text = "Key from mdblist.com — enables IMDb, Rotten Tomatoes, " +
-                                "Metacritic, Trakt and more on detail pages.",
+                            text = "Connects your mdblist.com account: critic ratings (IMDb, " +
+                                "Rotten Tomatoes, Metacritic, Trakt), watched-history badges, " +
+                                "resume-from-pause, scrobbling, and your personal lists + watchlist " +
+                                "in the Library tab.",
                             color = KBTextLo,
                             style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.padding(top = 2.dp)
@@ -309,12 +311,59 @@ fun SettingsScreen(
                         }
 
                         if (mdbListKeySaved) {
-                            Text(
-                                text = "Saved — ratings appear the next time you open a title.",
-                                color = KBAccent,
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.padding(top = 5.dp)
-                            )
+                            // Connection status line: the VERIFY action probes
+                            // GET /user with the pasted key and shows the
+                            // account name (or why the key was rejected).
+                            var verifyState by remember {
+                                mutableStateOf<Pair<String?, String?>?>(null)
+                            }
+                            var verifying by remember { mutableStateOf(false) }
+                            val verifyScope = rememberCoroutineScope()
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(top = 6.dp)
+                            ) {
+                                Text(
+                                    text = when {
+                                        verifying -> "Verifying…"
+                                        verifyState?.first != null ->
+                                            "Connected as ${verifyState?.first}"
+                                        verifyState?.second != null ->
+                                            verifyState?.second ?: ""
+                                        else -> "Key saved — ratings appear on the next title you open."
+                                    },
+                                    color = when {
+                                        verifying || verifyState?.first != null -> KBAccent
+                                        verifyState?.second != null -> KBTextLo
+                                        else -> KBAccent
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                KBCard(
+                                    onClick = {
+                                        verifying = true
+                                        verifyState = null
+                                        verifyScope.launch {
+                                            verifyState = com.kennyb1201.kbstream
+                                                .data.mdblist.MdbListClient.verifyKey(context)
+                                            verifying = false
+                                        }
+                                    },
+                                    modifier = Modifier.width(120.dp)
+                                ) {
+                                    Text(
+                                        text = if (verifying) "VERIFYING…" else "VERIFY",
+                                        color = KBAccent,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier
+                                            .background(KBSurface, RoundedCornerShape(6.dp))
+                                            .padding(horizontal = 14.dp, vertical = 8.dp)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
