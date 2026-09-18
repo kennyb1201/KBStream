@@ -1474,8 +1474,12 @@ private fun UpcomingEpisodeCard(
             )
 
             // Top chip: the AIR DATE (or NEW SEASON flag) — the thing that
-            // makes this card "upcoming".
-            if (upcoming.isSeasonPremiere) {
+            // makes this card "upcoming". A season premiere airing TODAY
+            // still shows the TODAY chip: "NEW SEASON" says what it is, but
+            // on premiere day "TODAY" is the urgent part (the date below
+            // already says which day) — MobLand S2 landing today read as
+            // "NEW SEASON / Thu, Sep 18" instead of "TODAY".
+            if (upcoming.isSeasonPremiere && upcoming.airDateLabel != "Today") {
                 Text(
                     text = "NEW SEASON",
                     color = KBTextHi,
