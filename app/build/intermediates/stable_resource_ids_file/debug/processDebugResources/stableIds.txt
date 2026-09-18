@@ -1,3 +1,4 @@
+com.kennyb1201.kbstream:xml/update_file_paths = 0x7f110002
 com.kennyb1201.kbstream:styleable/StateListDrawable = 0x7f100016
 com.kennyb1201.kbstream:styleable/SplitPlaceholderRule = 0x7f100015
 com.kennyb1201.kbstream:styleable/SplitPairRule = 0x7f100014

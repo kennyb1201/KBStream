@@ -2,7 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.kennyb1201.kbstream"
     android:versionCode="1"
-    android:versionName="0.1.0" >
+    android:versionName="0.1.0-dev" >
 
     <uses-sdk
         android:minSdkVersion="23"
@@ -10,6 +10,11 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.PICTURE_IN_PICTURE" />
+    <!--
+         In-app self-update: lets the system offer the install prompt for a
+         downloaded APK (sideloaded builds are not Play-managed).
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!--
          Voice search: let the system speech RecognizerIntent resolve on
@@ -78,6 +83,21 @@
             android:resizeableActivity="true"
             android:screenOrientation="landscape"
             android:supportsPictureInPicture="true" />
+
+        <!--
+             Self-update fallback flow: shares the downloaded APK with the
+             system installer via a content URI.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.kennyb1201.kbstream.updateprovider"
+            android:exported="false"
+            android:grantUriPermissions="true" >
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/update_file_paths" />
+        </provider>
+
         <activity
             android:name="androidx.compose.ui.tooling.PreviewActivity"
             android:exported="true" /> <!-- 'android:authorities' must be unique in the device, across all apps -->

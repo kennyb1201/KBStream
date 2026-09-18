@@ -1028,3 +1028,4 @@ styleable StateListDrawable android_dither android_visible android_variablePaddi
 styleable StateListDrawableItem android_drawable
 xml image_share_filepaths
 xml network_security_config
+xml update_file_paths

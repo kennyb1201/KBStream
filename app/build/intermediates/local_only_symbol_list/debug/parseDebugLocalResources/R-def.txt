@@ -151,3 +151,4 @@ mipmap ic_launcher
 string app_name
 style Theme.KBStream
 xml network_security_config
+xml update_file_paths
