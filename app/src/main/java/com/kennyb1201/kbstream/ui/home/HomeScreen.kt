@@ -36,6 +36,7 @@ import kotlin.math.abs
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.kennyb1201.kbstream.data.tmdb.displayDescription
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -257,9 +258,19 @@ private fun TopActionBar(
     onOpenGuide: () -> Unit,
     onOpenLibrary: () -> Unit,
     onOpenSettings: () -> Unit,
+    onSwitchProfile: () -> Unit,
     firstActionFocusRequester: FocusRequester,
     onDismiss: () -> Unit
 ) {
+    // Quick profile switch lives on the top bar: the button IS the active
+    // profile, so it's obvious what's running and one click swaps profiles
+    // (ProfilePicker → setActive → Home rails reload). Falls back to
+    // PROFILES before any profile exists.
+    val activeProfile by
+        com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile
+            .collectAsState()
+    val profileLabel = activeProfile?.name?.uppercase()
+        ?.takeIf { it.isNotBlank() } ?: "PROFILES"
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -289,6 +300,13 @@ private fun TopActionBar(
         TopActionItem(
             label = "LIBRARY",
             onClick = onOpenLibrary,
+            onDismiss = onDismiss,
+            modifier = Modifier.padding(end = 8.dp)
+        )
+
+        TopActionItem(
+            label = profileLabel,
+            onClick = onSwitchProfile,
             onDismiss = onDismiss,
             modifier = Modifier.padding(end = 8.dp)
         )
@@ -1909,6 +1927,7 @@ fun HomeScreen(
     onOpenGuide: () -> Unit = {},
     onOpenLibrary: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
+    onSwitchProfile: () -> Unit = {},
     onOpenKBFolder: (String) -> Unit = {},
     onOpenCatalogGrid: (Rail) -> Unit = {},
     viewModel: HomeViewModel =
@@ -3044,6 +3063,7 @@ fun HomeScreen(
                     onOpenGuide = onOpenGuide,
                     onOpenLibrary = onOpenLibrary,
                     onOpenSettings = onOpenSettings,
+                    onSwitchProfile = onSwitchProfile,
                     firstActionFocusRequester =
                         topBarFocusRequester,
                     onDismiss = {

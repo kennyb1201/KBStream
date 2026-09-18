@@ -72,7 +72,8 @@ internal enum class SettingsPane(val label: String) {
     VIDEO("Video & Audio"),
     LANGUAGE("Language"),
     SUBTITLES("Subtitles"),
-    DATA("Data & Backup")
+    DATA("Data & Backup"),
+    ABOUT("About")
 }
 
 @Composable
@@ -237,8 +238,6 @@ fun SettingsScreen(
                         description = "Connect your Simkl account for scrobbling",
                         onClick = onOpenSimkl
                     )
-
-                    UpdateRow()
                 // MDBList API key: mdblist.com key enables the critic ratings
                 // row (IMDb / RT / Metacritic / TMDB / Trakt / Letterboxd / MAL)
                 // on detail pages. Declared before the card so the card's click
@@ -1176,6 +1175,10 @@ fun SettingsScreen(
                 }
                 }
 
+                if (selectedPane == SettingsPane.ABOUT) {
+                    AboutSection()
+                }
+
         }
     }
 
@@ -1304,23 +1307,48 @@ private fun SettingsContentHost(
             modifier = Modifier.padding(bottom = 8.dp)
         )
         content()
-        SettingsAboutFooter()
     }
 }
 
 @Composable
-private fun SettingsAboutFooter() {
-    // Build identity for bug reports: versionName + versionCode + exact commit.
-    // Values are stamped by CI (VERSION_CODE / VERSION_NAME / GIT_SHA env vars
-    // in app/build.gradle.kts); local builds show 0.1.0-dev / local.
-    Spacer(modifier = Modifier.height(16.dp))
-    Text(
-        text = "KBStream ${com.kennyb1201.kbstream.BuildConfig.VERSION_NAME} " +
-            "(build ${com.kennyb1201.kbstream.BuildConfig.VERSION_CODE}, " +
-            com.kennyb1201.kbstream.BuildConfig.GIT_SHA.take(7) + ")",
-        color = KBTextLo.copy(alpha = 0.7f),
-        style = MaterialTheme.typography.labelSmall
-    )
+private fun AboutSection() {
+    // About pane: build identity + the in-app update flow. Updates live here
+    // (not in Integrations) — it's app plumbing, not an integration.
+    val versionLine = "KBStream ${com.kennyb1201.kbstream.BuildConfig.VERSION_NAME} " +
+        "(build ${com.kennyb1201.kbstream.BuildConfig.VERSION_CODE}, " +
+        com.kennyb1201.kbstream.BuildConfig.GIT_SHA.take(7) + ")"
+    Column {
+        KBCard(onClick = {}, modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(KBSurfaceRaised, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                Text(
+                    text = "VERSION",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall
+                )
+                Text(
+                    text = versionLine,
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        UpdateRow()
+        Spacer(modifier = Modifier.height(10.dp))
+        Text(
+            text = "Updates are published with every build. Check manually above — " +
+                "KBStream also checks on launch every 12 hours and installs " +
+                "without leaving the app.",
+            color = KBTextLo.copy(alpha = 0.7f),
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 4.dp)
+        )
+    }
 }
 
 @Composable

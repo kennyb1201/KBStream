@@ -66,5 +66,18 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/update_file_paths" />
         </provider>
+
+        <!-- Self-update: receives the PackageInstaller session status after
+             commit(). When the system answers STATUS_PENDING_USER_ACTION this
+             receiver launches the install-confirmation dialog; without it the
+             update flow would hang on "handing to the system installer".
+             Not exported: only the system and this app target it. -->
+        <receiver
+            android:name="com.kennyb1201.kbstream.data.update.AppUpdater$InstallStatusReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.kennyb1201.kbstream.action.INSTALL_STATUS" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

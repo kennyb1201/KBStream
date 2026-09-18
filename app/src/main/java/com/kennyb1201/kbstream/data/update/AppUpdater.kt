@@ -1,12 +1,14 @@
 package com.kennyb1201.kbstream.data.update
 
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentSender
 import android.content.pm.PackageInstaller
 import android.os.Build
+import android.util.Log
 import androidx.core.content.FileProvider
-import com.kennyb1201.kbstream.MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -30,10 +32,16 @@ import java.util.concurrent.TimeUnit
  *
  * Install strategy: a PackageInstaller session first (silently replaces the
  * app when this install owns the package, e.g. after the first in-app
- * update); if the system denies the session (Android 12+ update-ownership
- * rule when the app was last installed via adb), it falls back to the system
- * ACTION_INSTALL_PACKAGE prompt. On success the system relaunches KBStream
- * via [MainActivity] — the app process is killed during an install.
+ * update). The session's status callback is delivered as a broadcast to
+ * [InstallStatusReceiver]: when Android answers EXTRA_STATUS_PENDING_USER_ACTION
+ * (the normal case — it wants the user to confirm the install), the receiver
+ * launches the confirmation dialog. Without it the "handing to installer"
+ * state would hang forever, because commit()'s IntentSender is ONLY the
+ * status callback — it is never shown to the user. If the system denies the
+ * session (Android 12+ update-ownership rule when the app was last installed
+ * via adb), it falls back to the system ACTION_INSTALL_PACKAGE prompt. On
+ * success the system relaunches KBStream — the app process is killed during
+ * an install, and the confirmation activity relaunches us afterward.
  */
 object AppUpdater {
 
@@ -62,9 +70,62 @@ object AppUpdater {
         "https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/latest"
     private const val PREFS = "app_update"
     private const val KEY_LAST_CHECK_MS = "last_check_ms"
+    /** versionCode the user dismissed the update banner for (no re-nagging). */
+    private const val KEY_DISMISSED_CODE = "dismissed_version_code"
     private val AUTO_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000L
 
     private const val REQUEST_CODE_INSTALL = 4242
+
+    /** Broadcast action the session status callback is delivered to. */
+    private const val ACTION_INSTALL_STATUS =
+        "com.kennyb1201.kbstream.action.INSTALL_STATUS"
+
+    /**
+     * Session status callback. PackageInstaller sends EXTRA_STATUS here after
+     * commit(): PENDING_USER_ACTION means "show the confirmation dialog whose
+     * intent is in EXTRA_INTENT", SUCCESS means the app was replaced (the
+     * process is being killed — nothing to do), anything else is a failure.
+     * Must be a declared receiver (the system targets it explicitly).
+     */
+    class InstallStatusReceiver : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val status =
+                intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
+            when (status) {
+                PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                    val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
+                    if (confirm != null) {
+                        confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        try {
+                            context.startActivity(confirm)
+                        } catch (t: Throwable) {
+                            Log.e(TAG, "Install confirmation failed to start", t)
+                            state.value = UpdateState.Failed(
+                                "Couldn't open the install prompt: ${t.message ?: "unknown"}"
+                            )
+                        }
+                    } else {
+                        state.value = UpdateState.Failed(
+                            "Installer asked for confirmation but sent no dialog"
+                        )
+                    }
+                }
+                PackageInstaller.STATUS_SUCCESS -> {
+                    // App was replaced; the process dies around now. Nothing
+                    // to clean up — cache is wiped on the next run.
+                }
+                else -> {
+                    val message =
+                        intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
+                            ?: "Install failed (status $status)"
+                    Log.e(TAG, "PackageInstaller status $status: $message")
+                    state.value = UpdateState.Failed(message)
+                }
+            }
+        }
+    }
+
+    private const val TAG = "AppUpdater"
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -75,6 +136,26 @@ object AppUpdater {
 
     val state = MutableStateFlow<UpdateState>(UpdateState.Idle)
 
+    /**
+     * True when the launch-time check found a newer release that the user has
+     * NOT dismissed. The Settings row shows the update regardless of dismissal;
+     * this gate is for the app-wide popup so "Later" actually stays quiet
+     * (same version) instead of popping up on every launch.
+     */
+    fun isPopupEligible(context: Context): Boolean {
+        val s = state.value
+        if (s !is UpdateState.Available) return false
+        val dismissed = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getLong(KEY_DISMISSED_CODE, 0L)
+        return s.versionCode > dismissed
+    }
+
+    /** Remember the offered versionCode so the popup stops re-appearing. */
+    fun dismissPopup(context: Context, available: UpdateState.Available) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putLong(KEY_DISMISSED_CODE, available.versionCode).apply()
+    }
+
     /** Silent launch-time check, throttled to once per 12h. Failures are quiet. */
     fun maybeAutoCheck(context: Context) {
         val last = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -84,6 +165,18 @@ object AppUpdater {
             is UpdateState.Idle, is UpdateState.UpToDate, is UpdateState.Failed -> Unit
             else -> return
         }
+        checkForUpdate(context)
+    }
+
+    /**
+     * Launch-time check from MainActivity: fires whenever this process hasn't
+     * checked yet (state still Idle), so reopening the app surfaces a fresh
+     * release even when the Application-level 12h throttle would skip. A no-op
+     * once any check/update is already in flight (the state guard in
+     * [checkForUpdate] makes the race with Application.onCreate harmless).
+     */
+    fun checkOnLaunch(context: Context) {
+        if (state.value != UpdateState.Idle) return
         checkForUpdate(context)
     }
 
@@ -261,15 +354,16 @@ object AppUpdater {
                     session.fsync(output)
                 }
             }
-            // The system relaunches KBStream through this intent once the
-            // install completes (the app process is killed during install).
-            val relaunch = Intent(context, MainActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            val pi = PendingIntent.getActivity(
+            // Status callback: the system reports back to the receiver, which
+            // launches the confirmation dialog when required. (commit()'s
+            // IntentSender is NOT shown to the user — that was the old bug.)
+            val statusIntent = Intent(ACTION_INSTALL_STATUS)
+                .setPackage(context.packageName)
+            val pi = PendingIntent.getBroadcast(
                 context,
                 REQUEST_CODE_INSTALL,
-                relaunch,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                statusIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
             )
             session.commit(pi.intentSender)
         }

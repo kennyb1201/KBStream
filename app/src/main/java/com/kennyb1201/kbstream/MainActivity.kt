@@ -55,6 +55,7 @@ import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
+import com.kennyb1201.kbstream.data.update.AppUpdater
 import com.kennyb1201.kbstream.data.tmdb.TmdbCastMember
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.actor.ActorScreen
@@ -166,7 +167,12 @@ sealed class Screen {
         val returnTo: Screen = Home
     ) : Screen()
 
-    object ProfilePicker : Screen()
+    /**
+     * Profile picker. [returnTo] == null means the cold-launch entry picker
+     * (Back must exit the app); a non-null returnTo means it was opened from
+     * inside the app (Settings / the top bar), so Back returns there.
+     */
+    data class ProfilePicker(val returnTo: Screen? = null) : Screen()
 
     data class ProfileEdit(
         val editingProfileId: String? = null,
@@ -315,7 +321,15 @@ private fun encodeScreen(
                 put("returnTo", encodeScreen(screen.returnTo, depth + 1))
             }
         }
-        is Screen.ProfilePicker -> Unit
+        is Screen.ProfilePicker -> {
+            // returnTo is nullable (entry picker has none) — only encode a
+            // real destination so decode can distinguish "absent" from Home.
+            screen.returnTo?.let { target ->
+                if (depth < MAX_RETURN_DEPTH) {
+                    put("returnTo", encodeScreen(target, depth + 1))
+                }
+            }
+        }
         is Screen.ProfileEdit -> {
             screen.editingProfileId?.let { put("editingProfileId", it) }
             // returnTo is nullable (picker path has none) — only encode a
@@ -419,7 +433,10 @@ private fun decodeScreen(
                 addonName = json.optString("addonName"),
                 returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
             )
-            "profilePicker" -> Screen.ProfilePicker
+            "profilePicker" -> Screen.ProfilePicker(
+                returnTo = json.optJSONObject("returnTo")
+                    ?.let { decodeScreen(it, depth + 1) }
+            )
             "profileEdit" -> Screen.ProfileEdit(
                 editingProfileId = json.optNullableString("editingProfileId"),
                 // Absent key -> null (picker path); decodeScreen(null) would
@@ -792,7 +809,7 @@ fun AppRoot() {
     // only gate the entry screen on whether profiles exist.
     LaunchedEffect(Unit) {
         if (com.kennyb1201.kbstream.data.sync.ProfileManager.hasProfiles(applicationContext)) {
-            screen = Screen.ProfilePicker
+            screen = Screen.ProfilePicker()
         }
     }
 
@@ -937,8 +954,12 @@ fun AppRoot() {
     // user into a profile. Cancelling an in-flight auto-play keeps priority
     // over the prompt.
     var confirmExit by remember { mutableStateOf(false) }
+    // Only the ENTRY picker (no returnTo) treats Back as exit; a picker opened
+    // from inside the app belongs to its returnTo screen.
     val interceptBack =
-        (screen == Screen.Home || screen is Screen.ProfilePicker) &&
+        (screen == Screen.Home ||
+            ((screen as? Screen.ProfilePicker)?.returnTo == null &&
+                screen is Screen.ProfilePicker)) &&
             pendingAutoPlay == null
 
     BackHandler {
@@ -998,7 +1019,7 @@ fun AppRoot() {
                 } else {
                     // Opened from the picker's Manage tile (or restored state
                     // without a returnTo): Back belongs to the picker.
-                    Screen.ProfilePicker
+                    Screen.ProfilePicker()
                 }
 
             // Unreachable (interceptBack routes the picker to the exit
@@ -1006,7 +1027,11 @@ fun AppRoot() {
             // kept explicit so a future else-branch reshuffle can't regress
             // "Back on Who's Watching exits the app".
             is Screen.ProfilePicker ->
-                Screen.ProfilePicker
+                // Opened from Settings/top bar: Back belongs to that screen.
+                // Entry picker: unreachable (interceptBack routes it to the
+                // exit prompt) — kept explicit so it can never regress into
+                // "Back on Who's Watching enters Home".
+                current.returnTo ?: Screen.ProfilePicker()
 
             // Detail carries the screen it was opened from (Search, Home,
             // an actor page, ...), so Back returns there instead of always
@@ -1037,6 +1062,15 @@ fun AppRoot() {
     // is spent or the bedtime window is active. A parent can enter the
     // profile's PIN to unlock for this session.
     KidsTimeLockOverlay()
+
+    // Update popup on every screen except Settings (Settings has the full
+    // updater row; everywhere else the user would otherwise never know a new
+    // build exists until they happen to visit Settings). Shown when the
+    // launch check found a newer release that hasn't been dismissed for this
+    // version. Covers Home/Search/Detail/Player/Guide/Library/Profiles.
+    if (screen !is Screen.Settings) {
+        UpdateAvailablePopup(isPlaying = screen is Screen.Player)
+    }
 
     // The exit prompt sits before the onboarding early-return so Back is also
     // confirmed while the onboarding guide stands in for Home.
@@ -1080,8 +1114,19 @@ fun AppRoot() {
 
         is Screen.ProfilePicker -> {
             ProfilePickerScreen(
-                onSelect = { screen = Screen.Home },
-                onManage = { screen = Screen.ProfileEdit() }
+                onSelect = {
+                    // Switching profiles: return to where the picker was
+                    // opened from (Settings/top bar path), or Home for the
+                    // cold-launch entry picker. HomeViewModel's
+                    // observeProfileSwitches reloads all rails for the new
+                    // profile.
+                    screen = current.returnTo ?: Screen.Home
+                },
+                onManage = {
+                    screen = Screen.ProfileEdit(
+                        returnTo = current.returnTo ?: Screen.ProfilePicker()
+                    )
+                }
             )
         }
 
@@ -1092,7 +1137,7 @@ fun AppRoot() {
                     screen = if (current.returnTo != null) {
                         current.returnTo
                     } else {
-                        Screen.ProfilePicker
+                        Screen.ProfilePicker()
                     }
                 }
             )
@@ -1180,6 +1225,11 @@ fun AppRoot() {
                 onOpenSettings = {
                     screen = Screen.Settings
                 },
+                onSwitchProfile = {
+                    // Quick switch: top-bar profile button -> picker, then
+                    // back to Home with the new profile's rails loaded.
+                    screen = Screen.ProfilePicker(returnTo = Screen.Home)
+                },
 
                 onOpenKBFolder = { folderId ->
                     screen = Screen.KBFolder(
@@ -1215,7 +1265,10 @@ fun AppRoot() {
                 },
                 onOpenSimkl = { screen = Screen.Simkl },
                 onOpenProfiles = {
-                    screen = Screen.ProfileEdit(returnTo = Screen.Settings)
+                    // Real picker so the profile can be SWITCHED here — the
+                    // old wiring jumped straight into the editor, which can
+                    // only rename/create profiles, never switch.
+                    screen = Screen.ProfilePicker(returnTo = Screen.Settings)
                 }
             )
         }
@@ -2177,6 +2230,110 @@ private fun KidsTimeLockOverlay() {
                     modifier = Modifier.padding(top = 26.dp)
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun UpdateAvailablePopup(isPlaying: Boolean) {
+    val context = LocalContext.current
+    val updateState by AppUpdater.state.collectAsState()
+
+    // Never interrupt playback (movies, series, IPTV catch-up all run through
+    // the fullscreen player activity). While something plays the popup stays
+    // down - and for 10s after playback ends, so backing out of a video
+    // doesn't land you face-first in an update dialog either.
+    var everPlayed by remember { mutableStateOf(false) }
+    var suppressForPlayback by remember { mutableStateOf(false) }
+    LaunchedEffect(isPlaying) {
+        if (isPlaying) {
+            everPlayed = true
+            suppressForPlayback = true
+        } else if (everPlayed) {
+            @Suppress("OPT_IN_USAGE")
+            delay(10_000)
+            suppressForPlayback = false
+        }
+    }
+
+    // Fire the launch check once per composition entry (state stays Idle when
+    // Application.onCreate's 12h throttle skipped - a new process still gets
+    // one check, so reopening the app surfaces fresh releases).
+    LaunchedEffect(Unit) {
+        AppUpdater.checkOnLaunch(context)
+    }
+
+    // "Later" hides the dialog immediately and (via prefs) for this specific
+    // version, so it doesn't re-nag on every launch. A NEW versionCode (a
+    // release published while the app is open, or a late-landing check)
+    // re-arms the popup.
+    val available = updateState as? AppUpdater.UpdateState.Available
+    var hidden by remember { mutableStateOf(false) }
+    LaunchedEffect(available?.versionCode) {
+        if (available != null) {
+            hidden = !AppUpdater.isPopupEligible(context)
+        }
+    }
+
+    if (available == null || hidden || suppressForPlayback) return
+
+    Dialog(onDismissRequest = { }) {
+        Column(
+            modifier = Modifier
+                .width(560.dp)
+                .background(KBSurface, RoundedCornerShape(18.dp))
+                .border(1.dp, KBAccent.copy(alpha = 0.38f), RoundedCornerShape(18.dp))
+                .padding(22.dp)
+        ) {
+            Text(
+                text = "UPDATE AVAILABLE",
+                color = KBAccent,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = "KBStream ${available.versionName} (build ${available.versionCode}) " +
+                    "is ready to install.",
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.padding(top = 18.dp)
+            ) {
+                KBCard(onClick = {
+                    // No dismissPopup here: if the download/install fails the
+                    // popup must re-offer this version on the next launch.
+                    hidden = true
+                    AppUpdater.downloadAndInstall(context, available)
+                }) {
+                    Text(
+                        text = "INSTALL NOW",
+                        color = KBAccent,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                    )
+                }
+                KBCard(onClick = {
+                    hidden = true
+                    AppUpdater.dismissPopup(context, available)
+                }) {
+                    Text(
+                        text = "LATER",
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                    )
+                }
+            }
+            Text(
+                text = "Downloads in the background - the app relaunches when done.",
+                color = KBTextLo.copy(alpha = 0.7f),
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(top = 14.dp)
+            )
         }
     }
 }
