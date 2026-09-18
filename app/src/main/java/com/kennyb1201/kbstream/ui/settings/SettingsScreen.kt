@@ -28,9 +28,11 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
-import androidx.compose.runtime.setValue
+import com.kennyb1201.kbstream.data.update.AppUpdater
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -235,6 +237,8 @@ fun SettingsScreen(
                         description = "Connect your Simkl account for scrobbling",
                         onClick = onOpenSimkl
                     )
+
+                    UpdateRow()
                 // MDBList API key: mdblist.com key enables the critic ratings
                 // row (IMDb / RT / Metacritic / TMDB / Trakt / Letterboxd / MAL)
                 // on detail pages. Declared before the card so the card's click
@@ -1268,6 +1272,83 @@ private fun SettingsAboutFooter() {
         color = KBTextLo.copy(alpha = 0.7f),
         style = MaterialTheme.typography.labelSmall
     )
+}
+
+@Composable
+private fun UpdateRow() {
+    // In-app update: checks GitHub releases, offers download + install.
+    // State comes from AppUpdater so a launch-time auto-check is reflected
+    // here too (row shows "Update available").
+    val context = LocalContext.current
+    val updateState by AppUpdater.state.collectAsStateWithLifecycle()
+    val label = when (val s = updateState) {
+        is AppUpdater.UpdateState.Available ->
+            "Update available — ${s.versionName} (build ${s.versionCode})"
+        is AppUpdater.UpdateState.Downloading ->
+            "Downloading update… ${s.percent}%"
+        is AppUpdater.UpdateState.ReadyToInstall ->
+            "Update ready — installing…"
+        is AppUpdater.UpdateState.Checking -> "Checking for updates…"
+        is AppUpdater.UpdateState.Failed -> "Update check failed — tap to retry"
+        AppUpdater.UpdateState.UpToDate -> "You're up to date — check again"
+        AppUpdater.UpdateState.Idle -> "Check for updates"
+    }
+    val description = when (val s = updateState) {
+        is AppUpdater.UpdateState.Available ->
+            "New KBStream ${s.versionName} is available — select to download and install"
+        is AppUpdater.UpdateState.Downloading ->
+            "Fetching the new APK — the app relaunches when done"
+        is AppUpdater.UpdateState.ReadyToInstall ->
+            "Handing the file to the system installer…"
+        is AppUpdater.UpdateState.Failed ->
+            s.message
+        else -> "KBStream updates are published with each build"
+    }
+    Column {
+        KBCard(
+            onClick = {
+                when (val s = updateState) {
+                    is AppUpdater.UpdateState.Available ->
+                        AppUpdater.downloadAndInstall(context, s)
+                    is AppUpdater.UpdateState.Downloading,
+                    is AppUpdater.UpdateState.Checking,
+                    is AppUpdater.UpdateState.ReadyToInstall -> Unit
+                    else -> AppUpdater.checkForUpdate(context)
+                }
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(KBSurfaceRaised, RoundedCornerShape(10.dp))
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = label,
+                        color = if (updateState is AppUpdater.UpdateState.Available) KBAccent else KBTextHi,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(
+                        text = description,
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+                if (updateState is AppUpdater.UpdateState.Available) {
+                    Icon(
+                        imageVector = Icons.Filled.ChevronRight,
+                        contentDescription = null,
+                        tint = KBAccent,
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable

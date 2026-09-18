@@ -34,6 +34,9 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
         // long-running installs that stay alive for days.
         com.kennyb1201.kbstream.data.addon.AddonManager.getInstance(this)
             .maybeRefreshOnLaunch(this)
+        // Self-update: quiet GitHub-release check at most every 12h; only
+        // downloads when the user accepts the prompt in Settings.
+        com.kennyb1201.kbstream.data.update.AppUpdater.maybeAutoCheck(this)
     }
 
     /**

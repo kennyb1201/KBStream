@@ -1,6 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.PICTURE_IN_PICTURE" />
+    <!-- In-app self-update: lets the system offer the install prompt for a
+         downloaded APK (sideloaded builds are not Play-managed). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- Voice search: let the system speech RecognizerIntent resolve on
          Android 11+ (package visibility filtering). -->
@@ -51,5 +54,17 @@
             android:supportsPictureInPicture="true"
             android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden"
             android:screenOrientation="landscape" />
+
+        <!-- Self-update fallback flow: shares the downloaded APK with the
+             system installer via a content URI. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${packageName}.updateprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/update_file_paths" />
+        </provider>
     </application>
 </manifest>

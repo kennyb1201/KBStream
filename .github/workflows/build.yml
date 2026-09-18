@@ -9,6 +9,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -96,3 +99,32 @@ jobs:
         with:
           name: kbstream-release-signed
           path: app/build/outputs/apk/release/*.apk
+
+      # Self-update feed: every main-branch build is published as the
+      # "latest" GitHub release with the signed APK + metadata.json, which
+      # the app's AppUpdater polls (permissions: contents write). Release
+      # names are the stamped build identity from the version-stamping step.
+      - name: Prepare metadata
+        if: github.ref == 'refs/heads/main'
+        run: |
+          echo "{\"versionCode\": ${GITHUB_RUN_NUMBER}, \"versionName\": \"0.2.${GITHUB_RUN_NUMBER}\"}" > metadata.json
+          cat metadata.json
+
+      - name: Delete in-progress release tag
+        if: github.ref == 'refs/heads/main'
+        run: gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Publish latest release (self-update feed)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          gh release create latest \
+            --title "KBStream 0.2.${GITHUB_RUN_NUMBER} (build ${GITHUB_RUN_NUMBER})" \
+            --notes "Automated build from commit ${GITHUB_SHA}. Install from the app: Settings → Check for updates." \
+            --latest
+          gh release upload latest \
+            app/build/outputs/apk/release/*.apk \
+            metadata.json
+        env:
+          GH_TOKEN: ${{ github.token }}
