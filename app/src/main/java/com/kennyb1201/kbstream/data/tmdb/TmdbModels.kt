@@ -99,6 +99,9 @@ data class TmdbRecommendationItem(
     val title: String? = null,
     val name: String? = null,
     @Json(name = "poster_path") val posterPath: String? = null,
+    // Card art + copy for the player's because-you-watched panel.
+    @Json(name = "backdrop_path") val backdropPath: String? = null,
+    @Json(name = "overview") val overview: String? = null,
     // Year + rating for Detail screen poster captions (TMDB sends both).
     @Json(name = "release_date") val releaseDate: String? = null,
     @Json(name = "first_air_date") val firstAirDate: String? = null,

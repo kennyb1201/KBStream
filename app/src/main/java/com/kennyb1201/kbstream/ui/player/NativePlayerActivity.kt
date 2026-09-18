@@ -75,6 +75,7 @@ import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.ui.streams.StreamsViewModel
 import coil3.load
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -274,6 +275,12 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var btnNextPlay: TextView
     private lateinit var btnNextDismiss: TextView
     private lateinit var nextUpCountdown: TextView
+
+    // Because-you-watched (end-credits recommendations)
+    private lateinit var becauseYouWatchedPanel: LinearLayout
+    private lateinit var bywTitle: TextView
+    private lateinit var bywRow: LinearLayout
+    private var bywDismissed = false
 
     // Player
     private var exoPlayer: ExoPlayer? = null
@@ -1232,6 +1239,9 @@ class NativePlayerActivity : ComponentActivity() {
         btnOffsetPlus = findViewById(R.id.btn_offset_plus)
         castSection = findViewById(R.id.cast_section)
         castRow = findViewById(R.id.cast_row)
+        becauseYouWatchedPanel = findViewById(R.id.because_you_watched_panel)
+        bywTitle = findViewById(R.id.byw_title)
+        bywRow = findViewById(R.id.byw_row)
         nextUpPanel = findViewById(R.id.next_up_panel)
         nextUpThumb = findViewById(R.id.next_up_thumb)
         nextUpShowTitle = findViewById(R.id.next_up_show_title)
@@ -3978,6 +3988,7 @@ class NativePlayerActivity : ComponentActivity() {
     private fun dismissAllPanels() {
         dismissPicker()
         dismissSettingsPanel()
+        becauseYouWatchedPanel.visibility = View.GONE
     }
 
     // --- Retry ---
@@ -4007,10 +4018,14 @@ class NativePlayerActivity : ComponentActivity() {
         scrobbleSimkl("stop", progressOverride = 100.0)
         scope?.launch {
             saveProgress(reason = "ended", forceCompleted = true)
-            // Series episodes show the "Up next" popup; movies/live just end.
+            // Series episodes show the "Up next" popup; anything without a
+            // next episode (movies, finished finales) gets the
+            // because-you-watched credits recommendations instead.
             val target = nextEpisodeTarget()
             if (target != null) {
                 showNextUpPanel(target.first, target.second)
+            } else {
+                showBecauseYouWatchedPanel()
             }
         }
     }
@@ -4072,6 +4087,393 @@ class NativePlayerActivity : ComponentActivity() {
         } else {
             "$parentId:$targetSeason:$targetEpisode"
         }
+    }
+
+    // --- Because You Watched (end credits) ---
+
+    /**
+     * One recommendation card inside the because-you-watched row: poster +
+     * name, with the ids the result handoff needs. Built as views (not
+     * Compose) because this panel lives in the player's view hierarchy.
+     */
+    private data class BywPick(
+        val tmdbId: Int,
+        val type: String,
+        val name: String,
+        val posterUrl: String?,
+        val backdropUrl: String?,
+        val logoUrl: String?,
+        val overview: String?,
+        val imdbId: String?
+    )
+
+    /**
+     * Shows the "Because you watched" panel during the end credits: TMDB
+     * recommendations for the title that just finished, each with PLAY
+     * (auto-resolve top stream, straight into the next playback) and
+     * DETAILS (deep-link into the catalog detail screen). Runs only when
+     * there is no next episode to chain (movies, or a finished finale);
+     * the Up Next panel owns the series flow.
+     */
+    private fun showBecauseYouWatchedPanel() {
+        if (bywDismissed || isLiveChannel) return
+        val ctx = this
+        bywTitle.text = itemName ?: "This title"
+        becauseYouWatchedPanel.visibility = View.VISIBLE
+
+        scope?.launch {
+            val picks: List<BywPick> = withContext(Dispatchers.IO) {
+                val repo = TmdbRepository(ctx)
+                val tmdbId = resolveParentTmdbId() ?: return@withContext emptyList()
+                val mediaType = when (parentType.lowercase()) {
+                    "series", "show", "tv" -> "series"
+                    else -> "movie"
+                }
+                val detail = runCatching {
+                    repo.getDetailByTmdbId(tmdbId, mediaType)
+                }.getOrNull() ?: return@withContext emptyList()
+                detail.recommendations?.results.orEmpty()
+                    .filter { !it.posterPath.isNullOrBlank() }
+                    .take(6)
+                    .mapNotNull { rec ->
+                        val recType = when {
+                            rec.name != null -> "series"
+                            rec.title != null -> "movie"
+                            else -> return@mapNotNull null
+                        }
+                        BywPick(
+                            tmdbId = rec.id,
+                            type = recType,
+                            name = (rec.title ?: rec.name).orEmpty(),
+                            posterUrl = rec.posterPath
+                                ?.takeIf { it.isNotBlank() }
+                                ?.let { TmdbRepository.POSTER_BASE + it },
+                            backdropUrl = rec.backdropPath
+                                ?.takeIf { it.isNotBlank() }
+                                ?.let { TmdbRepository.BACKDROP_BASE + it },
+                            logoUrl = null, // resolved by the logo pass below
+                            overview = rec.overview?.takeIf { it.isNotBlank() },
+                            imdbId = null
+                        )
+                    }
+            }
+
+            if (picks.isEmpty() ||
+                becauseYouWatchedPanel.visibility != View.VISIBLE
+            ) {
+                becauseYouWatchedPanel.visibility = View.GONE
+                return@launch
+            }
+
+            withContext(kotlinx.coroutines.Dispatchers.Main) {
+                buildBecauseYouWatchedRow(picks)
+            }
+
+        }
+    }
+
+    private val bywViews = mutableMapOf<Int, BywCardRefs>()
+    private var bywFeatured: Int? = null
+
+    /** Live view refs + mutable imdb id for one card in the row. */
+    private class BywCardRefs(
+        val cardView: View,
+        val nameView: TextView?,
+        val logoView: ImageView?,
+        var imdbId: String?
+    )
+
+    /** Renders the pick cards: poster / clear logo, name, PLAY + DETAILS. */
+    private fun buildBecauseYouWatchedRow(picks: List<BywPick>) {
+        bywRow.removeAllViews()
+        bywViews.clear()
+        val density = resources.displayMetrics.density
+        fun dp(v: Int): Int = (v * density).toInt()
+
+        picks.forEachIndexed { index, pick ->
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = android.view.Gravity.CENTER_HORIZONTAL
+                setPadding(dp(6), dp(4), dp(6), dp(8))
+                isFocusable = true
+                isFocusableInTouchMode = true
+                descendantFocusability = ViewGroup.FOCUS_BEFORE_DESCENDANTS
+            }
+
+            // Poster with a clear-logo overlay, mirroring the app's
+            // rail-card look. The logo is best-effort: resolved below and
+            // swapped in only if TMDB has one (posters already carry the
+            // title for everything else).
+            val posterFrame = android.widget.FrameLayout(this).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(108), dp(162))
+                clipToOutline = true
+                setBackgroundColor(getColor(R.color.kb_surface))
+            }
+            val poster = ImageView(this).apply {
+                layoutParams = android.widget.FrameLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                )
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                pick.posterUrl?.let { load(it) }
+            }
+            posterFrame.addView(poster)
+            val logoView = ImageView(this).apply {
+                layoutParams = android.widget.FrameLayout.LayoutParams(
+                    dp(92), dp(34)
+                ).also {
+                    it.gravity = android.view.Gravity.CENTER_HORIZONTAL or
+                        android.view.Gravity.BOTTOM
+                    it.bottomMargin = dp(6)
+                }
+                scaleType = ImageView.ScaleType.FIT_CENTER
+            }
+            posterFrame.addView(logoView)
+            card.addView(posterFrame)
+
+            val name = TextView(this).apply {
+                text = pick.name
+                textSize = 11f
+                setTextColor(getColor(R.color.kb_text_hi))
+                maxWidth = dp(108)
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                gravity = android.view.Gravity.CENTER_HORIZONTAL
+                setPadding(0, dp(4), 0, 0)
+                typeface = resources.getFont(R.font.oswald_medium)
+            }
+            card.addView(name)
+
+            val buttons = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER
+            }
+            val play = TextView(this).apply {
+                text = "PLAY"
+                textSize = 10f
+                isFocusable = true
+                isFocusableInTouchMode = true
+                setPadding(dp(8), dp(4), dp(8), dp(4))
+                setBackgroundResource(pillBg(true, false))
+                setTextColor(getColor(R.color.kb_void))
+            }
+            val details = TextView(this).apply {
+                text = "DETAILS"
+                textSize = 10f
+                isFocusable = true
+                isFocusableInTouchMode = true
+                setPadding(dp(8), dp(4), dp(8), dp(4))
+                setBackgroundResource(pillBg(false, false))
+                setTextColor(getColor(R.color.kb_text_hi))
+            }
+            buttons.addView(play)
+            buttons.addView(details)
+            card.addView(buttons)
+
+            bywViews[pick.tmdbId] = BywCardRefs(
+                cardView = card,
+                nameView = name,
+                logoView = logoView,
+                imdbId = null
+            )
+
+            play.setOnClickListener { bywPlayPick(pick) }
+            details.setOnClickListener { bywOpenDetails(pick) }
+            card.setOnClickListener { bywOpenDetails(pick) }
+
+            play.setOnFocusChangeListener { v, hasFocus ->
+                (v as TextView).setBackgroundResource(pillBg(true, hasFocus))
+                if (hasFocus) featureBywPick(pick)
+            }
+            details.setOnFocusChangeListener { v, hasFocus ->
+                (v as TextView).setBackgroundResource(pillBg(false, hasFocus))
+                if (hasFocus) featureBywPick(pick)
+            }
+            card.setOnFocusChangeListener { _, hasFocus ->
+                card.setBackgroundResource(
+                    if (hasFocus) R.drawable.pill_chip_focused_bg else 0
+                )
+            }
+
+            if (index == 0) {
+                card.post {
+                    play.requestFocus()
+                    featureBywPick(pick)
+                }
+            }
+            bywRow.addView(card)
+        }
+
+        // Clear-logo + description pass: fetch images/metadata per pick and
+        // fill the featured strip as answers land (cards render instantly
+        // with posters; logos/descriptions stream in).
+        scope?.launch {
+            val repo = TmdbRepository(this@NativePlayerActivity)
+            picks.forEach { pick ->
+                val detail = withContext(Dispatchers.IO) {
+                    runCatching {
+                        repo.getDetailByTmdbId(pick.tmdbId, pick.type)
+                    }.getOrNull()
+                } ?: return@forEach
+                val logo = detail.images?.logos
+                    ?.filter { !it.filePath.isNullOrBlank() }
+                    ?.sortedWith(
+                        compareByDescending { it.iso6391 == "en" }
+                    )?.firstOrNull()?.filePath
+                val imdb = withContext(Dispatchers.IO) {
+                    runCatching {
+                        repo.resolveImdbId(pick.tmdbId, pick.type)
+                    }.getOrNull()
+                }
+                withContext(Dispatchers.Main) {
+                    val refs = bywViews[pick.tmdbId] ?: return@withContext
+                    if (!logo.isNullOrBlank()) {
+                        bywLogoCache[pick.tmdbId] =
+                            TmdbRepository.LOGO_BASE + logo
+                        refs.logoView?.load(bywLogoCache[pick.tmdbId])
+                    }
+                    imdb?.let { refs.imdbId = it }
+                    if (bywFeatured == pick.tmdbId) {
+                        featureBywPick(pick)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Featured strip under the row: focused pick's backdrop + clear logo +
+     * description ("looks nice" part). Uses the panel's own children so no
+     * extra layout resource is needed.
+     */
+    private fun featureBywPick(pick: BywPick) {
+        bywFeatured = pick.tmdbId
+        val panel = becauseYouWatchedPanel
+        // The panel is: kicker, title, [featured strip], row scroll, hint —
+        // the strip is inserted programmatically at index 2 when missing.
+        var strip = panel.findViewWithTag<LinearLayout>("byw_featured_strip")
+        if (strip == null) {
+            val density = resources.displayMetrics.density
+            fun dp(v: Int): Int = (v * density).toInt()
+            strip = LinearLayout(this).apply {
+                tag = "byw_featured_strip"
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding(0, dp(12), 0, dp(4))
+            }
+            val backdrop = ImageView(this).apply {
+                tag = "byw_featured_backdrop"
+                layoutParams = LinearLayout.LayoutParams(dp(192), dp(108)).also {
+                    it.marginEnd = dp(14)
+                }
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                setBackgroundColor(getColor(R.color.kb_surface))
+            }
+            strip.addView(backdrop)
+            val textCol = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+            }
+            val logo = ImageView(this).apply {
+                tag = "byw_featured_logo"
+                layoutParams = LinearLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT, dp(40)
+                )
+                scaleType = ImageView.ScaleType.FIT_START
+            }
+            textCol.addView(logo)
+            val desc = TextView(this).apply {
+                tag = "byw_featured_desc"
+                textSize = 12f
+                setTextColor(getColor(R.color.kb_text_lo))
+                maxLines = 3
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setPadding(0, dp(6), 0, 0)
+            }
+            textCol.addView(desc)
+            strip.addView(
+                textCol,
+                LinearLayout.LayoutParams(
+                    0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+                )
+            )
+            panel.addView(strip, 2)
+        }
+        val backdrop = strip.findViewWithTag<ImageView>("byw_featured_backdrop")
+        val logo = strip.findViewWithTag<ImageView>("byw_featured_logo")
+        val desc = strip.findViewWithTag<TextView>("byw_featured_desc")
+        (pick.backdropUrl ?: pick.posterUrl)?.let { backdrop.load(it) }
+        desc.text = pick.overview ?: ""
+        // Logo: from the per-pick logo pass if it landed already.
+        bywLogoCache[pick.tmdbId]?.let { logo.load(it) } ?: run { logo.setImageDrawable(null) }
+    }
+
+    private val bywLogoCache = mutableMapOf<Int, String>()
+
+    /** PLAY: resolve streams for the pick and hand the top one back. */
+    private fun bywPlayPick(pick: BywPick) {
+        val ctx = this
+        scope?.launch {
+            val imdb = withContext(Dispatchers.IO) {
+                bywViews[pick.tmdbId]?.imdbId
+                    ?: runCatching {
+                        TmdbRepository(ctx).resolveImdbId(pick.tmdbId, pick.type)
+                    }.getOrNull()
+            } ?: "tmdb:" + pick.tmdbId
+
+            val vm = StreamsViewModel(application = ctx.application)
+            val streams = withContext(Dispatchers.IO) {
+                runCatching {
+                    vm.resolve(pick.type, imdb)
+                }.getOrNull()
+            }.orEmpty()
+
+            val top = streams.firstOrNull { !it.url.isNullOrBlank() }
+            bywDismissed = true
+            finishWithBywResult(
+                action = if (top != null) "play_now" else "go_details",
+                pick = pick,
+                imdbId = imdb,
+                streamUrl = top?.url,
+                streamName = top?.name ?: top?.title
+            )
+        }
+    }
+
+    private fun bywOpenDetails(pick: BywPick) {
+        bywDismissed = true
+        finishWithBywResult(
+            action = "go_details",
+            pick = pick,
+            imdbId = bywViews[pick.tmdbId]?.imdbId ?: "tmdb:" + pick.tmdbId,
+            streamUrl = null,
+            streamName = null
+        )
+    }
+
+    /** Hands the pick back to MainActivity (which owns Detail/Player nav). */
+    private fun finishWithBywResult(
+        action: String,
+        pick: BywPick,
+        imdbId: String,
+        streamUrl: String?,
+        streamName: String?
+    ) {
+        setResult(
+            RESULT_OK,
+            Intent().apply {
+                putExtra("player_result_action", action)
+                putExtra("byw_type", pick.type)
+                putExtra("byw_id", imdbId)
+                putExtra("byw_name", pick.name)
+                putExtra("byw_poster", pick.posterUrl)
+                putExtra("byw_backdrop", pick.backdropUrl)
+                putExtra("byw_stream_url", streamUrl)
+                putExtra("byw_stream_name", streamName)
+            }
+        )
+        mediaSession?.release()
+        mediaSession = null
+        finish()
     }
 
     private fun showNextUpPanel(targetSeason: Int, targetEpisode: Int) {

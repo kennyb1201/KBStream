@@ -1933,7 +1933,63 @@ fun AppRoot() {
                                 )
                             }
                         }
-                    "navigate_actor" -> {
+                                            "play_now" -> {
+                            val bywUrl = data.getStringExtra("byw_stream_url")
+                            val bywType = data.getStringExtra("byw_type") ?: "movie"
+                            val bywId = data.getStringExtra("byw_id").orEmpty()
+                            val bywName = data.getStringExtra("byw_name").orEmpty()
+                            val bywPoster = data.getStringExtra("byw_poster")
+                            val bywBackdrop = data.getStringExtra("byw_backdrop")
+                            if (!bywUrl.isNullOrBlank()) {
+                                screen = Screen.Player(
+                                    url = bywUrl,
+                                    audioUrl = null,
+                                    parentId = bywId,
+                                    parentType = bywType,
+                                    season = null,
+                                    episode = null,
+                                    episodeStreamId = bywId,
+                                    itemName = bywName,
+                                    itemPoster = bywPoster,
+                                    backdropUrl = bywBackdrop,
+                                    startPositionMs = 0L,
+                                    sources = listOf(
+                                        Stream(
+                                            name = data.getStringExtra("byw_stream_name"),
+                                            title = data.getStringExtra("byw_stream_name"),
+                                            url = bywUrl
+                                        )
+                                    ),
+                                    returnTo = stableBackDestination(current.returnTo)
+                                )
+                            } else {
+                                screen = Screen.Detail(
+                                    bywType,
+                                    bywId,
+                                    itemPoster = bywPoster,
+                                    itemBackdrop = bywBackdrop,
+                                    returnTo = stableBackDestination(current.returnTo)
+                                )
+                            }
+                        }
+
+                        "go_details" -> {
+                            val bywType = data.getStringExtra("byw_type") ?: "movie"
+                            val bywId = data.getStringExtra("byw_id").orEmpty()
+                            val bywName = data.getStringExtra("byw_name").orEmpty()
+                            val bywPoster = data.getStringExtra("byw_poster")
+                            val bywBackdrop = data.getStringExtra("byw_backdrop")
+                            screen = Screen.Detail(
+                                bywType,
+                                bywId,
+                                itemPoster = bywPoster,
+                                itemBackdrop = bywBackdrop,
+                                itemOverview = null,
+                                returnTo = stableBackDestination(current.returnTo)
+                            )
+                        }
+
+"navigate_actor" -> {
                         val personId = data.getIntExtra("actor_person_id", -1)
                         val resumePos = data.getLongExtra("actor_resume_position_ms", 0L)
                         if (personId > 0) {

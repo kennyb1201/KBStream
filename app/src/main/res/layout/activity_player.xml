@@ -1505,4 +1505,65 @@
         </LinearLayout>
     </LinearLayout>
 
+
+    <!-- Because-you-watched panel (shown during end credits): TMDB
+         recommendations for the just-finished title, one PLAY + one DETAILS
+         button per pick. Populated only when there is no next episode to
+         autoplay (next-up owns the series flow). -->
+    <LinearLayout
+        android:id="@+id/because_you_watched_panel"
+        android:layout_width="720dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:background="@drawable/panel_bg"
+        android:orientation="vertical"
+        android:padding="22dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/byw_kicker"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="@font/oswald_medium"
+            android:letterSpacing="0.18"
+            android:text="BECAUSE YOU WATCHED"
+            android:textColor="@color/kb_accent"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/byw_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:ellipsize="end"
+            android:fontFamily="@font/oswald_medium"
+            android:maxLines="1"
+            android:textColor="@color/kb_text_hi"
+            android:textSize="22sp" />
+
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:fillViewport="true"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/byw_row"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal" />
+        </HorizontalScrollView>
+
+        <TextView
+            android:id="@+id/byw_hint"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:fontFamily="@font/oswald_medium"
+            android:text="Pick a title, or press BACK to exit"
+            android:textColor="@color/kb_text_lo"
+            android:textSize="11sp" />
+    </LinearLayout>
+
 </FrameLayout>
