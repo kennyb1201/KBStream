@@ -3078,7 +3078,7 @@ class NativePlayerActivity : ComponentActivity() {
         val addon = try {
             com.kennyb1201.kbstream.data.addon.AddonManager
                 .getInstance(applicationContext)
-                .getInstalledAddons()
+                .getEnabledAddons()
                 .firstOrNull { it.displayName.equals(name, ignoreCase = true) }
         } catch (_: Exception) {
             null

@@ -316,7 +316,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 val normalizedType = normalizeMediaType(type)
                 Log.e("KBStream", "detail load start type=$normalizedType id=$id initialSeason=$initialSeason")
 
-                val addonsDeferred = async { addonManager.getInstalledAddons() }
+                val addonsDeferred = async { addonManager.getEnabledAddons() }
                 val tmdbDeferred = async { runCatching { tmdbRepository.fetchEnrichedMeta(id, normalizedType) } }
                 val resumeDeferred = async { runCatching { historyDao.getResumeForParent(id) } }
                 val completedDeferred = async { runCatching { historyDao.getCompletedForParent(id) } }

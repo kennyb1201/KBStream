@@ -36,7 +36,9 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardDoubleArrowDown
@@ -371,6 +373,9 @@ fun AddonsScreen(
                                 },
                                 onRefresh = { viewModel.refreshManifest(selectedAddon.id) },
                                 onRemove = { showRemoveConfirm = true },
+                                onToggleEnabled = { enabled ->
+                                    viewModel.setAddonEnabled(selectedAddon.id, enabled)
+                                },
                                 firstActionFocusRequester = firstActionFocusRequester
                             )
                         }
@@ -663,7 +668,8 @@ private fun AddonListCard(
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    color = if (addon.enabled) KBTextHi else KBTextLo
                 )
                 Text(
                     text = addon.resources
@@ -676,6 +682,22 @@ private fun AddonListCard(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 3.dp)
                 )
+            }
+
+            if (!addon.enabled) {
+                Box(
+                    modifier = Modifier
+                        .background(KBTextLo.copy(alpha = 0.14f), RoundedCornerShape(999.dp))
+                        .border(1.dp, KBTextLo.copy(alpha = 0.4f), RoundedCornerShape(999.dp))
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                ) {
+                    Text(
+                        text = "OFF",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
             }
 
             if (addon.catalogs.isNotEmpty()) {
@@ -738,6 +760,7 @@ private fun AddonDetails(
     onOpenManifest: () -> Unit,
     onRefresh: () -> Unit,
     onRemove: () -> Unit,
+    onToggleEnabled: (Boolean) -> Unit,
     firstActionFocusRequester: FocusRequester? = null
 ) {
     val catalogScrollState = rememberScrollState()
@@ -839,9 +862,11 @@ private fun AddonDetails(
         DetailLine("TYPES", addon.types.joinToString(", ").ifBlank { "—" })
         DetailLine(
             "STATUS",
-            when (health) {
-                null -> "Unknown — CHECK HEALTH to verify"
-                else -> if (health.healthy) "Online" else "Offline"
+            when {
+                !addon.enabled -> "DISABLED — kept installed, not used anywhere"
+                health == null -> "Unknown — CHECK HEALTH to verify"
+                health.healthy -> "Online"
+                else -> "Offline"
             }
         )
 
@@ -905,6 +930,15 @@ private fun AddonDetails(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
+            // Soft on/off: a disabled add-on stays installed (backups, sync,
+            // order) but vanishes from catalogs/streams/search/player until
+            // re-enabled.
+            SmallAction(
+                label = if (addon.enabled) "DISABLE" else "ENABLE",
+                icon = if (addon.enabled) Icons.Filled.Close else Icons.Filled.Check,
+                onClick = { onToggleEnabled(!addon.enabled) },
+                modifier = Modifier.weight(1f)
+            )
             SmallAction(
                 label = if (refreshing) "REFRESHING..." else "REFRESH",
                 icon = Icons.Filled.Refresh,
@@ -912,6 +946,13 @@ private fun AddonDetails(
                 onClick = onRefresh,
                 modifier = Modifier.weight(1f)
             )
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
             ActionButton(
                 label = "REMOVE",
                 icon = Icons.Filled.Delete,
@@ -919,6 +960,7 @@ private fun AddonDetails(
                 modifier = Modifier.weight(1f),
                 horizontalPadding = 14.dp
             )
+            Spacer(modifier = Modifier.weight(1f))
         }
 
         if (addon.catalogs.isEmpty()) {

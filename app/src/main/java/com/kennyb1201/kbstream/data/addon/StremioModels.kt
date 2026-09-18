@@ -310,7 +310,15 @@ data class InstalledAddon(
      * e.g. a TVDB-sourced title resolves from a TVDB addon rather than an
      * IMDB-only one that happens to answer first.
      */
-    val idPrefixes: List<String>? = null
+    val idPrefixes: List<String>? = null,
+
+    /**
+     * Soft on/off switch: a disabled addon stays installed (and synced and
+     * backed up) but every runtime consumer — catalogs, streams, meta
+     * probes, search, subtitles — skips it. Defaults to true so JSON saved
+     * by older builds (no enabled field) loads as enabled.
+     */
+    val enabled: Boolean = true
 ) {
     val displayName: String
         get() = customName

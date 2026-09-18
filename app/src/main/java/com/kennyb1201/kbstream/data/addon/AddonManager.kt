@@ -118,7 +118,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         _installedAddons
             .map { list ->
                 list.filter {
-                    "stream" in it.resources
+                    it.enabled && "stream" in it.resources
                 }
             }
             .stateIn(
@@ -131,7 +131,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         _installedAddons
             .map { list ->
                 list.filter {
-                    "catalog" in it.resources
+                    it.enabled && "catalog" in it.resources
                 }
             }
             .stateIn(
@@ -312,6 +312,35 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         )
         }
     }
+
+    /**
+     * Soft-disable toggle: a disabled addon stays installed (kept on disk,
+     * in backups, and in cloud sync) but drops out of every runtime
+     * consumer via [getEnabledAddons]. No-op when already in the wanted
+     * state, so double-presses don't rewrite prefs.
+     */
+    fun setAddonEnabled(id: String, enabled: Boolean) {
+        synchronized(stateLock) {
+            val current = getInstalledAddons()
+            val target = current.firstOrNull { it.id == id } ?: return
+            if (target.enabled == enabled) return
+            saveInstalledAddons(
+                current.map {
+                    if (it.id == id) it.copy(enabled = enabled) else it
+                }
+            )
+        }
+    }
+
+    /**
+     * Runtime view of the installed addons: only the enabled ones, in the
+     * same order management returns. Consumers that actually fetch data
+     * (catalogs, streams, meta, search, subtitles) must use this; screens
+     * that manage addons keep using [getInstalledAddons] so disabled addons
+     * remain visible and re-toggleable.
+     */
+    fun getEnabledAddons(): List<InstalledAddon> =
+        getInstalledAddons().filter { it.enabled }
 
     fun renameAddon(
         id: String,

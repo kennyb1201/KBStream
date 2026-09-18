@@ -133,6 +133,7 @@ class KBContentLoader(context: android.content.Context) {
             .getInstalledAddons()
             .firstOrNull { it.id == addonId }
             ?: return source.providerLabel()
+        if (!addon.enabled) return source.providerLabel()
 
         val catalog = addon.catalogs.firstOrNull {
             it.id == catalogId &&
@@ -423,7 +424,7 @@ class KBContentLoader(context: android.content.Context) {
             ?: return emptyList()
 
         val addon = AddonManager.getInstance(appContext).getInstalledAddons()
-            .firstOrNull { it.id == addonId }
+            .firstOrNull { it.id == addonId && it.enabled }
             ?: return emptyList()
 
         val metas: List<MetaPreview> = addonRepository.getCatalog(

@@ -574,6 +574,14 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         _status.value = "Name saved"
     }
 
+    /** Soft on/off: keeps the addon installed but drops it from runtime use. */
+    fun setAddonEnabled(id: String, enabled: Boolean) {
+        addonManager.setAddonEnabled(id, enabled)
+        refresh()
+        _status.value = if (enabled) "Add-on enabled" else "Add-on disabled"
+        checkHealth()
+    }
+
     fun resetAddonName(id: String) {
         addonManager.renameAddon(id, null)
         refresh()

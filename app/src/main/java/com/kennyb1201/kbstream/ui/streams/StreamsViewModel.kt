@@ -110,7 +110,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         }
 
         val allStreams = mutableListOf<Stream>()
-        val addons = addonManager.getInstalledAddons()
+        val addons = addonManager.getEnabledAddons()
         val streamAddons = addons.filter { it.resources.contains("stream") }
 
         if (streamAddons.isEmpty()) {

@@ -750,7 +750,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         query: String,
         tmdbKeysDeferred: Deferred<Set<String>>
     ): List<AddonResultGroup> = coroutineScope {
-        val addons = addonManager.getInstalledAddons()
+        val addons = addonManager.getEnabledAddons()
 
         // Every installed add-on is probed in parallel, and each add-on's
         // rails are published the moment that add-on answers (install order

@@ -173,7 +173,7 @@ class AddonSubtitleController(
         val contentType = if (parentType == "series") "series" else "movie"
         fetchJob = scope.launch(Dispatchers.IO) {
             val addons = AddonManager.getInstance(appContext)
-                .getInstalledAddons()
+                .getEnabledAddons()
                 .filter { it.resources.contains("subtitles") }
             if (addons.isEmpty()) {
                 Log.i(TAG, "No installed addon offers the 'subtitles' resource")

@@ -70,7 +70,7 @@ class KBHomeManagerViewModel(application: Application) : AndroidViewModel(applic
                 )
             }
 
-            val addonRails = addonManager.getInstalledAddons()
+            val addonRails = addonManager.getEnabledAddons()
                 .flatMap { addon ->
                     addon.catalogs
                         .filter { it.showOnHome }
