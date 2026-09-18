@@ -5096,11 +5096,22 @@ private suspend fun calculateEpisodesRemaining(
                 val pinned =
                     mutableListOf<Rail>()
 
-                loadPinnedTopTodayRails(
-                    pinned,
-                    hideUpcoming,
-                    landscapeCards
-                )
+                if (tmdbRepository.kidsMaxAge() != null) {
+                    // Kids profile: the general-audience "Top ... Today"
+                    // rails don't belong here - after ceiling filtering they
+                    // are usually near-empty (today's top titles are mostly
+                    // adult fare). Hardcoded kids rails replace them.
+                    loadPinnedKidsRails(
+                        pinned,
+                        landscapeCards
+                    )
+                } else {
+                    loadPinnedTopTodayRails(
+                        pinned,
+                        hideUpcoming,
+                        landscapeCards
+                    )
+                }
 
                 val addonsById =
                     addonManager
@@ -5470,6 +5481,102 @@ private suspend fun calculateEpisodesRemaining(
             }
     }
 
+    /**
+     * Kids-profile replacement for the pinned "Top ... Today" rails: two
+     * hardcoded rails ("Top Kids Movies" / "Top Kids Shows") sourced from
+     * TMDB discover — popular family + animation, certified-release floor —
+     * so kids get a real, always-populated version of the rows the main
+     * profile sees. Every item still runs through the ceiling filter
+     * (TMDB certification check) before it lands on the rail.
+     */
+    private suspend fun loadPinnedKidsRails(
+        result: MutableList<Rail>,
+        landscapeCards: Boolean
+    ) {
+        val isTv = listOf(false, true)
+        coroutineScope {
+            isTv.map { tv ->
+                async {
+                    try {
+                        val filters = com.kennyb1201.kbstream.data.kb.KBFilters(
+                            // Movies: Animation OR Family. Shows: Kids OR Animation.
+                            // (OR-comma on purpose; adult-tagged genres like
+                            // Action & Adventure or News would leak in.)
+                            withGenres = if (tv) "10762,16" else "16,10751",
+                            voteCountGte = 20,
+                            releaseDateGte = "1970-01-01"
+                        )
+                        val items = tmdbRepository.discoverKB(
+                            mediaType = if (tv) "tv" else "movie",
+                            page = 1,
+                            sortBy = "popularity.desc",
+                            filters = filters
+                        ).orEmpty()
+                            .take(INITIAL_RAIL_PAGE_SIZE)
+
+                        val metas = items.map { item ->
+                            MetaPreview(
+                                id = "tmdb:" + item.id,
+                                type = if (tv) "series" else "movie",
+                                name = item.name ?: item.title.orEmpty(),
+                                poster = item.posterPath
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?.let { TmdbRepository.POSTER_BASE + it },
+                                background = item.backdropPath
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?.let { TmdbRepository.BACKDROP_BASE + it },
+                                releaseInfo = (item.firstAirDate ?: item.releaseDate)
+                                    ?.takeIf { it.length >= 4 }
+                                    ?.take(4)
+                            )
+                        }
+
+                        // Belt-and-braces ceiling re-check (discoverKB already
+                        // filters when kids mode is on).
+                        val filtered = tmdbRepository.kidsFilterMetas(metas)
+                        if (filtered.isEmpty()) return@async null
+
+                        val rail = Rail(
+                            addonName = KIDS_ADDON_NAME,
+                            catalogName = if (tv) "Top Kids Shows" else "Top Kids Movies",
+                            type = if (tv) "series" else "movie",
+                            items = filtered,
+                            catalogId = if (tv) "top_kids_shows" else "top_kids_movies",
+                            baseUrl = null,
+                            landscapeArt = if (landscapeCards) {
+                                resolveLandscapeArt(filtered, tmdbOnly = true)
+                            } else {
+                                emptyMap()
+                            }
+                        )
+
+                        railInfo[railKeyOf(rail)] = RailInfo(
+                            addonName = KIDS_ADDON_NAME,
+                            catalogId = rail.catalogId ?: "",
+                            catalogType = rail.type,
+                            catalogRawName = rail.catalogName,
+                            baseUrl = "",
+                            hideUpcoming = false,
+                            landscapeCards = landscapeCards,
+                            pinned = true
+                        )
+
+                        // The source is one fixed TMDB page — no pagination.
+                        exhaustedRails.add(railKeyOf(rail))
+
+                        rail
+                    } catch (e: Exception) {
+                        Log.e("HOME_RAILS", "kids pinned rail load failed tv=$tv: " + e.message, e)
+                        null
+                    }
+                }
+            }
+                .awaitAll()
+                .filterNotNull()
+                .forEach { rail -> result += rail }
+        }
+    }
+
     private suspend fun loadPinnedTopTodayRails(
         result: MutableList<Rail>,
         hideUpcoming: Boolean,
@@ -5824,6 +5931,9 @@ private suspend fun calculateEpisodesRemaining(
         private const val RAIL_LOAD_RETRY_MAX_ATTEMPTS = 2
 
         private const val RAIL_LOAD_RETRY_BASE_DELAY_MS = 4_000L
+
+        private const val KIDS_ADDON_NAME =
+            "KBStream Kids Picks"
 
         private const val TOP_TODAY_ADDON_NAME =
             "TMDB Top Today"
