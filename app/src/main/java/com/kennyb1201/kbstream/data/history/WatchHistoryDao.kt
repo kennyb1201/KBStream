@@ -38,6 +38,14 @@ interface WatchHistoryDao {
     @Query("SELECT * FROM watch_history WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): WatchHistoryEntity?
 
+    /**
+     * Batch variant of [getById] for sync merges: one query for the whole
+     * remote batch instead of one per row (N+1 made a large history pull
+     * issue thousands of individual lookups on every sync).
+     */
+    @Query("SELECT * FROM watch_history WHERE id IN (:ids)")
+    suspend fun getByIds(ids: List<String>): List<WatchHistoryEntity>
+
     @Query(
         """
         SELECT * FROM watch_history

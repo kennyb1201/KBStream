@@ -8,6 +8,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
+import coil3.disk.directory
 import coil3.svg.SvgDecoder
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.work.AddonManifestRefreshWorker
@@ -103,10 +104,36 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                     .maxSizePercent(context, 0.30)
                     .build()
             )
+            // Coil 3 ships NO default disk cache — without this every app
+            // restart re-downloads every poster/backdrop over the network,
+            // which on a TV means slow, half-populated rails after relaunch.
+            // Sized from usable storage: ~2% with a 32 MB floor and a
+            // 256 MB ceiling so small-stick devices stay reasonable.
+            .diskCache(
+                coil3.disk.DiskCache.Builder()
+                    .directory(
+                        java.io.File(
+                            context.applicationContext.cacheDir,
+                            "image_cache"
+                        )
+                    )
+                    .maxSizeBytes(imageDiskCacheBytes(context))
+                    .build()
+            )
             // KB badge packs commonly ship .svg chip art; without this
             // decoder those badges silently fail to render (blank chips).
             .components { add(SvgDecoder.Factory()) }
             .build()
+    }
+
+    /**
+     * Coil image disk-cache budget: 2% of usable storage, clamped to
+     * [32 MB, 256 MB]. Pure disk math — no Context retained.
+     */
+    private fun imageDiskCacheBytes(context: android.content.Context): Long {
+        val usable = context.cacheDir.usableSpace
+        val twoPercent = usable * 2 / 100
+        return twoPercent.coerceIn(32L * 1024 * 1024, 256L * 1024 * 1024)
     }
 
     private fun scheduleSimklPeriodicSync() {

@@ -46,7 +46,10 @@ class TmdbHeroArtworkRepository(
 
     private val mutex = Mutex()
 
-    // fetchedAt -> artwork, keyed by "<mediaType>:<tmdbId>"
+    // fetchedAt -> artwork, keyed by "<mediaType>:<tmdbId>". Capped: an
+    // evening of browsing resolves hundreds of heroes, and an unbounded
+    // map kept every one of them alive for the whole process. Over the cap
+    // we drop expired entries first, then the oldest-fetched remainder.
     private val memoryCache = HashMap<String, Pair<Long, HeroArtwork>>()
 
     suspend fun resolve(
@@ -104,6 +107,7 @@ class TmdbHeroArtworkRepository(
 
             if (artwork != null) {
                 memoryCache[key] = now to artwork
+                pruneMemoryCache(now)
 
                 runCatching {
                     tmdbJsonCacheDao?.upsert(
@@ -188,6 +192,21 @@ class TmdbHeroArtworkRepository(
         const val MEMORY_CACHE_TTL_MS = 12L * 60L * 60L * 1000L
         const val DISK_CACHE_TTL_MS = 30L * 24L * 60L * 60L * 1000L
         const val DISK_KEY_PREFIX = "hero_artwork:"
+        const val MEMORY_CACHE_MAX_ENTRIES = 128
+    }
+
+    /**
+     * Keeps [memoryCache] bounded: expired entries go first, then the
+     * oldest-fetched remainder. Called with the mutex held.
+     */
+    private fun pruneMemoryCache(now: Long) {
+        if (memoryCache.size <= MEMORY_CACHE_MAX_ENTRIES) return
+        memoryCache.entries.removeAll { now - it.value.first >= MEMORY_CACHE_TTL_MS }
+        if (memoryCache.size <= MEMORY_CACHE_MAX_ENTRIES) return
+        memoryCache.entries
+            .sortedBy { it.value.first }
+            .take(memoryCache.size - MEMORY_CACHE_MAX_ENTRIES)
+            .forEach { memoryCache.remove(it.key) }
     }
 }
 

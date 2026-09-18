@@ -21,6 +21,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -502,33 +504,50 @@ object SupabaseSync {
         val batch = outbox.values.toList()
         if (batch.isEmpty()) return
 
-        for (row in batch) {
-            try {
-                val body = buildJsonObject {
-                    put(
-                        when (row.keyColumn) {
-                            "item_id" -> "item_id"
-                            "item_key" -> "item_key"
-                            else -> "pref_key"
-                        },
-                        row.key
+        // Group by table and upload as batched upserts instead of one HTTP
+        // round-trip per row — a bulk watched import used to fire hundreds
+        // of sequential requests. Chunked so a huge outbox can't blow the
+        // PostgREST request-size limit, and a failed chunk doesn't sink the
+        // rest (failed rows stay in the outbox and retry idempotently).
+        val byTable = batch.groupBy { it.table }
+        for ((table, rows) in byTable) {
+            rows.chunked(100).forEach { chunk ->
+                try {
+                    val bodies = chunk.map { row ->
+                        buildJsonObject {
+                            put(
+                                when (row.keyColumn) {
+                                    "item_id" -> "item_id"
+                                    "item_key" -> "item_key"
+                                    else -> "pref_key"
+                                },
+                                row.key
+                            )
+                            put("payload", row.payload)
+                            put(
+                                "updated_at",
+                                java.time.Instant.ofEpochMilli(row.enqueuedAtMs).toString()
+                            )
+                        }
+                    }
+                    c.from(table).upsert(bodies)
+                    // Remove only if the slot still maps to the EXACT row we
+                    // just uploaded. If a newer write for the same key was
+                    // enqueued while this upload was in flight, the slot now
+                    // holds that newer row — removing by key alone would
+                    // silently drop a write that never reached the cloud
+                    // (lost update).
+                    chunk.forEach { row -> outbox.remove(outboxId(row), row) }
+                } catch (e: Exception) {
+                    Log.w(TAG, "flush $table chunk of ${chunk.size} failed: ${e.message}")
+                    // Keep in outbox; retried by the periodic sync loop.
+                } catch (t: Throwable) {
+                    CrashReporter.recordNonFatal(
+                        t,
+                        mapOf("source" to "flush_outbox", "table" to table)
                     )
-                    put("payload", row.payload)
-                    put(
-                        "updated_at",
-                        java.time.Instant.ofEpochMilli(row.enqueuedAtMs).toString()
-                    )
+                    Log.e(TAG, "flush $table crashed: ${t.message}")
                 }
-                c.from(row.table).upsert(body)
-                // Remove only if the slot still maps to the EXACT row we just
-                // uploaded. If a newer write for the same key was enqueued
-                // while this upload was in flight, the slot now holds that
-                // newer row — removing by key alone would silently drop a
-                // write that never reached the cloud (lost update).
-                outbox.remove(outboxId(row), row)
-            } catch (e: Exception) {
-                Log.w(TAG, "flush ${row.table}/${row.key} failed: ${e.message}")
-                // Keep in outbox; retried by the periodic sync loop.
             }
         }
         _lastSyncAtMs.value = System.currentTimeMillis()
@@ -604,6 +623,16 @@ object SupabaseSync {
                 .decodeList<SyncRowDto>()
 
             val db = WatchHistoryDatabase.getInstanceScoped(context)
+            // Batch-load every local row once, then merge in memory: the old
+            // per-row getById() loop was an N+1 (one query per remote row) on
+            // every pull — a multi-hundred-row history stalled sync for
+            // seconds and churned the DB.
+            val localById = db.watchHistoryDao()
+                .getByIds(rows.mapNotNull { row ->
+                    val storedId = row.itemId ?: return@mapNotNull null
+                    if (!storedKeyMatchesActiveProfile(storedId)) null else unscopedKey(storedId)
+                }.distinct())
+                .associateBy { it.id }
             var applied = 0
             for (row in rows) {
                 val remote = row.payload
@@ -612,8 +641,7 @@ object SupabaseSync {
                 if (!storedKeyMatchesActiveProfile(storedId)) continue
                 val id = unscopedKey(storedId)
 
-                val local = db.watchHistoryDao().getById(id)
-                val localUpdated = local?.updatedAt ?: 0L
+                val localUpdated = localById[id]?.updatedAt ?: 0L
 
                 if (remoteUpdated > localUpdated) {
                     db.watchHistoryDao().upsert(
@@ -666,6 +694,19 @@ object SupabaseSync {
                 .decodeList<SyncRowDto>()
 
             val db = WatchHistoryDatabase.getInstanceScoped(context)
+            // Same N+1 fix as pullHistory: load the relevant local rows once
+            // and merge in memory instead of one getByKeys() round-trip per
+            // remote row.
+            val keysForActiveProfile = rows.mapNotNull { row ->
+                val storedKey = row.itemKey ?: return@mapNotNull null
+                if (!storedKeyMatchesActiveProfile(storedKey)) null else unscopedKey(storedKey)
+            }.distinct()
+            val localByKey = if (keysForActiveProfile.isEmpty()) {
+                emptyMap()
+            } else {
+                db.watchedStatusDao().getByKeys(keysForActiveProfile).associateBy { it.key }
+            }
+            val pendingUpdates = mutableListOf<WatchedStatusEntity>()
             var applied = 0
             for (row in rows) {
                 val remote = row.payload
@@ -674,23 +715,24 @@ object SupabaseSync {
                 if (!storedKeyMatchesActiveProfile(storedKey)) continue
                 val key = unscopedKey(storedKey)
 
-                val local = db.watchedStatusDao().getByKeys(listOf(key)).firstOrNull()
-                val localUpdated = local?.updatedAt ?: 0L
+                val localUpdated = localByKey[key]?.updatedAt ?: 0L
 
                 if (remoteUpdated > localUpdated) {
-                    db.watchedStatusDao().upsertAll(
-                        listOf(
-                            WatchedStatusEntity(
-                                key = key,
-                                imdbId = remote.str("imdbId") ?: "",
-                                mediaType = remote.str("mediaType") ?: "movie",
-                                isWatched = remote.bool("isWatched"),
-                                updatedAt = remoteUpdated
-                            )
+                    pendingUpdates.add(
+                        WatchedStatusEntity(
+                            key = key,
+                            imdbId = remote.str("imdbId") ?: "",
+                            mediaType = remote.str("mediaType") ?: "movie",
+                            isWatched = remote.bool("isWatched"),
+                            updatedAt = remoteUpdated
                         )
                     )
                     applied++
                 }
+            }
+            // One batch write instead of one upsert per row.
+            if (pendingUpdates.isNotEmpty()) {
+                db.watchedStatusDao().upsertAll(pendingUpdates)
             }
             if (applied > 0) {
                 Log.i(TAG, "watched pull applied $applied rows")
@@ -772,35 +814,43 @@ object SupabaseSync {
     private val realtimeChannels =
         java.util.concurrent.CopyOnWriteArrayList<io.github.jan.supabase.realtime.RealtimeChannel>()
 
+    // Serializes start/stop so two auth paths that fire near-simultaneously
+    // (session restore racing a manual sign-in) can't both pass the
+    // "already subscribed?" check and create DUPLICATE channels — which
+    // doubled every remote-change event and leaked a websocket.
+    private val realtimeMutex = Mutex()
+
     private fun startRealtime() {
         val c = client ?: return
-        if (realtimeChannels.isNotEmpty()) return
 
         scope.launch {
-            try {
-                // One channel per table; the flow must be created BEFORE the
-                // channel subscribes (supabase-kt requirement).
-                listOf(TABLE_HISTORY, TABLE_WATCHED, TABLE_PREFS).forEach { table ->
-                    val ch = c.channel("kbstream_$table")
-                    val changeFlow = ch.postgresChangeFlow<io.github.jan.supabase.realtime.PostgresAction>(
-                        schema = "public"
-                    ) {
-                        this.table = table
-                    }
+            realtimeMutex.withLock {
+                if (realtimeChannels.isNotEmpty()) return@withLock
+                try {
+                    // One channel per table; the flow must be created BEFORE the
+                    // channel subscribes (supabase-kt requirement).
+                    listOf(TABLE_HISTORY, TABLE_WATCHED, TABLE_PREFS).forEach { table ->
+                        val ch = c.channel("kbstream_$table")
+                        val changeFlow = ch.postgresChangeFlow<io.github.jan.supabase.realtime.PostgresAction>(
+                            schema = "public"
+                        ) {
+                            this.table = table
+                        }
 
-                    scope.launch {
-                        changeFlow.collect { action -> onRemoteChange(action) }
-                    }
+                        scope.launch {
+                            changeFlow.collect { action -> onRemoteChange(action) }
+                        }
 
-                    ch.subscribe(blockUntilSubscribed = false)
-                    realtimeChannels.add(ch)
+                        ch.subscribe(blockUntilSubscribed = false)
+                        realtimeChannels.add(ch)
+                    }
+                    Log.i(TAG, "realtime subscribed to 3 tables")
+                } catch (e: Exception) {
+                    Log.w(TAG, "realtime setup failed: ${e.message}")
+                } catch (t: Throwable) {
+                    CrashReporter.recordNonFatal(t, mapOf("source" to "realtime_setup"))
+                    Log.e(TAG, "realtime setup crashed: ${t.message}")
                 }
-                Log.i(TAG, "realtime subscribed to 3 tables")
-            } catch (e: Exception) {
-                Log.w(TAG, "realtime setup failed: ${e.message}")
-            } catch (t: Throwable) {
-                CrashReporter.recordNonFatal(t, mapOf("source" to "realtime_setup"))
-                Log.e(TAG, "realtime setup crashed: ${t.message}")
             }
         }
     }
@@ -916,7 +966,9 @@ object SupabaseSync {
         val channels = realtimeChannels.toList()
         realtimeChannels.clear()
         scope.launch {
-            channels.forEach { ch -> runCatching { ch.unsubscribe() } }
+            realtimeMutex.withLock {
+                channels.forEach { ch -> runCatching { ch.unsubscribe() } }
+            }
         }
     }
 

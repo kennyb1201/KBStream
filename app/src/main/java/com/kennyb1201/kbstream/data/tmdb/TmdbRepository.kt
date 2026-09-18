@@ -51,20 +51,38 @@ data class ResolvedEpisode(
 )
 
 class TmdbRepository(context: Context) {
-    private val moshi = Moshi.Builder()
-        .add(KotlinJsonAdapterFactory())
-        .build()
 
-    // One process-wide OkHttp client: TMDB traffic all goes to the same host,
-    // so sharing it lets every screen reuse pooled TCP+TLS connections instead
-    // of paying a fresh handshake per repository instance (Tag, Studio,
-    // Collection, Detail, Home, Search each built their own before).
-    private val api: TmdbApiService = Retrofit.Builder()
-        .baseUrl("https://api.themoviedb.org/3/")
-        .client(sharedOkHttpClient())
-        .addConverterFactory(MoshiConverterFactory.create(moshi))
-        .build()
-        .create(TmdbApiService::class.java)
+    // One process-wide Retrofit/Moshi/api stack, shared by every repository
+    // instance: Retrofit + Moshi(KotlinJsonAdapterFactory) are heavyweight
+    // reflection setups, and the app instantiates TmdbRepository from ~19
+    // call sites (often several per screen in the player), so per-instance
+    // stacks wasted measurable startup/JIT time and memory. All instances
+    // are stateless w.r.t. these (only appContext + per-instance caches vary).
+    private val moshi: Moshi = sharedMoshi()
+
+    private val api: TmdbApiService = sharedApi()
+
+    // Moshi/Retrofit are thread-safe after build; synchronize only the
+    // first construction (class-level lock: instances are created from
+    // several threads).
+    private fun sharedMoshi(): Moshi =
+        synchronized(TmdbRepository::class.java) {
+            companionMoshi ?: Moshi.Builder()
+                .add(KotlinJsonAdapterFactory())
+                .build()
+                .also { companionMoshi = it }
+        }
+
+    private fun sharedApi(): TmdbApiService =
+        synchronized(TmdbRepository::class.java) {
+            companionApi ?: Retrofit.Builder()
+                .baseUrl("https://api.themoviedb.org/3/")
+                .client(sharedOkHttpClient())
+                .addConverterFactory(MoshiConverterFactory.create(companionMoshi ?: sharedMoshi()))
+                .build()
+                .create(TmdbApiService::class.java)
+                .also { companionApi = it }
+        }
 
     private val apiKey = BuildConfig.TMDB_API_KEY
     private val appContext = context.applicationContext
@@ -1754,6 +1772,12 @@ class TmdbRepository(context: Context) {
     }
 
     companion object {
+        @Volatile
+        private var companionMoshi: Moshi? = null
+
+        @Volatile
+        private var companionApi: TmdbApiService? = null
+
         @Volatile
         private var sharedClient: OkHttpClient? = null
 
