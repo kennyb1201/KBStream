@@ -1251,7 +1251,23 @@ private fun SettingsContentHost(
             modifier = Modifier.padding(bottom = 8.dp)
         )
         content()
+        SettingsAboutFooter()
     }
+}
+
+@Composable
+private fun SettingsAboutFooter() {
+    // Build identity for bug reports: versionName + versionCode + exact commit.
+    // Values are stamped by CI (VERSION_CODE / VERSION_NAME / GIT_SHA env vars
+    // in app/build.gradle.kts); local builds show 0.1.0-dev / local.
+    Spacer(modifier = Modifier.height(16.dp))
+    Text(
+        text = "KBStream ${com.kennyb1201.kbstream.BuildConfig.VERSION_NAME} " +
+            "(build ${com.kennyb1201.kbstream.BuildConfig.VERSION_CODE}, " +
+            com.kennyb1201.kbstream.BuildConfig.GIT_SHA.take(7) + ")",
+        color = KBTextLo.copy(alpha = 0.7f),
+        style = MaterialTheme.typography.labelSmall
+    )
 }
 
 @Composable

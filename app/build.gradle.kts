@@ -73,6 +73,13 @@ val releaseStorePassword = System.getenv("KBSTREAM_STORE_PASSWORD")
 val releaseKeyAlias = System.getenv("KBSTREAM_KEY_ALIAS")
 val releaseKeyPassword = System.getenv("KBSTREAM_KEY_PASSWORD")
 
+// Release version stamping (set by CI; local builds fall back to dev values).
+// VERSION_CODE=github.run_number makes every CI build strictly higher than the
+// last, so `adb install -r` upgrades cleanly and bug reports identify builds.
+val ciVersionCode = System.getenv("VERSION_CODE")?.toIntOrNull() ?: 1
+val ciVersionName = System.getenv("VERSION_NAME")?.takeIf { it.isNotBlank() } ?: "0.1.0-dev"
+val ciGitSha = System.getenv("GIT_SHA")?.takeIf { it.isNotBlank() } ?: "local"
+
 android {
     namespace = "com.kennyb1201.kbstream"
     compileSdk = 35
@@ -81,8 +88,8 @@ android {
         applicationId = "com.kennyb1201.kbstream"
         minSdk = 23
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = ciVersionCode
+        versionName = ciVersionName
 
         buildConfigField("String", "TMDB_API_KEY", "\"$tmdbApiKey\"")
         buildConfigField("String", "SIMKL_CLIENT_ID", "\"$simklClientId\"")
@@ -91,6 +98,7 @@ android {
         buildConfigField("String", "MDBLIST_API_KEY", "\"$mdbListApiKey\"")
         buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"$supabaseAnonKey\"")
+        buildConfigField("String", "GIT_SHA", "\"$ciGitSha\"")
     }
     buildFeatures {
         compose = true

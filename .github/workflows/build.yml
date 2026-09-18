@@ -21,6 +21,12 @@ jobs:
       OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_PUBLISHABLE_KEY }}
+      # Every CI build gets a strictly increasing versionCode (run number) and a
+      # versionName that identifies the exact commit, so device bug reports map
+      # to the build that produced them.
+      VERSION_CODE: ${{ github.run_number }}
+      VERSION_NAME: 0.2.${{ github.run_number }}
+      GIT_SHA: ${{ github.sha }}
       
     steps:
       - name: Checkout
