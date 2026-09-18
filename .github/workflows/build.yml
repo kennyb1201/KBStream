@@ -85,8 +85,25 @@ jobs:
         env:
           GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
 
+      # The Sentry mapping-upload task is excluded here so a Sentry outage
+      # or auth problem can never fail the build and block the APK. It runs
+      # separately below as a best-effort step.
       - name: Build signed release APK
-        run: ./gradlew assembleRelease --stacktrace
+        run: ./gradlew assembleRelease -x uploadSentryProguardMappingsRelease --stacktrace
+        env:
+          GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
+          KBSTREAM_STORE_FILE: kbstream-release.jks
+          KBSTREAM_STORE_PASSWORD: ${{ secrets.KBSTREAM_KEYSTORE_PASSWORD }}
+          KBSTREAM_KEY_ALIAS: ${{ secrets.KBSTREAM_KEY_ALIAS }}
+          KBSTREAM_KEY_PASSWORD: ${{ secrets.KBSTREAM_KEY_PASSWORD }}
+
+      # Best-effort R8 mapping upload: needs an upload-capable Sentry token
+      # (org auth token). With the wrong/read-only token this 403s and is
+      # logged as a warning - the APK from the step above is still published.
+      - name: Upload Sentry mappings (best-effort)
+        if: success()
+        continue-on-error: true
+        run: ./gradlew uploadSentryProguardMappingsRelease --stacktrace
         env:
           GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
           KBSTREAM_STORE_FILE: kbstream-release.jks
