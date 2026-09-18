@@ -711,11 +711,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        com.kennyb1201.kbstream.data.sync.KidsTimeGuard.onAppStart()
+        runCatching { com.kennyb1201.kbstream.data.sync.KidsTimeGuard.onAppStart() }
     }
 
     override fun onStop() {
-        com.kennyb1201.kbstream.data.sync.KidsTimeGuard.onAppStop()
+        runCatching { com.kennyb1201.kbstream.data.sync.KidsTimeGuard.onAppStop() }
         super.onStop()
     }
 
@@ -758,11 +758,27 @@ class MainActivity : ComponentActivity() {
         // (toggle=false) and the app launched with the regular palette —
         // AMOLED only "kicked in" after visiting Settings, whose own read
         // then mirrored the correct scoped value into the live theme state.
-        com.kennyb1201.kbstream.data.sync.ProfileManager.init(applicationContext)
+        // Isolated: a corrupt prefs blob or unexpected throw here used to be
+        // a guaranteed no-launch (black screen → launcher). With the guard
+        // the app still starts (profiles may be empty → runs unsigned-in as
+        // the legacy global store) instead of dying.
+        runCatching {
+            com.kennyb1201.kbstream.data.sync.ProfileManager.init(applicationContext)
+        }.onFailure {
+            com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
+                it, mapOf("source" to "activity_create_profile_init")
+            )
+        }
 
         // Kids Mode time guard: owns daily-limit/bedtime tracking and the
         // lock overlay state. Lifecycle callbacks below drive accumulation.
-        com.kennyb1201.kbstream.data.sync.KidsTimeGuard.start(applicationContext)
+        runCatching {
+            com.kennyb1201.kbstream.data.sync.KidsTimeGuard.start(applicationContext)
+        }.onFailure {
+            com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
+                it, mapOf("source" to "activity_create_kids_guard")
+            )
+        }
 
         setContent {
             // Sync the AMOLED toggle into the theme's live state BEFORE the

@@ -12,6 +12,7 @@ import io.github.jan.supabase.postgrest.query.Columns
 import io.github.jan.supabase.realtime.Realtime
 import io.github.jan.supabase.realtime.channel
 import io.github.jan.supabase.realtime.postgresChangeFlow
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -33,6 +34,7 @@ import kotlinx.serialization.json.put
 import java.util.concurrent.ConcurrentHashMap
 import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.addon.AddonManager
+import com.kennyb1201.kbstream.data.reporting.CrashReporter
 import com.kennyb1201.kbstream.data.cache.WatchedStatusEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
@@ -96,7 +98,22 @@ object SupabaseSync {
     // ── Client ──────────────────────────────────────────────────────
 
     private var client: SupabaseClient? = null
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    // Last-resort net under every launch {} in this object: the per-path
+    // try/catch blocks only catch Exception, but an Error/Throwable escaping
+    // a launch on an unhandled scope CRASHES THE PROCESS (black screen →
+    // launcher on TV). That is exactly what happened on signed-in devices:
+    // the restoreSession/pull path is the only startup work signed-out
+    // devices never run. This handler converts any such escape into a log +
+    // Sentry capture instead of a dead app. Behavior is unchanged when
+    // everything works.
+    private val uncaughtHandler = CoroutineExceptionHandler { _, throwable ->
+        Log.e(TAG, "sync task failed hard", throwable)
+        com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
+            throwable, mapOf("source" to "supabase_sync_scope")
+        )
+    }
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + uncaughtHandler)
 
     private const val TABLE_HISTORY = "sync_watch_history"
     private const val TABLE_WATCHED = "sync_watched_status"
@@ -230,6 +247,16 @@ object SupabaseSync {
                 // Any unexpected error path: keep the saved token — the
                 // next launch can still restore from it.
                 Log.e(TAG, "restoreSession failed (token kept)", e)
+                _authState.value = AuthState.SignedOut
+            } catch (t: Throwable) {
+                // Errors (LinkageError etc., e.g. an R8/codec mismatch on a
+                // release build) are NOT Exceptions — letting one escape this
+                // launch kills the process at every cold start on signed-in
+                // devices. Swallow to the crash reporter and mark signed out.
+                Log.e(TAG, "restoreSession crashed (token kept)", t)
+                com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
+                    t, mapOf("source" to "restore_session")
+                )
                 _authState.value = AuthState.SignedOut
             }
         }
@@ -625,6 +652,9 @@ object SupabaseSync {
             }
         } catch (e: Exception) {
             Log.w(TAG, "pullHistory failed: ${e.message}")
+        } catch (t: Throwable) {
+            CrashReporter.recordNonFatal(t, mapOf("source" to "pull_history"))
+            Log.e(TAG, "pullHistory crashed: ${t.message}")
         }
     }
 
@@ -668,6 +698,9 @@ object SupabaseSync {
             }
         } catch (e: Exception) {
             Log.w(TAG, "pullWatched failed: ${e.message}")
+        } catch (t: Throwable) {
+            CrashReporter.recordNonFatal(t, mapOf("source" to "pull_watched"))
+            Log.e(TAG, "pullWatched crashed: ${t.message}")
         }
     }
 
@@ -695,6 +728,9 @@ object SupabaseSync {
             }
         } catch (e: Exception) {
             Log.w(TAG, "pullPrefs failed: ${e.message}")
+        } catch (t: Throwable) {
+            CrashReporter.recordNonFatal(t, mapOf("source" to "pull_prefs"))
+            Log.e(TAG, "pullPrefs crashed: ${t.message}")
         }
     }
 
@@ -762,6 +798,9 @@ object SupabaseSync {
                 Log.i(TAG, "realtime subscribed to 3 tables")
             } catch (e: Exception) {
                 Log.w(TAG, "realtime setup failed: ${e.message}")
+            } catch (t: Throwable) {
+                CrashReporter.recordNonFatal(t, mapOf("source" to "realtime_setup"))
+                Log.e(TAG, "realtime setup crashed: ${t.message}")
             }
         }
     }
@@ -800,6 +839,9 @@ object SupabaseSync {
                 _lastSyncAtMs.value = System.currentTimeMillis()
             } catch (e: Exception) {
                 Log.w(TAG, "onRemoteChange failed: ${e.message}")
+            } catch (t: Throwable) {
+                CrashReporter.recordNonFatal(t, mapOf("source" to "remote_change"))
+                Log.e(TAG, "onRemoteChange crashed: ${t.message}")
             }
         }
     }

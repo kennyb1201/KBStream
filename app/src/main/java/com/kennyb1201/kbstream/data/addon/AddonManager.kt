@@ -5,6 +5,7 @@ import android.util.Log
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -109,9 +110,19 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         return matching + legacy + mismatched
     }
 
+    // Manifest refreshes / applies run here (including the launch-time
+    // refresh kicked from Application.onCreate). The handler keeps an
+    // escaping Throwable (Error subclasses slip past the runCatching blocks
+    // around individual fetches) from killing the whole process.
     private val addonScope =
         CoroutineScope(
-            Dispatchers.Default + SupervisorJob()
+            Dispatchers.Default + SupervisorJob() +
+                CoroutineExceptionHandler { _, t ->
+                    Log.e("ADDON_SCOPE", "addon task failed hard", t)
+                    com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
+                        t, mapOf("source" to "addon_manager_scope")
+                    )
+                }
         )
 
     val streamAddons: StateFlow<List<InstalledAddon>> =

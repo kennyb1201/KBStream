@@ -23,20 +23,54 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             applicationContext
         com.kennyb1201.kbstream.data.sync.SupabaseSync.appContextRef =
             java.lang.ref.WeakReference(applicationContext)
-        com.kennyb1201.kbstream.data.sync.SupabaseSync.init(this)
-        initCrashReporting()
-        scheduleSimklPeriodicSync()
-        scheduleAddonManifestRefresh()
+        // Crash reporting FIRST so every step below is observable.
+        runCatching { initCrashReporting() }
+        // Startup isolation: an exception thrown from Application.onCreate
+        // kills the process before any Activity exists — on a TV that is a
+        // black screen for ~2s, then the launcher. Each step is independent
+        // (sync, workers, addon refresh, update check); losing any one of
+        // them degrades a feature, but must never take down the launch.
+        // runCatching catches Throwable, covering Error subclasses that the
+        // inner try/catch(Exception) blocks cannot see.
+        runCatching { com.kennyb1201.kbstream.data.sync.SupabaseSync.init(this) }
+            .onFailure {
+                com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
+                    it, mapOf("source" to "app_create_supabase_init")
+                )
+            }
+        runCatching { scheduleSimklPeriodicSync() }
+            .onFailure {
+                com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
+                    it, mapOf("source" to "app_create_simkl_worker")
+                )
+            }
+        runCatching { scheduleAddonManifestRefresh() }
+            .onFailure {
+                com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
+                    it, mapOf("source" to "app_create_addon_worker")
+                )
+            }
         // Launch-time auto-update: picks up addon manifest changes on the
         // first launch after any restart. Throttled internally so frequent
         // app relaunches don't spam every manifest URL; runs on a background
         // scope, so startup is never blocked. The daily worker covers
         // long-running installs that stay alive for days.
-        com.kennyb1201.kbstream.data.addon.AddonManager.getInstance(this)
-            .maybeRefreshOnLaunch(this)
+        runCatching {
+            com.kennyb1201.kbstream.data.addon.AddonManager.getInstance(this)
+                .maybeRefreshOnLaunch(this)
+        }.onFailure {
+            com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
+                it, mapOf("source" to "app_create_addon_launch_refresh")
+            )
+        }
         // Self-update: quiet GitHub-release check at most every 12h; only
         // downloads when the user accepts the prompt in Settings.
-        com.kennyb1201.kbstream.data.update.AppUpdater.maybeAutoCheck(this)
+        runCatching { com.kennyb1201.kbstream.data.update.AppUpdater.maybeAutoCheck(this) }
+            .onFailure {
+                com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
+                    it, mapOf("source" to "app_create_update_check")
+                )
+            }
     }
 
     /**

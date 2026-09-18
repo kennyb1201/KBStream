@@ -374,6 +374,15 @@ class NativePlayerActivity : ComponentActivity() {
     // When the black-video watchdog tries TextureView as an automatic fallback
     // after SurfaceView fails (stage 1.5 in the recovery ladder).
     private var forceTextureViewFallback = false
+    // One-shot per session: stage 2.5 of the black-video watchdog rebuilds
+    // the player once with every Dolby Vision conversion forced to "Strip
+    // All" after the normal path produced no first frame. Fire TV sticks
+    // advertise a DV decoder yet their DV pipeline does not reliably
+    // downconvert for non-DV displays — the decoder accepts the track,
+    // outputs zero frames, and no error fires. This mirrors what other
+    // apps' players do: same file, same URL, just presented to the decoder
+    // as plain HDR10/HEVC. Never loop the retry.
+    private var dvStripRetryDone = false
     // The TextureView installed by that fallback (Media3 1.9's PlayerView has
     // no public setSurfaceType, so the internal surface view is swapped via
     // reflection). Kept across player rebuilds so every session routes the
@@ -1986,7 +1995,15 @@ class NativePlayerActivity : ComponentActivity() {
         // (ST 2094-40) stripping is an independent toggle that composes with
         // any DV mode; with DV = None it strips HDR10+ only and never touches
         // DV.
-        val dvCompatMode = AppPreferences.getDvCompatMode(this)
+        // Session-level DV override: the black-video watchdog's stage 2.5
+        // sets this when a DV stream produced no frames on this device — the
+        // rebuilt player then behaves as if the user had selected "Strip
+        // All", without changing the saved preference.
+        val dvCompatMode = if (forceDvStripForSession) {
+            AppPreferences.DV_COMPAT_ALL
+        } else {
+            AppPreferences.getDvCompatMode(this)
+        }
         val stripHdr10Plus = AppPreferences.getStripHdr10Plus(this)
         val audioDecoderPriority = AppPreferences.getAudioDecoder(this)
         // True when the platform advertises a Dolby Vision decoder. On such
@@ -2671,6 +2688,10 @@ class NativePlayerActivity : ComponentActivity() {
      */
     private fun p5GlesPathWanted(): Boolean {
         if (!P5ColorShader.hasGles3()) return false
+        // The watchdog's session override forces "Strip All", which auto-
+        // enables the GLES color path for P5 content — mirror that here so
+        // the stripped-P5 session gets correct colors, not raw ICtCp.
+        if (forceDvStripForSession) return true
         return AppPreferences.getDvCompatMode(this) == AppPreferences.DV_COMPAT_ALL ||
             AppPreferences.getP5GlesCorrection(this)
     }
@@ -2776,7 +2797,12 @@ class NativePlayerActivity : ComponentActivity() {
      *     frames but output goes nowhere),
      *  2. TextureView rebuild — renders through the view hierarchy when the
      *     SurfaceView's native window is lost (hardware decoding stays on),
-     *  3. explicit notice so the user is never left staring at a silent stall.
+     *  3. DV strip retry — one rebuild with Dolby Vision forced to "Strip
+     *     All" for this session: Fire TV-class boxes advertise a DV decoder
+     *     yet silently output zero frames for DV passthrough on non-DV
+     *     displays (no error ever fires). Same file, same URL, presented to
+     *     the decoder as plain HDR10/HEVC — what other players already do.
+     *  4. explicit notice so the user is never left staring at a silent stall.
      */
     private fun handleBlackVideoTimeout(token: Int, requirePlaying: Boolean = true) {
         if (token != blackVideoWatchdogToken) return
@@ -2878,9 +2904,51 @@ class NativePlayerActivity : ComponentActivity() {
 
         // Stage 2: video is always hardware now — the bundled FFmpeg ships
         // audio decoders only, so there is no software video decoder left
+        // Stage 2.5 (before giving up): DV-capable boxes whose DV pipeline
+        // never outputs a frame on non-DV displays (Fire TV Stick class). One
+        // rebuild with DV forced to "Strip All" — same URL, the stream is
+        // presented as plain HDR10/HEVC, exactly what other players do. The
+        // one-shot [forceDvStripForSession] override makes the DV mode read as
+        // STRIP-ALL for this session without touching the user's setting.
+        if (!dvStripRetryDone &&
+            AppPreferences.getDvCompatMode(this) != AppPreferences.DV_COMPAT_ALL
+        ) {
+            dvStripRetryDone = true
+            Log.w(
+                "PLAYER_VIDEO",
+                "Black video: no first frame after surface + TextureView retries$codecInfo — " +
+                    "retrying once with Dolby Vision stripped to HDR10"
+            )
+            reconnectingContainer.visibility = View.VISIBLE
+            bufferingSpinner.visibility = View.GONE
+            reconnectingText.text = "Video isn't displaying — trying Dolby Vision compatibility mode…"
+            handler.postDelayed(
+                {
+                    if (token != blackVideoWatchdogToken) return@postDelayed
+                    if (blackVideoNoticeShown) return@postDelayed
+                    if (firstFrameRendered) return@postDelayed
+                    errorMessageStr = null
+                    forceDvStripForSession = true
+                    recreatePlayer()
+                },
+                500L
+            )
+            return
+        }
+
         // to swap to. Surface the actionable notice.
         showBlackVideoNotice()
     }
+
+    /**
+     * One-shot session override for the black-video watchdog's DV stage:
+     * when set, DV conversion behaves as "Strip All" for this playback
+     * session regardless of the user's saved DV mode. Used on Fire TV-class
+     * boxes that advertise a DV decoder but silently output zero frames for
+     * DV passthrough on non-DV displays. Reset in [switchToSource] and on
+     * activity create.
+     */
+    private var forceDvStripForSession = false
 
     private fun findVideoSurfaceView(root: View): android.view.SurfaceView? {
         if (root is android.view.SurfaceView) return root
@@ -5212,6 +5280,7 @@ class NativePlayerActivity : ComponentActivity() {
         currentAudioUrl = stream.audioUrl
         currentSourceIndex = sources.indexOfFirst { it.url == newUrl }
         retryAttempt = 0; retryExhausted = false; errorMessageStr = null; forceTextureViewFallback = false; languagesAutoSelected = false
+        dvStripRetryDone = false; forceDvStripForSession = false
         // A manual source switch is a fresh, actively-playing load — drop
         // the actor-return pause semantics so the new source starts
         // playing like any other switch.

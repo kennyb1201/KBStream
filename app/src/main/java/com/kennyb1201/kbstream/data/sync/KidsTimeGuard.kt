@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -61,7 +62,15 @@ object KidsTimeGuard {
     private val _state = MutableStateFlow(LockState(locked = false))
     val state: StateFlow<LockState> = _state.asStateFlow()
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default +
+            CoroutineExceptionHandler { _, t ->
+                android.util.Log.w(TAG, "kids guard task failed: ${t.message}")
+                com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
+                    t, mapOf("source" to "kids_time_guard_scope")
+                )
+            }
+    )
     private var tickerJob: kotlinx.coroutines.Job? = null
 
     // Per-profile persisted minute counters: { day: "yyyyMMdd", mins: Int }

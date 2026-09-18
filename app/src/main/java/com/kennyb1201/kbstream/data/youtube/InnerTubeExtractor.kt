@@ -472,7 +472,9 @@ object InnerTubeExtractor {
         for (entry in hlsUrls) {
             val manifestUrl = entry.third
             try {
-                val variant = parseHlsManifest(manifestUrl) ?: continue
+                // Signed for `entry.first`'s client: fetch its manifest with
+                // that client's UA (see parseHlsManifest comment).
+                val variant = parseHlsManifest(manifestUrl, userAgentFor(entry.first)) ?: continue
                 if (lowest == null || variant.height < lowest.first.height) {
                     lowest = variant to entry
                 }
@@ -602,11 +604,25 @@ object InnerTubeExtractor {
 
     // ── HLS parsing ───────────────────────────────────────────────────
 
-    private suspend fun parseHlsManifest(manifestUrl: String): ManifestVariant? {
+    private suspend fun parseHlsManifest(
+        manifestUrl: String,
+        userAgent: String? = null
+    ): ManifestVariant? {
+        // The manifest must be fetched with the SAME User-Agent of the client
+        // it was signed for — googlevideo binds signed HLS manifests to the
+        // requesting client's UA, and fetching with the generic Chrome UA
+        // 403s on some CDN edges (reported on Fire TV: trailers never played
+        // there while other devices were fine). The Chrome default stays
+        // only as a fallback for the legacy single-arg call sites.
+        val headers = if (userAgent.isNullOrBlank()) {
+            DEFAULT_HEADERS
+        } else {
+            DEFAULT_HEADERS + ("User-Agent" to userAgent)
+        }
         val response = performRequest(
             url = manifestUrl,
             method = "GET",
-            headers = DEFAULT_HEADERS
+            headers = headers
         )
         if (!response.ok) {
             throw IllegalStateException("Failed to fetch HLS manifest (${response.status})")

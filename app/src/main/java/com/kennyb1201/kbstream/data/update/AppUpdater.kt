@@ -9,6 +9,7 @@ import android.content.pm.PackageInstaller
 import android.os.Build
 import android.util.Log
 import androidx.core.content.FileProvider
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -132,7 +133,18 @@ object AppUpdater {
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // Launch {} failures funnel here: without a handler an uncaught
+    // Throwable on this scope kills the process (the updater runs at every
+    // cold start, so a network-stack Error would make the app unlaunchable).
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, t ->
+            Log.e(TAG, "update task failed hard", t)
+            state.value = UpdateState.Failed(t.message ?: "Update error")
+            com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
+                t, mapOf("source" to "app_updater_scope")
+            )
+        }
+    )
 
     val state = MutableStateFlow<UpdateState>(UpdateState.Idle)
 
