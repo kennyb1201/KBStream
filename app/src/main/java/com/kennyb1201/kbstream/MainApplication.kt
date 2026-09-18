@@ -48,6 +48,13 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
         if (BuildConfig.SENTRY_DSN.isBlank()) return
         SentryAndroid.init(this) { options ->
             options.dsn = BuildConfig.SENTRY_DSN
+            // Build identity on every event: crash reports aggregate per
+            // release in the dashboard and each one pins the exact build
+            // number + commit, so a report maps to the APK that produced it.
+            // CI stamps VERSION_CODE/VERSION_NAME/GIT_SHA (build.gradle.kts).
+            options.release = "kbstream@${BuildConfig.VERSION_NAME}"
+            options.dist = BuildConfig.VERSION_CODE.toString()
+            options.setTag("git_sha", BuildConfig.GIT_SHA.take(10))
         }
     }
 

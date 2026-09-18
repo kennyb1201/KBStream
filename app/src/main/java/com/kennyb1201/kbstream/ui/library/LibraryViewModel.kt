@@ -512,18 +512,30 @@ class LibraryViewModel(
         items: List<LibraryItem>,
         sort: LibrarySort,
         ratings: Map<String, Double>
-    ): List<LibraryItem> = when (sort) {
-        LibrarySort.ADDED -> items
-        LibrarySort.TITLE -> items.sortedBy { it.title.lowercase() }
-        LibrarySort.RELEASE_DATE -> items.sortedWith(
-            compareByDescending { it.year ?: 0 }
-        )
-        LibrarySort.RATING -> items.sortedWith(
-            compareByDescending { ratings[LocalLibraryStore.dedupeKey(it)] ?: 0.0 }
-        )
-    }
+    ): List<LibraryItem> = sortLibraryItems(items, sort, ratings)
 
     companion object {
         private const val TAG = "LIBRARY"
     }
+}
+
+/**
+ * Pure ordering for the Library tab's sort chips — extracted from the
+ * ViewModel so the JVM test suite can pin the contracts (stable ADDED
+ * order, case-insensitive titles, missing years/ratings sinking to the
+ * bottom) without an Android dependency.
+ */
+internal fun sortLibraryItems(
+    items: List<LibraryItem>,
+    sort: LibrarySort,
+    ratings: Map<String, Double>
+): List<LibraryItem> = when (sort) {
+    LibrarySort.ADDED -> items
+    LibrarySort.TITLE -> items.sortedBy { it.title.lowercase() }
+    LibrarySort.RELEASE_DATE -> items.sortedWith(
+        compareByDescending { it.year ?: 0 }
+    )
+    LibrarySort.RATING -> items.sortedWith(
+        compareByDescending { ratings[LocalLibraryStore.dedupeKey(it)] ?: 0.0 }
+    )
 }
