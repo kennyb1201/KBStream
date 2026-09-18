@@ -4116,7 +4116,7 @@ class NativePlayerActivity : ComponentActivity() {
         overlayNextPrefetchKey = key
         scope?.launch {
             val nextEp: com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode? = withContext(Dispatchers.IO) {
-                val repo = TmdbRepository(this@NativePlayerActivity)
+                val repo = TmdbRepository.getInstance(this@NativePlayerActivity)
                 val tmdbId = resolveParentTmdbId() ?: return@withContext null
                 val episodes = runCatching {
                     repo.getSeasonEpisodes(tmdbId, target.first, parentId)
@@ -4232,7 +4232,7 @@ class NativePlayerActivity : ComponentActivity() {
      * title itself, and unposter-ed entries are dropped.
      */
     private suspend fun buildBecauseYouWatchedPicks(ctx: android.content.Context): List<BywPick> {
-        val repo = TmdbRepository(ctx)
+        val repo = TmdbRepository.getInstance(ctx)
         val tmdbId = resolveParentTmdbId() ?: return emptyList()
         val mediaType = when (parentType.lowercase()) {
             "series", "show", "tv" -> "series"
@@ -4564,7 +4564,7 @@ class NativePlayerActivity : ComponentActivity() {
         // fill the featured strip as answers land (cards render instantly
         // with posters; logos/descriptions stream in).
         scope?.launch {
-            val repo = TmdbRepository(this@NativePlayerActivity)
+            val repo = TmdbRepository.getInstance(this@NativePlayerActivity)
             picks.forEach { pick ->
                 val detail = withContext(Dispatchers.IO) {
                     runCatching {
@@ -4672,7 +4672,7 @@ class NativePlayerActivity : ComponentActivity() {
             val imdb = withContext(Dispatchers.IO) {
                 bywViews[pick.tmdbId]?.imdbId
                     ?: runCatching {
-                        TmdbRepository(ctx).resolveImdbId(pick.tmdbId, pick.type)
+                        TmdbRepository.getInstance(ctx).resolveImdbId(pick.tmdbId, pick.type)
                     }.getOrNull()
             } ?: "tmdb:" + pick.tmdbId
 
@@ -4771,7 +4771,7 @@ class NativePlayerActivity : ComponentActivity() {
         // popup shows real episode details instead of just S#E#.
         scope?.launch {
             val nextEp: com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode? = withContext(Dispatchers.IO) {
-                val repo = TmdbRepository(this@NativePlayerActivity)
+                val repo = TmdbRepository.getInstance(this@NativePlayerActivity)
                 val tmdbId = resolveParentTmdbId() ?: return@withContext null
                 val episodes = runCatching {
                     repo.getSeasonEpisodes(tmdbId, targetSeason, parentId)
@@ -5041,7 +5041,7 @@ class NativePlayerActivity : ComponentActivity() {
         if (resolvedParentTmdbId == null && parentId.isNotBlank()) {
             resolvedParentTmdbId = withContext(Dispatchers.IO) {
                 runCatching {
-                    TmdbRepository(this@NativePlayerActivity)
+                    TmdbRepository.getInstance(this@NativePlayerActivity)
                         .fetchEnrichedMetaCached(parentId, parentType)
                         ?.id
                 }.getOrNull()

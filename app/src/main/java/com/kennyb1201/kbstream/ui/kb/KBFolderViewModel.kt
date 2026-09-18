@@ -55,7 +55,7 @@ data class KBRailPagingState(
 class KBFolderViewModel(application: Application) : AndroidViewModel(application) {
 
     private val contentLoader = KBContentLoader(application)
-    private val tmdbRepository = TmdbRepository(application)
+    private val tmdbRepository = TmdbRepository.getInstance(application)
     private val heroArtworkRepository = TmdbHeroArtworkRepository(application)
     private val watchedStatusRepository = WatchedStatusRepository(application)
     private val repository =

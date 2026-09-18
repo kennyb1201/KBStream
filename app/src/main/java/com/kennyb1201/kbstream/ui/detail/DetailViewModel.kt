@@ -61,7 +61,7 @@ fun computeEpisodeWatched(
 class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
     private val repository = AddonRepository()
     private val addonManager = AddonManager.getInstance(app)
-    private val tmdbRepository = TmdbRepository(app)
+    private val tmdbRepository = TmdbRepository.getInstance(app)
     private val simklRepository = SimklRepository.getInstance(app)
     // Resolved per access: the scoped DB instance is bound to the ACTIVE
     // profile. Capturing the DAO once meant a Detail page opened before a

@@ -33,7 +33,7 @@ import java.util.concurrent.TimeUnit
 class KBContentLoader(context: android.content.Context) {
 
     private val appContext = context.applicationContext
-    private val tmdbRepository = TmdbRepository(appContext)
+    private val tmdbRepository = TmdbRepository.getInstance(appContext)
     private val addonRepository = AddonRepository()
 
     private val traktClient = OkHttpClient.Builder()

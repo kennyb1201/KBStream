@@ -272,7 +272,7 @@ class HomeViewModel(
         SimklRepository.getInstance(application)
 
     private val tmdbRepository =
-        TmdbRepository(application)
+        TmdbRepository.getInstance(application)
 
     private val tmdbHeroArtworkRepository =
         TmdbHeroArtworkRepository(application)

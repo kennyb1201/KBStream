@@ -27,7 +27,7 @@ data class RailPagingState(
 )
 
 class TagViewModel(application: Application) : AndroidViewModel(application) {
-    private val tmdbRepository = TmdbRepository(application)
+    private val tmdbRepository = TmdbRepository.getInstance(application)
     private val watchedStatusRepository = WatchedStatusRepository(application)
 
     private val _sections = MutableStateFlow<List<StudioSection>>(emptyList())

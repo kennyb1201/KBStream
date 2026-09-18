@@ -25,7 +25,7 @@ import kotlinx.coroutines.supervisorScope
  * can key off the same ids the rest of the app uses.
  */
 class CollectionViewModel(application: Application) : AndroidViewModel(application) {
-    private val tmdbRepository = TmdbRepository(application)
+    private val tmdbRepository = TmdbRepository.getInstance(application)
     private val watchedStatusRepository = WatchedStatusRepository(application)
 
     private val _collection = MutableStateFlow<TmdbCollectionDetail?>(null)

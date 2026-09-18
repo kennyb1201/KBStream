@@ -862,7 +862,7 @@ fun AppRoot() {
     }
 
     val tmdbRepository = remember {
-        TmdbRepository(context)
+        TmdbRepository.getInstance(context)
     }
 
     val iptvViewModel: IptvViewModel = viewModel()

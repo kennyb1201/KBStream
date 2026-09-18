@@ -21,7 +21,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
 class ActorViewModel(application: Application) : AndroidViewModel(application) {
-    private val tmdbRepository = TmdbRepository(application)
+    private val tmdbRepository = TmdbRepository.getInstance(application)
     private val watchedStatusRepository = WatchedStatusRepository(application)
 
     // Caps parallel TMDB imdb-id lookups so a prolific actor's credit list

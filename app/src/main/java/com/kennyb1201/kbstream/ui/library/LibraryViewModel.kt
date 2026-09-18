@@ -99,7 +99,7 @@ class LibraryViewModel(
     private val watchedRepository =
         WatchedStatusRepository(application)
     private val tmdbRepository =
-        TmdbRepository(application)
+        TmdbRepository.getInstance(application)
 
     private val _uiState = MutableStateFlow(LibraryUiState())
     val uiState: StateFlow<LibraryUiState> = _uiState.asStateFlow()

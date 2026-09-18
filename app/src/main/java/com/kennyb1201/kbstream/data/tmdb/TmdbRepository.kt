@@ -50,39 +50,24 @@ data class ResolvedEpisode(
     val voteAverage: Double?
 )
 
-class TmdbRepository(context: Context) {
+class TmdbRepository private constructor(context: Context) {
 
-    // One process-wide Retrofit/Moshi/api stack, shared by every repository
-    // instance: Retrofit + Moshi(KotlinJsonAdapterFactory) are heavyweight
-    // reflection setups, and the app instantiates TmdbRepository from ~19
-    // call sites (often several per screen in the player), so per-instance
-    // stacks wasted measurable startup/JIT time and memory. All instances
-    // are stateless w.r.t. these (only appContext + per-instance caches vary).
-    private val moshi: Moshi = sharedMoshi()
+    // Process-wide singleton (see [Companion.getInstance]): Retrofit +
+    // Moshi(KotlinJsonAdapterFactory) are heavyweight reflection setups and
+    // per-instance detail/episode/imdb caches fragmented across ~18 call
+    // sites — the player alone used to build several instances per
+    // session. One shared instance means one Retrofit stack and warm caches
+    // for the whole process.
+    private val moshi = Moshi.Builder()
+        .add(KotlinJsonAdapterFactory())
+        .build()
 
-    private val api: TmdbApiService = sharedApi()
-
-    // Moshi/Retrofit are thread-safe after build; synchronize only the
-    // first construction (class-level lock: instances are created from
-    // several threads).
-    private fun sharedMoshi(): Moshi =
-        synchronized(TmdbRepository::class.java) {
-            companionMoshi ?: Moshi.Builder()
-                .add(KotlinJsonAdapterFactory())
-                .build()
-                .also { companionMoshi = it }
-        }
-
-    private fun sharedApi(): TmdbApiService =
-        synchronized(TmdbRepository::class.java) {
-            companionApi ?: Retrofit.Builder()
-                .baseUrl("https://api.themoviedb.org/3/")
-                .client(sharedOkHttpClient())
-                .addConverterFactory(MoshiConverterFactory.create(companionMoshi ?: sharedMoshi()))
-                .build()
-                .create(TmdbApiService::class.java)
-                .also { companionApi = it }
-        }
+    private val api: TmdbApiService = Retrofit.Builder()
+        .baseUrl("https://api.themoviedb.org/3/")
+        .client(sharedOkHttpClient())
+        .addConverterFactory(MoshiConverterFactory.create(moshi))
+        .build()
+        .create(TmdbApiService::class.java)
 
     private val apiKey = BuildConfig.TMDB_API_KEY
     private val appContext = context.applicationContext
@@ -1773,10 +1758,17 @@ class TmdbRepository(context: Context) {
 
     companion object {
         @Volatile
-        private var companionMoshi: Moshi? = null
+        private var instance: TmdbRepository? = null
 
-        @Volatile
-        private var companionApi: TmdbApiService? = null
+        /**
+         * Process-wide instance. Context is only used on first construction
+         * (applicationContext is retained); afterwards it is ignored, so
+         * passing an Activity context from any call site is leak-safe.
+         */
+        fun getInstance(context: Context): TmdbRepository =
+            instance ?: synchronized(this) {
+                instance ?: TmdbRepository(context).also { instance = it }
+            }
 
         @Volatile
         private var sharedClient: OkHttpClient? = null

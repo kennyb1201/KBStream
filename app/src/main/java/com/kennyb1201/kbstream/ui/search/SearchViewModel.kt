@@ -79,7 +79,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         AddonManager.getInstance(app)
 
     private val tmdbRepository =
-        TmdbRepository(app)
+        TmdbRepository.getInstance(app)
 
     private val watchedStatusRepository =
         WatchedStatusRepository(app)
