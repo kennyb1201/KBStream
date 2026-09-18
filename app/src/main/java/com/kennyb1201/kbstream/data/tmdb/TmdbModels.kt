@@ -23,7 +23,10 @@ data class TmdbCastMember(
     val id: Int,
     val name: String,
     val character: String? = null,
-    @Json(name = "profile_path") val profilePath: String? = null
+    @Json(name = "profile_path") val profilePath: String? = null,
+    // Billing order from TMDB detail credits (0 = top billed). Optional so
+    // every other parse site keeps working without it.
+    val order: Int? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -179,6 +182,18 @@ data class TmdbGenre(
 data class TmdbKeyword(
     val id: Int,
     val name: String
+)
+
+// Keyword-discover page (movie/tv discover with_keywords=): powers the
+// "same vibe" tier of the player's because-you-watched blend.
+@JsonClass(generateAdapter = true)
+data class TmdbKeywordDiscoverItem(
+    val id: Int,
+    val title: String? = null,
+    val name: String? = null,
+    @Json(name = "poster_path") val posterPath: String? = null,
+    @Json(name = "backdrop_path") val backdropPath: String? = null,
+    val overview: String? = null
 )
 
 @JsonClass(generateAdapter = true)

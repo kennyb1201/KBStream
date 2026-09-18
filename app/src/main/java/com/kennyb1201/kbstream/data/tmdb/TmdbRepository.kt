@@ -568,6 +568,46 @@ class TmdbRepository(context: Context) {
     }
 
     /** TMDB "COLLECTION" source: the collection's parts. */
+    /**
+     * Titles sharing a TMDB keyword ("heist", "space western", ...) via the
+     * generic discover endpoint. Powers the "same vibe" tier of the player's
+     * because-you-watched blend; sorted by TMDB's default relevance.
+     */
+    suspend fun getKeywordItems(
+        keywordId: Int,
+        type: String,
+        page: Int = 1
+    ): List<com.kennyb1201.kbstream.data.tmdb.TmdbKeywordDiscoverItem>? {
+        if (apiKey.isBlank()) return null
+        val isTv = normalizeType(type) == "series"
+        return runCatching {
+            if (isTv) {
+                api.discoverTvGeneric(
+                    apiKey = apiKey,
+                    page = page,
+                    sortBy = "popularity.desc",
+                    withKeywords = keywordId.toString()
+                )
+            } else {
+                api.discoverMovieGeneric(
+                    apiKey = apiKey,
+                    page = page,
+                    sortBy = "popularity.desc",
+                    withKeywords = keywordId.toString()
+                )
+            }.results.map { item ->
+                com.kennyb1201.kbstream.data.tmdb.TmdbKeywordDiscoverItem(
+                    id = item.id,
+                    title = item.title,
+                    name = item.name,
+                    posterPath = item.posterPath,
+                    backdropPath = item.backdropPath,
+                    overview = null
+                )
+            }
+        }.getOrNull()
+    }
+
     suspend fun getKBCollectionItems(collectionId: Int): List<TmdbCollectionPart>? {
         if (apiKey.isBlank()) return null
         return runCatching {

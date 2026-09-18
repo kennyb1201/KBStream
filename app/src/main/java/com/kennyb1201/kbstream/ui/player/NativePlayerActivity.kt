@@ -74,8 +74,12 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tmdb.list
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.streams.StreamsViewModel
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import coil3.load
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -4104,7 +4108,7 @@ class NativePlayerActivity : ComponentActivity() {
         val backdropUrl: String?,
         val logoUrl: String?,
         val overview: String?,
-        val imdbId: String?
+        var imdbId: String? = null
     )
 
     /**
@@ -4123,39 +4127,7 @@ class NativePlayerActivity : ComponentActivity() {
 
         scope?.launch {
             val picks: List<BywPick> = withContext(Dispatchers.IO) {
-                val repo = TmdbRepository(ctx)
-                val tmdbId = resolveParentTmdbId() ?: return@withContext emptyList()
-                val mediaType = when (parentType.lowercase()) {
-                    "series", "show", "tv" -> "series"
-                    else -> "movie"
-                }
-                val detail = runCatching {
-                    repo.getDetailByTmdbId(tmdbId, mediaType)
-                }.getOrNull() ?: return@withContext emptyList()
-                detail.recommendations?.results.orEmpty()
-                    .filter { !it.posterPath.isNullOrBlank() }
-                    .take(6)
-                    .mapNotNull { rec ->
-                        val recType = when {
-                            rec.name != null -> "series"
-                            rec.title != null -> "movie"
-                            else -> return@mapNotNull null
-                        }
-                        BywPick(
-                            tmdbId = rec.id,
-                            type = recType,
-                            name = (rec.title ?: rec.name).orEmpty(),
-                            posterUrl = rec.posterPath
-                                ?.takeIf { it.isNotBlank() }
-                                ?.let { TmdbRepository.POSTER_BASE + it },
-                            backdropUrl = rec.backdropPath
-                                ?.takeIf { it.isNotBlank() }
-                                ?.let { TmdbRepository.BACKDROP_BASE + it },
-                            logoUrl = null, // resolved by the logo pass below
-                            overview = rec.overview?.takeIf { it.isNotBlank() },
-                            imdbId = null
-                        )
-                    }
+                buildBecauseYouWatchedPicks(ctx)
             }
 
             if (picks.isEmpty() ||
@@ -4170,6 +4142,222 @@ class NativePlayerActivity : ComponentActivity() {
             }
 
         }
+    }
+
+    /**
+     * Builds the because-you-watched lineup as a weighted blend of four
+     * signals, then de-dupes against what this profile already watched:
+     *
+     *  1. SAME FRANCHISE (weight 100) — the TMDB collection the finished
+     *     title belongs to, minus its own entry. "You finished Fast Five ->
+     *     here's Fast & Furious 6" is the single most-wanted next watch.
+     *  2. SAME KEY CREATIVES (weight 60) — other works by the director(s)
+     *     and top-billed cast via combined credits. People are the
+     *     strongest taste signal in the data.
+     *  3. TMDB RECOMMENDATIONS (weight 30) — the content engine; good
+     *     genre-adjacent fill but generic on its own.
+     *  4. SAME KEYWORDS (weight 25) — TMDB keywords ("heist", "space
+     *     western") sharpen the theme match when they exist.
+     *
+     * Earlier tiers win ties; within a tier the source order stands (TMDB
+     * sorts by its own relevance). Already-watched titles, the finished
+     * title itself, and unposter-ed entries are dropped.
+     */
+    private suspend fun buildBecauseYouWatchedPicks(ctx: android.content.Context): List<BywPick> {
+        val repo = TmdbRepository(ctx)
+        val tmdbId = resolveParentTmdbId() ?: return emptyList()
+        val mediaType = when (parentType.lowercase()) {
+            "series", "show", "tv" -> "series"
+            else -> "movie"
+        }
+        val detail = runCatching {
+            repo.getDetailByTmdbId(tmdbId, mediaType)
+        }.getOrNull() ?: return emptyList()
+
+        // What this profile has already watched (any parent id, completed or
+        // started): the ids come back as imdb ids / raw stream ids, so the
+        // filter below normalizes through the same tmdb->imdb resolution.
+        val watchedParentIds = runCatching {
+            WatchHistoryDatabase.getInstanceScoped(ctx)
+                .watchHistoryDao()
+                .getAll()
+                .map { it.parentId }
+                .toHashSet()
+        }.getOrNull() ?: HashSet()
+
+        data class Candidate(
+            val pick: BywPick,
+            val score: Int,
+            val order: Int
+        )
+
+        val candidates = LinkedHashMap<Int, Candidate>()
+        var order = 0
+
+        fun addCandidate(
+            tmdbId: Int,
+            type: String,
+            name: String,
+            poster: String?,
+            backdrop: String?,
+            overview: String?,
+            score: Int
+        ) {
+            if (tmdbId <= 0) return
+            if (tmdbId == detail.id) return
+            if (poster.isNullOrBlank()) return
+            val existing = candidates[tmdbId]
+            if (existing != null) {
+                // Keep the higher score but original position.
+                if (score > existing.score) {
+                    candidates[tmdbId] = existing.copy(score = score)
+                }
+                return
+            }
+            candidates[tmdbId] = Candidate(
+                BywPick(
+                    tmdbId = tmdbId,
+                    type = type,
+                    name = name,
+                    posterUrl = poster?.let { TmdbRepository.POSTER_BASE + it },
+                    backdropUrl = backdrop?.let { TmdbRepository.BACKDROP_BASE + it },
+                    logoUrl = null,
+                    overview = overview?.takeIf { it.isNotBlank() },
+                    imdbId = null
+                ),
+                score = score,
+                order = order++
+            )
+        }
+
+        // T1: franchise — same collection, ordered by release date so the
+        // "next" entry of the saga is the first suggestion.
+        val collectionId = detail.belongsToCollection?.id
+        if (collectionId != null) {
+            runCatching {
+                repo.getKBCollectionItems(collectionId)
+            }.getOrNull().orEmpty()
+                .sortedBy { it.releaseDate.orEmpty() }
+                .forEach { part ->
+                    addCandidate(
+                        tmdbId = part.id,
+                        type = "movie",
+                        name = part.title ?: part.name.orEmpty(),
+                        poster = part.posterPath,
+                        backdrop = null,
+                        overview = null,
+                        score = 100
+                    )
+                }
+        }
+
+        // T2: key creatives — directors first, then top-billed cast, using
+        // combined credits. Each person contributes their top few works.
+        val people = buildList {
+            addAll(
+                detail.credits?.crew.orEmpty()
+                    .filter { it.job.equals("Director", ignoreCase = true) }
+                    .map { it.id }
+            )
+            addAll(
+                detail.credits?.cast.orEmpty()
+                    .sortedBy { it.order }
+                    .take(3)
+                    .map { it.id }
+            )
+        }.distinct().take(4)
+
+        if (people.isNotEmpty()) {
+            coroutineScope {
+                people.map { personId ->
+                    async(Dispatchers.IO) {
+                        runCatching {
+                            repo.getPerson(personId)
+                        }.getOrNull()
+                    }
+                }.awaitAll()
+            }.filterNotNull().forEach { person ->
+                person.combinedCredits?.cast.orEmpty()
+                    .filter { credit ->
+                        val type = credit.mediaType.orEmpty()
+                        (type == "movie" || type == "tv") &&
+                            !credit.posterPath.isNullOrBlank()
+                    }
+                    .sortedByDescending { it.popularity ?: 0.0 }
+                    .take(4)
+                    .forEach { credit ->
+                        addCandidate(
+                            tmdbId = credit.id,
+                            type = if (credit.mediaType == "tv") "series" else "movie",
+                            name = credit.title ?: credit.name.orEmpty(),
+                            poster = credit.posterPath,
+                            backdrop = null,
+                            overview = null,
+                            score = 60
+                        )
+                    }
+            }
+        }
+
+        // T3: TMDB's own recommendation engine.
+        detail.recommendations?.results.orEmpty()
+            .filter { !it.posterPath.isNullOrBlank() }
+            .take(10)
+            .forEach { rec ->
+                addCandidate(
+                    tmdbId = rec.id,
+                    type = if (rec.name != null) "series" else "movie",
+                    name = (rec.title ?: rec.name).orEmpty(),
+                    poster = rec.posterPath,
+                    backdrop = rec.backdropPath,
+                    overview = rec.overview,
+                    score = 30
+                )
+            }
+
+        // T4: keyword neighbors when the title carries them.
+        val keywordIds = detail.keywords.list().map { it.id }.take(3)
+        if (keywordIds.isNotEmpty()) {
+            keywordIds.forEach { kw ->
+                runCatching {
+                    repo.getKeywordItems(kw, mediaType)
+                }.getOrNull().orEmpty()
+                    .take(6)
+                    .forEach { item ->
+                        addCandidate(
+                            tmdbId = item.id,
+                            type = if (mediaType == "series") "series" else "movie",
+                            name = item.name ?: item.title.orEmpty(),
+                            poster = item.posterPath,
+                            backdrop = item.backdropPath,
+                            overview = item.overview,
+                            score = 25
+                        )
+                    }
+            }
+        }
+
+        // Resolve imdb ids only for the survivors (the final ordering), so
+        // the stream resolution on PLAY doesn't burn a lookup burst.
+        val ranked = candidates.values
+            .sortedWith(compareByDescending<Candidate> { it.score }.thenBy { it.order })
+            .toList()
+            .take(10)
+
+        val filtered = ranked.filter { candidate ->
+            val pick = candidate.pick
+            // Cross-check watch history by tmdb id: history stores imdb ids,
+            // so resolve lazily (single lookup per finalist) — candidates
+            // whose imdb id matches a watched parent are dropped.
+            val imdb = runCatching {
+                repo.resolveImdbId(pick.tmdbId, pick.type)
+            }.getOrNull()
+            pick.imdbId = imdb
+            val seen = imdb != null && imdb in watchedParentIds
+            !seen
+        }.map { it.pick }
+
+        return filtered.take(6)
     }
 
     private val bywViews = mutableMapOf<Int, BywCardRefs>()
