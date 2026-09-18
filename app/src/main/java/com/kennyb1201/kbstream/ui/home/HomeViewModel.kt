@@ -886,59 +886,6 @@ Log.d(
     private val _refreshTrigger =
         MutableStateFlow(0)
 
-    init {
-
-        Log.e(
-            "HOME_VM",
-            "HomeViewModel init"
-        )
-
-        observeAddonChanges()
-
-        loadRails()
-
-        observeUpNext()
-
-        observeProfileSwitches()
-
-        // Instant Continue Watching: seed the rail from the warm watch
-        // history right away so the UI has cards the moment Home renders;
-        // the full enriched pipeline in observeUpNext replaces this
-        // snapshot when it finishes (TMDB enrichments + Simkl merge).
-        viewModelScope.launch {
-            publishInstantUpNextSnapshot()
-        }
-
-        startPeriodicSimklRefresh()
-
-        viewModelScope.launch {
-
-            WatchStateBus.updates.collect {
-                (key, isWatched) ->
-
-                val current =
-                    _watchedKeys.value
-                        .toMutableSet()
-
-                if (isWatched) {
-                    current.add(key)
-                } else {
-                    current.remove(key)
-                }
-
-                _watchedKeys.value =
-                    current
-
-                // A manual mark/unmark always clears the eye badge for that
-                // key: markWatchedLocal resolves it to fully-watched (the
-                // checkmark wins) and markUnwatchedLocal resets it entirely.
-                if (key in _partialWatchedKeys.value) {
-                    _partialWatchedKeys.value =
-                        _partialWatchedKeys.value - key
-                }
-            }
-        }
-    }
 
     /**
      * Profile-switch cleanup for the ViewModel's profile-bound in-memory
@@ -5894,6 +5841,67 @@ private suspend fun calculateEpisodesRemaining(
         if (meta != null) return meta
     }
     return null
+    }
+
+    // NOTE: this init block MUST sit below every property declaration in
+    // this class. Kotlin initializes properties top-down, and with
+    // Dispatchers.Main.immediate a collector/launch started in init can
+    // run DURING the constructor - touching any property declared below
+    // init would NPE (same initialization-order crash as SearchViewModel,
+    // Sentry ANDROID-9). loadRails()/observeUpNext() read late-declared
+    // state, so the block was relocated above companion object.
+    init {
+
+        Log.e(
+            "HOME_VM",
+            "HomeViewModel init"
+        )
+
+        observeAddonChanges()
+
+        loadRails()
+
+        observeUpNext()
+
+        observeProfileSwitches()
+
+        // Instant Continue Watching: seed the rail from the warm watch
+        // history right away so the UI has cards the moment Home renders;
+        // the full enriched pipeline in observeUpNext replaces this
+        // snapshot when it finishes (TMDB enrichments + Simkl merge).
+        viewModelScope.launch {
+            publishInstantUpNextSnapshot()
+        }
+
+        startPeriodicSimklRefresh()
+
+        viewModelScope.launch {
+
+            WatchStateBus.updates.collect {
+                (key, isWatched) ->
+
+                val current =
+                    _watchedKeys.value
+                        .toMutableSet()
+
+                if (isWatched) {
+                    current.add(key)
+                } else {
+                    current.remove(key)
+                }
+
+                _watchedKeys.value =
+                    current
+
+                // A manual mark/unmark always clears the eye badge for that
+                // key: markWatchedLocal resolves it to fully-watched (the
+                // checkmark wins) and markUnwatchedLocal resets it entirely.
+                if (key in _partialWatchedKeys.value) {
+                    _partialWatchedKeys.value =
+                        _partialWatchedKeys.value - key
+                }
+            }
+        }
     }
 
     companion object {

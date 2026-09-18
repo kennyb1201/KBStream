@@ -205,41 +205,6 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     var onOpenDecadeScreen:
         ((decadeStart: Int, name: String) -> Unit)? = null
 
-    init {
-        loadRecentSearches()
-        // Restore the last-resolved keyword/collection ids from disk so the
-        // browse submenu renders instantly; a background refresh then only
-        // repairs gaps after the TTL.
-        loadBrowseCatalogCache()
-
-        // Kids Mode follows the ACTIVE profile: on every switch the browse
-        // browser swaps to (or from) the kid-focused chip set and any adult
-        // content still on screen is dropped, so a profile change can never
-        // leave a child staring at the previous profile's results.
-        com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile
-            .onEach { refreshKidsMode() }
-            .launchIn(viewModelScope)
-
-        WatchStateBus.updates
-            .onEach { (key, isWatched) ->
-                val current = _watchedKeys.value.toMutableSet()
-                if (isWatched) {
-                    current.add(key)
-                } else {
-                    current.remove(key)
-                }
-                _watchedKeys.value = current
-
-                // A manual mark/unmark always clears the eye badge for that
-                // key: the completed checkmark wins, or the tile goes back
-                // to unwatched.
-                if (key in _partialWatchedKeys.value) {
-                    _partialWatchedKeys.value = _partialWatchedKeys.value - key
-                }
-            }
-            .launchIn(viewModelScope)
-    }
-
     fun watchedKey(
         id: String,
         type: String
@@ -1242,6 +1207,47 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
     /** True when the disk cache was applied AND is younger than the TTL. */
     private var browseCacheFresh = false
+
+    // NOTE: this init block MUST sit below every property declaration in
+    // this class. Kotlin initializes properties top-down, and a
+    // Main.immediate-dispatched collector launched from init can execute
+    // during the constructor itself — with init above late-declared
+    // properties (e.g. _suggestions), refreshKidsMode() dereferenced an
+    // uninitialized StateFlow and crashed at startup (Sentry ANDROID-9).
+    init {
+        loadRecentSearches()
+        // Restore the last-resolved keyword/collection ids from disk so the
+        // browse submenu renders instantly; a background refresh then only
+        // repairs gaps after the TTL.
+        loadBrowseCatalogCache()
+
+        // Kids Mode follows the ACTIVE profile: on every switch the browse
+        // browser swaps to (or from) the kid-focused chip set and any adult
+        // content still on screen is dropped, so a profile change can never
+        // leave a child staring at the previous profile's results.
+        com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile
+            .onEach { refreshKidsMode() }
+            .launchIn(viewModelScope)
+
+        WatchStateBus.updates
+            .onEach { (key, isWatched) ->
+                val current = _watchedKeys.value.toMutableSet()
+                if (isWatched) {
+                    current.add(key)
+                } else {
+                    current.remove(key)
+                }
+                _watchedKeys.value = current
+
+                // A manual mark/unmark always clears the eye badge for that
+                // key: the completed checkmark wins, or the tile goes back
+                // to unwatched.
+                if (key in _partialWatchedKeys.value) {
+                    _partialWatchedKeys.value = _partialWatchedKeys.value - key
+                }
+            }
+            .launchIn(viewModelScope)
+    }
 
     /**
      * Sidebar selection: swap the submenu. Keyword/collection entries are
