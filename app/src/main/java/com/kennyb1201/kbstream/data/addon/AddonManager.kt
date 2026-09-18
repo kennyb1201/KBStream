@@ -932,7 +932,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         val addons = getInstalledAddons()
         if (addons.isEmpty()) return
 
-        val repository = com.kennyb1201.kbstream.data.addon.AddonRepository()
+        val repository = com.kennyb1201.kbstream.data.addon.AddonRepository.getInstance()
 
         addons.forEach { addon ->
             addonScope.launch {

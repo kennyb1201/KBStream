@@ -59,7 +59,7 @@ fun computeEpisodeWatched(
 }
 
 class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
-    private val repository = AddonRepository()
+    private val repository = AddonRepository.getInstance()
     private val addonManager = AddonManager.getInstance(app)
     private val tmdbRepository = TmdbRepository.getInstance(app)
     private val simklRepository = SimklRepository.getInstance(app)

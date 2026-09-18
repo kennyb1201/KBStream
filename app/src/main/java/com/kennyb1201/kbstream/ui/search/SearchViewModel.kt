@@ -73,7 +73,7 @@ data class AddonResultGroup(
 
 class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
-    private val repository = AddonRepository()
+    private val repository = AddonRepository.getInstance()
 
     private val addonManager =
         AddonManager.getInstance(app)

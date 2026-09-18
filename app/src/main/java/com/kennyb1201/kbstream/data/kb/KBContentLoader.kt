@@ -34,7 +34,7 @@ class KBContentLoader(context: android.content.Context) {
 
     private val appContext = context.applicationContext
     private val tmdbRepository = TmdbRepository.getInstance(appContext)
-    private val addonRepository = AddonRepository()
+    private val addonRepository = AddonRepository.getInstance()
 
     private val traktClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)

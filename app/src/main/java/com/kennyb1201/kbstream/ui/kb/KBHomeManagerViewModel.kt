@@ -47,7 +47,7 @@ class KBHomeManagerViewModel(application: Application) : AndroidViewModel(applic
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     private val addonManager = AddonManager.getInstance(application)
-    private val repository = KBRepository(application)
+    private val repository = KBRepository.getInstance(application)
 
     init {
         reload()

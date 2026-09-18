@@ -25,7 +25,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
     // HomeViewModel's watcher (a fresh AddonManager would hold a stale
     // StateFlow and Home would never pick up reorder/show-hide changes).
     private val addonManager = AddonManager.getInstance(application)
-    private val repository = AddonRepository()
+    private val repository = AddonRepository.getInstance()
 
     private val _addons = MutableStateFlow<List<InstalledAddon>>(emptyList())
     val addons: StateFlow<List<InstalledAddon>> = _addons.asStateFlow()
@@ -40,7 +40,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
     val catalogConfigurations: StateFlow<List<CatalogConfiguration>> =
         _catalogConfigurations.asStateFlow()
 
-    private val kbRepository = KBRepository(application)
+    private val kbRepository = KBRepository.getInstance(application)
 
     /**
      * addonId -> manifestUrl, so rail keys match Home exactly. Home builds

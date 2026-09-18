@@ -96,7 +96,7 @@ class AddonSubtitleController(
 
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val repository = AddonRepository()
+    private val repository = AddonRepository.getInstance()
 
     /** Downloaded subtitle files: offer url -> cached file URI. */
     private val downloadCache = mutableMapOf<String, Uri>()

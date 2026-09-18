@@ -59,7 +59,7 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
     private val heroArtworkRepository = TmdbHeroArtworkRepository(application)
     private val watchedStatusRepository = WatchedStatusRepository(application)
     private val repository =
-        com.kennyb1201.kbstream.data.kb.KBRepository(application)
+        com.kennyb1201.kbstream.data.kb.KBRepository.getInstance(application)
 
     data class UiState(
         val folder: KBFolder? = null,

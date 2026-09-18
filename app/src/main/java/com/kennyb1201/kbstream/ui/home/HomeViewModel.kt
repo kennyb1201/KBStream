@@ -245,7 +245,7 @@ class HomeViewModel(
 ) : AndroidViewModel(application) {
 
     private val repository =
-        AddonRepository()
+        AddonRepository.getInstance()
 
     // FIXED: was AddonManager(application) — bypassed the singleton so
     // Home held a stale copy of installed addons/catalogs whenever the

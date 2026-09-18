@@ -28,7 +28,10 @@ import java.util.concurrent.TimeUnit
  * - Parsing is lenient: unknown fields are ignored and a bad top-level
  *   shape yields an empty list instead of throwing.
  */
-class KBRepository(private val context: Context) {
+class KBRepository private constructor(context: Context) {
+
+    // Always the app context: the singleton outlives any Activity/ViewModel.
+    private val context: Context = context.applicationContext
 
     init {
         migrateLegacyCacheDirs()
@@ -55,6 +58,19 @@ class KBRepository(private val context: Context) {
     private val memoryCache = mutableMapOf<String, Pair<Long, List<KBCollectionProfile>>>()
 
     companion object {
+        @Volatile
+        private var instance: KBRepository? = null
+
+        /**
+         * Process-wide instance: one Moshi/OkHttp stack and one shared HTTP
+         * cache for all KB screens (Addons, KB Home, folder views) instead of
+         * per-ViewModel instances that each re-fetch the same collections.
+         */
+        fun getInstance(context: Context): KBRepository =
+            instance ?: synchronized(this) {
+                instance ?: KBRepository(context).also { instance = it }
+            }
+
         private const val TAG = "KB_REPO"
         private const val CACHE_DIR = "kb_collections"
         private const val LOCAL_DIR = "kb_collections_local"

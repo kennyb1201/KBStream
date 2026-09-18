@@ -87,7 +87,7 @@ private val sharedAddonClient: OkHttpClient by lazy {
         .build()
 }
 
-class AddonRepository {
+class AddonRepository private constructor() {
 
     private data class CachedCatalog(
         val metas: List<MetaPreview>,
@@ -827,7 +827,22 @@ class AddonRepository {
         }
     }
 
-    private companion object {
+    companion object {
+        @Volatile
+        private var instance: AddonRepository? = null
+
+        /**
+         * Process-wide instance: every screen shares one catalog/meta/streams
+         * cache, so data fetched in one place (e.g. streams resolved on the
+         * detail screen) is reused everywhere else (player, subtitles,
+         * search) instead of being re-fetched per ViewModel. Caches are
+         * keyed purely by add-on URL/params — no profile or user state.
+         */
+        fun getInstance(): AddonRepository =
+            instance ?: synchronized(this) {
+                instance ?: AddonRepository().also { instance = it }
+            }
+
         private const val CATALOG_CACHE_TTL_MS =
             10 * 60 * 1000L
 

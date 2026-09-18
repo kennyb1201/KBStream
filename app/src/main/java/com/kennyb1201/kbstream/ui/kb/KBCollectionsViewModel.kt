@@ -19,7 +19,7 @@ import kotlinx.coroutines.launch
  */
 class KBCollectionsViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val repository = KBRepository(application)
+    private val repository = KBRepository.getInstance(application)
 
     data class UiState(
         val folders: List<KBFolder> = emptyList(),

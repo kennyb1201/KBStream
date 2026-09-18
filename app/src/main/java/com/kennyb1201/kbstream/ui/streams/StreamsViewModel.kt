@@ -20,7 +20,7 @@ import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withTimeout
 
 class StreamsViewModel(application: Application) : AndroidViewModel(application) {
-    private val repository = AddonRepository()
+    private val repository = AddonRepository.getInstance()
     private val addonManager = AddonManager.getInstance(application)
 
     private companion object {

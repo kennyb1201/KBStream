@@ -29,7 +29,7 @@ class KBHomeViewModel(application: Application) : AndroidViewModel(application) 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
-    private val repository = KBRepository(application)
+    private val repository = KBRepository.getInstance(application)
 
     init {
         load()
