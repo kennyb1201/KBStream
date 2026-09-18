@@ -25,6 +25,9 @@ import kotlinx.coroutines.launch
  * Which flat view of the Library tab is showing.
  */
 enum class LibraryFilter(val label: String) {
+    // ALL merges My List + watchlists + local personal lists into one
+    // de-duplicated grid. Listed first so it is the default focus target.
+    ALL("ALL"),
     MY_LIST("MY LIST"),
     WATCHLIST("WATCHLIST"),
     LISTS("PERSONAL LISTS")
@@ -46,12 +49,19 @@ enum class LibrarySort(val label: String) {
  * show origin tags while keeping the merged list ordering stable.
  */
 data class LibraryUiState(
-    val filter: LibraryFilter = LibraryFilter.MY_LIST,
+    val filter: LibraryFilter = LibraryFilter.ALL,
     val sort: LibrarySort = LibrarySort.ADDED,
     val loading: Boolean = true,
 
     // MY LIST: local, profile-scoped, works with no account connected.
     val localItems: List<LibraryItem> = emptyList(),
+
+    // ALL: My List + watchlists + local personal lists merged and
+    // de-duplicated (local rows win over remote duplicates).
+    val allItems: List<LibraryItem> = emptyList(),
+
+    // When true, rows whose watchedKey is in watchedKeys are hidden.
+    val hideWatched: Boolean = false,
 
     // WATCHLIST: Simkl plan-to-watch + MDBList watchlist merged.
     val watchlistItems: List<LibraryItem> = emptyList(),
@@ -94,6 +104,18 @@ class LibraryViewModel(
     private val _uiState = MutableStateFlow(LibraryUiState())
     val uiState: StateFlow<LibraryUiState> = _uiState.asStateFlow()
 
+    // Canonical (unfiltered) rows backing each view. The UI state carries
+    // the *display* versions — sorted + UNWATCHED-filtered by [pushDisplay]
+    // — so toggling filters never loses rows.
+    private var canonicalAll: List<LibraryItem> = emptyList()
+    private var canonicalLocal: List<LibraryItem> = emptyList()
+    private var canonicalWatchlist: List<LibraryItem> = emptyList()
+    private var canonicalListItems: List<LibraryItem> = emptyList()
+
+    // Flattened items from every local personal list; feeds the ALL merge
+    // without needing a list to be selected.
+    private var localListFlatCache: List<LibraryItem> = emptyList()
+
     /** Bump to force a remote re-fetch (filter changes, pull-to-refresh). */
     private var requestVersion = 0
 
@@ -106,6 +128,11 @@ class LibraryViewModel(
         if (current.filter == filter) return
         _uiState.value = current.copy(filter = filter)
         when (filter) {
+            LibraryFilter.ALL -> {
+                // Rebuild from cached rows; remote refresh only if empty.
+                if (canonicalAll.isEmpty()) refresh() else pushDisplay()
+            }
+
             LibraryFilter.MY_LIST -> {
                 _uiState.value = _uiState.value.copy(
                     localItems = sortItems(
@@ -128,12 +155,15 @@ class LibraryViewModel(
     fun setSort(sort: LibrarySort) {
         val state = _uiState.value
         if (state.sort == sort) return
-        _uiState.value = state.copy(
-            sort = sort,
-            localItems = sortItems(state.localItems, sort, state.ratings),
-            watchlistItems = sortItems(state.watchlistItems, sort, state.ratings),
-            selectedListItems = sortItems(state.selectedListItems, sort, state.ratings)
-        )
+        _uiState.value = state.copy(sort = sort)
+        pushDisplay()
+    }
+
+    /** Toggles the UNWATCHED chip: hides rows already marked watched. */
+    fun toggleHideWatched() {
+        val state = _uiState.value
+        _uiState.value = state.copy(hideWatched = !state.hideWatched)
+        pushDisplay()
     }
 
     fun selectList(list: LibraryList?) {
@@ -163,13 +193,12 @@ class LibraryViewModel(
             val state = _uiState.value
             _uiState.value = state.copy(
                 lists = state.lists.filter { it.id != listId },
-                selectedList = state.selectedList?.takeIf { it.id != listId },
-                selectedListItems = if (state.selectedList?.id == listId) {
-                    emptyList()
-                } else {
-                    state.selectedListItems
-                }
+                selectedList = state.selectedList?.takeIf { it.id != listId }
             )
+            if (state.selectedList?.id == listId) {
+                canonicalListItems = emptyList()
+            }
+            recomputeAll()
         }
     }
 
@@ -191,9 +220,8 @@ class LibraryViewModel(
                         imdbId = item.imdbId,
                         tmdbId = item.tmdbId
                     )
-                    _uiState.value = _uiState.value.copy(
-                        localItems = LocalLibraryStore.myList(appContext)
-                    )
+                    canonicalLocal = LocalLibraryStore.myList(appContext)
+                    recomputeAll()
                 }
 
                 LibrarySource.LOCAL_LIST -> {
@@ -205,9 +233,8 @@ class LibraryViewModel(
                         imdbId = item.imdbId,
                         tmdbId = item.tmdbId
                     )
-                    _uiState.value = _uiState.value.copy(
-                        selectedListItems = LocalLibraryStore.listItems(appContext, listId)
-                    )
+                    canonicalListItems = LocalLibraryStore.listItems(appContext, listId)
+                    recomputeAll()
                     refreshListsOnly()
                 }
 
@@ -219,12 +246,11 @@ class LibraryViewModel(
                         imdbId = item.imdbId,
                         tmdbId = item.tmdbId
                     )
-                    _uiState.value = _uiState.value.copy(
-                        watchlistItems = _uiState.value.watchlistItems.filter {
-                            LocalLibraryStore.dedupeKey(it) !=
-                                LocalLibraryStore.dedupeKey(item)
-                        }
-                    )
+                    val key = LocalLibraryStore.dedupeKey(item)
+                    canonicalWatchlist = canonicalWatchlist.filter {
+                        LocalLibraryStore.dedupeKey(it) != key
+                    }
+                    recomputeAll()
                 }
 
                 LibrarySource.MDBLIST_LIST -> {
@@ -237,12 +263,11 @@ class LibraryViewModel(
                         imdbId = item.imdbId,
                         tmdbId = item.tmdbId
                     )
-                    _uiState.value = _uiState.value.copy(
-                        selectedListItems = _uiState.value.selectedListItems.filter {
-                            LocalLibraryStore.dedupeKey(it) !=
-                                LocalLibraryStore.dedupeKey(item)
-                        }
-                    )
+                    val key = LocalLibraryStore.dedupeKey(item)
+                    canonicalListItems = canonicalListItems.filter {
+                        LocalLibraryStore.dedupeKey(it) != key
+                    }
+                    pushDisplay()
                 }
 
                 // Simkl: add-only; no remove path exists on the API.
@@ -323,17 +348,30 @@ class LibraryViewModel(
                 mergeById(simklItems + mdbListWatchlist)
             )
 
+            // Canonical rows: ALL merges My List + watchlists + every local
+            // personal list, local rows winning over remote duplicates.
+            val localListItems = localLists
+                .filter { it.id < 0 }
+                .flatMap { LocalLibraryStore.listItems(appContext, it.id) }
+            localListFlatCache = localListItems
+            canonicalLocal = localItems
+            canonicalWatchlist = watchlistMerged
+            canonicalListItems = emptyList()
+            canonicalAll = kidsFiltered(
+                mergeAllSources(listOf(localItems, watchlistMerged, localListItems))
+            )
+
             _uiState.value = _uiState.value.copy(
                 loading = false,
-                localItems = sortItems(localItems, _uiState.value.sort, _uiState.value.ratings),
-                watchlistItems = sortItems(watchlistMerged, _uiState.value.sort, _uiState.value.ratings),
                 lists = lists,
                 simklConnected = simklConnected,
                 mdbListConfigured = mdbListConfigured
             )
+            pushDisplay()
 
             // Enrichment pass: kids filter + ratings + watched badges.
-            enrich(localItems + watchlistMerged, version)
+            // canonicalAll is the superset (local + watchlist + local lists).
+            enrich(canonicalAll, version)
         }
     }
 
@@ -389,9 +427,9 @@ class LibraryViewModel(
             }
 
             if (version != requestVersion) return@launch
-            val sorted = sortItems(items, _uiState.value.sort, _uiState.value.ratings)
-            _uiState.value = _uiState.value.copy(selectedListItems = sorted)
-            enrich(sorted, version)
+            canonicalListItems = items
+            pushDisplay()
+            enrich(items, version)
         }
     }
 
@@ -463,17 +501,12 @@ class LibraryViewModel(
                 r.rating?.let { ratings[r.key] = it }
             }
 
-            val watchedKeys = _uiState.value.watchedKeys +
-                resolved.mapNotNull { it.watched }.toSet()
-
             _uiState.value = _uiState.value.copy(
                 ratings = ratings,
-                watchedKeys = watchedKeys,
-                localItems = sortItems(_uiState.value.localItems, _uiState.value.sort, ratings),
-                watchlistItems = kidsFiltered(
-                    sortItems(_uiState.value.watchlistItems, _uiState.value.sort, ratings)
-                )
+                watchedKeys = _uiState.value.watchedKeys +
+                    resolved.mapNotNull { it.watched }.toSet()
             )
+            pushDisplay()
         }
     }
 
@@ -495,6 +528,52 @@ class LibraryViewModel(
         }
         return items.filter { it.source == LibrarySource.LOCAL || allowed.contains(it) }
     }
+
+    /**
+     * Rebuilds every display list from the canonical rows: sort + kids
+     * filter + UNWATCHED toggle in one place, so toggling filters never
+     * loses rows and enrichment updates stay consistent everywhere.
+     */
+    private fun pushDisplay() {
+        val state = _uiState.value
+        val sort = state.sort
+        val ratings = state.ratings
+        val watched = state.watchedKeys
+        val hide = state.hideWatched
+        _uiState.value = state.copy(
+            allItems = applyUnwatched(
+                sortItems(canonicalAll, sort, ratings), watched, hide
+            ),
+            localItems = applyUnwatched(
+                sortItems(canonicalLocal, sort, ratings), watched, hide
+            ),
+            watchlistItems = applyUnwatched(
+                sortItems(canonicalWatchlist, sort, ratings), watched, hide
+            ),
+            selectedListItems = applyUnwatched(
+                sortItems(canonicalListItems, sort, ratings), watched, hide
+            )
+        )
+    }
+
+    /**
+     * Rebuilds just the ALL view (after local-list mutations) without a
+     * full remote refresh.
+     */
+    private fun recomputeAll() {
+        val appContext = getApplication<Application>()
+        localListFlatCache = _uiState.value.lists
+            .filter { it.id < 0 }
+            .flatMap { LocalLibraryStore.listItems(appContext, it.id) }
+        canonicalAll = mergeAllSources(
+            listOf(canonicalLocal, canonicalWatchlist, localListFlatCache)
+        )
+        pushDisplay()
+    }
+
+    /** ALL-view merge: de-duped across every source, input order kept. */
+    private fun mergeAllSources(sources: List<List<LibraryItem>>): List<LibraryItem> =
+        mergeById(sources.flatten())
 
     /** Drops duplicate titles across trackers, Simkl winning over MDBList. */
     private fun mergeById(items: List<LibraryItem>): List<LibraryItem> {
@@ -538,4 +617,22 @@ internal fun sortLibraryItems(
     LibrarySort.RATING -> items.sortedWith(
         compareByDescending { ratings[LocalLibraryStore.dedupeKey(it)] ?: 0.0 }
     )
+}
+
+/**
+ * Pure UNWATCHED filter: when [hide] is set, rows whose watchedKey is
+ * present in [watchedKeys] are dropped (rows without a key — no IMDB id
+ * resolved yet — always stay). Extracted alongside [sortLibraryItems]
+ * for the same testability reasons.
+ */
+internal fun applyUnwatched(
+    items: List<LibraryItem>,
+    watchedKeys: Set<String>,
+    hide: Boolean
+): List<LibraryItem> {
+    if (!hide || watchedKeys.isEmpty()) return items
+    return items.filter { item ->
+        val key = item.watchedKey()
+        key == null || !watchedKeys.contains(key)
+    }
 }

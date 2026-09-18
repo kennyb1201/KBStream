@@ -121,6 +121,14 @@ fun LibraryScreen(
 
             Spacer(modifier = Modifier.weight(1f))
 
+            // UNWATCHED toggle: hides rows already marked watched.
+            LibraryFilterChip(
+                label = if (state.hideWatched) "WATCHED HIDDEN" else "UNWATCHED",
+                selected = state.hideWatched,
+                onClick = { viewModel.toggleHideWatched() },
+                modifier = Modifier.padding(end = 8.dp)
+            )
+
             // Sort chips: Added / Title / Date / Rating.
             LibrarySort.entries.forEach { sort ->
                 LibraryFilterChip(
@@ -149,6 +157,29 @@ fun LibraryScreen(
         Spacer(modifier = Modifier.height(14.dp))
 
         when (state.filter) {
+            LibraryFilter.ALL -> {
+                ItemGrid(
+                    items = state.allItems,
+                    emptyText = if (state.loading) {
+                        "Loading…"
+                    } else {
+                        "Nothing here yet. Long-press any poster and choose " +
+                            "\"Add to list…\" — My List, watchlists and personal " +
+                            "lists all land in this merged view."
+                    },
+                    sourceLabel = { it.source.label },
+                    onItemClick = onItemClick,
+                    onItemLongClick = { item ->
+                        // Simkl rows are add-only (no API to remove).
+                        if (item.source != LibrarySource.SIMKL_WATCHLIST) {
+                            viewModel.removeItem(item)
+                        }
+                    },
+                    ratings = state.ratings,
+                    watchedKeys = state.watchedKeys
+                )
+            }
+
             LibraryFilter.MY_LIST -> {
                 ItemGrid(
                     items = state.localItems,
