@@ -57,7 +57,7 @@ abstract class IptvDatabase : RoomDatabase() {
                         context.applicationContext,
                         IptvDatabase::class.java,
                         "iptv_epg.db"
-                    ).fallbackToDestructiveMigration()
+                    ).fallbackToDestructiveMigration(dropAllTables = true)
                         .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
                         .addCallback(RoomBusyTimeout)
                         .build()
@@ -71,7 +71,7 @@ abstract class IptvDatabase : RoomDatabase() {
                     context.applicationContext,
                     IptvDatabase::class.java,
                     dbName
-                ).fallbackToDestructiveMigration()
+                ).fallbackToDestructiveMigration(dropAllTables = true)
                     .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
                     .addCallback(RoomBusyTimeout)
                     .build()
