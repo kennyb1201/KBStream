@@ -68,6 +68,11 @@ fun StudioScreen(
     // entries with a watch-provider id): rails then cover movies + series
     // via provider discover while the header still shows the brand logo.
     providerId: Int? = null,
+    // ORIGINALS rails (what the brand made): network/company discover ids
+    // carried from the browse entry; nullable for plain pages.
+    networkOrCompanyId: Int? = null,
+    networkIsCompany: Boolean = false,
+    originalsCompanyId: Int? = null,
     onNavigateDetail: (String, String) -> Unit = { _, _ -> },
     viewModel: StudioViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
@@ -107,7 +112,14 @@ fun StudioScreen(
     }
 
     LaunchedEffect(id, isNetwork, providerId) {
-        viewModel.load(id, isNetwork, providerId)
+        viewModel.load(
+            id,
+            isNetwork,
+            providerId,
+            networkOrCompanyId,
+            networkIsCompany,
+            originalsCompanyId
+        )
     }
 
     LaunchedEffect(sections, isLoading) {
@@ -561,8 +573,8 @@ private fun StudioRailRow(
                             onOpenPosterMenu(studioItem, requester)
                         },
                         modifier = Modifier
-                            .width(140.dp)
-                            .height(210.dp)
+                            .width(120.dp)
+                            .height(180.dp)
                             .focusRequester(requester)
                             .then(
                                 if (isFirstItem) {
@@ -579,7 +591,7 @@ private fun StudioRailRow(
                             ?: studioItem.item.firstAirDate)?.take(4),
                         rating = studioItem.item.voteAverage,
                         modifier = Modifier
-                            .width(140.dp)
+                            .width(120.dp)
                             .padding(top = 5.dp)
                     )
                 }

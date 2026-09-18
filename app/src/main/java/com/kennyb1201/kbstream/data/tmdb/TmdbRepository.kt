@@ -1586,16 +1586,70 @@ class TmdbRepository private constructor(context: Context) {
         "SERIES · TOP RATED"
     )
 
-    suspend fun getInitialServiceSections(providerId: Int): List<StudioSection> = coroutineScope {
-        val pages = SERVICE_RAIL_TITLES.map { title ->
-            async { getServiceRailPage(providerId, title, 1) }
+    /**
+     * Service-page rails. The six provider rails cover everything streaming
+     * on the service NOW; the ORIGINALS rails (network + company discover)
+     * add everything the brand PRODUCED — including titles that have since
+     * left the service and co-productions TMDB tags with the company but
+     * never listed under the provider. Originals sections are inserted
+     * FIRST (they are the identity of the page); provider rails follow.
+     *
+     * Both originals ids are optional and independent:
+     *  - [networkOrCompanyId] + [networkIsCompany=false] → TV-only originals
+     *    (network discover; a network id has no movie equivalent).
+     *  - [originalsCompanyId] → full originals (company discover: movies +
+     *    TV). When the header id IS the company (niche streamers), the
+     *    network rail would duplicate it, so only the company rail runs.
+     */
+    suspend fun getInitialServiceSections(
+        providerId: Int?,
+        networkOrCompanyId: Int? = null,
+        networkIsCompany: Boolean = false,
+        originalsCompanyId: Int? = null
+    ): List<StudioSection> = coroutineScope {
+        val networkOriginals = async {
+            if (networkOrCompanyId != null && !networkIsCompany) {
+                runCatching { getNetworkRailPage(networkOrCompanyId, "SERIES · RECENT", 1) }
+                    .getOrNull()
+            } else {
+                null
+            }
+        }
+        val companyOriginals = async {
+            if (originalsCompanyId != null) {
+                runCatching { getCompanyRailPage(originalsCompanyId, "MOVIES · RECENT", 1) }
+                    .getOrNull()
+            } else {
+                null
+            }
+        }
+        val providerPages = SERVICE_RAIL_TITLES.map { title ->
+            async {
+                providerId?.let { runCatching { getServiceRailPage(it, title, 1) }.getOrNull() }
+            }
         }.awaitAll()
+
+        val sections = mutableListOf<StudioSection>()
+        networkOriginals.await()?.items?.takeIf { it.isNotEmpty() }?.let {
+            sections.add(StudioSection("ORIGINALS · SERIES", it))
+        }
+        companyOriginals.await()?.items?.takeIf { it.isNotEmpty() }?.let {
+            sections.add(StudioSection("ORIGINALS · MOVIES", it))
+        }
         SERVICE_RAIL_TITLES.mapIndexed { index, title ->
-            pages[index].items.takeIf { it.isNotEmpty() }?.let { StudioSection(title, it) }
-        }.filterNotNull()
+            providerPages[index]?.items?.takeIf { it.isNotEmpty() }?.let { StudioSection(title, it) }
+        }.filterNotNull().let { sections.addAll(it) }
+        sections
     }
 
-    suspend fun getServiceRailPage(providerId: Int, title: String, page: Int): TagRailPage {
+    suspend fun getServiceRailPage(
+        providerId: Int?,
+        title: String,
+        page: Int,
+        networkOrCompanyId: Int? = null,
+        networkIsCompany: Boolean = false,
+        originalsCompanyId: Int? = null
+    ): TagRailPage {
         if (apiKey.isBlank()) return TagRailPage(emptyList(), false)
 
         val parts = title.split("·").map { it.trim() }
@@ -1603,6 +1657,26 @@ class TmdbRepository private constructor(context: Context) {
             "MOVIES" -> "movie"
             "SERIES" -> "tv"
             else -> return TagRailPage(emptyList(), false)
+        }
+
+        // ORIGINALS rails discover through the brand's network/company ids
+        // (what it made) instead of the watch provider (what is streaming).
+        // A company id discovers movies AND TV; a network id is TV-only.
+        if (parts.getOrNull(0)?.uppercase() == "ORIGINALS") {
+            val isMoviesRail = parts.getOrNull(1)?.uppercase() == "MOVIES"
+            val companyId = when {
+                isMoviesRail -> originalsCompanyId
+                networkIsCompany -> networkOrCompanyId
+                else -> originalsCompanyId
+            }
+            if (companyId != null) {
+                val railTitle = (if (isMoviesRail) "MOVIES" else "SERIES") + " \u00B7 RECENT"
+                return getCompanyRailPage(companyId, railTitle, page)
+            }
+            if (!networkIsCompany && networkOrCompanyId != null) {
+                return getNetworkRailPage(networkOrCompanyId, "SERIES \u00B7 RECENT", page)
+            }
+            return TagRailPage(emptyList(), false)
         }
         val mode = when (parts.getOrNull(1)?.uppercase()) {
             "RECENT" -> "recent"

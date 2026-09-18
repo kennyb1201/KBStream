@@ -119,17 +119,29 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     private var currentId: Int? = null
     private var currentIsNetwork: Boolean = false
     private var currentProviderId: Int? = null
+    private var currentNetworkOrCompanyId: Int? = null
+    private var currentNetworkIsCompany: Boolean = false
+    private var currentOriginalsCompanyId: Int? = null
 
     fun watchedKey(id: String, type: String): String = "${type.lowercase()}::$id"
 
     fun lookupKey(tmdbId: Int, mediaType: String): String =
         "${mediaType.lowercase()}::$tmdbId"
 
-    fun load(id: Int, isNetwork: Boolean, providerId: Int? = null) {
+    fun load(
+        id: Int,
+        isNetwork: Boolean,
+        providerId: Int? = null,
+        networkOrCompanyId: Int? = null,
+        networkIsCompany: Boolean = false,
+        originalsCompanyId: Int? = null
+    ) {
         val isSameRoute =
             currentId == id &&
             currentIsNetwork == isNetwork &&
             currentProviderId == providerId &&
+            currentNetworkOrCompanyId == networkOrCompanyId &&
+            currentOriginalsCompanyId == originalsCompanyId &&
             _sections.value.isNotEmpty()
 
         if (isSameRoute) return
@@ -137,6 +149,15 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         currentId = id
         currentIsNetwork = isNetwork
         currentProviderId = providerId
+        currentNetworkOrCompanyId = networkOrCompanyId
+        currentNetworkIsCompany = networkIsCompany
+        currentOriginalsCompanyId = originalsCompanyId
+
+        // Showtime-style entries have no provider id but DO carry originals
+        // ids - they take the service path so the network ORIGINALS rail and
+        // the company MOVIES originals render (a plain network page would
+        // drop the movie slate entirely).
+        val serviceRoute = providerId != null || originalsCompanyId != null
 
         viewModelScope.launch {
             _isLoading.value = true
@@ -145,7 +166,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             _pagingStates.value = emptyMap()
             _logoUrl.value = null
             _companyInfo.value = null
-            _isService.value = providerId != null
+            _isService.value = serviceRoute
 
             // Clear logo + blurb for the header. Networks use their own TMDB
             // endpoints (a network id is not a company id), so route by type.
@@ -164,8 +185,15 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 val result = when {
                     // Service pages discover through watch-provider rails
                     // (movies + series) instead of network/company rails.
-                    providerId != null ->
-                        tmdbRepository.getInitialServiceSections(providerId)
+                    // The ORIGINALS rails (network/company discover) ride
+                    // along when the browse entry carries those ids.
+                    serviceRoute ->
+                        tmdbRepository.getInitialServiceSections(
+                            providerId = providerId,
+                            networkOrCompanyId = networkOrCompanyId,
+                            networkIsCompany = networkIsCompany,
+                            originalsCompanyId = originalsCompanyId
+                        )
                     isNetwork ->
                         tmdbRepository.getByNetwork(id)
                     else ->
@@ -212,8 +240,15 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             try {
                 val page: TagRailPage = when {
-                    currentProviderId != null ->
-                        tmdbRepository.getServiceRailPage(currentProviderId!!, title, pageNumber)
+                    currentProviderId != null || currentOriginalsCompanyId != null ->
+                        tmdbRepository.getServiceRailPage(
+                            providerId = currentProviderId,
+                            title = title,
+                            page = pageNumber,
+                            networkOrCompanyId = currentNetworkOrCompanyId,
+                            networkIsCompany = currentNetworkIsCompany,
+                            originalsCompanyId = currentOriginalsCompanyId
+                        )
                     currentIsNetwork ->
                         tmdbRepository.getNetworkRailPage(screenId, title, pageNumber)
                     else ->

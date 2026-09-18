@@ -91,7 +91,7 @@ fun SearchScreen(
     // Studio, collections -> Collection, decades -> Decade). Null =
     // entries navigate nowhere (standalone previews).
     onOpenTagScreen: ((Int, String, Boolean, String) -> Unit)? = null,
-    onOpenStudioScreen: ((Int, String, Boolean, Int?) -> Unit)? = null,
+    onOpenStudioScreen: ((Int, String, Boolean, Int?, Int?, Boolean, Int?) -> Unit)? = null,
     onOpenCollectionScreen: ((Int, String) -> Unit)? = null,
     onOpenDecadeScreen: ((Int, String) -> Unit)? = null,
     // Hoisted by MainActivity (survives Search -> Detail -> Back) so Back

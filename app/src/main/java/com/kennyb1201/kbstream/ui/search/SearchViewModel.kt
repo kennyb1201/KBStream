@@ -199,7 +199,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     var onOpenTagScreen:
         ((id: Int, name: String, isKeyword: Boolean, mediaType: String) -> Unit)? = null
     var onOpenStudioScreen:
-        ((id: Int, name: String, isNetwork: Boolean, providerId: Int?) -> Unit)? = null
+        ((id: Int, name: String, isNetwork: Boolean, providerId: Int?, networkOrCompanyId: Int?, networkIsCompany: Boolean, originalsCompanyId: Int?) -> Unit)? = null
     var onOpenCollectionScreen:
         ((id: Int, name: String) -> Unit)? = null
     var onOpenDecadeScreen:
@@ -1293,9 +1293,12 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 entry.id,
                 entry.name,
                 !entry.networkIsCompany,
-                entry.providerId
+                entry.providerId,
+                entry.networkOrCompanyId,
+                entry.networkIsCompany,
+                entry.originalsCompanyId
             )
-            "studios" -> onOpenStudioScreen?.invoke(entry.id, entry.name, false, null)
+            "studios" -> onOpenStudioScreen?.invoke(entry.id, entry.name, false, null, null, false, null)
             "collections" -> onOpenCollectionScreen?.invoke(entry.id, entry.name)
             "decades" -> onOpenDecadeScreen?.invoke(entry.id, entry.name)
         }

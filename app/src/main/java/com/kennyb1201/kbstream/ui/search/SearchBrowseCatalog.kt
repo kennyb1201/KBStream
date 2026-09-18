@@ -45,7 +45,9 @@ data class BrowseEntry(
     val name: String,
     val providerId: Int? = null,
     val networkOrCompanyId: Int? = null,
-    val networkIsCompany: Boolean = false
+    val networkIsCompany: Boolean = false,
+    /** Extra originals rail: the brand's production company (movies+TV). */
+    val originalsCompanyId: Int? = null
 )
 
 /**
@@ -55,12 +57,20 @@ data class BrowseEntry(
  * "Originals" rail). Null network/company id means the service has no
  * meaningful originals catalog (Tubi, Pluto, ...), so it only offers the
  * provider rails.
+ *
+ * [originalsCompanyId] optionally adds a SECOND originals rail driven by
+ * the brand's production company: company discover includes MOVIES too
+ * (network discover is TV-only), and it catches content the provider
+ * rails lost — titles that left the service, plus co-productions TMDB
+ * tags with the company but not the network. Null when the brand has no
+ * meaningful company page in TMDB (Hulu, Peacock, MUBI, ...).
  */
 data class BrowseService(
     val name: String,
     val providerId: Int?,
     val networkOrCompanyId: Int?,
-    val networkIsCompany: Boolean
+    val networkIsCompany: Boolean,
+    val originalsCompanyId: Int? = null
 )
 
 /** One sidebar category and its statically-known submenu entries. */
@@ -604,31 +614,38 @@ val BROWSE_SERVICES = listOf(
         "Netflix",
         providerId = 8,
         networkOrCompanyId = 213,
-        networkIsCompany = false
+        networkIsCompany = false,
+        originalsCompanyId = 178464
     ),
     BrowseService(
         "Prime Video",
         providerId = 9,
         networkOrCompanyId = 1024,
-        networkIsCompany = false
+        networkIsCompany = false,
+        originalsCompanyId = 210099 // Amazon MGM Studios
     ),
     BrowseService(
         "Disney+",
         providerId = 337,
         networkOrCompanyId = 2739,
-        networkIsCompany = false
+        networkIsCompany = false,
+        originalsCompanyId = 2 // Walt Disney Pictures — the Disney+ film originals
+        // (Noelle, Togo, Chip 'n Dale… all tagged company 2; the Disney+
+        // series originals ride the network 2739 rail).
     ),
     BrowseService(
         "Apple TV+",
         providerId = 350,
         networkOrCompanyId = 2552,
-        networkIsCompany = false
+        networkIsCompany = false,
+        originalsCompanyId = 194232 // Apple Studios
     ),
     BrowseService(
         "HBO Max",
         providerId = 1899,
         networkOrCompanyId = 3186,
-        networkIsCompany = false
+        networkIsCompany = false,
+        originalsCompanyId = 3268 // HBO — the whole HBO film/TV slate
     ),
     BrowseService(
         "Hulu",
@@ -646,7 +663,8 @@ val BROWSE_SERVICES = listOf(
         "Peacock",
         providerId = 386,
         networkOrCompanyId = 3353,
-        networkIsCompany = false
+        networkIsCompany = false,
+        originalsCompanyId = 32491 // Peacock Films — their film co-productions
     ),
     BrowseService(
         "Starz",
@@ -661,7 +679,8 @@ val BROWSE_SERVICES = listOf(
         "Showtime",
         providerId = null,
         networkOrCompanyId = 67,
-        networkIsCompany = false
+        networkIsCompany = false,
+        originalsCompanyId = 4343 // Showtime Networks — adds the movie slate
     ),
     // Free/fast services now carry their (network) originals id so the
     // header gets a real clear-logo instead of falling back to text.
@@ -719,7 +738,8 @@ val BROWSE_SERVICES = listOf(
         "AMC+",
         providerId = 526,
         networkOrCompanyId = 174,
-        networkIsCompany = false
+        networkIsCompany = false,
+        originalsCompanyId = 23242 // AMC Studios
     ),
     BrowseService(
         "Discovery+",
@@ -737,13 +757,15 @@ val BROWSE_SERVICES = listOf(
         "ESPN+",
         providerId = 1768,
         networkOrCompanyId = 29,
-        networkIsCompany = false
+        networkIsCompany = false,
+        originalsCompanyId = 17037 // ESPN — 30-for-30 film library etc.
     ),
     BrowseService(
         "The Roku Channel",
         providerId = 207,
         networkOrCompanyId = 290879,
-        networkIsCompany = true
+        networkIsCompany = true,
+        originalsCompanyId = 279515 // Roku Media — originals film slate
     ),
     BrowseService(
         "Plex",
@@ -767,7 +789,8 @@ val BROWSE_SERVICES = listOf(
         "Shudder",
         providerId = 99,
         networkOrCompanyId = 142877,
-        networkIsCompany = true
+        networkIsCompany = true,
+        originalsCompanyId = 142877
     ),
     BrowseService(
         "ALLBLK",
@@ -790,19 +813,21 @@ val BROWSE_SERVICES = listOf(
     BrowseService(
         "MUBI",
         providerId = 11,
-        networkOrCompanyId = null,
-        networkIsCompany = false
+        networkOrCompanyId = 204957,
+        networkIsCompany = true,
+        originalsCompanyId = 204957 // MUBI's releases (288516 is empty)
     ),
     BrowseService(
         "Criterion Channel",
         providerId = 258,
-        networkOrCompanyId = null,
-        networkIsCompany = false
+        networkOrCompanyId = 10932,
+        networkIsCompany = true,
+        originalsCompanyId = 204170 // The Criterion Collection film library
     ),
     BrowseService(
         "fuboTV",
         providerId = 257,
-        networkOrCompanyId = 57501,
+        networkOrCompanyId = 238158, // Fubo Studios (57501 is 'Fun TV' — dead end)
         networkIsCompany = true
     ),
     BrowseService(
@@ -824,7 +849,8 @@ val BROWSE_PROVIDER_ENTRIES: List<BrowseEntry> = BROWSE_SERVICES
             service.name,
             service.providerId,
             service.networkOrCompanyId,
-            service.networkIsCompany
+            service.networkIsCompany,
+            service.originalsCompanyId
         )
     } + BROWSE_NETWORKS
 
@@ -1262,7 +1288,8 @@ val KIDS_PROVIDER_ENTRIES: List<BrowseEntry> = KIDS_SERVICES
             service.name,
             service.providerId,
             service.networkOrCompanyId,
-            service.networkIsCompany
+            service.networkIsCompany,
+            service.originalsCompanyId
         )
     }
 

@@ -143,6 +143,14 @@ sealed class Screen {
         // series rails via provider discover); null for plain network/company
         // pages.
         val providerId: Int? = null,
+        // ORIGINALS rails: the brand's network/company id (what it made) and
+        // whether that id is a company (company discover also covers movies).
+        val networkOrCompanyId: Int? = null,
+        val networkIsCompany: Boolean = false,
+        // Optional extra originals rail from the brand's production company
+        // (company discover: movies + TV) — catches titles that left the
+        // service or were never tagged with the provider.
+        val originalsCompanyId: Int? = null,
         val returnTo: Screen = Home
     ) : Screen()
 
@@ -287,6 +295,9 @@ private fun encodeScreen(
             put("name", screen.name)
             put("isNetwork", screen.isNetwork)
             screen.providerId?.let { put("providerId", it) }
+            screen.networkOrCompanyId?.let { put("networkOrCompanyId", it) }
+            if (screen.networkIsCompany) put("networkIsCompany", true)
+            screen.originalsCompanyId?.let { put("originalsCompanyId", it) }
             if (depth < MAX_RETURN_DEPTH) {
                 put("returnTo", encodeScreen(screen.returnTo, depth + 1))
             }
@@ -409,6 +420,9 @@ private fun decodeScreen(
                 name = json.optString("name"),
                 isNetwork = json.optBoolean("isNetwork"),
                 providerId = json.optInt("providerId").takeIf { it != 0 },
+                networkOrCompanyId = json.optInt("networkOrCompanyId").takeIf { it != 0 },
+                networkIsCompany = json.optBoolean("networkIsCompany"),
+                originalsCompanyId = json.optInt("originalsCompanyId").takeIf { it != 0 },
                 returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
             )
             "decade" -> Screen.Decade(
@@ -1364,7 +1378,7 @@ fun AppRoot() {
                         studio.name,
                         false,
                         null,
-                        Screen.Search
+                        returnTo = Screen.Search
                     )
                 },
 
@@ -1379,12 +1393,15 @@ fun AppRoot() {
                 onOpenTagScreen = { id, name, isKeyword, mediaType ->
                     screen = Screen.Tag(id, name, isKeyword, mediaType, Screen.Search)
                 },
-                onOpenStudioScreen = { id, name, isNetwork, providerId ->
+                onOpenStudioScreen = { id, name, isNetwork, providerId, networkOrCompanyId, networkIsCompany, originalsCompanyId ->
                     screen = Screen.Studio(
                         id,
                         name,
                         isNetwork,
                         providerId,
+                        networkOrCompanyId,
+                        networkIsCompany,
+                        originalsCompanyId,
                         Screen.Search
                     )
                 },
@@ -1574,7 +1591,7 @@ fun AppRoot() {
                         name,
                         isNetwork,
                         null,
-                        Screen.Detail(current.type, current.id, current.pendingTarget, current.itemPoster)
+                        returnTo = Screen.Detail(current.type, current.id, current.pendingTarget, current.itemPoster)
                     )
                 },
 
@@ -1674,6 +1691,9 @@ fun AppRoot() {
                 current.name,
                 current.isNetwork,
                 current.providerId,
+                current.networkOrCompanyId,
+                current.networkIsCompany,
+                current.originalsCompanyId,
 
                 onNavigateDetail = {
                         type,
