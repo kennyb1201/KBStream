@@ -142,6 +142,14 @@ android {
     sentry {
         includeProguardMapping.set(true)
         telemetry.set(false)
+        // The org token is region-scoped (us.sentry.io); pointing the CLI
+        // straight at the region endpoint skips the region-URL lookup that
+        // upload-only tokens get 403 on.
+        url.set(
+            System.getenv("SENTRY_URL")
+                ?: localProps.getProperty("SENTRY_URL")
+                ?: "https://us.sentry.io"
+        )
         org.set(
             System.getenv("SENTRY_ORG")
                 ?: localProps.getProperty("SENTRY_ORG")
