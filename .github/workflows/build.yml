@@ -21,6 +21,11 @@ jobs:
       SIMKL_CLIENT_ID: ${{ secrets.SIMKL_CLIENT_ID }}
       SIMKL_CLIENT_SECRET: ${{ secrets.SIMKL_CLIENT_SECRET }}
       SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      # Authenticates the Sentry Gradle plugin's R8-mapping upload so release
+      # crash traces arrive deobfuscated (real class/method names).
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      SENTRY_PROJECT: kbstream
+      SENTRY_ORG: kbstream
       OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_PUBLISHABLE_KEY }}

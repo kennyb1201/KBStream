@@ -6,6 +6,7 @@ plugins {
     id("com.google.devtools.ksp")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
+    id("io.sentry.android.gradle")
 }
 
 val localProps = Properties()
@@ -131,6 +132,31 @@ android {
             )
             signingConfig = signingConfigs.getByName("release")
         }
+    }
+
+    // Sentry: upload the R8 mapping on release builds so crash reports
+    // arrive with real class/method names instead of obfuscated ones
+    // (MainActivity.i). Auth comes from SENTRY_AUTH_TOKEN (CI secret) or
+    // sentryAuthToken in local.properties; without a token the build still
+    // succeeds — mapping upload is skipped with a warning.
+    sentry {
+        includeProguardMapping.set(true)
+        telemetry.set(false)
+        org.set(
+            System.getenv("SENTRY_ORG")
+                ?: localProps.getProperty("SENTRY_ORG")
+                ?: "kbstream"
+        )
+        projectName.set(
+            System.getenv("SENTRY_PROJECT")
+                ?: localProps.getProperty("SENTRY_PROJECT")
+                ?: "kbstream"
+        )
+        authToken.set(
+            System.getenv("SENTRY_AUTH_TOKEN")
+                ?: localProps.getProperty("SENTRY_AUTH_TOKEN")
+        )
+        tracingInstrumentation { enabled.set(false) }
     }
 
     compileOptions {
