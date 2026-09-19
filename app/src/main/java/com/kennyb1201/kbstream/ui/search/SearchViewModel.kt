@@ -1325,11 +1325,14 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         if (catalogResolveStarted) return
         catalogResolveStarted = true
 
-        // Always resolve the STANDARD name lists: the kids chip lists are
-        // strict subsets, so a standard resolve serves both modes and a
-        // profile switch never needs a second resolve pass.
+        // Resolve the UNION of the standard and kids name lists. The kids
+        // lists stopped being strict subsets when the second wave of
+        // kids-only franchises/keywords landed (SpongeBob, PAW Patrol,
+        // treehouse, spelling bee, ...), so a standard-only resolve would
+        // leave those chips id-less and dead. Union resolve serves both
+        // modes from one pass; the extra lookups are semaphore-capped.
         val keywordEntries = coroutineScope {
-            BROWSE_KEYWORD_NAMES.map { name ->
+            (BROWSE_KEYWORD_NAMES + KIDS_KEYWORD_NAMES).distinct().map { name ->
                 async {
                     catalogResolveSemaphore.withPermit {
                         resolveWithRetry(name) {
@@ -1342,7 +1345,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             }.awaitAll().filterNotNull()
         }
         val collectionEntries = coroutineScope {
-            BROWSE_COLLECTION_NAMES.map { name ->
+            (BROWSE_COLLECTION_NAMES + KIDS_COLLECTION_NAMES).distinct().map { name ->
                 async {
                     catalogResolveSemaphore.withPermit {
                         resolveWithRetry(name) {

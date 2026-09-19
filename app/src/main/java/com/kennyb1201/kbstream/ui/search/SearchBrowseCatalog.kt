@@ -601,8 +601,9 @@ val BROWSE_STUDIOS = listOf(
 //  - providers: Netflix=8, Prime=9, Disney+=337, Apple TV+=350,
 //    HBO Max=1899 (384 is dead), Hulu=15, Paramount+=2303 ("Paramount Plus
 //    Premium"; 531 is dead), Peacock=386, Starz=43, Tubi=73, Pluto=300,
-//    Crunchyroll=283. Showtime has NO provider id any more (folded into
-//    Paramount Plus Premium), so it runs as a plain network page.
+//    Crunchyroll=283, Angel Studios=1956. Showtime has NO provider id any
+//    more (folded into Paramount Plus Premium), so it runs as a plain
+//    network page.
 //  - networks: Netflix=213, Prime Video=1024 (132 is Oxygen!),
 //    Disney+=2739, Apple TV+=2552, HBO Max=3186, Hulu=453, Paramount+=4330,
 //    Peacock=3353 (3186 is HBO Max!), Starz=318 (43 is National
@@ -634,7 +635,7 @@ val BROWSE_SERVICES = listOf(
         // series originals ride the network 2739 rail).
     ),
     BrowseService(
-        "Apple TV+",
+        "Apple TV",
         providerId = 350,
         networkOrCompanyId = 2552,
         networkIsCompany = false,
@@ -829,6 +830,18 @@ val BROWSE_SERVICES = listOf(
         providerId = 257,
         networkOrCompanyId = 238158, // Fubo Studios (57501 is 'Fun TV' — dead end)
         networkIsCompany = true
+    ),
+    // Faith-and-family studio: watch provider 1956 is their streaming
+    // catalog (Hacksaw Ridge, Midway, David…), network 3081 "Angel" carries
+    // the series originals (The Chosen, Homestead, Vindication), and company
+    // 165435 is the real Angel Studios film library (48 films; the other
+    // company-id hits were empty or unrelated).
+    BrowseService(
+        "Angel Studios",
+        providerId = 1956,
+        networkOrCompanyId = 3081,
+        networkIsCompany = false,
+        originalsCompanyId = 165435
     ),
     BrowseService(
         "Xumo Play",
@@ -1126,6 +1139,146 @@ val KIDS_SERVICES: List<BrowseService> = listOf(
         providerId = null,
         networkOrCompanyId = 234, // Hollywood Heights probe — 159 is Indian 'StarPlus'
         networkIsCompany = false
+    ),
+    // 2026-09 second wave — family-slate streamers and more kids networks
+    // (ids verified live against TMDB: watch-provider list for providerIds,
+    // network endpoints / flagship-show probes for networkIds).
+    BrowseService(
+        "Apple TV",
+        providerId = 350,
+        networkOrCompanyId = 2552, // Ted Lasso probe (2572 is Smithsonian Earth)
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "HBO Max",
+        providerId = 1899,
+        networkOrCompanyId = 3186,
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "Hulu",
+        providerId = 15,
+        networkOrCompanyId = 453,
+        networkIsCompany = false
+    ),
+    // Anime is a kids staple — Crunchyroll's all-ages side (Doraemon,
+    // Pokémon, Yo-kai Watch dubs live here).
+    BrowseService(
+        "Crunchyroll",
+        providerId = 283,
+        networkOrCompanyId = null,
+        networkIsCompany = false
+    ),
+    // FAST services: heavy kids channels, free.
+    BrowseService(
+        "Tubi",
+        providerId = 73,
+        networkOrCompanyId = null,
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "Pluto TV",
+        providerId = 300,
+        networkOrCompanyId = null,
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "The Roku Channel",
+        providerId = 207,
+        networkOrCompanyId = null,
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "Plex",
+        providerId = 538,
+        networkOrCompanyId = null,
+        networkIsCompany = false
+    ),
+    // Big subscription catalogs with deep kids libraries; network ids are
+    // the originals networks (Prime Video 1024 via Pete the Cat probe,
+    // Peacock 3353 via TrollsTopia / Where's Waldo? probes).
+    BrowseService(
+        "Prime Video",
+        providerId = 9,
+        networkOrCompanyId = 1024,
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "Peacock",
+        providerId = 386,
+        networkOrCompanyId = 3353,
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "Discovery Family",
+        providerId = null,
+        networkOrCompanyId = 1287, // MLP: Friendship Is Magic probe
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "Treehouse TV",
+        providerId = null,
+        networkOrCompanyId = 216, // MLP:FIM co-network probe
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "ABC Kids (AU)",
+        providerId = null,
+        networkOrCompanyId = 2854, // Bluey's home network
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "Hub Network",
+        providerId = null,
+        networkOrCompanyId = 518, // MLP:FIM original home
+        networkIsCompany = false
+    ),
+    // 2026-09 third wave — international kids channels. TMDB's network
+    // search endpoint returns nothing for these names, so every id was
+    // probed through flagship shows (Hey Duggee→CBeebies, Shaun the
+    // Sheep→CBBC, Caillou→Teletoon, Pocoyo→CITV, Almost Naked Animals→YTV,
+    // The Next Step→Family Channel, Dino Dan→Noggin).
+    BrowseService(
+        "CBeebies",
+        providerId = null,
+        networkOrCompanyId = 166, // Hey Duggee / Charlie and Lola
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "CBBC",
+        providerId = null,
+        networkOrCompanyId = 15, // Shaun the Sheep
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "Teletoon",
+        providerId = null,
+        networkOrCompanyId = 83, // Caillou / Total Drama
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "CITV",
+        providerId = null,
+        networkOrCompanyId = 112, // Pocoyo
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "YTV",
+        providerId = null,
+        networkOrCompanyId = 46, // Almost Naked Animals
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "Family Channel",
+        providerId = null,
+        networkOrCompanyId = 197, // The Next Step
+        networkIsCompany = false
+    ),
+    BrowseService(
+        "Noggin",
+        providerId = null,
+        networkOrCompanyId = 188, // Dino Dan
+        networkIsCompany = false
     )
 )
 
@@ -1158,7 +1311,8 @@ val KIDS_STUDIOS: List<BrowseEntry> = listOf(
 
 /**
  * Kids collections: franchises a child knows, resolved at runtime exactly
- * like the standard list (strict name subset of BROWSE_COLLECTION_NAMES).
+ * like the standard list (resolver unions both lists, so entries need not
+ * be a strict subset of BROWSE_COLLECTION_NAMES anymore).
  */
 val KIDS_COLLECTION_NAMES = listOf(
     "Toy Story Collection",
@@ -1199,7 +1353,96 @@ val KIDS_COLLECTION_NAMES = listOf(
     "The LEGO Movie Collection",
     "The Boss Baby Collection",
     "The Croods Collection",
-    "Sing Collection"
+    "Sing Collection",
+    // 2026-09 second wave — TV-brand and modern-kids franchises, every
+    // name verified to resolve exactly against /search/collection.
+    "SpongeBob Collection",
+    "PAW Patrol (Theatrical) Collection",
+    "My Little Pony: Equestria Girls Collection",
+    "Curious George Collection",
+    "The Sandlot Collection",
+    "Peter Rabbit Collection",
+    "The Muppets Collection",
+    "Stuart Little Collection",
+    "Care Bears Collection",
+    "Garfield Collection",
+    "Night at the Museum Collection",
+    "The Angry Birds Collection",
+    "Teenage Mutant Ninja Turtles Collection",
+    "The Smurfs (Animated) Collection",
+    "Lilo & Stitch (Animated) Collection",
+    "Lilo & Stitch (Live-Action) Collection",
+    "Barbie Collection",
+    // 2026-09 third wave — Disney classics + modern hits. Every name
+    // re-verified live against /search/collection (exact first hit).
+    "Frozen Collection",
+    "Moana Collection",
+    "Encanto Collection",
+    "Coco Collection",
+    "Zootopia Collection",
+    "Tangled Collection",
+    "Wreck-It Ralph Collection",
+    "Wish Collection",
+    "Bambi Collection",
+    "Peter Pan Collection",
+    "Lady and the Tramp Collection",
+    "101 Dalmatians (Animated) Collection",
+    "The Adventures of Pinocchio Collection",
+    "Pocahontas Collection",
+    "Hercules Collection",
+    "Brother Bear Collection",
+    "Robin Hood (Animated) Collection",
+    "The Emperor's New Groove Collection",
+    "The Rescuers Collection",
+    "The Fox and the Hound Collection",
+    "The Jungle Book Collection",
+    "Mary Poppins Collection",
+    "A Goofy Movie Collection",
+    // 2026-09 third wave — animation franchises beyond Disney
+    "Rio Collection",
+    "The Trolls Collection",
+    "Puss in Boots Collection",
+    "The Wild Robot Collection",
+    "The Bad Guys Collection",
+    "An American Tail Collection",
+    "The Land Before Time Collection",
+    "Balto Collection",
+    "Alpha and Omega Collection",
+    "Rugrats Collection",
+    // 2026-09 third wave — live-action family staples
+    "Home Alone Collection",
+    "Sonic the Hedgehog Collection",
+    "Nanny McPhee Collection",
+    "Freaky Friday Collection",
+    "The Shaggy Dog Collection",
+    "Flubber Collection",
+    "Tooth Fairy Collection",
+    "Herbie Collection",
+    "Dr. Dolittle Collection",
+    "The Mighty Ducks Collection",
+    "Air Bud Collection",
+    "Beethoven Collection",
+    "The Little Rascals Collection",
+    "Dennis the Menace Collection",
+    "Problem Child Collection",
+    "Look Who's Talking Collection",
+    "George of the Jungle Collection",
+    "Inspector Gadget Collection",
+    "Woody Woodpecker Collection",
+    "The Flintstones Collection",
+    "Mr. Bean Collection",
+    "Baby Geniuses Collection",
+    "Goosebumps Collection",
+    // 2026-09 third wave — seasonal / DCOM
+    "All Dogs Go to Heaven Collection",
+    "FernGully Collection",
+    "The Polar Express Collection",
+    "The Santa Clause Collection",
+    "Hocus Pocus Collection",
+    "Halloweentown Collection",
+    "Descendants Collection",
+    "High School Musical Collection",
+    "Camp Rock Collection"
 )
 
 /**
@@ -1274,7 +1517,65 @@ val KIDS_KEYWORD_NAMES = listOf(
     "santa claus",
     "puppet",
     "bicycle",
-    "sleepover"
+    "sleepover",
+    // 2026-09 second wave — animals, myth, everyday-kid life, gentle
+    // adventure. Names resolve against TMDB keyword search; strict subset
+    // maintained with BROWSE_KEYWORD_NAMES.
+    "jungle",
+    "safari",
+    "penguin",
+    "dolphin",
+    "turtle",
+    "bear",
+    "wolf",
+    "rabbit",
+    "duck",
+    "farm",
+    "garden",
+    "treehouse",
+    "clubhouse",
+    "hide and seek",
+    "drawing",
+    "storybook",
+    "library",
+    "helicopter",
+    "fire truck",
+    "trains",
+    "submarine",
+    "hot air balloon",
+    "rockets",
+    "mars",
+    "volcano",
+    "rainbow",
+    "wishing well",
+    "flying car",
+    "giant",
+    "troll",
+    "elf",
+    "gnome",
+    "leprechaun",
+    "yeti",
+    "knight",
+    "castle",
+    "ninja",
+    "detective",
+    "secret agent",
+    "maze",
+    "riddle",
+    "bowling",
+    "karate",
+    "cheerleading",
+    "marching band",
+    "school play",
+    "talent show",
+    "science fair",
+    "spelling bee",
+    "best friends",
+    "siblings",
+    "new baby",
+    "first day of school",
+    "moving",
+    "new kid"
 )
 
 /** Decades are neutral; reuse the standard list. */
