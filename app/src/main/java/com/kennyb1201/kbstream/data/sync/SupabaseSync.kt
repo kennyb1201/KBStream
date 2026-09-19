@@ -107,7 +107,15 @@ object SupabaseSync {
     val syncError: StateFlow<String?> = _syncError.asStateFlow()
 
     private fun recordSyncError(where: String, e: Exception) {
-        _syncError.value = "$where failed: ${e.message ?: e.javaClass.simpleName}"
+        // supabase-kt request exceptions embed the full URL + headers
+        // (including the bearer token) in the message — showing that raw
+        // dump on a TV is useless and leaks the token onto the screen. The
+        // first line carries the useful part ("new row violates row-level
+        // security policy for table …").
+        val firstLine = (e.message ?: e.javaClass.simpleName)
+            .lineSequence().firstOrNull()?.trim().orEmpty()
+            .ifBlank { e.javaClass.simpleName }
+        _syncError.value = "$where failed: $firstLine"
     }
 
     private fun clearSyncError() {
