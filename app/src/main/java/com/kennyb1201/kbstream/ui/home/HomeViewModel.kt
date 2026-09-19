@@ -929,6 +929,17 @@ Log.d(
                     _upNext.value = emptyList()
                     publishInstantUpNextSnapshot()
 
+                    // Same for the addon rails: catalog rails for a NON-kids
+                    // profile (adult content) visibly lingered for seconds
+                    // after switching to a kids profile, until the kids
+                    // profile's own catalogs finished fetching. Drop them
+                    // now so Home shows the loading state instead of the
+                    // previous profile's content.
+                    _rails.value = emptyList()
+                    railInfo.clear()
+                    loadingRails.clear()
+                    exhaustedRails.clear()
+
                     _heroMeta.value = null
                     _heroTmdbDetail.value = null
                     _heroBackdropUrl.value = null

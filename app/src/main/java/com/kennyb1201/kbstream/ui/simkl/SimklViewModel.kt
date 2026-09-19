@@ -38,6 +38,41 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
             loadContinueWatching()
             loadWatchedCounts()
         }
+        observeProfileSwitches()
+    }
+
+    /**
+     * Profile-switch reset: the token STORE is per-profile (scoped prefs,
+     * re-read on every hasToken()/request), but this ViewModel is
+     * activity-scoped and was showing the previous profile's snapshot
+     * ("Connected" + their continue-watching/counts) after a switch — the
+     * Simkl screen looked like one account was shared across profiles.
+     * Re-derive the state from the incoming profile's token store and
+     * reload its data; drop any in-flight device-code poll started under
+     * the other profile.
+     */
+    private fun observeProfileSwitches() {
+        viewModelScope.launch {
+            var first = true
+            com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile
+                .collect {
+                    if (first) {
+                        first = false
+                        return@collect
+                    }
+                    pollJob?.cancel()
+                    pollJob = null
+                    val connected = repository.hasToken()
+                    _uiState.value = SimklUiState(
+                        isConnected = connected,
+                        statusMessage = if (connected) "Connected to Simkl." else null
+                    )
+                    if (connected) {
+                        loadContinueWatching()
+                        loadWatchedCounts()
+                    }
+                }
+        }
     }
 
     /**
