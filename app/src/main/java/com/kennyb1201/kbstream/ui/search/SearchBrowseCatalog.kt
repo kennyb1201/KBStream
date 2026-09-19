@@ -485,10 +485,63 @@ val BROWSE_NETWORKS = listOf(
 )
 
 // ---------------------------------------------------------------------------
+// ── Presentation ordering: household names first, rest alphabetical ─────
+// The curated lists above are grouped by theme/wave history; the picker
+// chips read better with the brands people actually open at the top.
+// Purely presentational: ids, ids-as-typed, and data are untouched.
+
+/** Household-name streaming services, in curated popularity order. */
+private val POPULAR_SERVICES_ORDER = listOf(
+    "Netflix", "Prime Video", "Disney+", "Apple TV", "HBO Max", "Hulu",
+    "Paramount+", "Peacock", "ESPN+", "Tubi", "Pluto TV", "Crunchyroll"
+)
+
+/** Broadcast majors + the biggest cable brands, curated order. */
+private val POPULAR_NETWORKS_ORDER = listOf(
+    "ABC", "NBC", "CBS", "FOX", "MTV", "Comedy Central", "Nickelodeon",
+    "Cartoon Network", "Adult Swim", "USA Network", "FX", "TNT", "TBS"
+)
+
+/** The traditional majors + top franchise houses, curated order. */
+private val POPULAR_STUDIOS_ORDER = listOf(
+    "Warner Bros. Pictures", "Walt Disney Pictures", "Universal Pictures",
+    "Paramount Pictures", "Columbia Pictures", "20th Century Fox",
+    "Metro-Goldwyn-Mayer", "Marvel Studios", "Lucasfilm", "Pixar",
+    "DreamWorks Animation", "Illumination", "Studio Ghibli"
+)
+
+/** Kids-first animation/TV brands, curated order. */
+private val POPULAR_KIDS_STUDIOS_ORDER = listOf(
+    "Walt Disney Pictures", "Pixar", "Walt Disney Animation Studios",
+    "Illumination", "DreamWorks Animation", "Studio Ghibli",
+    "Nickelodeon Movies", "Cartoon Network Studios", "The Pokémon Company",
+    "Lucasfilm"
+)
+
+/**
+ * Ranks [items] for the picker UI: entries whose [name] appears in
+ * [popular] first (in that list's order), everything else alphabetically.
+ * Names not in the popular list fall through to the alphabetical tail.
+ */
+private fun <T> popularFirst(
+    items: List<T>,
+    name: (T) -> String,
+    popular: List<String>
+): List<T> {
+    val rank = popular.withIndex().associate { (i, n) -> n to i }
+    return items.sortedWith(
+        compareBy(
+            { rank[name(it).trim()] ?: Int.MAX_VALUE },
+            { name(it).trim().lowercase() }
+        )
+    )
+}
+
 // Studios — verified against themoviedb.org/company/{id}.
 // ---------------------------------------------------------------------------
 
-val BROWSE_STUDIOS = listOf(
+val BROWSE_STUDIOS: List<BrowseEntry> = popularFirst(
+    listOf(
     BrowseEntry(174, "Warner Bros. Pictures"),
     BrowseEntry(2, "Walt Disney Pictures"),
     BrowseEntry(33, "Universal Pictures"),
@@ -590,6 +643,9 @@ val BROWSE_STUDIOS = listOf(
     BrowseEntry(13184, "Annapurna Pictures"),
     BrowseEntry(81, "Plan B Entertainment"),
     BrowseEntry(147786, "Dimension Films")
+    ),
+    name = { it.name },
+    popular = POPULAR_STUDIOS_ORDER
 )
 
 // ---------------------------------------------------------------------------
@@ -854,18 +910,23 @@ val BROWSE_SERVICES = listOf(
 // Merged "Services & Networks" submenu: every streaming service (with its
 // watch-provider id, so its screen gets Recent / Popular / Most Voted rails
 // alongside Originals) followed by the TV network list — one screen per
-// brand instead of separate Services and Networks categories.
-val BROWSE_PROVIDER_ENTRIES: List<BrowseEntry> = BROWSE_SERVICES
-    .map { service ->
-        BrowseEntry(
-            service.networkOrCompanyId ?: -1,
-            service.name,
-            service.providerId,
-            service.networkOrCompanyId,
-            service.networkIsCompany,
-            service.originalsCompanyId
-        )
-    } + BROWSE_NETWORKS
+// brand instead of separate Services and Networks categories. Ordered
+// popular-first, then alphabetical.
+val BROWSE_PROVIDER_ENTRIES: List<BrowseEntry> = popularFirst(
+    BROWSE_SERVICES
+        .map { service ->
+            BrowseEntry(
+                service.networkOrCompanyId ?: -1,
+                service.name,
+                service.providerId,
+                service.networkOrCompanyId,
+                service.networkIsCompany,
+                service.originalsCompanyId
+            )
+        } + BROWSE_NETWORKS,
+    name = { it.name },
+    popular = POPULAR_SERVICES_ORDER + POPULAR_NETWORKS_ORDER
+)
 
 // ---------------------------------------------------------------------------
 // Decades 2020s -> 1950s. Each decade opens Screen.Decade, whose rails keep
@@ -1289,7 +1350,8 @@ val KIDS_SERVICES: List<BrowseService> = listOf(
  * depth check (Toei Animation's company candidates were 0-movie pages,
  * so the anime studios stay on the standard list instead).
  */
-val KIDS_STUDIOS: List<BrowseEntry> = listOf(
+val KIDS_STUDIOS: List<BrowseEntry> = popularFirst(
+    listOf(
     BrowseEntry(2, "Walt Disney Pictures"),
     BrowseEntry(3, "Pixar"),
     BrowseEntry(6125, "Walt Disney Animation Studios"),
@@ -1307,6 +1369,9 @@ val KIDS_STUDIOS: List<BrowseEntry> = listOf(
     BrowseEntry(11537, "LAIKA"),
     BrowseEntry(2785, "Warner Bros. Animation"),
     BrowseEntry(6254, "The Jim Henson Company")
+    ),
+    name = { it.name },
+    popular = POPULAR_KIDS_STUDIOS_ORDER
 )
 
 /**
@@ -1583,17 +1648,21 @@ val KIDS_KEYWORD_NAMES = listOf(
 val KIDS_DECADES: List<BrowseEntry> = BROWSE_DECADES
 
 /** Merged "Services & Networks" submenu for kids profiles. */
-val KIDS_PROVIDER_ENTRIES: List<BrowseEntry> = KIDS_SERVICES
-    .map { service ->
-        BrowseEntry(
-            service.networkOrCompanyId ?: -1,
-            service.name,
-            service.providerId,
-            service.networkOrCompanyId,
-            service.networkIsCompany,
-            service.originalsCompanyId
-        )
-    }
+val KIDS_PROVIDER_ENTRIES: List<BrowseEntry> = popularFirst(
+    KIDS_SERVICES
+        .map { service ->
+            BrowseEntry(
+                service.networkOrCompanyId ?: -1,
+                service.name,
+                service.providerId,
+                service.networkOrCompanyId,
+                service.networkIsCompany,
+                service.originalsCompanyId
+            )
+        },
+    name = { it.name },
+    popular = POPULAR_SERVICES_ORDER + POPULAR_NETWORKS_ORDER
+)
 
 /**
  * The kids sidebar. Same six category keys as the standard browser so the
