@@ -115,6 +115,31 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
     init {
         refresh()
         checkHealth()
+        observeProfileSwitches()
+    }
+
+    /**
+     * Profile-switch reset: this ViewModel is activity-scoped (created once,
+     * survives switches) and its snapshot (_addons / _catalogConfigurations
+     * / collections) belongs to whichever profile was active at refresh
+     * time. Reopening the Addons screen after a switch reused the previous
+     * profile's list — its addons "leaked" into the new profile's manager
+     * and Home manager UI. Re-read the incoming profile's addon set on
+     * switch; health results are also per-set, so drop them.
+     */
+    private fun observeProfileSwitches() {
+        viewModelScope.launch {
+            var first = true
+            com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile
+                .collect {
+                    if (first) {
+                        first = false
+                        return@collect
+                    }
+                    _health.value = emptyMap()
+                    refresh()
+                }
+        }
     }
 
     /**

@@ -1944,13 +1944,18 @@ fun HomeScreen(
     val kbViewModel: com.kennyb1201.kbstream.ui.kb.KBHomeViewModel =
         androidx.lifecycle.viewmodel.compose.viewModel()
 
-    val showRailType by remember {
+    // Keyed on the active profile: these are profile-scoped prefs and
+    // remember{} would otherwise keep the previous profile's display
+    // settings for the whole session after a switch.
+    val activeProfileId = com.kennyb1201.kbstream.data.sync.ProfileManager
+        .activeProfile.collectAsStateWithLifecycle().value?.id
+    val showRailType by remember(activeProfileId) {
         mutableStateOf(AppPreferences.getHomeRailShowCatalogType(context))
     }
-    val showRailAddon by remember {
+    val showRailAddon by remember(activeProfileId) {
         mutableStateOf(AppPreferences.getHomeRailShowAddonName(context))
     }
-    val landscapeCards by remember {
+    val landscapeCards by remember(activeProfileId) {
         mutableStateOf(AppPreferences.getHomeLandscapeCards(context))
     }
     val rails by viewModel.rails.collectAsStateWithLifecycle()

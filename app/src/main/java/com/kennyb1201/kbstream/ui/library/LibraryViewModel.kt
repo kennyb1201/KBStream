@@ -121,6 +121,28 @@ class LibraryViewModel(
 
     init {
         refresh()
+        observeProfileSwitches()
+    }
+
+    /**
+     * Profile-switch reset: this ViewModel is activity-scoped and its
+     * init-only refresh captured the previous profile's My List / Simkl /
+     * MDBList snapshot. Reopening Library after a switch showed the other
+     * profile's saved items. Re-read everything from the incoming
+     * profile's scoped stores (refresh() is fully per-call scoped).
+     */
+    private fun observeProfileSwitches() {
+        viewModelScope.launch {
+            var first = true
+            com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile
+                .collect {
+                    if (first) {
+                        first = false
+                        return@collect
+                    }
+                    refresh()
+                }
+        }
     }
 
     fun setFilter(filter: LibraryFilter) {
