@@ -97,6 +97,23 @@ object SupabaseSync {
     private val _lastSyncAtMs = MutableStateFlow(0L)
     val lastSyncAtMs: StateFlow<Long> = _lastSyncAtMs.asStateFlow()
 
+    /**
+     * Last sync failure message, surfaced in Settings → Sync. Without this,
+     * pull/push failures were swallowed (log-only) and "Last sync" kept
+     * updating as if everything worked — a broken sync was invisible to the
+     * user (missing profiles looked like a mystery, not an error).
+     */
+    private val _syncError = MutableStateFlow<String?>(null)
+    val syncError: StateFlow<String?> = _syncError.asStateFlow()
+
+    private fun recordSyncError(where: String, e: Exception) {
+        _syncError.value = "$where failed: ${e.message ?: e.javaClass.simpleName}"
+    }
+
+    private fun clearSyncError() {
+        _syncError.value = null
+    }
+
     // ── Client ──────────────────────────────────────────────────────
 
     private var client: SupabaseClient? = null
@@ -545,8 +562,10 @@ object SupabaseSync {
                     // silently drop a write that never reached the cloud
                     // (lost update).
                     chunk.forEach { row -> outbox.remove(outboxId(row), row) }
+                    clearSyncError()
                 } catch (e: Exception) {
                     Log.w(TAG, "flush $table chunk of ${chunk.size} failed: ${e.message}")
+                    recordSyncError("Upload", e)
                     // Keep in outbox; retried by the periodic sync loop.
                 } catch (t: Throwable) {
                     CrashReporter.recordNonFatal(
@@ -699,6 +718,7 @@ object SupabaseSync {
             }
         } catch (e: Exception) {
             Log.w(TAG, "pullHistory failed: ${e.message}")
+            recordSyncError("History sync", e)
         } catch (t: Throwable) {
             CrashReporter.recordNonFatal(t, mapOf("source" to "pull_history"))
             Log.e(TAG, "pullHistory crashed: ${t.message}")
@@ -759,6 +779,7 @@ object SupabaseSync {
             }
         } catch (e: Exception) {
             Log.w(TAG, "pullWatched failed: ${e.message}")
+            recordSyncError("Watched sync", e)
         } catch (t: Throwable) {
             CrashReporter.recordNonFatal(t, mapOf("source" to "pull_watched"))
             Log.e(TAG, "pullWatched crashed: ${t.message}")
@@ -789,6 +810,7 @@ object SupabaseSync {
             }
         } catch (e: Exception) {
             Log.w(TAG, "pullPrefs failed: ${e.message}")
+            recordSyncError("Settings sync", e)
         } catch (t: Throwable) {
             CrashReporter.recordNonFatal(t, mapOf("source" to "pull_prefs"))
             Log.e(TAG, "pullPrefs crashed: ${t.message}")

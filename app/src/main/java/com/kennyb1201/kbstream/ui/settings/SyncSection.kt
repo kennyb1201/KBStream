@@ -45,6 +45,7 @@ fun SyncSection() {
     val context = androidx.compose.ui.platform.LocalContext.current
     val authState by SupabaseSync.authState.collectAsStateWithLifecycle()
     val lastSync by SupabaseSync.lastSyncAtMs.collectAsStateWithLifecycle()
+    val syncError by SupabaseSync.syncError.collectAsStateWithLifecycle()
 
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -74,6 +75,13 @@ fun SyncSection() {
                 },
                 color = KBTextLo
             )
+            syncError?.let { err ->
+                Text(
+                    text = err,
+                    color = KBDanger,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
 
             Row(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
