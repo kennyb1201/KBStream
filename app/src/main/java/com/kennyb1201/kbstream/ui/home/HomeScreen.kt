@@ -2011,7 +2011,7 @@ fun HomeScreen(
     val kbState by kbViewModel.state.collectAsStateWithLifecycle()
     val mergedEntries = remember(rails, kbState) {
         com.kennyb1201.kbstream.ui.kb.KBHomeSlots
-            .buildMergedEntries(rails, kbState)
+            .buildMergedEntries(context, rails, kbState)
     }
 
     // The up-onto-topbar hook belongs to the first rail in DISPLAY order,

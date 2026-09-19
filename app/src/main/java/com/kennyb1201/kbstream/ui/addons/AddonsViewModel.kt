@@ -200,7 +200,10 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
             _collections.value = CollectionUiState(
                 profileUrls = KBProfilePrefs.getProfileUrls(context),
                 collections = collections.map { collection ->
-                    val key = KBHomeOrderPrefs.collectionKey(
+                    // Alias-migration-aware: re-uploaded profiles with new
+                    // ids but same titles keep their arrangement.
+                    val key = KBHomeOrderPrefs.resolveArrangementKey(
+                        context,
                         collection.id,
                         collection.title
                     )

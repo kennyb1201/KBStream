@@ -56,6 +56,7 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 object KBHomeSlots {
 
     fun buildMergedEntries(
+        context: android.content.Context,
         rails: List<Rail>,
         state: KBHomeViewModel.UiState
     ): List<HomeEntry> {
@@ -73,7 +74,7 @@ object KBHomeSlots {
         val arrangedKeys = arrangement.pinned.toSet() +
             arrangement.order.toSet() + arrangement.hiddenSet
         val effectiveHidden = arrangement.hiddenSet + collectionKeysNeedingDefault(
-            state.collections, arrangedKeys
+            context, state.collections, arrangedKeys
         )
         val hidden = effectiveHidden
         val pinnedKeys = arrangement.pinned.toSet()
@@ -81,7 +82,7 @@ object KBHomeSlots {
         val collectionByKey = LinkedHashMap<String, KBCollectionProfile>()
         for (collection in collections) {
             collectionByKey.putIfAbsent(
-                KBHomeOrderPrefs.collectionKey(collection.id, collection.title),
+                key(context, collection),
                 collection
             )
         }
@@ -180,15 +181,20 @@ object KBHomeSlots {
      * the home manager.
      */
     private fun collectionKeysNeedingDefault(
+        context: android.content.Context,
         collections: List<KBCollectionProfile>,
         arrangedKeys: Set<String>
     ): Set<String> = collections
-        .map { key(it) }
+        .map { key(context, it) }
         .filter { it !in arrangedKeys }
         .toSet()
 
-    private fun key(collection: KBCollectionProfile): String =
-        KBHomeOrderPrefs.collectionKey(collection.id, collection.title)
+    private fun key(context: android.content.Context, collection: KBCollectionProfile): String =
+        KBHomeOrderPrefs.resolveArrangementKey(
+            context,
+            collection.id,
+            collection.title
+        )
 }
 
 /** One Home entry: either an addon catalog rail or an imported collection. */

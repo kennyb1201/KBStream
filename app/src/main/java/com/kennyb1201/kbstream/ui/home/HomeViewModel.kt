@@ -1447,17 +1447,33 @@ Log.d(
         // available" until they find some setting to poke.
         val railsEmpty = _rails.value.isEmpty()
 
-        if (needsRebuild || railsEmpty) {
+        // Stale-rails guard: after the device sat on the launcher / another
+        // screen for a long while, the addon catalogs (dynamic ones like
+        // BingeCat "Because you watched" especially) may have new content
+        // server-side. Rebuild with a network refetch instead of serving
+        // rails that could be hours old. railsBuiltAtMs updates on every
+        // build, so normal quick back-and-forth navigation still uses the
+        // warm cache path above.
+        val railsStale =
+            railsBuiltAtMs > 0L &&
+                System.currentTimeMillis() - railsBuiltAtMs >
+                RAILS_STALE_RESUME_MS
+
+        if (needsRebuild || railsEmpty || railsStale) {
 
             viewModelScope.launch {
 
                 loadRailsInternal(
                     forceRefresh = true,
-                    clearCatalogCache = false
+                    clearCatalogCache = railsStale
                 )
             }
         }
     }
+
+    /** Timestamp of the last successful rail build; 0 until first build. */
+    @Volatile
+    private var railsBuiltAtMs = 0L
 
     private var lastAppliedHideUpcoming: Boolean? = null
     private var lastAppliedLandscape: Boolean? = null
@@ -5209,6 +5225,9 @@ private suspend fun calculateEpisodesRemaining(
                 _rails.value =
                     finalRails.distinctBy { railKeyOf(it) }
 
+                // Freshness stamp for onHomeResumed()'s stale-rails guard.
+                railsBuiltAtMs = System.currentTimeMillis()
+
                 // Warm the hero-art caches for everything on screen BEFORE
                 // the user focuses it: focusing then becomes a cache hit and
                 // the hero swaps art in one frame instead of flashing the
@@ -5921,6 +5940,37 @@ private suspend fun calculateEpisodesRemaining(
                     _partialWatchedKeys.value =
                         _partialWatchedKeys.value - key
                 }
+
+                // Dynamic addon catalogs (BingeCat "Because you watched …",
+                // collections that grow as you watch) are computed from the
+                // watch history server-side. Rail items were fetched once
+                // and otherwise stay frozen until a profile switch — so
+                // schedule ONE debounced catalog refetch per burst of watch
+                // writes (marking a whole season emits hundreds of events).
+                scheduleDynamicCatalogRefresh()
+            }
+        }
+    }
+
+    /**
+     * Debounced rebuild of the addon catalog rails after watch-state
+     * changes. The delay lets a burst of bus events (bulk season mark,
+     * binge playback writing progress) settle so the rebuild runs once,
+     * not per event. clearCatalogCache=true forces actual network fetches:
+     * a warm cache would just re-serve the pre-watch list and the whole
+     * exercise would be pointless.
+     */
+    private var dynamicCatalogRefreshJob: kotlinx.coroutines.Job? = null
+
+    private fun scheduleDynamicCatalogRefresh() {
+        dynamicCatalogRefreshJob?.cancel()
+        dynamicCatalogRefreshJob = viewModelScope.launch {
+            delay(DYNAMIC_CATALOG_REFRESH_DELAY_MS)
+            runCatching {
+                loadRailsInternal(
+                    forceRefresh = true,
+                    clearCatalogCache = true
+                )
             }
         }
     }
@@ -5976,6 +6026,16 @@ private suspend fun calculateEpisodesRemaining(
 
         private const val PERIODIC_SIMKL_REFRESH_MS =
             15 * 60 * 1000L
+
+        /** Watch-write burst settle time before dynamic catalog rails refetch. */
+        private const val DYNAMIC_CATALOG_REFRESH_DELAY_MS = 3_000L
+
+        /**
+         * On Home resume, rails older than this force a network refetch:
+         * the app may have sat backgrounded for hours while the addon's
+         * dynamic catalogs (BingeCat because-you-watched, etc.) changed.
+         */
+        private const val RAILS_STALE_RESUME_MS = 10 * 60 * 1000L
 
         /** Cold-start rail retry tuning: 2 retries at +4s / +8s. */
         private const val RAIL_LOAD_RETRY_MAX_ATTEMPTS = 2

@@ -62,7 +62,11 @@ class KBHomeManagerViewModel(application: Application) : AndroidViewModel(applic
 
             val collectionRails = collections.map { collection ->
                 ManagedRail(
-                    key = KBHomeOrderPrefs.collectionKey(collection.id, collection.title),
+                    key = KBHomeOrderPrefs.resolveArrangementKey(
+                        getApplication(),
+                        collection.id,
+                        collection.title
+                    ),
                     isCollection = true,
                     title = collection.title.ifBlank { "Untitled collection" },
                     subtitle = "${collection.folders.size} folders",

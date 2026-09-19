@@ -688,10 +688,33 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                 }
                 .toMap()
 
-        val nextOrderStart =
-            getCatalogConfigurations().size
+        // Catalogs this addon HAD that the fresh manifest no longer lists.
+        // Dynamic addons (BingeCat's because-you-watched rails, curated
+        // lists) frequently swap catalog ids as their content changes —
+        // conceptually the new catalog REPLACES the removed one, so the
+        // replacement inherits the removed slot's order index instead of
+        // appending to the bottom of Home. Freed slots are handed out in
+        // ascending order so one removed slot absorbs exactly one newcomer.
+        val manifestKeys =
+            manifest.catalogs.mapTo(mutableSetOf()) {
+                catalogKey(
+                    manifest.id,
+                    it.type,
+                    it.id
+                )
+            }
 
-        var newCatalogOffset = 0
+        val freedOrderSlots =
+            existingGlobalOrder.entries
+                .filter { (key, _) -> key !in manifestKeys }
+                .map { it.value }
+                .sorted()
+
+        val fallbackOrderStart =
+            (existingGlobalOrder.values.maxOrNull() ?: -1) + 1
+
+        var freedSlotCursor = 0
+        var overflowOffset = 0
 
         val mergedCatalogs =
             manifest.catalogs.map { manifestCatalog ->
@@ -723,8 +746,13 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                     order =
                         existingOrder
                             ?: (
-                                nextOrderStart +
-                                    newCatalogOffset++
+                                freedOrderSlots.getOrNull(
+                                    freedSlotCursor++
+                                )
+                                    ?: (
+                                        fallbackOrderStart +
+                                            overflowOffset++
+                                        )
                                 )
                 )
             }
