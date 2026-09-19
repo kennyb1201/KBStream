@@ -1312,13 +1312,15 @@ continueTimeLeft?.let { label ->
             // Upcoming-rail items: the real calendar date under the
             // "Airs …" label ("Mon, Sep 15"), styled like the other
             // hero detail lines. Skipped when the label already IS the
-            // date ("Airs Mon, Sep 15") so the same date never renders
-            // twice.
+            // date — ≥7 days out the relative label formats as the
+            // absolute date, so "Airs Thu, Sep 25" + the date line showed
+            // the same date twice (the hero double-date on far-out items,
+            // e.g. new-season premieres). Relative labels ("In 5 days",
+            // "Today") keep the date line — there it adds real info.
             continueWatchingItem?.airDateFull
                 ?.takeIf { it.isNotBlank() }
                 ?.takeIf { fullDate ->
-                    continueWatchingItem.airDateLabel
-                        ?.let { "Airs $it" } != fullDate
+                    continueWatchingItem.airDateLabel != fullDate
                 }
                 ?.let { fullDate ->
                     Text(
@@ -1513,28 +1515,51 @@ private fun UpcomingEpisodeCard(
                 )
             }
 
-            // Bottom block: show title, then season/episode + episode title.
+            // Bottom block: calendar date first ("When is this on?" is the
+            // primary question for an unaired episode), then show title,
+            // then season/episode + episode title.
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .fillMaxWidth()
                     .padding(horizontal = 8.dp, vertical = 6.dp)
             ) {
+                // Calendar date ("Mon, Sep 15") — promoted ABOVE the show
+                // title: on upcoming cards the date outranks the title as
+                // the scanning hook, and it's the only timing info NEW
+                // SEASON cards carry (their top chip is the flag, not a
+                // date).
+                upcoming.airDateFull
+                    .takeIf { it.isNotBlank() }
+                    ?.let { fullDate ->
+                        Text(
+                            text = fullDate,
+                            color = if (focused) {
+                                KBTextHi.copy(alpha = 0.80f)
+                            } else {
+                                KBTextLo
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                        )
+                    }
+
                 Text(
                     text = upcoming.title,
                     color = KBTextHi,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 1.dp)
                 )
 
                 val seLabel = "S%02d · E%02d".format(
                     upcoming.season,
                     upcoming.episode
                 )
-                // Same stack order as the Continue Watching card:
-                // show title -> S·E line -> episode title line.
+                // Show title -> S·E line -> episode title line.
                 Text(
                     text = seLabel,
                     color = if (focused) {
@@ -1548,26 +1573,6 @@ private fun UpcomingEpisodeCard(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 2.dp)
                 )
-
-                // Calendar date ("Mon, Sep 15") — the same line the hero
-                // shows under "Airs …". Matters most on NEW SEASON cards:
-                // their top chip carries no timing info at all, so without
-                // this the card gives no clue when the season lands.
-                upcoming.airDateFull
-                    .takeIf { it.isNotBlank() }
-                    ?.let { fullDate ->
-                        Text(
-                            text = fullDate,
-                            color = if (focused) {
-                                KBTextHi.copy(alpha = 0.70f)
-                            } else {
-                                KBTextLo
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            maxLines = 1,
-                            modifier = Modifier.padding(top = 1.dp)
-                        )
-                    }
 
                 upcoming.episodeTitle
                     ?.trim()
