@@ -60,6 +60,52 @@ begin
   end;
 end $$;
 
+-- ── Legacy user_id columns / primary keys ──────────────────────────
+-- Some earlier table versions carry a NOT NULL user_id the app never
+-- sends — sometimes as part of the PRIMARY KEY ("column "user_id" is in
+-- a primary key" / "null value in column "user_id" …"). Handle both:
+-- rebuild any PK that includes user_id onto the app's key column, then
+-- default user_id to auth.uid() and drop its NOT NULL. No-ops when the
+-- tables already match the app's schema.
+do $$
+declare
+  t text;
+  keycol text;
+  pkname text;
+  pk_has_user bool;
+begin
+  for t, keycol in
+    select * from unnest(
+      array['sync_watch_history','sync_watched_status','sync_prefs'],
+      array['item_id','item_key','pref_key']
+    )
+  loop
+    select c.conname, bool_or(a.attname = 'user_id')
+      into pkname, pk_has_user
+    from pg_constraint c
+    join pg_attribute a
+      on a.attrelid = c.conrelid and a.attnum = any(c.conkey)
+    where c.conrelid = format('public.%I', t)::regclass
+      and c.contype = 'p'
+    group by c.conname;
+
+    if pkname is not null and pk_has_user then
+      execute format('alter table public.%I drop constraint %I', t, pkname);
+      execute format('alter table public.%I add primary key (%I)', t, keycol);
+    end if;
+
+    if exists (
+      select 1 from information_schema.columns
+      where table_schema = 'public' and table_name = t and column_name = 'user_id'
+    ) then
+      execute format(
+        'alter table public.%I alter column user_id set default auth.uid()', t);
+      execute format(
+        'alter table public.%I alter column user_id drop not null', t);
+    end if;
+  end loop;
+end $$;
+
 -- ── Row level security ──────────────────────────────────────────────
 -- Rows carry no per-user column; isolation is the app's account boundary
 -- plus per-profile key prefixes ("p:<profileId>:<key>"). Policies grant
