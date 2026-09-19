@@ -257,6 +257,12 @@ object AppUpdater {
      * the system install prompt when the session is denied (update-ownership).
      */
     fun installApk(context: Context, apk: File) {
+        // The install kills this process. Persist the CURRENT Supabase
+        // refresh token first — a background auto-refresh since the last
+        // save would leave the stored token spent, and the post-update cold
+        // start would then fail refresh-token reuse detection and sign the
+        // user out.
+        com.kennyb1201.kbstream.data.sync.SupabaseSync.persistSessionBeforeProcessExit()
         try {
             sessionInstall(context, apk)
         } catch (denied: SecurityException) {

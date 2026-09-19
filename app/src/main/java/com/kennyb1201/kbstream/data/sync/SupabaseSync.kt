@@ -5,6 +5,7 @@ import android.util.Log
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.gotrue.Auth
+import io.github.jan.supabase.gotrue.SessionStatus
 import io.github.jan.supabase.gotrue.auth
 import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.postgrest.from
@@ -169,6 +170,23 @@ object SupabaseSync {
         }
 
         restoreSession(context)
+
+        // Keep the persisted refresh token in lockstep with the client's
+        // session. supabase-kt auto-refreshes in the background and ROTATES
+        // the token on every refresh — memory-only unless re-saved here.
+        // A saved token one generation behind turns the next forced process
+        // restart (the in-app updater!) into Supabase refresh-token
+        // reuse-detection, which revokes the whole session family: instant
+        // sign-out after updating. Re-persist on every Authenticated event.
+        scope.launch {
+            client?.auth?.sessionStatus?.collect { status ->
+                if (status is SessionStatus.Authenticated) {
+                    val ctx = appContextRef?.get() ?: return@collect
+                    runCatching { persistSessionFromClient(ctx) }
+                        .onFailure { Log.w(TAG, "session persist failed", it) }
+                }
+            }
+        }
     }
 
     private fun restoreSession(context: Context) {
@@ -391,6 +409,37 @@ object SupabaseSync {
             .putString(KEY_REFRESH_TOKEN, refresh)
             .putString(KEY_EMAIL, email)
             .apply()
+    }
+
+    /**
+     * Re-saves the client's CURRENT refresh token (and the already-known
+     * email) to prefs. Used by the session-status collector and the updater.
+     */
+    private suspend fun persistSessionFromClient(context: Context) {
+        val c = client ?: return
+        val refresh = c.auth.currentSessionOrNull()?.refreshToken ?: return
+        if (refresh.isBlank()) return
+        val prefs = context.getSharedPreferences(SYNC_PREFS, Context.MODE_PRIVATE)
+        prefs.edit()
+            .putString(KEY_REFRESH_TOKEN, refresh)
+            .putString(KEY_EMAIL, prefs.getString(KEY_EMAIL, null).orEmpty())
+            .apply()
+    }
+
+    /**
+     * Synchronous one-shot save of the client's current refresh token.
+     * Called right before the in-app updater commits an APK install: the
+     * install kills this process, and a background auto-refresh since the
+     * last persist would leave the saved token SPENT — the post-update cold
+     * start would then trip Supabase's reuse detection and sign the user
+     * out. Blocking briefly here is fine: we are on the updater's IO
+     * coroutine and about to die anyway.
+     */
+    fun persistSessionBeforeProcessExit() {
+        val context = appContextRef?.get() ?: return
+        runCatching {
+            kotlinx.coroutines.runBlocking { persistSessionFromClient(context) }
+        }
     }
 
     // ── Outbox (offline-safe local-write flush) ─────────────────────
