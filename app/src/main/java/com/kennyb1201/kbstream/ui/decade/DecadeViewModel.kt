@@ -4,7 +4,9 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kennyb1201.kbstream.data.tmdb.CrossBase
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
+import com.kennyb1201.kbstream.data.tmdb.TmdbGenre
 import com.kennyb1201.kbstream.data.tmdb.TagRailPage
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
@@ -108,15 +110,42 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
 
     private var currentDecadeStart: Int? = null
 
+    // Genre chip filter: when non-null, rails re-run with the selected
+    // genre ANDed onto the decade's year window.
+    private var currentGenreId: Int? = null
+    private val _browseGenres = MutableStateFlow<List<TmdbGenre>>(emptyList())
+    val browseGenres: StateFlow<List<TmdbGenre>> = _browseGenres.asStateFlow()
+
+    private val _selectedGenreId = MutableStateFlow<Int?>(null)
+    val selectedGenreId: StateFlow<Int?> = _selectedGenreId.asStateFlow()
+
+    /** Genre chips act on the loaded decade. */
+    fun crossGenreBase(): CrossBase? {
+        val start = currentDecadeStart ?: return null
+        return CrossBase(kind = "decade", id = start)
+    }
+
+    /** Select/clear the genre filter and reload the rails. */
+    fun onGenreSelected(genreId: Int?) {
+        val start = currentDecadeStart ?: return
+        if (genreId == currentGenreId) return
+        load(start, genreId)
+    }
+
     fun watchedKey(id: String, type: String): String = "${type.lowercase()}::$id"
 
     fun lookupKey(tmdbId: Int, mediaType: String): String =
         "${mediaType.lowercase()}::$tmdbId"
 
-    fun load(decadeStart: Int) {
+    fun load(decadeStart: Int, genreId: Int? = null) {
         // Same-route guard so Back-restore doesn't reload and clear state.
         if (currentDecadeStart == decadeStart && _sections.value.isNotEmpty()) return
         currentDecadeStart = decadeStart
+        currentGenreId = genreId
+        _selectedGenreId.value = genreId
+        viewModelScope.launch {
+            _browseGenres.value = tmdbRepository.getBrowseGenres()
+        }
 
         viewModelScope.launch {
             _isLoading.value = true
@@ -125,7 +154,14 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
             _pagingStates.value = emptyMap()
 
             try {
-                val result = tmdbRepository.getInitialDecadeSections(decadeStart)
+                val result = if (currentGenreId != null) {
+                    tmdbRepository.getInitialCrossGenreSections(
+                        base = CrossBase("decade", decadeStart),
+                        genreId = currentGenreId!!
+                    )
+                } else {
+                    tmdbRepository.getInitialDecadeSections(decadeStart)
+                }
 
                 _sections.value = result
                 _pagingStates.value = result.associate { section ->
@@ -166,7 +202,16 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             try {
                 val page: TagRailPage =
-                    tmdbRepository.getDecadeRailPage(decadeStart, title, pageNumber)
+                    if (currentGenreId != null) {
+                        tmdbRepository.getCrossGenreRailPage(
+                            base = CrossBase("decade", decadeStart),
+                            genreId = currentGenreId!!,
+                            title = title,
+                            page = pageNumber
+                        )
+                    } else {
+                        tmdbRepository.getDecadeRailPage(decadeStart, title, pageNumber)
+                    }
 
                 val existingSection = _sections.value.firstOrNull { it.title == title }
                 if (existingSection != null && page.items.isNotEmpty()) {

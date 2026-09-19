@@ -4,7 +4,9 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kennyb1201.kbstream.data.tmdb.CrossBase
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
+import com.kennyb1201.kbstream.data.tmdb.TmdbGenre
 import com.kennyb1201.kbstream.data.tmdb.TagRailPage
 import com.kennyb1201.kbstream.data.tmdb.TmdbCompanyDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
@@ -123,6 +125,47 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     private var currentNetworkIsCompany: Boolean = false
     private var currentOriginalsCompanyId: Int? = null
 
+    // Genre chip filter: when non-null, rails re-run with the selected
+    // genre ANDed onto the screen's base dimension (provider / network /
+    // company, whichever the browse entry carries).
+    private var currentGenreId: Int? = null
+    private val _browseGenres = MutableStateFlow<List<TmdbGenre>>(emptyList())
+    val browseGenres: StateFlow<List<TmdbGenre>> = _browseGenres.asStateFlow()
+
+    private val _selectedGenreId = MutableStateFlow<Int?>(null)
+    val selectedGenreId: StateFlow<Int?> = _selectedGenreId.asStateFlow()
+
+    /** Genre chips act on the loaded entity's base dimension. */
+    fun crossGenreBase(): CrossBase? {
+        val id = currentId ?: return null
+        return when {
+            // A watch-provider base needs the provider id; entries whose
+            // header id is the company itself use the company kind.
+            currentProviderId != null -> CrossBase("provider", currentProviderId!!)
+            currentNetworkOrCompanyId != null -> CrossBase(
+                if (currentNetworkIsCompany) "company" else "network",
+                currentNetworkOrCompanyId!!
+            )
+            // Plain network/studio page: header id IS the dimension.
+            else -> CrossBase(if (currentIsNetwork) "network" else "company", id)
+        }
+    }
+
+    /** Select/clear the genre filter and reload the rails. */
+    fun onGenreSelected(genreId: Int?) {
+        val id = currentId ?: return
+        if (genreId == currentGenreId) return
+        load(
+            id,
+            currentIsNetwork,
+            currentProviderId,
+            currentNetworkOrCompanyId,
+            currentNetworkIsCompany,
+            currentOriginalsCompanyId,
+            genreId
+        )
+    }
+
     fun watchedKey(id: String, type: String): String = "${type.lowercase()}::$id"
 
     fun lookupKey(tmdbId: Int, mediaType: String): String =
@@ -134,7 +177,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         providerId: Int? = null,
         networkOrCompanyId: Int? = null,
         networkIsCompany: Boolean = false,
-        originalsCompanyId: Int? = null
+        originalsCompanyId: Int? = null,
+        genreId: Int? = null
     ) {
         val isSameRoute =
             currentId == id &&
@@ -142,6 +186,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             currentProviderId == providerId &&
             currentNetworkOrCompanyId == networkOrCompanyId &&
             currentOriginalsCompanyId == originalsCompanyId &&
+            currentGenreId == genreId &&
             _sections.value.isNotEmpty()
 
         if (isSameRoute) return
@@ -150,6 +195,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         currentIsNetwork = isNetwork
         currentProviderId = providerId
         currentNetworkOrCompanyId = networkOrCompanyId
+        currentGenreId = genreId
+        _selectedGenreId.value = genreId
         currentNetworkIsCompany = networkIsCompany
         currentOriginalsCompanyId = originalsCompanyId
 
@@ -183,6 +230,14 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
             try {
                 val result = when {
+                    // Genre chip active: genre ANDed onto the base dimension
+                    // (provider rails skip originals, which are not the chip's
+                    // target and would just repeat it).
+                    currentGenreId != null && crossGenreBase() != null ->
+                        tmdbRepository.getInitialCrossGenreSections(
+                            base = crossGenreBase()!!,
+                            genreId = currentGenreId!!
+                        )
                     // Service pages discover through watch-provider rails
                     // (movies + series) instead of network/company rails.
                     // The ORIGINALS rails (network/company discover) ride
@@ -240,6 +295,13 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             try {
                 val page: TagRailPage = when {
+                    currentGenreId != null && crossGenreBase() != null ->
+                        tmdbRepository.getCrossGenreRailPage(
+                            base = crossGenreBase()!!,
+                            genreId = currentGenreId!!,
+                            title = title,
+                            page = pageNumber
+                        )
                     currentProviderId != null || currentOriginalsCompanyId != null ->
                         tmdbRepository.getServiceRailPage(
                             providerId = currentProviderId,

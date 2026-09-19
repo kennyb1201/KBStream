@@ -33,6 +33,14 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 data class StudioItem(val item: TmdbDiscoverItem, val mediaType: String)
 data class StudioSection(val title: String, val items: List<StudioItem>)
 
+/**
+ * The non-genre dimension a discover screen is already filtered by. Genre
+ * chip rails compose this WITH a genre (KBFilters fields AND together), so
+ * every screen can offer "browse this dimension by genre" without new
+ * endpoints. kind: provider | company | network | keyword | decade.
+ */
+data class CrossBase(val kind: String, val id: Int)
+
 data class TagRailPage(
     val items: List<StudioItem>,
     val hasMore: Boolean
@@ -851,6 +859,122 @@ class TmdbRepository private constructor(context: Context) {
             pages[4].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · POPULAR", it) },
             pages[5].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · TOP RATED", it) }
         )
+    }
+
+    // ------------------------------------------------------------------
+    // Genre chip rails: compose a genre filter with whatever dimension a
+    // discover screen already uses (provider, company, network, keyword,
+    // or decade). Uses discoverKB so the genre ANDs with the base filter,
+    // instead of adding new API endpoints per screen.
+    // ------------------------------------------------------------------
+
+    /** Cached union of TMDB movie + TV genre lists (merged by id). */
+    @Volatile
+    private var browseGenreCache: List<TmdbGenre>? = null
+
+    suspend fun getBrowseGenres(): List<TmdbGenre> {
+        browseGenreCache?.let { return it }
+        val movie = runCatching { api.getMovieGenreList(apiKey).genres }.getOrDefault(emptyList())
+        val tv = runCatching { api.getTvGenreList(apiKey).genres }.getOrDefault(emptyList())
+        val merged = (movie + tv.filter { tvGenre -> movie.none { it.id == tvGenre.id } })
+            .sortedBy { it.name }
+        if (merged.isNotEmpty()) browseGenreCache = merged
+        return merged
+    }
+
+    /**
+     * One page of one rail where a genre is ANDed onto the screen's base
+     * dimension. Rail title parses exactly like the per-dimension rail
+     * pages ("MOVIES · POPULAR", ...). A network base is TV-only; movie
+     * rails against it return an empty page.
+     */
+    suspend fun getCrossGenreRailPage(
+        base: CrossBase,
+        genreId: Int,
+        title: String,
+        page: Int
+    ): TagRailPage {
+        if (apiKey.isBlank()) return TagRailPage(emptyList(), false)
+
+        val parts = title.split("\u00B7").map { it.trim() }
+        val mediaType = when (parts.getOrNull(0)?.uppercase()) {
+            "MOVIES" -> "movie"
+            "SERIES" -> "tv"
+            else -> return TagRailPage(emptyList(), false)
+        }
+        val isTv = mediaType == "tv"
+        val mode = parts.getOrNull(1)?.uppercase()
+        val sortBy = when (mode) {
+            "RECENT" -> if (isTv) "first_air_date.desc" else "primary_release_date.desc"
+            "POPULAR" -> "popularity.desc"
+            "TOP RATED" -> "vote_count.desc"
+            else -> return TagRailPage(emptyList(), false)
+        }
+        val voteFloor = when (mode) {
+            "RECENT" -> minRecentVoteCount
+            "POPULAR" -> minVoteCount
+            else -> minTopRatedVoteCount
+        }
+        if (base.kind == "network" && !isTv) return TagRailPage(emptyList(), false)
+
+        val filters = com.kennyb1201.kbstream.data.kb.KBFilters(
+            voteCountGte = voteFloor,
+            // A genre-base screen (Tag on a genre) ANDs the chip genre via
+            // TMDB's comma OR semantics within the same filter field.
+            withGenres = if (base.kind == "genre") {
+                if (base.id == genreId) base.id.toString() else "${base.id},$genreId"
+            } else {
+                genreId.toString()
+            },
+            releaseDateLte = today,
+            withWatchProviders = if (base.kind == "provider") base.id.toString() else null,
+            watchRegion = if (base.kind == "provider") "US" else null,
+            withCompanies = if (base.kind == "company") base.id.toString() else null,
+            withNetworks = if (base.kind == "network") base.id.toString() else null,
+            withKeywords = if (base.kind == "keyword") base.id.toString() else null,
+            year = if (base.kind == "decade") base.id else null
+        )
+
+        val items = runCatching {
+            discoverKB(
+                mediaType = if (isTv) "tv" else "movie",
+                page = page,
+                sortBy = sortBy,
+                filters = filters
+            )
+        }.getOrNull().orEmpty()
+            .map { StudioItem(it, if (isTv) "series" else "movie") }
+            .distinctBy { it.item.id }
+
+        val filtered =
+            if (isDigitalFilterEnabled()) {
+                filterByHomeAvailability(items) { it.item.id to it.mediaType }
+            } else {
+                items
+            }
+        return kidsFilterPage(TagRailPage(filtered, items.size >= 20))
+    }
+
+    /**
+     * Initial rail set for a genre-filtered discover screen. Rail titles
+     * (and therefore section keys) match the unfiltered screens so the
+     * ViewModels' paging code works unchanged.
+     */
+    suspend fun getInitialCrossGenreSections(
+        base: CrossBase,
+        genreId: Int
+    ): List<StudioSection> = coroutineScope {
+        val titles = when (base.kind) {
+            "decade" -> DECADE_RAIL_TITLES
+            "network" -> listOf("SERIES \u00B7 RECENT", "SERIES \u00B7 POPULAR", "SERIES \u00B7 TOP RATED")
+            else -> SERVICE_RAIL_TITLES
+        }
+        val pages = titles.map { title ->
+            async { getCrossGenreRailPage(base, genreId, title, 1) }
+        }.awaitAll()
+        titles.mapIndexed { index, title ->
+            pages[index].items.takeIf { it.isNotEmpty() }?.let { StudioSection(title, it) }
+        }.filterNotNull()
     }
 
     /**

@@ -116,7 +116,11 @@ class TagViewModel(application: Application) : AndroidViewModel(application) {
     fun lookupKey(tmdbId: Int, mediaType: String): String =
         "${mediaType.lowercase()}::$tmdbId"
 
-    fun load(id: Int, isKeyword: Boolean, type: String) {
+    fun load(
+        id: Int,
+        isKeyword: Boolean,
+        type: String
+    ) {
         currentId = id
         currentIsKeyword = isKeyword
 
@@ -173,11 +177,12 @@ class TagViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             try {
-                val page: TagRailPage = if (currentIsKeyword) {
-                    tmdbRepository.getKeywordRailPage(screenId, title, pageNumber)
-                } else {
-                    tmdbRepository.getGenreRailPage(screenId, title, pageNumber)
-                }
+                val page: TagRailPage =
+                    if (currentIsKeyword) {
+                        tmdbRepository.getKeywordRailPage(screenId, title, pageNumber)
+                    } else {
+                        tmdbRepository.getGenreRailPage(screenId, title, pageNumber)
+                    }
 
                 val existingSection = _sections.value.firstOrNull { it.title == title }
                 if (existingSection != null && page.items.isNotEmpty()) {

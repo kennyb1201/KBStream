@@ -50,6 +50,7 @@ import coil3.size.Size
 import com.kennyb1201.kbstream.data.tmdb.StudioItem
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.ui.components.GenreChipRow
 import com.kennyb1201.kbstream.ui.components.PosterSize
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
@@ -80,6 +81,8 @@ fun DecadeScreen(
     viewModel: DecadeViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
     val sections by viewModel.sections.collectAsStateWithLifecycle()
+    val browseGenres by viewModel.browseGenres.collectAsStateWithLifecycle()
+    val selectedGenreId by viewModel.selectedGenreId.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
     val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
@@ -147,6 +150,13 @@ fun DecadeScreen(
             DecadeHeader(
                 name = name,
                 posterUrls = headerPosters
+            )
+
+            GenreChipRow(
+                genres = browseGenres,
+                selectedGenreId = selectedGenreId,
+                onSelect = { viewModel.onGenreSelected(it) },
+                modifier = Modifier.padding(start = 28.dp, top = 4.dp)
             )
 
             LazyColumn(
