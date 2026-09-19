@@ -287,11 +287,18 @@ object SupabaseSync {
                 _syncEnabled.value = true
                 startRealtime()
                 startPeriodicFlush()
-                pullAll(context)
-                // Seed the cloud with this device's active-profile rows so
-                // other devices sync immediately (last-write-wins makes
-                // pushing on sign-in safe).
-                pushAll(context)
+                // Pull FIRST and AWAIT it: a fresh device must ingest the
+                // cloud state before it pushes. pullAll/pushAll are
+                // fire-and-forget Jobs — running them back-to-back raced
+                // them on the IO dispatcher, and this device's empty local
+                // payloads (stamped updatedAt=now by buildAll) overwrote the
+                // cloud's profiles/settings blobs before or while the pull
+                // read them. The sign-in transfer then had nothing to
+                // deliver. Sequencing the push after the pull completes
+                // means the push re-seeds the merged state — a no-op for
+                // existing rows, correct for genuinely new ones.
+                pullAllNow(context)
+                pushAllNow(context)
             } catch (e: Exception) {
                 Log.e(TAG, "signIn failed", e)
                 _authState.value = AuthState.Error(e.message ?: "Sign-in failed")
@@ -564,23 +571,35 @@ object SupabaseSync {
         @SerialName("updated_at") val updatedAt: String = ""
     )
 
-    fun pullAll(context: Context) {
-        scope.launch {
-            pullHistory(context)
-            pullWatched(context)
-            pullPrefs(context)
-            _lastSyncAtMs.value = System.currentTimeMillis()
-        }
+    fun pullAll(context: Context): kotlinx.coroutines.Job = scope.launch {
+        pullAllNow(context)
     }
 
-    fun pushAll(context: Context) {
-        scope.launch {
-            pushHistory(context)
-            pushWatched(context)
-            pushPrefsBlobs(context)
-            flushOutbox()
-            _lastSyncAtMs.value = System.currentTimeMillis()
-        }
+    fun pushAll(context: Context): kotlinx.coroutines.Job = scope.launch {
+        pushAllNow(context)
+    }
+
+    /**
+     * Awaited variants — callers that must sequence push-after-pull.
+     * Prefs pull FIRST: the profiles blob inside it creates/activates the
+     * account's profile on a fresh device, and the history/watched pulls
+     * below filter rows by the ACTIVE profile — running them before the
+     * profile exists would drop every scoped row (the fresh-device sign-in
+     * transferred nothing, even when the pull itself succeeded).
+     */
+    private suspend fun pullAllNow(context: Context) {
+        pullPrefs(context)
+        pullHistory(context)
+        pullWatched(context)
+        _lastSyncAtMs.value = System.currentTimeMillis()
+    }
+
+    private suspend fun pushAllNow(context: Context) {
+        pushHistory(context)
+        pushWatched(context)
+        pushPrefsBlobs(context)
+        flushOutbox()
+        _lastSyncAtMs.value = System.currentTimeMillis()
     }
 
     /**
@@ -794,6 +813,17 @@ object SupabaseSync {
 
     private suspend fun pushPrefsBlobs(context: Context) {
         PrefsPayloadBuilder.buildAll(context).forEach { (key, payload) ->
+            // Belt-and-braces guard: an empty local profiles list must never
+            // reach the cloud. A fresh device pushing before its first pull
+            // would otherwise erase the account's profiles for every other
+            // device (the sign-in race this guards against is fixed at the
+            // call site, but any future caller ordering stays safe).
+            if (key == PrefsPayloadBuilder.KEY_PROFILES &&
+                (payload["profiles"] as? kotlinx.serialization.json.JsonArray)
+                    ?.isEmpty() == true
+            ) {
+                return@forEach
+            }
             enqueuePrefs(context, key, payload)
         }
         flushOutbox()
