@@ -101,6 +101,27 @@ class SimklRepository(
                     .tmdbJsonCacheDao()
             }
 
+    init {
+        // One-time sweep: builds before the per-profile disk-cache keys
+        // stored Simkl blobs under GLOBAL keys in this shared cache table.
+        // Those rows are now unreachable (all reads/writes go through the
+        // profile-scoped diskKey()) and can hold ANOTHER account's data —
+        // delete them once so they don't sit stale forever.
+        tmdbJsonCacheDao?.let { dao ->
+            CoroutineScope(Dispatchers.IO).launch {
+                runCatching {
+                    dao.deleteByKeys(
+                        listOf(
+                            "simkl:all_show_items",
+                            "simkl:continue_watching",
+                            "simkl:completed_movies"
+                        )
+                    )
+                }
+            }
+        }
+    }
+
     // Scoped history DAO resolved per access so Continue Watching filtering
     // sees the ACTIVE profile's completed episodes (same per-access
     // rebinding pattern the other history consumers rely on).
@@ -1676,13 +1697,21 @@ class SimklRepository(
         // the old mix (shows from a 12h-cached blob + movies fetched live)
         // made the two numbers disagree on every visit — the screen always
         // displayed counts from two different moments.
+        //
+        // Series counts only WATCHING + COMPLETED shows: the all-items
+        // endpoint returns every list (including plantowatch / hold /
+        // dropped), and "SERIES WATCHED" over-counts when it includes
+        // shows never actually watched. Matches what Simkl's own site
+        // reports as watched.
+        val watchedShowStatuses = setOf("watching", "completed")
         val shows =
             runCatching {
                 getAllShowItemsCached(
                     accessToken = accessToken,
                     forceRefresh = true
                 )
-            }.getOrNull()?.shows?.size
+            }.getOrNull()?.shows
+                ?.count { it.status?.lowercase()?.trim() in watchedShowStatuses }
 
         val movies =
             runCatching {
