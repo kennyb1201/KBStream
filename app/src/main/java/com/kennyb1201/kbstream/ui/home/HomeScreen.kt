@@ -1464,12 +1464,16 @@ private fun UpcomingEpisodeCard(
                     .fillMaxSize()
                     .background(
                         Brush.verticalGradient(
+                            // Same 4-stop treatment as the Continue Watching
+                            // cards: the old 5-stop gradient ended in TWO
+                            // 100%-opaque stops, painting a flat solid-black
+                            // band across the bottom third instead of a
+                            // smooth fade.
                             colors = listOf(
-                                Color.Transparent,
-                                Color.Transparent,
-                                Color.Black.copy(alpha = 0.50f),
-                                KBVoid.copy(alpha = 1.0f),
-                                KBVoid.copy(alpha = 1.0f)
+                                Color.Black.copy(alpha = 0.08f),
+                                Color.Black.copy(alpha = 0.34f),
+                                Color.Black.copy(alpha = 0.80f),
+                                KBVoid.copy(alpha = 0.97f)
                             )
                         )
                     )
