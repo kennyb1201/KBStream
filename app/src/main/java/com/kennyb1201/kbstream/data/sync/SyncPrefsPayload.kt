@@ -227,6 +227,10 @@ object PrefsPayloadBuilder {
 
     fun buildIptv(context: Context): JsonObject {
         val prefs = scopedPrefs(context, "iptv_prefs")
+        // Guide-level sets live in their own scoped store and must ride the
+        // same payload row — hidden channels/groups that don't cross devices
+        // make one TV's guide diverge from the other's.
+        val guidePrefs = scopedPrefs(context, "iptv_guide_preferences")
         return buildJsonObject {
             put("updatedAt", System.currentTimeMillis())
             put("playlist_url", prefs.getString("playlist_url", null).orEmpty())
@@ -246,6 +250,12 @@ object PrefsPayloadBuilder {
             }
             putJsonArray("hidden_channel_ids") {
                 prefs.getStringSet("hidden_channel_ids", emptySet()).orEmpty().forEach { add(it) }
+            }
+            putJsonArray("hidden_groups") {
+                guidePrefs.getStringSet("hidden_groups", emptySet()).orEmpty().forEach { add(it) }
+            }
+            putJsonArray("favorites") {
+                guidePrefs.getStringSet("favorites", emptySet()).orEmpty().forEach { add(it) }
             }
         }
     }
@@ -455,6 +465,27 @@ object PrefsPayloadApplier {
             val set = arr.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }.toSet()
             editor.putStringSet("hidden_channel_ids", set)
         }
+        // Guide-level sets: full replace when present (a device that un-hid
+        // a group should propagate the un-hide), guarded by the same
+        // iptv_synced_at staleness check above.
+        val guidePrefs = scopedPrefs(context, "iptv_guide_preferences")
+        val guideEditor = guidePrefs.edit()
+        var guideChanged = false
+        (payload["hidden_groups"] as? kotlinx.serialization.json.JsonArray)?.let { arr ->
+            guideEditor.putStringSet(
+                "hidden_groups",
+                arr.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }.toSet()
+            )
+            guideChanged = true
+        }
+        (payload["favorites"] as? kotlinx.serialization.json.JsonArray)?.let { arr ->
+            guideEditor.putStringSet(
+                "favorites",
+                arr.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }.toSet()
+            )
+            guideChanged = true
+        }
+        if (guideChanged) guideEditor.apply()
         editor.putLong("iptv_synced_at", remoteUpdated ?: System.currentTimeMillis())
         editor.apply()
 

@@ -768,6 +768,14 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private fun saveHiddenChannelIds() {
         prefs.edit().putStringSet(KEY_HIDDEN_CHANNEL_IDS, _hiddenChannelIds.value).apply()
+        // Sync push: hiding channels must cross devices immediately instead
+        // of riding the next unrelated iptv_config flush.
+        val appCtx = app.applicationContext
+        com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+            appCtx,
+            com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_IPTV,
+            com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildIptv(appCtx)
+        )
     }
 
     private fun buildGuideSourceKey(

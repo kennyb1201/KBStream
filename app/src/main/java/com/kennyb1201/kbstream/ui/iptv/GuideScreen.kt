@@ -227,6 +227,14 @@ fun GuideScreen(
     fun favoriteKey(item: IptvChannelWithEpg): String = channelKey(item)
     fun saveSet(key: String, values: Set<String>) {
         guidePreferences.edit().putStringSet(key, values).apply()
+        // Sync push: favorites and hidden groups must cross devices. Only
+        // these two ride saveSet (recents write directly), so enqueue the
+        // fresh IPTV payload — a no-op outbox entry when signed out.
+        com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+            appContext,
+            com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_IPTV,
+            com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildIptv(appContext)
+        )
     }
     fun withFavoriteFlag(item: IptvChannelWithEpg): IptvChannelWithEpg =
         item.copy(isFavorite = favoriteKey(item) in favorites)
