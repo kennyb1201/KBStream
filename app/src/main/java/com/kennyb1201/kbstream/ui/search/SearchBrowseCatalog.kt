@@ -1341,7 +1341,8 @@ val KIDS_COLLECTION_NAMES = listOf(
     "Cars Collection",
     "The Hobbit Collection",
     // 2026-09 additions — exact-resolving family franchises (see the
-    // fourth wave on BROWSE_COLLECTION_NAMES). Strict subset maintained.
+    // fourth wave on BROWSE_COLLECTION_NAMES). The resolver unions both
+    // lists, so kids-only names resolve fine.
     "The Land Before Time Collection",
     "Alvin and the Chipmunks Collection",
     "The Secret Life of Pets Collection",
@@ -1405,7 +1406,6 @@ val KIDS_COLLECTION_NAMES = listOf(
     "The Wild Robot Collection",
     "The Bad Guys Collection",
     "An American Tail Collection",
-    "The Land Before Time Collection",
     "Balto Collection",
     "Alpha and Omega Collection",
     "Rugrats Collection",
@@ -1519,7 +1519,8 @@ val KIDS_KEYWORD_NAMES = listOf(
     "bicycle",
     "sleepover",
     // 2026-09 second wave — animals, myth, everyday-kid life, gentle
-    // adventure. Names resolve against TMDB keyword search; strict subset
+    // adventure. Names resolve against TMDB keyword search; the resolver
+    // unions both lists, so kids-only entries resolve fine.
     // maintained with BROWSE_KEYWORD_NAMES.
     "jungle",
     "safari",

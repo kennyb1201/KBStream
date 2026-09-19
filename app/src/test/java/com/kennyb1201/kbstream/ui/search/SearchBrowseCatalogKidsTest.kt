@@ -7,45 +7,50 @@ import org.junit.Test
  * Invariants of the Search browse catalog that the app relies on at
  * runtime:
  *
- *  1. Every kids chip list is a strict subset of the standard list.
- *     SearchViewModel caches keyword/collection ids keyed by NAME and
- *     shares that cache across profile switches; if a kids-only name
- *     ever appears that the standard list lacks, the standard mode
- *     would never resolve its id and the chip would silently open an
- *     empty rail.
+ *  1. SearchViewModel resolves the UNION of the standard and kids lists
+ *     (distinct by name) and caches ids by name against TMDB search, so
+ *     a name appearing in BOTH lists is fine — same name, same TMDB
+ *     entity, same id. The real hazards are duplicates WITHIN a list
+ *     (double chips, double-resolved ids) and names with no usable id.
  *
  *  2. Kids categories expose only kid-focused entries: no adult-only
  *     networks/studios slip in, and every collection is a franchise a
  *     parent would hand to a kid.
  *
- *  3. Duplicate names inside one list would double-resolve ids and
- *     duplicate chips on screen.
+ *  3. Every kids service/decade entry must carry a discoverable id.
  */
 class SearchBrowseCatalogKidsTest {
 
     private fun names(entries: List<BrowseEntry>) = entries.map { it.name.trim() }
 
-    // ── subset invariants (the SearchViewModel cache contract) ──────────
+    // ── cache-contract invariants ───────────────────────────────────
 
     @Test
-    fun `kids keyword names are a subset of standard keyword names`() {
-        val standard = BROWSE_KEYWORD_NAMES.map { it.trim() }.toSet()
-        val kids = KIDS_KEYWORD_NAMES.map { it.trim() }.toSet()
-        val missing = kids - standard
+    fun `union of keyword lists has no whitespace-variant duplicates`() {
+        // The resolver feeds BROWSE + KIDS through .distinct() before
+        // resolving, so an exact-equal name in both lists collapses to one
+        // chip (fine — same name, same TMDB entity). What must never happen:
+        // the same trimmed name appearing with DIFFERENT raw spellings
+        // ("dinosaur" vs "dinosaur ") — .distinct() keeps both, the UI
+        // renders two identical chips, and the id cache races. Group by
+        // trimmed name and assert every group has exactly one spelling.
+        val variants = (BROWSE_KEYWORD_NAMES + KIDS_KEYWORD_NAMES)
+            .groupBy { it.trim() }
+            .filterValues { spellings -> spellings.distinct().size > 1 }
         assertTrue(
-            "kids keywords missing from BROWSE_KEYWORD_NAMES: $missing",
-            missing.isEmpty()
+            "whitespace-variant keyword duplicates: $variants",
+            variants.isEmpty()
         )
     }
 
     @Test
-    fun `kids collection names are a subset of standard collection names`() {
-        val standard = BROWSE_COLLECTION_NAMES.map { it.trim() }.toSet()
-        val kids = KIDS_COLLECTION_NAMES.map { it.trim() }.toSet()
-        val missing = kids - standard
+    fun `union of collection lists has no whitespace-variant duplicates`() {
+        val variants = (BROWSE_COLLECTION_NAMES + KIDS_COLLECTION_NAMES)
+            .groupBy { it.trim() }
+            .filterValues { spellings -> spellings.distinct().size > 1 }
         assertTrue(
-            "kids collections missing from BROWSE_COLLECTION_NAMES: $missing",
-            missing.isEmpty()
+            "whitespace-variant collection duplicates: $variants",
+            variants.isEmpty()
         )
     }
 
