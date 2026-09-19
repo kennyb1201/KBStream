@@ -95,7 +95,9 @@ fun SimklConnectScreen(
                 if (uiState.isConnected) {
                     SimklStatusPanel(
                         title = "Account connected",
-                        message = "Your Simkl account is connected and ready."
+                        message = uiState.accountName?.let {
+                            "Signed in as $it."
+                        } ?: "Your Simkl account is connected and ready."
                     )
 
                     uiState.watchedCounts?.let { counts ->

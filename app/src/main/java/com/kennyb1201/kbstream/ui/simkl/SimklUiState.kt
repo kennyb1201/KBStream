@@ -15,5 +15,6 @@ data class SimklUiState(
     val errorMessage: String? = null,
     val isLoadingWatching: Boolean = false,
     val continueWatching: List<SimklContinueWatchingItem> = emptyList(),
-    val watchedCounts: SimklWatchedCounts? = null
+    val watchedCounts: SimklWatchedCounts? = null,
+    val accountName: String? = null
 )

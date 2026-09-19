@@ -1672,11 +1672,15 @@ class SimklRepository(
             runCatching { requireAccessToken() }.getOrNull()
                 ?: return null
 
+        // Both legs are forced fresh so the pair is a coherent snapshot:
+        // the old mix (shows from a 12h-cached blob + movies fetched live)
+        // made the two numbers disagree on every visit — the screen always
+        // displayed counts from two different moments.
         val shows =
             runCatching {
                 getAllShowItemsCached(
                     accessToken = accessToken,
-                    forceRefresh = false
+                    forceRefresh = true
                 )
             }.getOrNull()?.shows?.size
 
@@ -1694,6 +1698,25 @@ class SimklRepository(
             series = shows ?: 0,
             movies = movies ?: 0
         )
+    }
+
+    /**
+     * The connected account's identity for the connect screen ("Signed in
+     * as …"). Best-effort: null on any failure so the UI simply omits the
+     * line. No caching — the call is cheap and correctness here matters
+     * more than latency (this is how the user verifies WHICH profile's
+     * Simkl they are looking at).
+     */
+    suspend fun getAccountInfo(): SimklUser? {
+        val accessToken =
+            runCatching { requireAccessToken() }.getOrNull()
+                ?: return null
+
+        return runCatching {
+            api.getUserSettings(
+                authorization = bearer(accessToken)
+            ).user
+        }.getOrNull()
     }
 
     suspend fun getWatchedBulkImport(

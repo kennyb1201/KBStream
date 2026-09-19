@@ -41,6 +41,7 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         if (repository.hasToken()) {
+            loadAccountInfo()
             loadContinueWatching()
             loadWatchedCounts()
         }
@@ -74,10 +75,23 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
                         statusMessage = if (connected) "Connected to Simkl." else null
                     )
                     if (connected) {
+                        loadAccountInfo()
                         loadContinueWatching()
                         loadWatchedCounts()
                     }
                 }
+        }
+    }
+
+    /**
+     * Which Simkl account is connected. Best-effort: on failure the line
+     * simply stays hidden. This is the ground truth the user checks to
+     * confirm each profile carries its OWN account.
+     */
+    private fun loadAccountInfo() {
+        viewModelScope.launch {
+            val user = runCatching { repository.getAccountInfo() }.getOrNull()
+            _uiState.value = _uiState.value.copy(accountName = user?.name)
         }
     }
 
@@ -150,6 +164,7 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
                                 statusMessage = "Connected to Simkl.",
                                 errorMessage = null
                             )
+                            loadAccountInfo()
                             loadContinueWatching()
                             loadWatchedCounts()
                             pollJob?.cancel()
@@ -234,6 +249,7 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
                 .onSuccess { items ->
                     runCatching { repository.markWatchedActivitySynced() }
                     loadWatchedCounts()
+                    loadAccountInfo()
 
                     _uiState.value = _uiState.value.copy(
                         isConnected = true,

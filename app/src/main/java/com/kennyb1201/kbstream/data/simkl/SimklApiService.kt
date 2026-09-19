@@ -27,6 +27,11 @@ interface SimklApiService {
         @Header("Authorization") authorization: String
     ): SimklActivitiesResponse
 
+    @GET("users/settings")
+    suspend fun getUserSettings(
+        @Header("Authorization") authorization: String
+    ): SimklUserSettingsResponse
+
     @GET("sync/playback")
     suspend fun getPlayback(
         @Header("Authorization") authorization: String,

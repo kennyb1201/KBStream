@@ -35,6 +35,24 @@ data class SimklWatchedCounts(
 )
 
 @JsonClass(generateAdapter = true)
+data class SimklUserSettingsResponse(
+    @Json(name = "user") val user: SimklUser?
+)
+
+@JsonClass(generateAdapter = true)
+data class SimklUser(
+    @Json(name = "name") val name: String?,
+    @Json(name = "slug") val slug: String?,
+    @Json(name = "avatar_url") val avatarUrl: String?,
+    @Json(name = "urls") val urls: SimklUserUrls?
+)
+
+@JsonClass(generateAdapter = true)
+data class SimklUserUrls(
+    @Json(name = "simkl") val simkl: String?
+)
+
+@JsonClass(generateAdapter = true)
 data class SimklPlaybackIds(
     @Json(name = "simkl") val simkl: Int?,
     @Json(name = "slug") val slug: String?,
