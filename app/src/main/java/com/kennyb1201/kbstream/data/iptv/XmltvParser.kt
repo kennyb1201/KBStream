@@ -67,7 +67,7 @@ class XmltvParser {
         onProgramBatch: (List<XmltvProgram>) -> Unit
     ) {
         parseStreaming(
-            reader = InputStreamReader(input, Charsets.UTF_8),
+            reader = EntitySanitizingReader(InputStreamReader(input, Charsets.UTF_8)),
             sourceUrl = sourceUrl,
             windowStartMs = windowStartMs,
             windowEndMs = windowEndMs,
@@ -89,7 +89,13 @@ class XmltvParser {
         val factory = XmlPullParserFactory.newInstance()
         factory.isNamespaceAware = false
         val parser = factory.newPullParser()
-        parser.setInput(reader)
+        // Real-world XMLTV files frequently contain bare '&' characters
+        // ("AT&T", "Wine & Dine") that Android's strict parser rejects for
+        // the WHOLE file ("unterminated entity ref"). The String-based
+        // parse() path already regex-fixes them; this streaming wrapper
+        // applies the same fix without buffering the (potentially huge)
+        // guide in memory.
+        parser.setInput(EntitySanitizingReader(reader))
 
         val acceptedPrograms = ArrayList<XmltvProgram>(batchSize)
         var channelCount = 0
@@ -306,6 +312,102 @@ class XmltvParser {
             Regex("&(?!(amp|lt|gt|quot|apos|#\\d+|#x[0-9a-fA-F]+);)"),
             "&amp;"
         )
+    }
+
+    /**
+     * Stream-level version of [sanitizeMalformedXml]: escapes bare '&'
+     * characters to '&amp;' as the stream is consumed. Valid entity
+     * references (the five predefined XML ones plus numeric refs) pass
+     * through untouched. Constant memory: fixed internal buffers only, no
+     * full-file buffering — safe for multi-hundred-MB guides on TV devices.
+     */
+    private class EntitySanitizingReader(private val source: Reader) : Reader() {
+        private val inBuf = CharArray(8_192)
+        private var inPos = 0
+        private var inLen = 0
+        private var eof = false
+
+        // Chars consumed from the source but not yet emitted (pushback when
+        // a candidate '&' turns out NOT to start a valid entity).
+        private val lookahead = ArrayDeque<Char>()
+
+        // Transformed output not yet delivered to the caller.
+        private val pending = StringBuilder()
+
+        private fun nextSourceChar(): Char? {
+            lookahead.removeFirstOrNull()?.let { return it }
+            if (inPos >= inLen) {
+                if (eof) return null
+                inLen = source.read(inBuf)
+                inPos = 0
+                if (inLen < 0) {
+                    eof = true
+                    return null
+                }
+            }
+            return inBuf[inPos++]
+        }
+
+        override fun read(cbuf: CharArray, off: Int, len: Int): Int {
+            // Produce up to len transformed chars.
+            while (pending.length < len && !eof) {
+                val c = nextSourceChar() ?: break
+                if (c != '&') {
+                    pending.append(c)
+                    continue
+                }
+                // Collect a candidate entity reference: '&' followed by
+                // entity chars up to ';' (bounded — numeric refs can't
+                // exceed ~10 chars, predefined names are 3-5).
+                val candidate = StringBuilder().append('&')
+                var valid = false
+                while (candidate.length < 12) {
+                    val n = nextSourceChar()
+                    if (n == null) {
+                        eof = true
+                        break
+                    }
+                    candidate.append(n)
+                    if (n == ';') {
+                        valid = isValidEntity(candidate)
+                        break
+                    }
+                    if (!n.isLetterOrDigit() && n != '#') break
+                }
+                if (valid) {
+                    pending.append(candidate)
+                } else {
+                    pending.append("&amp;")
+                    // Push back everything consumed after the '&'.
+                    for (i in candidate.length - 1 downTo 1) {
+                        lookahead.addFirst(candidate[i])
+                    }
+                }
+            }
+
+            if (pending.isEmpty()) return if (eof) -1 else read(cbuf, off, len)
+
+            val n = minOf(len, pending.length)
+            for (i in 0 until n) cbuf[off + i] = pending[i]
+            pending.delete(0, n)
+            return n
+        }
+
+        private fun isValidEntity(s: StringBuilder): Boolean {
+            val body = s.substring(1, s.length - 1) // strip & and ;
+            return body in PREDEFINED ||
+                (body.startsWith("#x") && body.length > 2 &&
+                    body.substring(2).all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }) ||
+                (body.startsWith("#") && body.length > 1 && body.substring(1).all { it.isDigit() })
+        }
+
+        override fun close() {
+            source.close()
+        }
+
+        private companion object {
+            val PREDEFINED = setOf("amp", "lt", "gt", "quot", "apos")
+        }
     }
 
     private companion object {
