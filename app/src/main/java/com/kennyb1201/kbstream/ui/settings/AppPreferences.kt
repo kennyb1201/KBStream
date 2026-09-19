@@ -97,8 +97,8 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_AUTO_PLAY_NEXT, false)
 
     fun setAutoPlayNext(context: Context, enabled: Boolean) {
-        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_AUTO_PLAY_NEXT, enabled).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     // ── Auto-select top stream on streams screen
@@ -107,6 +107,7 @@ object AppPreferences {
 
     fun setAutoSelectStream(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_AUTO_SELECT_STREAM, enabled).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     // ── Stream ranker on/off (off = keep addon-provided order) ──────
@@ -114,8 +115,8 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_USE_STREAM_RANKER, true)
 
     fun setUseStreamRanker(context: Context, enabled: Boolean) {
-        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_USE_STREAM_RANKER, enabled).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     // ── Binge group (Stremio behaviorHints.bingeGroup) ───────────────
@@ -135,6 +136,7 @@ object AppPreferences {
 
     fun setBingeGroupPrefer(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_BINGE_GROUP_PREFER, enabled).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     fun getBingeGroupReuse(context: Context): Boolean =
@@ -142,6 +144,7 @@ object AppPreferences {
 
     fun setBingeGroupReuse(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_BINGE_GROUP_REUSE, enabled).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     fun getBingeGroupFallback(context: Context): Boolean =
@@ -149,6 +152,7 @@ object AppPreferences {
 
     fun setBingeGroupFallback(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_BINGE_GROUP_FALLBACK, enabled).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     // ── "Are you still there?" binge watchdog ────────────────────────
@@ -161,6 +165,7 @@ object AppPreferences {
 
     fun setStillTherePrompt(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_STILL_THERE_PROMPT, enabled).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     fun getStillThereEpisodes(context: Context): Int =
@@ -168,6 +173,7 @@ object AppPreferences {
 
     fun setStillThereEpisodes(context: Context, episodes: Int) {
         prefs(context).edit().putInt(KEY_STILL_THERE_EPISODES, episodes).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     private const val BINGE_STATE_PREFS = "kbstream_binge_state"
@@ -214,6 +220,7 @@ object AppPreferences {
 
     fun setEnablePip(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_ENABLE_PIP, enabled).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     // ── Decoder priority (KB-style) ───────────────────────────────
@@ -392,6 +399,7 @@ object AppPreferences {
 
     fun setDefaultAspectRatio(context: Context, ratio: Int) {
         prefs(context).edit().putInt(KEY_DEFAULT_ASPECT_RATIO, ratio).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     // ── Preferred audio language ──────────────────────────────────────
@@ -401,6 +409,7 @@ object AppPreferences {
 
     fun setPreferredAudioLanguage(context: Context, lang: String) {
         prefs(context).edit().putString(KEY_PREFERRED_AUDIO_LANG, lang).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     // ── Preferred subtitle language ───────────────────────────────────
@@ -410,6 +419,7 @@ object AppPreferences {
 
     fun setPreferredSubtitleLanguage(context: Context, lang: String) {
         prefs(context).edit().putString(KEY_PREFERRED_SUBTITLE_LANG, lang).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     // ── Hero trailer autoplay (Home hero) ─────────────────────────────
@@ -417,8 +427,8 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_HERO_TRAILER_AUTOPLAY, true)
 
     fun setHeroTrailerAutoplay(context: Context, enabled: Boolean) {
-        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_HERO_TRAILER_AUTOPLAY, enabled).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     // ── Hero trailer audio (Home hero) ─────────────────────────────
@@ -428,8 +438,8 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_HERO_TRAILER_MUTED, false)
 
     fun setHeroTrailerMuted(context: Context, enabled: Boolean) {
-        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_HERO_TRAILER_MUTED, enabled).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     // ── 24-hour clock (player overlay clock) ──────────────────────────
@@ -478,8 +488,8 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_SHOW_CATALOG_TYPE, false)
 
     fun setHomeRailShowCatalogType(context: Context, enabled: Boolean) {
-        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_SHOW_CATALOG_TYPE, enabled).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     // ── Home rail titles: show addon name ─────────────────────────────
@@ -487,8 +497,8 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_SHOW_ADDON_NAME, false)
 
     fun setHomeRailShowAddonName(context: Context, enabled: Boolean) {
-        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_SHOW_ADDON_NAME, enabled).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     // ── Search rails (add-on search only): show catalog type ──────────
@@ -499,8 +509,8 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_SEARCH_SHOW_CATALOG_TYPE, false)
 
     fun setSearchRailShowCatalogType(context: Context, enabled: Boolean) {
-        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_SEARCH_SHOW_CATALOG_TYPE, enabled).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     // ── Search rails (add-on search only): show addon name ────────────
@@ -508,8 +518,8 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_SEARCH_SHOW_ADDON_NAME, false)
 
     fun setSearchRailShowAddonName(context: Context, enabled: Boolean) {
-        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_SEARCH_SHOW_ADDON_NAME, enabled).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     // ── Poster size (all screens) ─────────────────────────────────────
@@ -520,8 +530,8 @@ object AppPreferences {
         prefs(context).getLong(KEY_POSTER_SIZE, 1L)
 
     fun setPosterSize(context: Context, size: Long) {
-        syncDisplayPrefsBlob(context)
         prefs(context).edit().putLong(KEY_POSTER_SIZE, size).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     // ── Poster captions (all screens except Home rails) ───────────────
@@ -532,24 +542,24 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_POSTER_CAPTION_TITLE, true)
 
     fun setPosterCaptionTitle(context: Context, enabled: Boolean) {
-        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_POSTER_CAPTION_TITLE, enabled).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     fun getPosterCaptionYear(context: Context): Boolean =
         prefs(context).getBoolean(KEY_POSTER_CAPTION_YEAR, true)
 
     fun setPosterCaptionYear(context: Context, enabled: Boolean) {
-        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_POSTER_CAPTION_YEAR, enabled).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     fun getPosterCaptionRating(context: Context): Boolean =
         prefs(context).getBoolean(KEY_POSTER_CAPTION_RATING, true)
 
     fun setPosterCaptionRating(context: Context, enabled: Boolean) {
-        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_POSTER_CAPTION_RATING, enabled).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     // ── MDBList API key (critic ratings: IMDb / RT / Metacritic / more) ─
@@ -570,8 +580,8 @@ object AppPreferences {
     }
 
     fun setMdbListApiKey(context: Context, key: String) {
-        syncDisplayPrefsBlob(context)
         prefs(context).edit().putString(KEY_MDBLIST_API_KEY, key.trim()).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     // ── OpenSubtitles API key (in-player online subtitle search) ─────
@@ -581,8 +591,8 @@ object AppPreferences {
         prefs(context).getString(KEY_OPENSUBTITLES_API_KEY, "")?.trim().orEmpty()
 
     fun setOpensubtitlesApiKey(context: Context, key: String) {
-        syncDisplayPrefsBlob(context)
         prefs(context).edit().putString(KEY_OPENSUBTITLES_API_KEY, key.trim()).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     // ── Home rails: hide not-yet-released titles (digital filter) ─────
@@ -590,8 +600,8 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_HIDE_UPCOMING, false)
 
     fun setHomeRailHideUpcoming(context: Context, enabled: Boolean) {
-        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_HIDE_UPCOMING, enabled).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     // ── Home rails: landscape backdrop cards instead of posters ───────
@@ -599,8 +609,8 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_LANDSCAPE_CARDS, false)
 
     fun setHomeLandscapeCards(context: Context, enabled: Boolean) {
-        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_LANDSCAPE_CARDS, enabled).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     // ── Poster eye badge: shows started-but-not-finished shows ────────
@@ -608,8 +618,8 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_POSTER_PARTIAL_WATCH_BADGE, true)
 
     fun setPosterPartialWatchBadge(context: Context, enabled: Boolean) {
-        syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_POSTER_PARTIAL_WATCH_BADGE, enabled).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     /**

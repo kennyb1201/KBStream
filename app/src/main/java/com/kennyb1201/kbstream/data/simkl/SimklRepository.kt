@@ -330,9 +330,9 @@ class SimklRepository(
             runCatching {
                 tmdbJsonCacheDao?.deleteByKeys(
                     listOf(
-                        ALL_SHOW_ITEMS_DISK_KEY,
-                        CONTINUE_WATCHING_DISK_KEY,
-                        COMPLETED_MOVIES_DISK_KEY
+                        diskKey(ALL_SHOW_ITEMS_DISK_KEY_BASE),
+                        diskKey(CONTINUE_WATCHING_DISK_KEY_BASE),
+                        diskKey(COMPLETED_MOVIES_DISK_KEY_BASE)
                     )
                 )
             }
@@ -347,6 +347,19 @@ class SimklRepository(
                 KEY_LAST_WATCHED_ACTIVITY_ALL
             )
             ?.apply()
+
+        // Cross-device sync: propagate the sign-out. Without this the cloud
+        // row keeps the old token forever and every pull (app start, Sync
+        // now, profile switch) resurrects the signed-out account on this and
+        // every other device — the profile could never actually sign out.
+        // The empty access_token tells applySimklAuth to clear too.
+        com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+                appContext,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_SIMKL_AUTH,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildSimklAuth(appContext)
+            )
+        }
     }
 
     suspend fun createPinCode():
@@ -810,7 +823,7 @@ class SimklRepository(
         cachedContinueWatching = null
         runCatching {
             tmdbJsonCacheDao?.deleteByKeys(
-                listOf(CONTINUE_WATCHING_DISK_KEY)
+                listOf(diskKey(CONTINUE_WATCHING_DISK_KEY_BASE))
             )
         }
     }
@@ -1960,7 +1973,7 @@ class SimklRepository(
             ) {
                 val diskCached =
                     readSimklJsonFromDisk(
-                        ALL_SHOW_ITEMS_DISK_KEY
+                        diskKey(ALL_SHOW_ITEMS_DISK_KEY_BASE)
                     )
 
                 if (
@@ -2056,7 +2069,7 @@ class SimklRepository(
                     tmdbJsonCacheDao?.upsert(
                         TmdbJsonCacheEntity(
                             key =
-                                ALL_SHOW_ITEMS_DISK_KEY,
+                                diskKey(ALL_SHOW_ITEMS_DISK_KEY_BASE),
 
                             json =
                                 allShowsJsonAdapter
@@ -2383,7 +2396,7 @@ class SimklRepository(
             ) {
                 val diskCached =
                     readSimklJsonFromDisk(
-                        COMPLETED_MOVIES_DISK_KEY
+                        diskKey(COMPLETED_MOVIES_DISK_KEY_BASE)
                     )
 
                 if (
@@ -2527,7 +2540,7 @@ class SimklRepository(
                 tmdbJsonCacheDao?.upsert(
                     TmdbJsonCacheEntity(
                         key =
-                            COMPLETED_MOVIES_DISK_KEY,
+                            diskKey(COMPLETED_MOVIES_DISK_KEY_BASE),
 
                         json =
                             completedMovieKeysJsonAdapter
@@ -2568,7 +2581,7 @@ class SimklRepository(
         ) {
             val diskCached =
                 readSimklJsonFromDisk(
-                    CONTINUE_WATCHING_DISK_KEY
+                    diskKey(CONTINUE_WATCHING_DISK_KEY_BASE)
                 )
 
             if (
@@ -3070,7 +3083,7 @@ class SimklRepository(
                 tmdbJsonCacheDao?.upsert(
                     TmdbJsonCacheEntity(
                         key =
-                            CONTINUE_WATCHING_DISK_KEY,
+                            diskKey(CONTINUE_WATCHING_DISK_KEY_BASE),
 
                         json =
                             continueWatchingJsonAdapter
@@ -3570,10 +3583,15 @@ class SimklRepository(
         private const val CONTINUE_WATCHING_DISK_TTL_MS =
             6L * 60L * 60L * 1000L
 
-        private const val ALL_SHOW_ITEMS_DISK_KEY =
+        // Disk-cache keys are PROFILE-SCOPED at use time (see diskKey()):
+        // the underlying tmdb_json_cache table is a shared DB, and these
+        // blobs are per-Simkl-account data. Global keys let profile B read
+        // profile A's cached continue-watching/completed lists for hours —
+        // the "Simkl account follows me between profiles" leak.
+        private const val ALL_SHOW_ITEMS_DISK_KEY_BASE =
             "simkl:all_show_items"
 
-        private const val CONTINUE_WATCHING_DISK_KEY =
+        private const val CONTINUE_WATCHING_DISK_KEY_BASE =
             "simkl:continue_watching"
 
         private const val COMPLETED_MOVIES_TTL_MS =
@@ -3582,8 +3600,20 @@ class SimklRepository(
         private const val COMPLETED_MOVIES_DISK_TTL_MS =
             12L * 60L * 60L * 1000L
 
-        private const val COMPLETED_MOVIES_DISK_KEY =
+        private const val COMPLETED_MOVIES_DISK_KEY_BASE =
             "simkl:completed_movies"
+
+        /**
+         * Resolves a disk-cache key against the ACTIVE profile so each
+         * profile's cached Simkl blobs never collide in the shared cache
+         * table. With no active profile (legacy startup) it returns the
+         * bare key, matching the pre-profiles layout.
+         */
+        private fun diskKey(base: String): String {
+            val pid = com.kennyb1201.kbstream.data.sync.ProfileManager
+                .activeProfile.value?.id ?: return base
+            return "$pid/$base"
+        }
 
         // Companion-level and read/written from arbitrary coroutines
         // without a mutex: @Volatile guarantees visibility and atomic

@@ -396,9 +396,20 @@ object PrefsPayloadApplier {
 
     private fun applySimklAuth(context: Context, payload: JsonObject) {
         val token = (payload["access_token"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return
-        if (token.isBlank()) return
 
         val prefs = scopedPrefs(context, "simkl_auth")
+
+        // Blank token = the profile SIGNED OUT on some device. Honor it:
+        // dropping the local session here is what makes a sign-out actually
+        // stick across devices (and stops a pull from resurrecting an
+        // account the user explicitly disconnected).
+        if (token.isBlank()) {
+            if (prefs.contains("access_token")) {
+                prefs.edit().remove("access_token").apply()
+            }
+            return
+        }
+
         if (prefs.getString("access_token", null) == token) return
 
         prefs.edit().putString("access_token", token).apply()

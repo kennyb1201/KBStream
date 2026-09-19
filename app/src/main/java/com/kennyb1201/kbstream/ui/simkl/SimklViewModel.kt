@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.simkl
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
@@ -19,9 +20,14 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
     private val appContext = app.applicationContext
     private val repository = SimklRepository.getInstance(appContext)
     private val watchedStatusRepository = WatchedStatusRepository(appContext)
-    private val historyDao = WatchHistoryDatabase
-        .getInstance(appContext)
-        .watchHistoryDao()
+
+    // Resolved PER ACCESS against the ACTIVE profile's scoped DB: the old
+    // captured dao bound to the legacy unscoped database, so disconnect()
+    // wiped legacy rows while the profile's real watch history survived.
+    private val historyDao: WatchHistoryDao
+        get() = WatchHistoryDatabase
+            .getInstanceScoped(appContext)
+            .watchHistoryDao()
 
     private val _uiState = MutableStateFlow(
         SimklUiState(
