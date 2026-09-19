@@ -89,6 +89,11 @@ fun SettingsScreen(
     var subtitleSize by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleSize(context)) }
     var subtitleBg by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleBackground(context)) }
     var autoPlayNext by remember { mutableStateOf(AppPreferences.getAutoPlayNext(context)) }
+    var bingeGroupPrefer by remember { mutableStateOf(AppPreferences.getBingeGroupPrefer(context)) }
+    var bingeGroupReuse by remember { mutableStateOf(AppPreferences.getBingeGroupReuse(context)) }
+    var bingeGroupFallback by remember { mutableStateOf(AppPreferences.getBingeGroupFallback(context)) }
+    var stillTherePrompt by remember { mutableStateOf(AppPreferences.getStillTherePrompt(context)) }
+    var stillThereEpisodes by remember { mutableIntStateOf(AppPreferences.getStillThereEpisodes(context)) }
     var autoSelectStream by remember { mutableStateOf(AppPreferences.getAutoSelectStream(context)) }
     var useStreamRanker by remember { mutableStateOf(AppPreferences.getUseStreamRanker(context)) }
     var enableTunneling by remember { mutableStateOf(AppPreferences.getEnableTunneling(context)) }
@@ -776,6 +781,73 @@ fun SettingsScreen(
                         AppPreferences.setAutoPlayNext(context, it)
                     }
                 )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                ToggleRow(
+                    label = "Prefer Binge Group",
+                    description = "Auto-next picks the stream tagged with the same Stremio binge group as the episode you just finished — same link continues seamlessly.",
+                    checked = bingeGroupPrefer,
+                    onToggle = {
+                        bingeGroupPrefer = it
+                        AppPreferences.setBingeGroupPrefer(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                ToggleRow(
+                    label = "Reuse Binge Group",
+                    description = "When no stream carries the previous group tag, reuse the same addon's stream anyway.",
+                    checked = bingeGroupReuse,
+                    onToggle = {
+                        bingeGroupReuse = it
+                        AppPreferences.setBingeGroupReuse(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                ToggleRow(
+                    label = "Binge Fallback",
+                    description = "When no group or addon match exists, still auto-play the top-ranked stream. Off stops autoplay and shows the source picker instead.",
+                    checked = bingeGroupFallback,
+                    onToggle = {
+                        bingeGroupFallback = it
+                        AppPreferences.setBingeGroupFallback(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                ToggleRow(
+                    label = "Are You Still There",
+                    description = "After several auto-played episodes in a row, hold on a confirmation prompt so it doesn't play all night.",
+                    checked = stillTherePrompt,
+                    onToggle = {
+                        stillTherePrompt = it
+                        AppPreferences.setStillTherePrompt(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = "Still-There Prompt After",
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(2, 3, 5, 8).forEach { count ->
+                        KBCard(onClick = {
+                            stillThereEpisodes = count
+                            AppPreferences.setStillThereEpisodes(context, count)
+                        }) {
+                            PillChip("$count eps", stillThereEpisodes == count)
+                        }
+                    }
+                }
                 }
 
                 if (selectedPane == SettingsPane.INTERFACE) {

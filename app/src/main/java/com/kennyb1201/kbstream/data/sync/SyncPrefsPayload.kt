@@ -62,6 +62,11 @@ object PrefsPayloadBuilder {
         "home_rail_hide_upcoming",
         "home_landscape_cards",
         "poster_partial_watch_badge",
+        "binge_group_prefer",                // binge continuity, not device-specific
+        "binge_group_reuse",
+        "binge_group_fallback",
+        "still_there_prompt",                // binge watchdog, not device-specific
+        "still_there_episodes",
         "amoled_black",                      // AMOLED theme toggle (pure display pref)
         "pure_black_surface",                // Pure black cards/panels/containers toggle
         "mdblist_api_key",

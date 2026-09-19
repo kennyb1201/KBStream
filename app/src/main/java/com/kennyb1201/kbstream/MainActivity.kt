@@ -53,6 +53,7 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.domain.streamengine.BingeGroupResolver
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.update.AppUpdater
@@ -619,7 +620,11 @@ private data class PendingPlay(
     val overview: String?,
     val cast: List<TmdbCastMember>,
     val returnTo: Screen,
-    val totalEpisodesInSeason: Int? = null
+    val totalEpisodesInSeason: Int? = null,
+    /** bingeGroup of the stream that just ended — empty for fresh starts. */
+    val bingeGroup: String? = null,
+    /** Best-effort addon identity of the stream that just ended. */
+    val addonName: String? = null
 ) {
     val streamKey: String
         get() = streamNavigationKey(target.contentType, target.streamId)
@@ -914,10 +919,26 @@ fun AppRoot() {
             pending.target.contentType,
             pending.target.streamId
         )
-        val top = streams.firstOrNull { !it.url.isNullOrBlank() }
+        // Binge continuation: when this auto-play is the next episode of a
+        // show whose previous stream carried a Stremio bingeGroup, reorder
+        // the sources so group/addon matches win (see BingeGroupResolver).
+        // Fallback OFF additionally collapses the list to nothing so the
+        // picker is shown instead of silently playing a different provider.
+        val ordered =
+            if (pending.bingeGroup.isNullOrBlank()) {
+                streams
+            } else {
+                BingeGroupResolver.orderedForNextEpisode(
+                    context = context,
+                    streams = streams,
+                    previousBingeGroup = pending.bingeGroup,
+                    previousAddonName = pending.addonName
+                )
+            }
+        val top = ordered.firstOrNull { !it.url.isNullOrBlank() }
         pendingAutoPlay = null
         screen = if (top != null) {
-            pending.toPlayerScreen(top, streams)
+            pending.toPlayerScreen(top, ordered)
         } else {
             pending.toStreamsScreen()
         }
@@ -1640,6 +1661,10 @@ fun AppRoot() {
                         // sources" overlay) and jump straight into the player —
                         // the streams picker only appears if nothing playable
                         // resolves.
+                        // Fresh user-initiated play: the still-there binge
+                        // watchdog tracks consecutive AUTO-advanced episodes,
+                        // so a manual play restarts the count.
+                        AppPreferences.resetConsecutiveAutoplays(context)
                         pendingAutoPlay = PendingPlay(
                             target = target,
                             parentId = parentId,
@@ -1870,7 +1895,7 @@ fun AppRoot() {
                 // here is scratch data the new navigation overwrites wholesale.
                 val next = NextEpisodeResult.consumePersisted(context)
                 if (next != null) {
-                    val nextTarget = StreamsTarget(
+                            val nextTarget = StreamsTarget(
                         contentType = current.parentType,
                         streamId = next.streamId,
                         title = next.title,
@@ -1900,7 +1925,9 @@ fun AppRoot() {
                             overview = current.overview,
                             cast = nextCast,
                             returnTo = current.returnTo,
-                            totalEpisodesInSeason = current.totalEpisodesInSeason
+                            totalEpisodesInSeason = current.totalEpisodesInSeason,
+                            bingeGroup = next.bingeGroup,
+                            addonName = next.addonName
                         )
                     } else {
                         screen = Screen.Streams(
@@ -1924,6 +1951,8 @@ fun AppRoot() {
                             val nextSeason = data.getIntExtra("next_season", -1).takeIf { it >= 0 }
                             val nextTitle = data.getStringExtra("next_title")
                             val nextStreamId = data.getStringExtra("next_stream_id")
+                            val nextBingeGroup = data.getStringExtra("next_binge_group")
+                            val nextAddonName = data.getStringExtra("next_addon_name")
                             val nextTarget = StreamsTarget(
                                 contentType = current.parentType,
                                 streamId = nextStreamId.orEmpty(),
@@ -1953,7 +1982,9 @@ fun AppRoot() {
                                     overview = current.overview,
                                     cast = nextCast,
                                     returnTo = current.returnTo,
-                                    totalEpisodesInSeason = current.totalEpisodesInSeason
+                                    totalEpisodesInSeason = current.totalEpisodesInSeason,
+                                    bingeGroup = nextBingeGroup,
+                                    addonName = nextAddonName
                                 )
                             } else {
                                 screen = Screen.Streams(
@@ -2130,6 +2161,7 @@ fun AppRoot() {
                             put("audioUrl", stream.audioUrl)
                             put("infoHash", stream.infoHash)
                             put("fileIdx", stream.fileIdx)
+                            stream.bingeGroup?.let { put("bingeGroup", it) }
                             if (stream.badges.isNotEmpty()) {
                                 val badgesArray = JSONArray()
                                 stream.badges.forEach { badge ->

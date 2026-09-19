@@ -29,7 +29,21 @@ object NextEpisodeResult {
         val episode: Int,
         val title: String,
         val streamId: String,
-        val runtimeMinutes: Int? = null
+        val runtimeMinutes: Int? = null,
+        /**
+         * Binge-watching group of the stream that just finished (Stremio
+         * behaviorHints.bingeGroup). Carried across the episode handoff so
+         * the next episode's stream resolver can prefer/reuse the same
+         * group — see the binge-group settings in AppPreferences.
+         */
+        val bingeGroup: String? = null,
+        /**
+         * Best-effort addon identity of the stream that just finished
+         * (parsed from the stream title line). Used by the "Reuse Binge
+         * Group" tier when the next episode's streams no longer carry the
+         * previous group tag.
+         */
+        val addonName: String? = null
     )
 
     // -- In-memory handoff (same process) -----------------------------------
@@ -93,15 +107,51 @@ object NextEpisodeResult {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     private fun encode(p: PendingNext): String =
-        "${p.season}|${p.episode}|${p.title}|${p.streamId}|${p.runtimeMinutes ?: -1}"
+        "${p.season}|${p.episode}|${p.title}|${p.streamId}|${p.runtimeMinutes ?: -1}" +
+            "|${p.bingeGroup?.replace("|", "") ?: ""}" +
+            "|${p.addonName?.replace("|", "") ?: ""}"
 
     private fun decode(raw: String?): PendingNext? {
         if (raw.isNullOrBlank()) return null
-        // Titles can contain '|'; streamId never does, so split from the end.
+        // Titles can contain '|'; streamId and the trailing runtime/binge
+        // fields never do, so the fixed fields are taken from the END and
+        // everything in between is the title. Seven fields = current format;
+        // six = pre-addon-name format (addonName stays null); five =
+        // pre-binge-group format (both stay null).
         val parts = raw.split("|")
         if (parts.size < 5) return null
         val season = parts[0].toIntOrNull() ?: return null
         val episode = parts[1].toIntOrNull() ?: return null
+        if (parts.size >= 7) {
+            val runtime = parts[parts.size - 3].toIntOrNull()?.takeIf { it >= 0 }
+            val streamId = parts[parts.size - 4]
+            val title = parts.subList(2, parts.size - 4).joinToString("|")
+            val bingeGroup = parts[parts.size - 2].takeIf { it.isNotBlank() }
+            val addonName = parts.last().takeIf { it.isNotBlank() }
+            return PendingNext(
+                season = season,
+                episode = episode,
+                title = title,
+                streamId = streamId,
+                runtimeMinutes = runtime,
+                bingeGroup = bingeGroup,
+                addonName = addonName
+            )
+        }
+        if (parts.size >= 6) {
+            val runtime = parts[parts.size - 2].toIntOrNull()?.takeIf { it >= 0 }
+            val streamId = parts[parts.size - 3]
+            val title = parts.subList(2, parts.size - 3).joinToString("|")
+            val bingeGroup = parts.last().takeIf { it.isNotBlank() }
+            return PendingNext(
+                season = season,
+                episode = episode,
+                title = title,
+                streamId = streamId,
+                runtimeMinutes = runtime,
+                bingeGroup = bingeGroup
+            )
+        }
         val runtime = parts.last().toIntOrNull()?.takeIf { it >= 0 }
         val streamId = parts[parts.size - 2]
         val title = parts.subList(2, parts.size - 2).joinToString("|")

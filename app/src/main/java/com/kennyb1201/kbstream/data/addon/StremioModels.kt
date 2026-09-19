@@ -101,12 +101,44 @@ data class Stream(
 
     val fileIdx: Int? = null,
 
+    @Json(name = "behaviorHints")
+    val behaviorHints: StreamBehaviorHints? = null,
+
     @Json(name = "drm")
     val drm: StreamDrm? = null,
 
     // Resolved badge chips (KB-compatible badge packs); never arrives
     // from addon JSON — attached client-side by StreamBadgeEngine.
     val badges: List<com.kennyb1201.kbstream.data.badges.StreamBadge> = emptyList()
+) {
+    /**
+     * Convenience accessor for the Stremio binge-watching group tag
+     * (behaviorHints.bingeGroup). Addons that emit the same bingeGroup for a
+     * run of episodes mean "same provider/quality — auto-continue safely";
+     * an episode whose group differs signals a different link, so the player
+     * may need to re-pick instead of blindly continuing.
+     */
+    val bingeGroup: String?
+        get() = behaviorHints?.bingeGroup
+}
+
+/**
+ * Stremio stream behavior hints. Only the fields this app acts on are
+ * modeled; unknown hint keys are ignored by Moshi and by the spec.
+ */
+@JsonClass(generateAdapter = true)
+data class StreamBehaviorHints(
+    /** Binge-watching continuity tag — see [Stream.bingeGroup]. */
+    val bingeGroup: String? = null,
+
+    /** Stream is not a direct video link (torrent / external player etc.). */
+    val notWebReady: Boolean? = null,
+
+    /** Server-provided filename hint for the stream. */
+    val filename: String? = null,
+
+    /** Server-provided video size in bytes. */
+    val videoSize: Long? = null
 )
 
 @JsonClass(generateAdapter = true)

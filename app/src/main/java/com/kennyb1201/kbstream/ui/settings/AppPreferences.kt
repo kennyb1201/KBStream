@@ -24,6 +24,11 @@ object AppPreferences {
     private const val KEY_AUTO_PLAY_NEXT = "auto_play_next"
     private const val KEY_AUTO_SELECT_STREAM = "auto_select_stream"
     private const val KEY_USE_STREAM_RANKER = "use_stream_ranker"
+    private const val KEY_BINGE_GROUP_PREFER = "binge_group_prefer"
+    private const val KEY_BINGE_GROUP_REUSE = "binge_group_reuse"
+    private const val KEY_BINGE_GROUP_FALLBACK = "binge_group_fallback"
+    private const val KEY_STILL_THERE_PROMPT = "still_there_prompt"
+    private const val KEY_STILL_THERE_EPISODES = "still_there_episodes"
     private const val KEY_FORCE_SOFTWARE_DECODER = "force_software_decoder"
     private const val KEY_ENABLE_TUNNELING = "enable_tunneling"
     private const val KEY_ENABLE_PIP = "enable_pip"
@@ -111,6 +116,80 @@ object AppPreferences {
     fun setUseStreamRanker(context: Context, enabled: Boolean) {
         syncDisplayPrefsBlob(context)
         prefs(context).edit().putBoolean(KEY_USE_STREAM_RANKER, enabled).apply()
+    }
+
+    // ── Binge group (Stremio behaviorHints.bingeGroup) ───────────────
+    //
+    // prefer  — when the next episode's sources load, put streams that
+    //           belong to the previous episode's bingeGroup first so the
+    //           auto-pick continues the same link/quality.
+    // reuse   — if a matching group is NOT found, keep trying the previous
+    //           episode's exact stream anyway (same addon / same name) on the
+    //           theory that the provider just hasn't tagged the next file.
+    // fallback— if neither group-match nor reuse produced a playable stream,
+    //           fall back to the normal ranked top stream instead of stopping
+    //           autoplay. When reuse is on, fallback only fires after reuse
+    //           itself has failed.
+    fun getBingeGroupPrefer(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_BINGE_GROUP_PREFER, true)
+
+    fun setBingeGroupPrefer(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_BINGE_GROUP_PREFER, enabled).apply()
+    }
+
+    fun getBingeGroupReuse(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_BINGE_GROUP_REUSE, true)
+
+    fun setBingeGroupReuse(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_BINGE_GROUP_REUSE, enabled).apply()
+    }
+
+    fun getBingeGroupFallback(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_BINGE_GROUP_FALLBACK, true)
+
+    fun setBingeGroupFallback(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_BINGE_GROUP_FALLBACK, enabled).apply()
+    }
+
+    // ── "Are you still there?" binge watchdog ────────────────────────
+    // After N consecutive episodes that were auto-advanced (the user never
+    // touched the remote), pause on a prompt so the app doesn't binge all
+    // night unattended. Stored count lives in its own prefs file so it is
+    // trivially resettable from anywhere.
+    fun getStillTherePrompt(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_STILL_THERE_PROMPT, true)
+
+    fun setStillTherePrompt(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_STILL_THERE_PROMPT, enabled).apply()
+    }
+
+    fun getStillThereEpisodes(context: Context): Int =
+        prefs(context).getInt(KEY_STILL_THERE_EPISODES, 3)
+
+    fun setStillThereEpisodes(context: Context, episodes: Int) {
+        prefs(context).edit().putInt(KEY_STILL_THERE_EPISODES, episodes).apply()
+    }
+
+    private const val BINGE_STATE_PREFS = "kbstream_binge_state"
+    private const val KEY_CONSECUTIVE_AUTOPLAYS = "consecutive_autoplays"
+
+    private fun bingeStatePrefs(context: Context): SharedPreferences =
+        context.getSharedPreferences(
+            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, BINGE_STATE_PREFS),
+            Context.MODE_PRIVATE
+        )
+
+    /** Episodes auto-advanced in a row without user input. */
+    fun getConsecutiveAutoplays(context: Context): Int =
+        bingeStatePrefs(context).getInt(KEY_CONSECUTIVE_AUTOPLAYS, 0)
+
+    fun setConsecutiveAutoplays(context: Context, count: Int) {
+        bingeStatePrefs(context)
+            .edit().putInt(KEY_CONSECUTIVE_AUTOPLAYS, count.coerceAtLeast(0)).apply()
+    }
+
+    fun resetConsecutiveAutoplays(context: Context) {
+        setConsecutiveAutoplays(context, 0)
     }
 
     // ── Tunneled playback ────────────────────────────────────────────

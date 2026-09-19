@@ -63,6 +63,7 @@ import androidx.media3.ui.PlayerView
 import androidx.media3.exoplayer.video.VideoRendererEventListener
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.data.addon.StreamBehaviorHints
 import com.kennyb1201.kbstream.data.badges.StreamBadge
 import com.kennyb1201.kbstream.data.iptv.LiveChannelZapRegistry
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
@@ -240,6 +241,10 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var settingsBufferLow: TextView
     private lateinit var btnTunneling: TextView
     private lateinit var btnAutoplay: TextView
+    private lateinit var btnBingePrefer: TextView
+    private lateinit var btnBingeReuse: TextView
+    private lateinit var btnBingeFallback: TextView
+    private lateinit var btnStillThere: TextView
     private lateinit var btnAspectFit: TextView
     private lateinit var btnAspectZoom: TextView
     private lateinit var btnAspectFill: TextView
@@ -349,6 +354,11 @@ class NativePlayerActivity : ComponentActivity() {
     // resolved once from the installed-addons registry by matching the active
     // source label against addon names (cheap, no intent plumbing changes).
     private var currentAddonName: String? = null
+
+    // Stremio bingeGroup of the active stream (behaviorHints.bingeGroup).
+    // Persisted into the next-episode handoff so the next episode's resolver
+    // can prefer/reuse the same group — see BingeGroupResolver.
+    private var currentBingeGroup: String? = null
     private var currentAddonLogoUrl: String? = null
     private var carryPositionMs = 0L
     private var playbackSpeed = 1f
@@ -759,6 +769,13 @@ class NativePlayerActivity : ComponentActivity() {
         override fun run() {
             nextUpCountdownRemaining--
             if (nextUpCountdownRemaining <= 0) {
+                // The countdown fired unattended: count this as an
+                // auto-advanced episode for the "Are you still there?"
+                // binge watchdog.
+                if (AppPreferences.getStillTherePrompt(this@NativePlayerActivity)) {
+                    val count = AppPreferences.getConsecutiveAutoplays(this@NativePlayerActivity) + 1
+                    AppPreferences.setConsecutiveAutoplays(this@NativePlayerActivity, count)
+                }
                 launchNextEpisode(
                     pendingNextSeason ?: return,
                     pendingNextEpisode ?: return,
@@ -1010,6 +1027,9 @@ class NativePlayerActivity : ComponentActivity() {
                         audioUrl = obj.optString("audioUrl", null),
                         infoHash = obj.optString("infoHash", null),
                         fileIdx = obj.optInt("fileIdx", -1).takeIf { it >= 0 },
+                        behaviorHints = StreamBehaviorHints(
+                            bingeGroup = obj.optString("bingeGroup", null)
+                        ),
                         badges = parseStreamBadges(obj.optJSONArray("badges"))
                     )
                 }.filter { !it.url.isNullOrBlank() }
@@ -1104,6 +1124,7 @@ class NativePlayerActivity : ComponentActivity() {
         sources.firstOrNull { it.url == currentUrl }?.let { first ->
             currentSourceLabel = first.displayLabel()
             currentBadges = first.badges
+            currentBingeGroup = first.bingeGroup
         }
         resolveAddonIdentity(currentSourceLabel)
             ?: sources.firstOrNull()?.displayLabel()
@@ -1230,6 +1251,10 @@ class NativePlayerActivity : ComponentActivity() {
         settingsBufferLow = findViewById(R.id.btn_buffer_low)
         btnTunneling = findViewById(R.id.btn_tunneling)
         btnAutoplay = findViewById(R.id.btn_autoplay)
+        btnBingePrefer = findViewById(R.id.btn_binge_prefer)
+        btnBingeReuse = findViewById(R.id.btn_binge_reuse)
+        btnBingeFallback = findViewById(R.id.btn_binge_fallback)
+        btnStillThere = findViewById(R.id.btn_still_there)
         btnAspectFit = findViewById(R.id.btn_aspect_fit)
         btnAspectZoom = findViewById(R.id.btn_aspect_zoom)
         btnAspectFill = findViewById(R.id.btn_aspect_fill)
@@ -1337,6 +1362,8 @@ class NativePlayerActivity : ComponentActivity() {
 
         // "Up next" popup buttons
         btnNextPlay.setOnClickListener {
+            // Manual confirmation: user is awake - restart the watchdog.
+            AppPreferences.resetConsecutiveAutoplays(this)
             launchNextEpisode(
                 pendingNextSeason ?: return@setOnClickListener,
                 pendingNextEpisode ?: return@setOnClickListener,
@@ -1473,6 +1500,24 @@ class NativePlayerActivity : ComponentActivity() {
         btnAutoplay.setOnClickListener {
             autoPlayNext = !autoPlayNext
             AppPreferences.setAutoPlayNext(this, autoPlayNext)
+            updateSettingsPanelState()
+        }
+        btnBingePrefer.setOnClickListener {
+            AppPreferences.setBingeGroupPrefer(this, !AppPreferences.getBingeGroupPrefer(this))
+            updateSettingsPanelState()
+        }
+        btnBingeReuse.setOnClickListener {
+            AppPreferences.setBingeGroupReuse(this, !AppPreferences.getBingeGroupReuse(this))
+            updateSettingsPanelState()
+        }
+        btnBingeFallback.setOnClickListener {
+            AppPreferences.setBingeGroupFallback(this, !AppPreferences.getBingeGroupFallback(this))
+            updateSettingsPanelState()
+        }
+        btnStillThere.setOnClickListener {
+            val enabled = !AppPreferences.getStillTherePrompt(this)
+            AppPreferences.setStillTherePrompt(this, enabled)
+            if (!enabled) AppPreferences.resetConsecutiveAutoplays(this)
             updateSettingsPanelState()
         }
 
@@ -1822,6 +1867,8 @@ class NativePlayerActivity : ComponentActivity() {
     /** Shared "jump to the next episode" path for the overlay button and media NEXT. */
     private fun advanceToNextEpisode() {
         val target = nextEpisodeTarget() ?: return
+        // Manual skip: user is actively watching - restart the watchdog.
+        AppPreferences.resetConsecutiveAutoplays(this)
         launchNextEpisode(
             target.first,
             target.second,
@@ -3548,6 +3595,19 @@ class NativePlayerActivity : ComponentActivity() {
         btnAutoplay.text = if (autoPlayNext) "ON" else "OFF"
         applyPillState(btnAutoplay, autoPlayNext)
 
+        val bingePrefer = AppPreferences.getBingeGroupPrefer(this)
+        btnBingePrefer.text = if (bingePrefer) "ON" else "OFF"
+        applyPillState(btnBingePrefer, bingePrefer)
+        val bingeReuse = AppPreferences.getBingeGroupReuse(this)
+        btnBingeReuse.text = if (bingeReuse) "ON" else "OFF"
+        applyPillState(btnBingeReuse, bingeReuse)
+        val bingeFallback = AppPreferences.getBingeGroupFallback(this)
+        btnBingeFallback.text = if (bingeFallback) "ON" else "OFF"
+        applyPillState(btnBingeFallback, bingeFallback)
+        val stillThere = AppPreferences.getStillTherePrompt(this)
+        btnStillThere.text = if (stillThere) "ON" else "OFF"
+        applyPillState(btnStillThere, stillThere)
+
         applyPillState(btnAspectFit, resizeModeIndex == 0)
         applyPillState(btnAspectZoom, resizeModeIndex == 1)
         applyPillState(btnAspectFill, resizeModeIndex == 2)
@@ -4758,8 +4818,25 @@ class NativePlayerActivity : ComponentActivity() {
         btnNextPlay.requestFocus()
 
         if (autoPlayNext) {
+            val threshold = AppPreferences.getStillThereEpisodes(this)
+            val autoAdvanced = AppPreferences.getConsecutiveAutoplays(this)
+            if (AppPreferences.getStillTherePrompt(this) && autoAdvanced >= threshold) {
+                // Binge watchdog: enough unattended episodes have played in a
+                // row - hold here and make the user confirm they're awake.
+                // Pressing PLAY NEXT resets the counter and continues.
+                nextUpCountdownRemaining = 0
+                nextUpCountdown.text = "Are you still there? Press PLAY NEXT to continue"
+                nextUpCountdown.setTextColor(
+                    androidx.core.content.ContextCompat.getColor(this, R.color.kb_accent)
+                )
+                nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
+                return
+            }
             nextUpCountdownRemaining = NEXT_UP_COUNTDOWN_SECONDS
             nextUpCountdown.text = "Playing next in $nextUpCountdownRemaining"
+            nextUpCountdown.setTextColor(
+                androidx.core.content.ContextCompat.getColor(this, R.color.kb_text_lo)
+            )
             nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
             nextUpCountdownHandler.postDelayed(nextUpCountdownRunnable, 1_000L)
         } else {
@@ -4809,7 +4886,9 @@ class NativePlayerActivity : ComponentActivity() {
             episode = targetEpisode,
             title = label,
             streamId = nextStreamId(targetSeason, targetEpisode),
-            runtimeMinutes = runtimeMinutes
+            runtimeMinutes = runtimeMinutes,
+            bingeGroup = currentBingeGroup,
+            addonName = currentAddonName
         )
         // Persist FIRST: on Fire TV the OS frequently kills the backgrounded
         // MainActivity during 4K playback, so the result callback later runs
@@ -4827,6 +4906,8 @@ class NativePlayerActivity : ComponentActivity() {
                 putExtra("next_season", pendingNext.season)
                 putExtra("next_title", pendingNext.title)
                 putExtra("next_stream_id", pendingNext.streamId)
+                putExtra("next_binge_group", pendingNext.bingeGroup)
+                putExtra("next_addon_name", pendingNext.addonName)
             }
         )
         // Release the media session synchronously so it is unregistered from the
@@ -5275,6 +5356,7 @@ class NativePlayerActivity : ComponentActivity() {
         carryPositionMs = if (isLiveChannel) 0L else exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
         currentSourceLabel = stream.displayLabel()
         currentBadges = stream.badges
+        currentBingeGroup = stream.bingeGroup
         resolveAddonIdentity(currentSourceLabel)
         currentUrl = newUrl
         currentAudioUrl = stream.audioUrl
