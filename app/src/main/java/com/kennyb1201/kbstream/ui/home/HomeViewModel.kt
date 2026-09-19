@@ -919,6 +919,16 @@ Log.d(
                     _watchedKeys.value = emptySet()
                     _partialWatchedKeys.value = emptySet()
 
+                    // Empty the rail UP FRONT: without this, the previous
+                    // profile's cards stayed on screen until the new
+                    // profile's enriched pass finished (collectLatest cancels
+                    // the stale pass, but cancellation alone doesn't repaint
+                    // an already-published list). The snapshot seed below
+                    // refills it from the NEW profile's raw rows instantly;
+                    // the enriched pipeline replaces it when it lands.
+                    _upNext.value = emptyList()
+                    publishInstantUpNextSnapshot()
+
                     _heroMeta.value = null
                     _heroTmdbDetail.value = null
                     _heroBackdropUrl.value = null
@@ -2232,7 +2242,7 @@ Log.d(
                     watchHistoryRepository.continueWatchingParentsFlow()
                 }
                 .debounce(UP_NEXT_DEBOUNCE_MS)
-                .collect { history ->
+                .collectLatest { history ->
 
                     val requestVersion =
                         nextUpNextRequestVersion()
@@ -2617,7 +2627,7 @@ Log.d(
                                     )
                             }
 
-                            return@collect
+                            return@collectLatest
                         }
 
                         val simklItems =
@@ -2636,7 +2646,7 @@ Log.d(
                             dedupeAndSortUpNext(localItems + simklItems + mdbListItems)
 
                         if (!isLatestUpNextRequest(requestVersion)) {
-                            return@collect
+                            return@collectLatest
                         }
 
                         val result =
