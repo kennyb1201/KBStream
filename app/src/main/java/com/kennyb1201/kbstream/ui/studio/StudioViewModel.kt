@@ -200,6 +200,14 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         currentNetworkIsCompany = networkIsCompany
         currentOriginalsCompanyId = originalsCompanyId
 
+        // The chip row was rendering "All" only: the flow existed but nothing
+        // ever populated it. Load the TMDB genre list like DecadeViewModel
+        // does so services/networks/studios actually get genre chips.
+        viewModelScope.launch {
+            runCatching { _browseGenres.value = tmdbRepository.getBrowseGenres() }
+                .onFailure { Log.w("STUDIO_VM", "browse genres failed: ${it.message}") }
+        }
+
         // Showtime-style entries have no provider id but DO carry originals
         // ids - they take the service path so the network ORIGINALS rail and
         // the company MOVIES originals render (a plain network page would

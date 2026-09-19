@@ -117,13 +117,16 @@ fun StudioScreen(
     }
 
     LaunchedEffect(id, isNetwork, providerId) {
+        // Re-pass the current chip selection so the VM's same-route guard
+        // treats Back-restore as a no-op instead of resetting the filter.
         viewModel.load(
             id,
             isNetwork,
             providerId,
             networkOrCompanyId,
             networkIsCompany,
-            originalsCompanyId
+            originalsCompanyId,
+            viewModel.selectedGenreId.value
         )
     }
 

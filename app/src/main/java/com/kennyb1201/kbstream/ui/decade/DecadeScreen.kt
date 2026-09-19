@@ -115,7 +115,9 @@ fun DecadeScreen(
     }
 
     LaunchedEffect(decadeStart) {
-        viewModel.load(decadeStart)
+        // Re-pass the current chip selection so the VM's same-route guard
+        // treats Back-restore as a no-op instead of resetting the filter.
+        viewModel.load(decadeStart, viewModel.selectedGenreId.value)
     }
 
     LaunchedEffect(sections, isLoading) {

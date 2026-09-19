@@ -139,7 +139,13 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
 
     fun load(decadeStart: Int, genreId: Int? = null) {
         // Same-route guard so Back-restore doesn't reload and clear state.
-        if (currentDecadeStart == decadeStart && _sections.value.isNotEmpty()) return
+        // The genre MUST be part of the comparison: a chip click re-enters
+        // with the same decade but a new genre, and the old guard (decade
+        // only) swallowed every click — the chips did nothing.
+        if (currentDecadeStart == decadeStart &&
+            currentGenreId == genreId &&
+            _sections.value.isNotEmpty()
+        ) return
         currentDecadeStart = decadeStart
         currentGenreId = genreId
         _selectedGenreId.value = genreId
