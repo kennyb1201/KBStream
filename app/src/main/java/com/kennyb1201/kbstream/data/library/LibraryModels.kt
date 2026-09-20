@@ -121,6 +121,23 @@ object LocalLibraryStore {
         val arr = JSONArray()
         items.forEach { arr.put(entryJson(it)) }
         prefs(context).edit().putString(key, arr.toString()).apply()
+        pushLibrarySync(context)
+    }
+
+    /**
+     * Cross-device sync: every local library write stamps the write time
+     * (so a pull with an older remote blob is rejected — offline edits
+     * survive) and enqueues a push (a no-op outbox entry when signed out).
+     */
+    private fun pushLibrarySync(context: Context) {
+        prefs(context).edit()
+            .putLong("library_synced_at", System.currentTimeMillis())
+            .apply()
+        com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+            context,
+            com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_LIBRARY,
+            com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildLibrary(context)
+        )
     }
 
     /**
@@ -263,6 +280,7 @@ object LocalLibraryStore {
             )
         }
         prefs(context).edit().putString(KEY_LISTS, root.toString()).apply()
+        pushLibrarySync(context)
     }
 
     /** All local personal lists, oldest first (stable rail order). */

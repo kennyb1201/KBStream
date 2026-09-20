@@ -78,6 +78,9 @@ import org.json.JSONObject
 private const val PREFS_DISMISSED_UPNEXT =
     "continue_watching_dismissals"
 
+/** Sync bookkeeping key inside the dismissals prefs store. */
+private const val DISMISSALS_SYNCED_AT = "dismissals_synced_at"
+
 data class Rail(
     val addonName: String,
     val catalogName: String,
@@ -1181,7 +1184,21 @@ Log.d(
                     PREFS_DISMISSED_UPNEXT,
                     json.toString()
                 )
+                .putLong(
+                    DISMISSALS_SYNCED_AT,
+                    System.currentTimeMillis()
+                )
                 .apply()
+
+            // Cross-device sync: dismissals follow the user between TVs.
+            // Timestamped like the library blob so an offline dismissal on
+            // one device isn't clobbered by an older cloud row.
+            val appCtx = getApplication<Application>()
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+                appCtx,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_DISMISSALS,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildDismissals(appCtx)
+            )
         }
     }
 
@@ -5723,13 +5740,22 @@ private suspend fun calculateEpisodesRemaining(
                         }
                         .mapNotNull { meta ->
 
-                            val imdbId =
+                            // Accept BOTH id forms: imdb "tt…" ids (addon
+                            // rails, Continue Watching) and "tmdb:<n>" ids
+                            // (KB/TMDB-discover rails — the hardcoded kids
+                            // rails). The old tt-only filter silently
+                            // dropped every tmdb-keyed item, which is why
+                            // the kids profile showed no watched markers:
+                            // its rails are 100% tmdb ids. The repository
+                            // stores and resolves both forms under the same
+                            // "type::id" cache key, so no conversion is
+                            // needed.
+                            val id =
                                 meta.id
                                     .trim()
                                     .takeIf {
-                                        it.startsWith(
-                                            "tt"
-                                        )
+                                        it.startsWith("tt") ||
+                                            it.startsWith("tmdb:")
                                     }
                                     ?: return@mapNotNull null
 
@@ -5739,7 +5765,7 @@ private suspend fun calculateEpisodesRemaining(
                                 )
                                     ?: return@mapNotNull null
 
-                            imdbId to mediaType
+                            id to mediaType
                         }
                         .distinct()
                         .toList()

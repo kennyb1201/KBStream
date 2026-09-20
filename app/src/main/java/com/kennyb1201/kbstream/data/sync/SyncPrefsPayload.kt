@@ -104,6 +104,8 @@ object PrefsPayloadBuilder {
     const val KEY_HOME_ORDER = "kb_home_order"
     const val KEY_COLLECTIONS = "kb_collections"
     const val KEY_BADGE_PACK = "badge_pack"
+    const val KEY_LIBRARY = "library"
+    const val KEY_DISMISSALS = "dismissals"
     const val KEY_PROFILES = "profiles"
 
     fun buildAll(context: Context): List<Pair<String, JsonObject>> = listOf(
@@ -115,6 +117,8 @@ object PrefsPayloadBuilder {
         KEY_HOME_ORDER to buildHomeOrder(context),
         KEY_COLLECTIONS to buildCollections(context),
         KEY_BADGE_PACK to buildBadgePack(context),
+        KEY_LIBRARY to buildLibrary(context),
+        KEY_DISMISSALS to buildDismissals(context),
         KEY_PROFILES to com.kennyb1201.kbstream.data.sync.ProfileManager.profilesSyncBlob(context)
     )
 
@@ -268,6 +272,36 @@ object PrefsPayloadBuilder {
                     .getStringSet("watched_overrides", emptySet()).orEmpty().forEach { add(it) }
             }
         }
+
+    /**
+     * Local library (My List + personal lists) as two raw JSON strings —
+     * the payloads mirror LocalLibraryStore's on-disk encoding exactly, so
+     * the applier can hand them straight back without re-encoding. Full
+     * replace on apply: the latest writer wins, matching how the store
+     * itself writes.
+     */
+    fun buildLibrary(context: Context): JsonObject =
+        buildJsonObject {
+            put("updatedAt", System.currentTimeMillis())
+            val prefs = scopedPrefs(context, "kbstream_library")
+            put("my_list", prefs.getString("my_list", null) ?: "")
+            put("personal_lists", prefs.getString("personal_lists", null) ?: "")
+        }
+
+    /**
+     * Continue-watching/upcoming dismissals as one raw JSON object string
+     * (key -> dismissedAtMillis). Built/reparsed opaquely — the writer owns
+     * the encoding.
+     */
+    fun buildDismissals(context: Context): JsonObject =
+        buildJsonObject {
+            put("updatedAt", System.currentTimeMillis())
+            val prefs = scopedPrefs(context, "continue_watching_dismissals")
+            put(
+                "dismissals_json",
+                prefs.getString("continue_watching_dismissals", null) ?: ""
+            )
+        }
 }
 
 /**
@@ -291,6 +325,8 @@ object PrefsPayloadApplier {
             PrefsPayloadBuilder.KEY_HOME_ORDER -> applyHomeOrder(context, payload)
             PrefsPayloadBuilder.KEY_COLLECTIONS -> applyCollections(context, payload)
             PrefsPayloadBuilder.KEY_BADGE_PACK -> applyBadgePack(context, payload)
+            PrefsPayloadBuilder.KEY_LIBRARY -> applyLibrary(context, payload)
+            PrefsPayloadBuilder.KEY_DISMISSALS -> applyDismissals(context, payload)
             PrefsPayloadBuilder.KEY_PROFILES ->
                 com.kennyb1201.kbstream.data.sync.ProfileManager.applyProfilesPayload(
                     context, payload
@@ -312,6 +348,52 @@ object PrefsPayloadApplier {
         prefs.edit()
             .putString("badge_pack_url", url)
             .putString("badge_pack_json", packJson)
+            .apply()
+    }
+
+    /**
+     * Library apply: full replace with the remote blobs, but ONLY when the
+     * remote write is newer than the last local one — My List edits from
+     * either device must survive, so the loser of a timestamp race keeps
+     * its state and re-pushes on its next edit.
+     */
+    private fun applyLibrary(context: Context, payload: JsonObject) {
+        val remoteUpdated = payloadUpdatedAt(payload)
+        val prefs = scopedPrefs(context, "kbstream_library")
+        if (remoteUpdated != null &&
+            remoteUpdated < prefs.getLong("library_synced_at", 0L)
+        ) return
+
+        fun raw(key: String): String? {
+            val v = (payload[key] as? kotlinx.serialization.json.JsonPrimitive)?.content
+            return v?.takeIf { it.isNotBlank() }
+        }
+
+        val editor = prefs.edit()
+        raw("my_list")?.let { editor.putString("my_list", it) }
+        raw("personal_lists")?.let { editor.putString("personal_lists", it) }
+        editor.putLong("library_synced_at", remoteUpdated ?: System.currentTimeMillis())
+        editor.apply()
+    }
+
+    /**
+     * Dismissals apply: same timestamp-guarded pattern as the library —
+     * a remote blob older than the newest local dismissal write is
+     * rejected so offline dismissals survive.
+     */
+    private fun applyDismissals(context: Context, payload: JsonObject) {
+        val remoteUpdated = payloadUpdatedAt(payload)
+        val prefs = scopedPrefs(context, "continue_watching_dismissals")
+        if (remoteUpdated != null &&
+            remoteUpdated < prefs.getLong("dismissals_synced_at", 0L)
+        ) return
+
+        val json = (payload["dismissals_json"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+            ?.takeIf { it.isNotBlank() } ?: return
+
+        prefs.edit()
+            .putString("continue_watching_dismissals", json)
+            .putLong("dismissals_synced_at", remoteUpdated ?: System.currentTimeMillis())
             .apply()
     }
 
