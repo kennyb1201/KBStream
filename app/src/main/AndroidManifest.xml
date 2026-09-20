@@ -4,6 +4,9 @@
     <!-- In-app self-update: lets the system offer the install prompt for a
          downloaded APK (sideloaded builds are not Play-managed). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- New-episode alerts. Runtime-requested on Android 13+ (requested when
+         the toggle is switched on); a no-op grant on older releases. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Voice search: let the system speech RecognizerIntent resolve on
          Android 11+ (package visibility filtering). -->

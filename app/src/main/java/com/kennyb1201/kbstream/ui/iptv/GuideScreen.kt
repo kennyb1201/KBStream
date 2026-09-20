@@ -80,6 +80,7 @@ import com.kennyb1201.kbstream.data.iptv.EpgMatchType
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.iptv.IptvPlaylist
 import com.kennyb1201.kbstream.data.iptv.IptvReminderStore
+import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
@@ -363,6 +364,28 @@ fun GuideScreen(
                     item.channel.name.contains(q, ignoreCase = true) ||
                     item.channel.tvgChno?.trim() == q
             }.take(40)
+        }
+    }
+
+    // EPG program hits for the same query ("what's on with X tonight").
+    // The ViewModel debounces the query and searches the EPG table; here the
+    // hits are mapped onto VISIBLE channels only, so a channel the user hid
+    // cannot resurface through a program match.
+    val programSearchRows by viewModel.programSearchResults.collectAsState()
+    LaunchedEffect(searchQuery, showSearch) {
+        if (!showSearch) return@LaunchedEffect
+        viewModel.searchPrograms(searchQuery)
+    }
+    val programSearchHits = remember(programSearchRows, unhiddenChannels) {
+        if (programSearchRows.isEmpty()) {
+            emptyList()
+        } else {
+            val byEpgId = unhiddenChannels
+                .mapNotNull { item -> item.epgChannel?.id?.let { id -> id to item } }
+                .toMap()
+            programSearchRows
+                .mapNotNull { row -> byEpgId[row.channelId]?.let { item -> GuideProgramHit(item, row) } }
+                .take(30)
         }
     }
 
@@ -929,6 +952,7 @@ Spacer(modifier = Modifier.height(14.dp))
                     ChannelSearchDialog(
                         query = searchQuery,
                         results = searchResults,
+                        programHits = programSearchHits,
                         channelKey = ::channelKey,
                         onQueryChanged = { searchQuery = it },
                         onPlay = { item ->
@@ -2208,7 +2232,7 @@ private fun ChannelActionsDialog(
             onToggleReminder?.let { toggle ->
                 KBCard(onClick = toggle, modifier = Modifier.fillMaxWidth()) {
                     Text(
-                        if (reminderActive) "REMOVE REMINDER" else "REMIND ME: ${item.next?.title ?: "next programme"}",
+                        if (reminderActive) "REMOVE REMINDER" else "REMIND ME: ${item.next?.title ?: "next program"}",
                         color = KBTextHi,
                         style = MaterialTheme.typography.titleMedium,
                         maxLines = 1,
@@ -2273,8 +2297,8 @@ private fun CatchupDialog(
 
             if (programs.isEmpty()) {
                 Text(
-                    text = "No recent programmes available. The channel advertises catch-up, " +
-                        "but the guide has no aired programme history for it yet \u2014 try again " +
+                    text = "No recent programs available. The channel advertises catch-up, " +
+                        "but the guide has no aired program history for it yet \u2014 try again " +
                         "after the EPG imports.",
                     color = KBTextLo,
                     style = MaterialTheme.typography.bodyMedium,
@@ -2361,10 +2385,17 @@ private fun formatCatchupWindow(startUtcMillis: Long, endUtcMillis: Long): Strin
     return "$dayLabel \u00b7 ${fmt(startUtcMillis)}\u2013${fmt(endUtcMillis)}"
 }
 
+/** One EPG title match bound to the visible channel it airs on. */
+private data class GuideProgramHit(
+    val item: IptvChannelWithEpg,
+    val program: EpgProgramRow
+)
+
 @Composable
 private fun ChannelSearchDialog(
     query: String,
     results: List<IptvChannelWithEpg>,
+    programHits: List<GuideProgramHit> = emptyList(),
     channelKey: (IptvChannelWithEpg) -> String,
     onQueryChanged: (String) -> Unit,
     onPlay: (IptvChannelWithEpg) -> Unit,
@@ -2380,7 +2411,7 @@ private fun ChannelSearchDialog(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Text(
-                text = "SEARCH CHANNELS",
+                text = "SEARCH GUIDE",
                 color = KBAccent,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold
@@ -2388,16 +2419,16 @@ private fun ChannelSearchDialog(
             KBTextField(
                 value = query,
                 onValueChange = onQueryChanged,
-                placeholder = "Channel name or number…",
+                placeholder = "Channel, number or program…",
                 modifier = Modifier.fillMaxWidth(),
                 onDone = onDismiss
             )
-            if (results.isEmpty()) {
+            if (results.isEmpty() && programHits.isEmpty()) {
                 Text(
                     text = if (query.isBlank()) {
-                        "Type to filter the channel list"
+                        "Type to search channels and programs"
                     } else {
-                        "No channels match"
+                        "No channels or programs match"
                     },
                     color = KBTextLo,
                     style = MaterialTheme.typography.bodyMedium,
@@ -2460,6 +2491,57 @@ private fun ChannelSearchDialog(
                                             style = MaterialTheme.typography.labelMedium
                                         )
                                     }
+                            }
+                        }
+                    }
+                }
+            }
+            if (programHits.isNotEmpty()) {
+                Text(
+                    text = "PROGRAMS",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(start = 4.dp)
+                )
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 240.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    itemsIndexed(
+                        items = programHits,
+                        key = { _, hit ->
+                            "program|${hit.item.channel.id}|${hit.program.startUtcMillis}"
+                        }
+                    ) { _, hit ->
+                        KBCard(
+                            onClick = { onPlay(hit.item) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 8.dp)
+                            ) {
+                                Text(
+                                    text = hit.program.title,
+                                    color = KBTextHi,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = hit.item.channel.displayName + " · " +
+                                        formatTimeRange(
+                                            hit.program.startUtcMillis,
+                                            hit.program.endUtcMillis
+                                        ),
+                                    color = KBTextLo,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
                         }
                     }

@@ -1372,6 +1372,14 @@ object SupabaseSync {
     }
 
     /**
+     * Pending upload rows for the diagnostics report ("table:key"). Values
+     * are the scoped cloud keys, so a row that keeps failing can be matched
+     * against the cloud table by hand.
+     */
+    fun pendingOutboxSummary(limit: Int = 10): List<String> =
+        outbox.snapshot().take(limit).map { item -> "${item.table}:${item.key}" }
+
+    /**
      * "Force full resync" from the sync-health panel: ONE awaited
      * flush → pull → push pass, so the panel reports the result of a single
      * attempt instead of three racing fire-and-forget jobs. [isSyncing] stays

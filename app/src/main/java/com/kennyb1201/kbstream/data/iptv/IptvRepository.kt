@@ -724,6 +724,28 @@ class IptvRepository(
         value.trim().lowercase(Locale.US)
 
     /**
+     * Guide-wide program search ("what's on with X tonight"): title match
+     * across every channel for programs that have not finished yet.
+     *
+     * Channel visibility is applied by the caller — the guide owns the
+     * hidden-channel rules, and a channel the user hid must not resurface
+     * through a program match. Short queries return nothing (a one-letter
+     * query matches most of the guide and would look like a freeze).
+     */
+    suspend fun searchPrograms(query: String, limit: Int = 60): List<EpgProgramRow> {
+        val q = query.trim()
+        if (q.length < MIN_PROGRAM_SEARCH_LENGTH) return emptyList()
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                dao.searchProgramsByTitle(q, System.currentTimeMillis(), limit)
+            }.getOrElse { t ->
+                Log.w(TAG, "program search failed: ${t.message}")
+                emptyList()
+            }
+        }
+    }
+
+    /**
      * Catch-up entries for one channel: the channel's last programs that
      * have fully aired (newest first), each carrying a resolved DVR URL
      * template built from the channel's M3U catch-up attributes. Channels
@@ -806,6 +828,11 @@ class IptvRepository(
         const val PROGRAMS_PER_CHANNEL_TARGET = 12
         const val MAX_PROGRAM_ROWS_PER_BATCH = 192
         const val MAX_UPCOMING_PROGRAMS = 12
+
+        // Program search needs at least this many characters: one letter
+        // matches most of the guide and would block the query thread for no
+        // useful result.
+        const val MIN_PROGRAM_SEARCH_LENGTH = 2
 
         val BRACKETED_TEXT = Regex("""\[[^]]*]""")
         val PARENTHESIZED_TEXT = Regex("""\([^)]*\)""")

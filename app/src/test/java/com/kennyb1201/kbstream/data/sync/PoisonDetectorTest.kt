@@ -145,7 +145,7 @@ class PoisonDetectorTest {
 
     @Test
     fun `empty sets are never treated as copies of each other`() {
-        val sets = listOf(pidA to emptySet(), pidB to emptySet())
+        val sets = listOf(pidA to emptySet<String>(), pidB to emptySet<String>())
         assertTrue(PoisonDetector.duplicateOverrideOwners(sets).isEmpty())
     }
 

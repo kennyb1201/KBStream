@@ -277,4 +277,35 @@ interface IptvDao {
         windowEnd: Long,
         perChannelLimit: Int
     ): List<EpgProgramRow>
+
+    /**
+     * Guide-wide program search: title match on every channel, limited to
+     * programs that have not finished yet ("what's on with X tonight").
+     *
+     * Deliberately NOT filtered by sourceUrl or channel: the caller drops
+     * hits whose channel is hidden and maps the rest through the guide's own
+     * channel list, which is the only place that knows what is visible.
+     * SQLite's LIKE is case-insensitive for ASCII, so no COLLATE is needed.
+     */
+    @Query(
+        """
+        SELECT
+            channelId,
+            title,
+            description,
+            category,
+            startUtcMillis,
+            endUtcMillis
+        FROM epg_programs
+        WHERE title LIKE '%' || :query || '%'
+          AND endUtcMillis > :fromMillis
+        ORDER BY startUtcMillis ASC
+        LIMIT :limit
+        """
+    )
+    suspend fun searchProgramsByTitle(
+        query: String,
+        fromMillis: Long,
+        limit: Int
+    ): List<EpgProgramRow>
 }

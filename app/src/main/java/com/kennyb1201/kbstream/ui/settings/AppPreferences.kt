@@ -47,6 +47,7 @@ object AppPreferences {
     private const val KEY_HERO_TRAILER_AUTOPLAY = "hero_trailer_autoplay"
     private const val KEY_HERO_TRAILER_MUTED = "hero_trailer_muted"
     private const val KEY_USE_24H_CLOCK = "use_24h_clock"
+    private const val KEY_NOTIFY_NEW_EPISODES = "new_episode_notifications"
     private const val KEY_SHOW_CATALOG_TYPE = "home_rail_show_catalog_type"
     private const val KEY_SHOW_ADDON_NAME = "home_rail_show_addon_name"
     private const val KEY_SEARCH_SHOW_CATALOG_TYPE = "search_rail_show_catalog_type"
@@ -188,6 +189,19 @@ object AppPreferences {
 
     fun setStillThereEpisodes(context: Context, episodes: Long) {
         prefs(context).edit().putLong(KEY_STILL_THERE_EPISODES, episodes).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
+    // ── New-episode notifications ────────────────────────────────────
+    // On by default: the checker only alerts for shows this profile already
+    // watches, so the volume is inherently low. The toggle is synced with the
+    // other behavior prefs ("am I a notifications person" is not device-
+    // specific), while the per-show already-notified snapshot stays local.
+    fun getNewEpisodeNotifications(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_NOTIFY_NEW_EPISODES, true)
+
+    fun setNewEpisodeNotifications(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_NOTIFY_NEW_EPISODES, enabled).apply()
         syncDisplayPrefsBlob(context)
     }
 

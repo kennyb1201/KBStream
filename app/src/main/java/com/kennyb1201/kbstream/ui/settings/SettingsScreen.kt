@@ -3,7 +3,9 @@ package com.kennyb1201.kbstream.ui.settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import android.Manifest
 import android.content.ActivityNotFoundException
+import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -96,6 +98,36 @@ fun SettingsScreen(
     var bingeGroupFallback by remember { mutableStateOf(AppPreferences.getBingeGroupFallback(context)) }
     var stillTherePrompt by remember { mutableStateOf(AppPreferences.getStillTherePrompt(context)) }
     var stillThereEpisodes by remember { mutableLongStateOf(AppPreferences.getStillThereEpisodes(context)) }
+    var newEpisodeNotifications by remember {
+        mutableStateOf(AppPreferences.getNewEpisodeNotifications(context))
+    }
+    // Whether the OS will actually deliver an alert. Separate from the toggle:
+    // the pref can be ON while the app's notifications are revoked in system
+    // settings (or POST_NOTIFICATIONS was never granted on Android 13+), which
+    // looks identical to "the feature is broken" from the couch.
+    var notificationsAllowed by remember {
+        mutableStateOf(
+            com.kennyb1201.kbstream.data.notifications.NotificationCenter.canPost(context)
+        )
+    }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) {
+        notificationsAllowed =
+            com.kennyb1201.kbstream.data.notifications.NotificationCenter.canPost(context)
+        // The immediate check enqueued by the enabling tap can race the grant
+        // dialog and bail out as "not permitted"; now that the answer is in,
+        // re-arm it so the first alert isn't delayed to the next 12h round.
+        if (notificationsAllowed && AppPreferences.getNewEpisodeNotifications(context)) {
+            runCatching {
+                com.kennyb1201.kbstream.work.NewEpisodeWorker.syncSchedule(
+                    context,
+                    enabled = true,
+                    runImmediate = true
+                )
+            }
+        }
+    }
     var autoSelectStream by remember { mutableStateOf(AppPreferences.getAutoSelectStream(context)) }
     var useStreamRanker by remember { mutableStateOf(AppPreferences.getUseStreamRanker(context)) }
     var enableTunneling by remember { mutableStateOf(AppPreferences.getEnableTunneling(context)) }
@@ -854,6 +886,46 @@ fun SettingsScreen(
 
                 if (selectedPane == SettingsPane.INTERFACE) {
                 ToggleRow(
+                    label = "New Episode Notifications",
+                    description = if (!notificationsAllowed) {
+                        "Alerts when a new episode of a show you watch has aired. " +
+                            "Blocked by the system — allow notifications for KBStream in your " +
+                            "device settings."
+                    } else {
+                        "Alerts when a new episode of a show you watch has aired. " +
+                            "Checked twice a day for the profile in use; each episode is " +
+                            "announced once."
+                    },
+                    checked = newEpisodeNotifications,
+                    onToggle = { enabled ->
+                        newEpisodeNotifications = enabled
+                        AppPreferences.setNewEpisodeNotifications(context, enabled)
+                        // The pref alone changes nothing on its own: switching
+                        // off has to cancel the scheduled round, and switching
+                        // on should alert about an episode that already aired
+                        // rather than waiting up to 12h for the next window.
+                        runCatching {
+                            com.kennyb1201.kbstream.work.NewEpisodeWorker.syncSchedule(
+                                context,
+                                enabled,
+                                runImmediate = enabled
+                            )
+                        }
+                        // Android 13+ needs the runtime grant; asking on the
+                        // enabling tap is the only moment it makes sense.
+                        if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            runCatching {
+                                notificationPermissionLauncher.launch(
+                                    Manifest.permission.POST_NOTIFICATIONS
+                                )
+                            }
+                        }
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                ToggleRow(
                     label = "AMOLED Black",
                     description = "True-black backgrounds for OLED/AMOLED screens — pixels turn fully off, saving power and boosting contrast. Applies instantly.",
                     checked = amoledBlack,
@@ -1534,6 +1606,45 @@ private fun SyncHealthSection() {
                 Text(
                     text = "Uploads pending changes, then pulls the account's " +
                         "history, watched marks and settings for this profile.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        val diagnosticsScope = rememberCoroutineScope()
+        var diagnosticsStatus by remember { mutableStateOf<String?>(null) }
+        KBCard(
+            onClick = {
+                diagnosticsScope.launch {
+                    runCatching {
+                        val report = com.kennyb1201.kbstream.data.reporting.Diagnostics.build(context)
+                        com.kennyb1201.kbstream.data.reporting.Diagnostics
+                            .copyToClipboard(context, report)
+                        diagnosticsStatus = "copied \u00b7 also logged as DIAGNOSTICS"
+                    }.onFailure {
+                        diagnosticsStatus = "failed: ${it.message}"
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(KBSurfaceRaised, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                Text(
+                    text = "COPY DIAGNOSTICS",
+                    color = KBAccent,
+                    style = MaterialTheme.typography.labelSmall
+                )
+                Text(
+                    text = diagnosticsStatus
+                        ?: "Build, device, account, sync health, pending uploads " +
+                        "and this session's caught errors — copied to the clipboard " +
+                        "and written to logcat (tag DIAGNOSTICS).",
                     color = KBTextLo,
                     style = MaterialTheme.typography.bodySmall
                 )

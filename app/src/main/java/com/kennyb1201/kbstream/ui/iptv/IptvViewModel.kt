@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.iptv.EpgMatchType
+import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.iptv.IptvPlaylist
@@ -74,6 +75,27 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         prefs.getString(KEY_EXTRA_PLAYLIST_URLS, "").orEmpty()
     )
     val extraPlaylistUrls: StateFlow<String> = _extraPlaylistUrls.asStateFlow()
+
+    // ── Guide-wide program search ─────────────────────────────────
+    // Debounced: typing on a TV remote fires a keystroke per D-pad press, and
+    // each one would otherwise run a LIKE scan over the whole EPG table.
+    private val _programSearchResults = MutableStateFlow<List<EpgProgramRow>>(emptyList())
+    val programSearchResults: StateFlow<List<EpgProgramRow>> =
+        _programSearchResults.asStateFlow()
+    private var programSearchJob: Job? = null
+
+    fun searchPrograms(query: String) {
+        programSearchJob?.cancel()
+        if (query.trim().length < 2) {
+            _programSearchResults.value = emptyList()
+            return
+        }
+        programSearchJob = viewModelScope.launch {
+            delay(250)
+            val hits = runCatching { repository.searchPrograms(query) }.getOrDefault(emptyList())
+            _programSearchResults.value = hits
+        }
+    }
 
     fun onExtraPlaylistUrlsChanged(value: String) {
         _extraPlaylistUrls.value = value

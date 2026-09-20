@@ -11,7 +11,9 @@ import coil3.SingletonImageLoader
 import coil3.disk.directory
 import coil3.svg.SvgDecoder
 import coil3.request.crossfade
+import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.work.AddonManifestRefreshWorker
+import com.kennyb1201.kbstream.work.NewEpisodeWorker
 import com.kennyb1201.kbstream.work.SimklSyncWorker
 import io.sentry.android.core.SentryAndroid
 import java.util.concurrent.TimeUnit
@@ -43,6 +45,18 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             .onFailure {
                 com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
                     it, mapOf("source" to "app_create_simkl_worker")
+                )
+            }
+        // Notification channels must exist before anything posts; created here
+        // (not in the worker) so a tap target is never missing on first alert.
+        runCatching {
+            com.kennyb1201.kbstream.data.notifications.NotificationCenter
+                .ensureChannels(applicationContext)
+        }
+        runCatching { scheduleNewEpisodeChecks() }
+            .onFailure {
+                com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
+                    it, mapOf("source" to "app_create_new_episode_worker")
                 )
             }
         runCatching { scheduleAddonManifestRefresh() }
@@ -151,6 +165,21 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             SIMKL_SYNC_WORK_NAME,
             ExistingPeriodicWorkPolicy.KEEP,
             request
+        )
+    }
+
+    /**
+     * Twice-daily "has a new episode aired?" round. Same cadence and network
+     * gate as the Simkl refresh, but a separate job so new-episode alerts
+     * don't depend on a connected tracker account.
+     *
+     * Honors the settings toggle: switching notifications off cancels the
+     * work instead of leaving a job that wakes up only to bail out.
+     */
+    private fun scheduleNewEpisodeChecks() {
+        NewEpisodeWorker.syncSchedule(
+            this,
+            AppPreferences.getNewEpisodeNotifications(this)
         )
     }
 
