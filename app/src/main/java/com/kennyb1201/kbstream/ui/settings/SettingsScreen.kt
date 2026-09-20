@@ -92,7 +92,10 @@ fun SettingsScreen(
     var bufferMode by remember { mutableIntStateOf(AppPreferences.getDefaultBufferMode(context)) }
     var subtitleSize by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleSize(context)) }
     var subtitleBg by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleBackground(context)) }
+    var subtitlePosition by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitlePosition(context)) }
     var autoPlayNext by remember { mutableStateOf(AppPreferences.getAutoPlayNext(context)) }
+    var autoSkipIntro by remember { mutableStateOf(AppPreferences.getAutoSkipIntro(context)) }
+    var autoSkipCredits by remember { mutableStateOf(AppPreferences.getAutoSkipCredits(context)) }
     var bingeGroupPrefer by remember { mutableStateOf(AppPreferences.getBingeGroupPrefer(context)) }
     var bingeGroupReuse by remember { mutableStateOf(AppPreferences.getBingeGroupReuse(context)) }
     var bingeGroupFallback by remember { mutableStateOf(AppPreferences.getBingeGroupFallback(context)) }
@@ -892,6 +895,54 @@ fun SettingsScreen(
                         }
                     }
                 }
+                Spacer(modifier = Modifier.height(10.dp))
+
+                ToggleRow(
+                    label = "Auto-skip Intros",
+                    description = "Skip intros and recaps the moment they start, using IntroDB timestamps. Off keeps the SKIP INTRO button, so the choice stays yours.",
+                    checked = autoSkipIntro,
+                    onToggle = {
+                        autoSkipIntro = it
+                        AppPreferences.setAutoSkipIntro(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                ToggleRow(
+                    label = "Auto-skip Credits",
+                    description = "Jump past end credits and stop on the post-credits scene when the title has one. A low-confidence timestamp is never skipped on its own.",
+                    checked = autoSkipCredits,
+                    onToggle = {
+                        autoSkipCredits = it
+                        AppPreferences.setAutoSkipCredits(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = "Subtitle Position",
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("Low", "Mid", "High").forEachIndexed { index, label ->
+                        KBCard(onClick = {
+                            subtitlePosition = index
+                            AppPreferences.setDefaultSubtitlePosition(context, index)
+                        }) {
+                            PillChip(label, subtitlePosition == index)
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "Lifts captions above letterbox bars or burned-in signage.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall
+                )
                 }
 
                 if (selectedPane == SettingsPane.INTERFACE) {

@@ -133,6 +133,9 @@ object PrefsPayloadBuilder {
         "opensubtitles_api_key",             // player → search subtitles online
         "default_subtitle_size",             // subtitle appearance: same on every device
         "default_subtitle_bg",
+        "default_subtitle_position",
+        "auto_skip_intro",                   // skipping behavior, not device-specific
+        "auto_skip_credits",
         "preferred_audio_language",          // preferred track languages: same on every device
         "preferred_subtitle_language"
     )

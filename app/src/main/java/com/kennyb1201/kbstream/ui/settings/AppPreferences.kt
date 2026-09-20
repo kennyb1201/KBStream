@@ -21,7 +21,12 @@ object AppPreferences {
     private const val KEY_DEFAULT_BUFFER_MODE = "default_buffer_mode"       // 0=balanced, 1=low-latency, 2=auto
     private const val KEY_DEFAULT_SUBTITLE_SIZE = "default_subtitle_size"   // 0=small, 1=normal, 2=large
     private const val KEY_DEFAULT_SUBTITLE_BG = "default_subtitle_bg"       // 0=none, 1=semi, 2=solid
+    private const val KEY_DEFAULT_SUBTITLE_POSITION = "default_subtitle_position" // 0=low, 1=mid, 2=high
     private const val KEY_AUTO_PLAY_NEXT = "auto_play_next"
+    // Automatic skipping of IntroDB segments. Both default OFF: moving the
+    // playhead with no press is opted into, never assumed.
+    private const val KEY_AUTO_SKIP_INTRO = "auto_skip_intro"
+    private const val KEY_AUTO_SKIP_CREDITS = "auto_skip_credits"
     private const val KEY_AUTO_SELECT_STREAM = "auto_select_stream"
     private const val KEY_USE_STREAM_RANKER = "use_stream_ranker"
     private const val KEY_BINGE_GROUP_PREFER = "binge_group_prefer"
@@ -98,6 +103,34 @@ object AppPreferences {
 
     fun setDefaultSubtitleBackground(context: Context, bg: Int) {
         prefs(context).edit().putInt(KEY_DEFAULT_SUBTITLE_BG, bg).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
+    // ── Subtitle position ────────────────────────────────────────────
+    // 0 = low (the placement every earlier build used), 1 = mid, 2 = high.
+    // A display pref like size/background, so it rides the same sync blob.
+    fun getDefaultSubtitlePosition(context: Context): Int =
+        readIntPref(context, KEY_DEFAULT_SUBTITLE_POSITION, 0)
+
+    fun setDefaultSubtitlePosition(context: Context, position: Int) {
+        prefs(context).edit().putInt(KEY_DEFAULT_SUBTITLE_POSITION, position).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
+    // ── Auto-skip intros / credits ───────────────────────────────────
+    fun getAutoSkipIntro(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_AUTO_SKIP_INTRO, false)
+
+    fun setAutoSkipIntro(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_AUTO_SKIP_INTRO, enabled).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
+    fun getAutoSkipCredits(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_AUTO_SKIP_CREDITS, false)
+
+    fun setAutoSkipCredits(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_AUTO_SKIP_CREDITS, enabled).apply()
         syncDisplayPrefsBlob(context)
     }
 

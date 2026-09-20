@@ -269,7 +269,8 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var btnSettings: TextView
     private lateinit var pickerContainer: LinearLayout
     private lateinit var pickerTitle: TextView
-    private lateinit var settingsContainer: ScrollView
+    // internal: PlayerPanelSection appends the track / A-V rows to this panel.
+    internal lateinit var settingsContainer: ScrollView
     private lateinit var scrim: View
     private lateinit var settingsBufferAuto: TextView
     private lateinit var settingsBufferBalanced: TextView
@@ -375,6 +376,8 @@ class NativePlayerActivity : ComponentActivity() {
 
     private var isInPiPMode = false
     private var showSettingsPanel = false
+    // The track / A-V rows appended to that panel; see PlayerPanelSection.
+    private var settingsPanelSection: PlayerPanelSection? = null
     private var isPickerShowing = false
     private var pickerMode = PickerMode.SOURCE
     private enum class PickerMode { SOURCE, AUDIO, SUBTITLE, SPEED }
@@ -398,9 +401,15 @@ class NativePlayerActivity : ComponentActivity() {
     private var carryPositionMs = 0L
     private var playbackSpeed = 1f
     private var resizeModeIndex = 0
-    private var subtitleOffsetMs = 0
+    // internal: PlayerPanelSection reads this — the panel's own ± offset
+    // buttons change it without going through the track bridge.
+    internal var subtitleOffsetMs = 0
     private var subtitleSize = 1
     private var subtitleBackground = 0
+    // 0 = low (the placement every earlier build used), 1 = mid, 2 = high.
+    // Applied as a translation on the cue view, which the renderer never
+    // rewrites — so it holds for the whole session.
+    private var subtitlePosition = 0
     private lateinit var subtitleText: TextView
     private var subtitleCueHandler: SubtitleCueHandler? = null
     // Parsed cues of the user-loaded external subtitle file. When present
@@ -878,7 +887,29 @@ class NativePlayerActivity : ComponentActivity() {
 
     // IntroDB
     private var introDbStamps = emptyList<IntroDbStamp>()
-    private var activeIntroStamp: IntroDbStamp? = null
+
+    // Auto-skip (Settings > Playback). The intro poller only ever *offers* a
+    // segment; these decide whether it is taken without a press.
+    private var autoSkipIntros = false
+    private var autoSkipCredits = false
+
+    // Segments already auto-skipped this session, so deliberately seeking back
+    // into an intro is never fought.
+    private val autoSkippedSegments = HashSet<String>()
+    private var activeIntroStampBacking: IntroDbStamp? = null
+
+    /**
+     * The segment currently on screen. A property rather than a plain field
+     * because its setter is the one funnel every offer passes through (the
+     * poller assigns it), which is what makes auto-skip possible without
+     * touching the polling code itself.
+     */
+    private var activeIntroStamp: IntroDbStamp?
+        get() = activeIntroStampBacking
+        set(value) {
+            activeIntroStampBacking = value
+            if (value != null) onIntroStampOffered(value)
+        }
 
     // Settings prefs
     private var enableTunneling = false
@@ -1061,6 +1092,42 @@ class NativePlayerActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Subtitle placement chosen from the player panel: the same pref the
+     * Settings pane writes, moved live on the cue view.
+     */
+    internal fun subtitlePositionApplied(position: Int) {
+        subtitlePosition = position
+        applySubtitlePosition()
+    }
+
+    /**
+     * IntroDB is keyed by IMDb id, but a title opened from a TMDB id carries
+     * only the numeric one — and the segment fetcher has no Context with which
+     * to resolve it. So the lookup runs here at playback start and the fetcher
+     * picks the answer up, falling back to the id it was given if it is slow.
+     */
+    private fun startIntroDbImdbHint() {
+        IntroDbHints.begin()
+        val numericId = parentId.trim().toLongOrNull()
+        if (numericId == null) {
+            // Already an IMDb id: nothing to resolve.
+            IntroDbHints.publish(null)
+            return
+        }
+        val type = if (parentType.lowercase() == "movie") "movie" else "series"
+        val tmdbId = numericId.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+        lifecycleScope.launch {
+            val imdbId = runCatching {
+                withContext(Dispatchers.IO) {
+                    TmdbRepository.getInstance(this@NativePlayerActivity)
+                        .resolveImdbId(tmdbId, type)
+                }
+            }.getOrNull()
+            IntroDbHints.publish(imdbId)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -1150,7 +1217,13 @@ class NativePlayerActivity : ComponentActivity() {
         bufferMode = AppPreferences.getDefaultBufferMode(this)
         subtitleSize = AppPreferences.getDefaultSubtitleSize(this)
         subtitleBackground = AppPreferences.getDefaultSubtitleBackground(this)
+        subtitlePosition = AppPreferences.getDefaultSubtitlePosition(this)
         autoPlayNext = AppPreferences.getAutoPlayNext(this)
+        autoSkipIntros = AppPreferences.getAutoSkipIntro(this)
+        autoSkipCredits = AppPreferences.getAutoSkipCredits(this)
+        // bindViews() already ran, so the cue view exists; placement can only
+        // be applied once the pref above is known.
+        applySubtitlePosition()
         val globalAudioLang = AppPreferences.getPreferredAudioLanguage(this)
         val globalSubtitleLang = AppPreferences.getPreferredSubtitleLanguage(this)
         preferredAudioLang = globalAudioLang
@@ -1196,6 +1269,17 @@ class NativePlayerActivity : ComponentActivity() {
             // directly; resolved lazily because the player is built later.
             playerProvider = { bridgeSelf.get()?.exoPlayer }
         )
+
+        // The panel's own rows sit past the tooling's edit window, so the
+        // language / track / A-V controls are appended to it in code. They are
+        // re-rendered whenever the panel becomes visible — showing it changes
+        // its bounds, which is exactly what this listener fires on.
+        settingsPanelSection = PlayerPanelSection(this, settingsContainer).also { section ->
+            section.attach()
+            settingsContainer.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+                if (settingsContainer.visibility == View.VISIBLE) section.refresh()
+            }
+        }
 
         // Bring back the subtitle attached to THIS video last time. Only the
         // URI is seeded here: createPlayer() turns it into the sidecar
@@ -1357,6 +1441,8 @@ class NativePlayerActivity : ComponentActivity() {
 
         setupListeners()
         setupKeyboardHandler()
+        // Before setupIntroDb(): the fetch waits briefly for this hint.
+        startIntroDbImdbHint()
         setupIntroDb()
         createPlayer()
     }
@@ -1388,6 +1474,51 @@ class NativePlayerActivity : ComponentActivity() {
     private fun applyChosenSubtitleOffset(ms: Int) {
         subtitleOffsetMs = ms
         runCatching { subtitleOffsetValue.text = "${ms}ms" }
+    }
+
+    /**
+     * Auto-skip: the only place the playhead moves without a press. Called from
+     * the [activeIntroStamp] setter every time the poller offers a segment.
+     *
+     * The poller makes the skip button visible right after that assignment, so
+     * the hide is posted: a posted runnable runs once the poller's current pass
+     * has finished, which means it wins and the button never flashes.
+     */
+    private fun onIntroStampOffered(stamp: IntroDbStamp) {
+        val settings = AutoSkipRules.Settings(autoSkipIntros, autoSkipCredits)
+        if (!AutoSkipRules.shouldAutoSkip(stamp, settings)) return
+        runCatching {
+            if (autoSkippedSegments.add(AutoSkipRules.key(stamp))) {
+                val target = AutoSkipRules.targetMs(
+                    stamp,
+                    introDbStamps,
+                    exoPlayer?.duration ?: 0L
+                )
+                exoPlayer?.seekTo(target)
+                Log.i(
+                    "INTRO_DB",
+                    "auto-skipped ${stamp.type.name} ${stamp.startMs}..${stamp.endMs} -> $target"
+                )
+            }
+        }.onFailure { Log.w("INTRO_DB", "auto-skip failed", it) }
+        handler.post {
+            btnSkipIntro.visibility = View.GONE
+            if (btnSkipIntro.isFocused) playerView.requestFocus()
+        }
+    }
+
+    /**
+     * Vertical placement of the cue renderer (0 = low, 1 = mid, 2 = high).
+     * SubtitleCueHandler rewrites the cue view's text, background and padding
+     * on every cue but never its translation, so one pass is enough.
+     */
+    private fun applySubtitlePosition() {
+        val lift = when (subtitlePosition) {
+            1 -> -56
+            2 -> -112
+            else -> 0
+        }
+        subtitleText.translationY = lift * resources.displayMetrics.density
     }
 
     private fun bindViews() {
