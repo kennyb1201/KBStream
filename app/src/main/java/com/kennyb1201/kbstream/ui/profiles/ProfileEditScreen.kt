@@ -173,6 +173,14 @@ fun ProfileEditScreen(
             .background(KBVoid)
             .padding(48.dp)
             .verticalScroll(rememberScrollState())
+            // Breathing room for the clip edge. Spacing placed BEFORE
+            // verticalScroll() leaves the viewport's clip edge sitting
+            // exactly on the last row, and the Save/Cancel cards scale
+            // 1.03x with a focused glow that draws outside their bounds —
+            // so the bottom of the focused button gets sheared off at max
+            // scroll. Padding INSIDE the viewport gives the ring somewhere
+            // to grow (same fix as the profile picker's tile row).
+            .padding(bottom = 32.dp)
             .focusGroup(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
