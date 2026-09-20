@@ -37,6 +37,9 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import android.content.SharedPreferences
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.runtime.DisposableEffect
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.LaunchedEffect
@@ -163,6 +166,30 @@ fun GuideScreen(
     
     var hiddenGroups by remember(activeProfileId) {
         mutableStateOf(guidePreferences.getStringSet("hidden_groups", emptySet())?.toSet().orEmpty())
+    }
+
+    // Hidden groups and favorites are also written by the sync applier. Without
+    // a listener the screen keeps the set it composed with, so a synced hide
+    // never appears — and the next local edit saves that stale set back, which
+    // reverts the cloud copy for the other devices too. The listener fires on
+    // whichever thread wrote the value (the applier runs off the main one), so
+    // the state update is posted to the main thread.
+    DisposableEffect(guidePreferences) {
+        val main = Handler(Looper.getMainLooper())
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            when (key) {
+                "hidden_groups" -> main.post {
+                    hiddenGroups = guidePreferences
+                        .getStringSet("hidden_groups", emptySet())?.toSet().orEmpty()
+                }
+                "favorites" -> main.post {
+                    favorites = guidePreferences
+                        .getStringSet("favorites", emptySet())?.toSet().orEmpty()
+                }
+            }
+        }
+        guidePreferences.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { guidePreferences.unregisterOnSharedPreferenceChangeListener(listener) }
     }
     var menuItem by remember { mutableStateOf<IptvChannelWithEpg?>(null) }
     // Catch-up (DVR): long-press a channel → CATCH-UP TV. The channel is

@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.iptv
 
 import android.app.Application
 import android.content.Context
+import android.content.SharedPreferences
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -121,6 +122,37 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         prefs.getStringSet(KEY_HIDDEN_CHANNEL_IDS, emptySet()).orEmpty().toSet()
     )
     val hiddenChannelIds: StateFlow<Set<String>> = _hiddenChannelIds.asStateFlow()
+
+    /**
+     * Re-reads the hidden set when it changes on disk. The sync applier writes
+     * this key straight from the cloud, and without a listener the ViewModel
+     * keeps the set it was constructed with — so a synced hide never shows up,
+     * and the next local edit saves that stale set back and pushes it, which
+     * erases the hidden channels on the other device too.
+     */
+    private val hiddenIdsPrefListener =
+        SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key != KEY_HIDDEN_CHANNEL_IDS) return@OnSharedPreferenceChangeListener
+            val stored = prefs.getStringSet(KEY_HIDDEN_CHANNEL_IDS, emptySet()).orEmpty().toSet()
+            if (stored != _hiddenChannelIds.value) _hiddenChannelIds.value = stored
+        }
+
+    /** Store the listener is bound to; re-bound when the profile changes. */
+    private var hiddenIdsPrefs: SharedPreferences? = null
+
+    private fun observeHiddenChannelIdsPref() {
+        val current = prefs
+        if (hiddenIdsPrefs === current) return
+        hiddenIdsPrefs?.unregisterOnSharedPreferenceChangeListener(hiddenIdsPrefListener)
+        current.registerOnSharedPreferenceChangeListener(hiddenIdsPrefListener)
+        hiddenIdsPrefs = current
+    }
+
+    override fun onCleared() {
+        hiddenIdsPrefs?.unregisterOnSharedPreferenceChangeListener(hiddenIdsPrefListener)
+        hiddenIdsPrefs = null
+        super.onCleared()
+    }
 
     /** Past programs with playable DVR URLs for the selected channel. */
     private val _catchupPrograms = MutableStateFlow<List<com.kennyb1201.kbstream.data.iptv.CatchupProgram>>(emptyList())
@@ -298,6 +330,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+        observeHiddenChannelIdsPref()
         startGuideClockRefresh()
         restoreCachedPlaylist()
         observeProfileSwitches()
@@ -332,6 +365,8 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                     _extraEpgUrls.value = prefs.getString(KEY_EXTRA_EPG_URLS, "").orEmpty()
                     _hiddenChannelIds.value =
                         prefs.getStringSet(KEY_HIDDEN_CHANNEL_IDS, emptySet()).orEmpty().toSet()
+                    // Re-bind: the listener has to follow the new profile's store.
+                    observeHiddenChannelIdsPref()
 
                     // Drop the previous profile's in-memory content.
                     _playlist.value = null
@@ -781,6 +816,10 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private fun removeMissingHiddenChannelIds(playlist: IptvPlaylist) {
         val validChannelIds = playlist.channels.asSequence().map { it.id }.toSet()
+        // Never prune against a playlist that carries no channels: an empty or
+        // half-parsed load would otherwise delete every hidden channel locally
+        // and push that deletion to the other devices.
+        if (validChannelIds.isEmpty()) return
         val cleanedIds = _hiddenChannelIds.value.intersect(validChannelIds)
         if (cleanedIds != _hiddenChannelIds.value) {
             _hiddenChannelIds.value = cleanedIds

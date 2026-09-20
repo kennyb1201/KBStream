@@ -221,10 +221,21 @@ fun ProfileEditScreen(
             value = name,
             onValueChange = { name = it },
             placeholder = "Profile name",
+            // Fire TV's keyboard is a full-screen overlay that takes the D-pad,
+            // so a field that opens it on focus makes everything below it
+            // unreachable. On this screen focus stays silent and OK opens it.
+            openKeyboardOnFocus = false,
             focusRequester = nameRequester,
             modifier = Modifier
                 .fillMaxWidth(0.6f)
                 .padding(top = 24.dp)
+        )
+
+        Text(
+            text = "Press OK on a field to type in it.",
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(top = 6.dp)
         )
 
         // ── Parental PIN ─────────────────────────────────────────────
@@ -248,6 +259,7 @@ fun ProfileEditScreen(
                 value = currentPinInput,
                 onValueChange = { currentPinInput = it.filter(Char::isDigit).take(4) },
                 placeholder = "Current PIN",
+                openKeyboardOnFocus = false,
                 keyboardType = KeyboardType.NumberPassword,
                 visualTransformation = PasswordVisualTransformation(),
                 modifier = Modifier
@@ -265,6 +277,7 @@ fun ProfileEditScreen(
                 value = newPinInput,
                 onValueChange = { newPinInput = it.filter(Char::isDigit).take(4) },
                 placeholder = "New PIN (4 digits)",
+                openKeyboardOnFocus = false,
                 keyboardType = KeyboardType.NumberPassword,
                 visualTransformation = PasswordVisualTransformation(),
                 modifier = Modifier.weight(1f)
@@ -274,6 +287,7 @@ fun ProfileEditScreen(
                 value = confirmPinInput,
                 onValueChange = { confirmPinInput = it.filter(Char::isDigit).take(4) },
                 placeholder = "Confirm PIN",
+                openKeyboardOnFocus = false,
                 keyboardType = KeyboardType.NumberPassword,
                 visualTransformation = PasswordVisualTransformation(),
                 modifier = Modifier.weight(1f)
@@ -525,6 +539,7 @@ fun ProfileEditScreen(
                 }
             },
             placeholder = "Avatar image URL (optional)",
+            openKeyboardOnFocus = false,
             keyboardType = KeyboardType.Uri,
             modifier = Modifier
                 .fillMaxWidth(0.6f)

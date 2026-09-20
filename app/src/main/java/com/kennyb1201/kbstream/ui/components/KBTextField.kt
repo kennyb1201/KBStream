@@ -20,6 +20,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -101,21 +102,49 @@ fun KBTextField(
      * key press fall through to controls behind the overlay, so callers can
      * keep focus on the field instead: commit + hide the IME, keep focus.
      */
-    keepFocusOnDone: Boolean = false
+    keepFocusOnDone: Boolean = false,
+    /**
+     * Whether gaining focus opens the system keyboard.
+     *
+     * On Fire TV the leanback IME is a full-screen overlay that takes the
+     * D-pad for itself: while it is up nothing below it can be reached, and
+     * Back only closes it onto the field it came from. Long TV forms (the
+     * profile editor) pass false so focus alone never opens it — the field
+     * takes focus silently, OK starts editing, and Done ends editing without
+     * pushing focus somewhere else.
+     */
+    openKeyboardOnFocus: Boolean = true
 ) {
     var focused by remember { mutableStateOf(false) }
+    // Manual mode starts inert: the field only becomes editable (and only then
+    // asks for the IME) once OK is pressed on it.
+    var editing by remember { mutableStateOf(openKeyboardOnFocus) }
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
 
     fun finishEditing() {
         keyboardController?.hide()
-        if (!keepFocusOnDone) focusManager.clearFocus()
+        if (openKeyboardOnFocus) {
+            if (!keepFocusOnDone) focusManager.clearFocus()
+        } else {
+            // Manual mode: end editing but KEEP focus, so the D-pad carries on
+            // down the form from here instead of jumping back to whatever held
+            // focus before the field.
+            editing = false
+        }
         onDone?.invoke()
+    }
+
+    // The field was readOnly when it took focus, so the IME has to be asked
+    // for once it becomes editable.
+    LaunchedEffect(editing) {
+        if (editing && focused) keyboardController?.show()
     }
 
     BasicTextField(
         value = value,
         onValueChange = onValueChange,
+        readOnly = !editing,
         singleLine = true,
         textStyle = TextStyle(
             color = KBTextHi,
@@ -167,6 +196,9 @@ fun KBTextField(
             )
             .onFocusChanged {
                 focused = it.isFocused
+                // Blurring a manual-mode field ends its editing state, so it is
+                // inert again the next time the D-pad lands on it.
+                if (!it.isFocused && !openKeyboardOnFocus) editing = false
                 onFocusChanged?.invoke(it.isFocused)
             }
             .onPreviewKeyEvent { event ->
@@ -176,17 +208,50 @@ fun KBTextField(
                     when (event.key) {
                         Key.DirectionDown -> {
                             val moved = focusManager.moveFocus(FocusDirection.Down)
-                            if (moved) keyboardController?.hide()
+                            if (moved) {
+                                keyboardController?.hide()
+                                editing = openKeyboardOnFocus
+                            }
                             moved
                         }
                         Key.DirectionUp -> {
                             val moved = focusManager.moveFocus(FocusDirection.Up)
-                            if (moved) keyboardController?.hide()
+                            if (moved) {
+                                keyboardController?.hide()
+                                editing = openKeyboardOnFocus
+                            }
                             moved
                         }
+                        // OK on a remote. In manual mode it is what starts
+                        // editing; in the default mode the IME owns it.
+                        Key.DirectionCenter -> {
+                            if (editing) {
+                                false
+                            } else {
+                                editing = true
+                                true
+                            }
+                        }
                         Key.Enter, Key.NumPadEnter -> {
-                            finishEditing()
-                            true
+                            if (!editing) {
+                                editing = true
+                                true
+                            } else {
+                                finishEditing()
+                                true
+                            }
+                        }
+                        // Back while editing normally belongs to the IME (it
+                        // closes the keyboard). When it reaches the app instead
+                        // it must end editing, not fall through to the screen's
+                        // back handler and drop the whole form.
+                        Key.Back -> {
+                            if (editing && !openKeyboardOnFocus) {
+                                finishEditing()
+                                true
+                            } else {
+                                false
+                            }
                         }
                         else -> false
                     }
