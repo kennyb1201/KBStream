@@ -168,11 +168,26 @@ object AppPreferences {
         syncDisplayPrefsBlob(context)
     }
 
-    fun getStillThereEpisodes(context: Context): Int =
-        prefs(context).getInt(KEY_STILL_THERE_EPISODES, 3)
+    fun getStillThereEpisodes(context: Context): Long {
+        val p = prefs(context)
+        // Tolerant read: the sync applier writes numbers as Long, but older
+        // builds wrote this key with putInt. getInt on a Long-stored value
+        // (and getLong on an Int-stored one) throws ClassCastException —
+        // which used to detonate mid-recomposition in Settings and kill the
+        // app (Sentry ANDROID-A). Accept both storage types.
+        return try {
+            p.getLong(KEY_STILL_THERE_EPISODES, 3L)
+        } catch (e: ClassCastException) {
+            try {
+                p.getInt(KEY_STILL_THERE_EPISODES, 3).toLong()
+            } catch (_: Exception) {
+                3L
+            }
+        }
+    }
 
-    fun setStillThereEpisodes(context: Context, episodes: Int) {
-        prefs(context).edit().putInt(KEY_STILL_THERE_EPISODES, episodes).apply()
+    fun setStillThereEpisodes(context: Context, episodes: Long) {
+        prefs(context).edit().putLong(KEY_STILL_THERE_EPISODES, episodes).apply()
         syncDisplayPrefsBlob(context)
     }
 
@@ -526,8 +541,20 @@ object AppPreferences {
     // 0=small 110x165, 1=medium 124x186 (default), 2=large 140x210. Stored
     // as a Long because the display-prefs sync blob round-trips numbers as
     // Long on the receiving device.
-    fun getPosterSize(context: Context): Long =
-        prefs(context).getLong(KEY_POSTER_SIZE, 1L)
+    fun getPosterSize(context: Context): Long {
+        val p = prefs(context)
+        // Same tolerant dual-type read as getStillThereEpisodes: legacy
+        // builds stored this with putInt, the sync applier stores Long.
+        return try {
+            p.getLong(KEY_POSTER_SIZE, 1L)
+        } catch (e: ClassCastException) {
+            try {
+                p.getInt(KEY_POSTER_SIZE, 1).toLong()
+            } catch (_: Exception) {
+                1L
+            }
+        }
+    }
 
     fun setPosterSize(context: Context, size: Long) {
         prefs(context).edit().putLong(KEY_POSTER_SIZE, size).apply()

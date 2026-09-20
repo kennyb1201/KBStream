@@ -4818,7 +4818,7 @@ class NativePlayerActivity : ComponentActivity() {
         btnNextPlay.requestFocus()
 
         if (autoPlayNext) {
-            val threshold = AppPreferences.getStillThereEpisodes(this)
+            val threshold = AppPreferences.getStillThereEpisodes(this).toInt()
             val autoAdvanced = AppPreferences.getConsecutiveAutoplays(this)
             if (AppPreferences.getStillTherePrompt(this) && autoAdvanced >= threshold) {
                 // Binge watchdog: enough unattended episodes have played in a

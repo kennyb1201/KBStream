@@ -220,6 +220,7 @@ object SupabaseSync {
                         _syncEnabled.value = true
                         startRealtime()
                         startPeriodicFlush()
+                        ensureBackgroundPull(context)
                         pullAll(context)
 
                         restoreAttempts = 0
@@ -342,6 +343,13 @@ object SupabaseSync {
                 // existing rows, correct for genuinely new ones.
                 pullAllNow(context)
                 pushAllNow(context)
+                // SAFETY NET: the awaited pull above covers the happy path,
+                // but on flaky TV networks it can silently fail (transient
+                // HTTP failure in pullPrefs) and the fresh device would come
+                // up empty with no retry. The catch-up pull re-runs in a few
+                // seconds; it's idempotent (remote-vs-local updatedAt merge)
+                // so a redundant run only costs one read query.
+                ensureBackgroundPull(context)
             } catch (e: Exception) {
                 Log.e(TAG, "signIn failed", e)
                 _authState.value = AuthState.Error(e.message ?: "Sign-in failed")
@@ -391,6 +399,11 @@ object SupabaseSync {
         val c = client ?: return
         periodicFlushJob?.cancel()
         periodicFlushJob = null
+        // Reset the one-shot guards so a subsequent sign-in on the SAME
+        // process actually starts the loops again (previously a sign-out →
+        // sign-in cycle left the app silently without realtime/flush loops —
+        // reported changes only synced when the user manually hit Sync now).
+        backgroundPullStarted = false
         scope.launch {
             runCatching { c.auth.signOut() }
             context.getSharedPreferences(SYNC_PREFS, Context.MODE_PRIVATE)
@@ -552,11 +565,28 @@ object SupabaseSync {
 
     private var flushJob: kotlinx.coroutines.Job? = null
 
+    // Coalescing window for write bursts (bulk watched import, profile
+    // switching, the player's position saves). Single-shot before: the
+    // first enqueue started a 400ms timer, and any row enqueued AFTER the
+    // timer fired stayed in the outbox until the NEXT enqueue or the 60s
+    // periodic retry — remote devices saw that write seconds-to-minutes
+    // late or not at all until the app was used again ("flaky sync").
+    private const val FLUSH_DEBOUNCE_MS = 400L
+
     private fun scheduleFlush() {
         if (flushJob?.isActive == true) return
         flushJob = scope.launch {
-            delay(400) // coalesce bursts (e.g. bulk watched import)
-            flushOutbox()
+            while (true) {
+                delay(FLUSH_DEBOUNCE_MS)
+                flushOutbox()
+                // Sign-out strands retry rows until the next sign-in (the
+                // periodic loop restarts then) — don't busy-loop on them.
+                if (!isSignedIn()) break
+                // Loop while writes keep arriving so nothing strands: a row
+                // enqueued during flushOutbox() re-arms this loop instead of
+                // waiting for the next enqueue/60s retry.
+                if (outbox.isEmpty()) break
+            }
         }
     }
 
@@ -584,6 +614,12 @@ object SupabaseSync {
 
         val batch = outbox.values.toList()
         if (batch.isEmpty()) return
+
+        // Max one in-flight flush at a time: two flushOutbox() runs racing
+        // (scheduled + periodic) would both upload the same rows — harmless
+        // but wasteful, and interleaved chunk removals made the exact-row
+        // accounting below harder to reason about.
+        flushMutex.withLock {
 
         // Group by table and upload as batched upserts instead of one HTTP
         // round-trip per row — a bulk watched import used to fire hundreds
@@ -633,8 +669,12 @@ object SupabaseSync {
                 }
             }
         }
+        } // flushMutex
         _lastSyncAtMs.value = System.currentTimeMillis()
     }
+
+    /** Serializes flushOutbox() bodies (see the mutex acquire above). */
+    private val flushMutex = Mutex()
 
     // ── Pull + merge ────────────────────────────────────────────────
 
@@ -918,10 +958,43 @@ object SupabaseSync {
         }
     }
 
+    /**
+     * Catch-up re-pull after sign-in/restore. The initial pull races flaky
+     * TV networks; a silent failure left a fresh device empty with no retry.
+     * One delayed, idempotent re-run (merge is remote-vs-local updatedAt)
+     * repairs that window without a visible cost in the success case.
+     */
+    @Volatile
+    private var backgroundPullStarted = false
+
+    private fun ensureBackgroundPull(context: Context) {
+        if (backgroundPullStarted) return
+        backgroundPullStarted = true
+        scope.launch {
+            delay(8_000L)
+            if (isSignedIn()) {
+                runCatching { pullAllNow(context) }
+                    .onFailure { Log.w(TAG, "catch-up pull failed: ${it.message}") }
+            }
+        }
+    }
+
     // ── Realtime ────────────────────────────────────────────────────
 
-    private val realtimeChannels =
-        java.util.concurrent.CopyOnWriteArrayList<io.github.jan.supabase.realtime.RealtimeChannel>()
+    /**
+     * One table's realtime channel plus the coroutine collecting its
+     * postgres-change flow. Channels are never reused across joins: the
+     * SDK's teardown() resets a dropped channel's callback manager, so a
+     * repaired join needs a fresh channel object (see [subscribeTable]).
+     */
+    private class RealtimeSubscription(
+        val table: String,
+        val channel: io.github.jan.supabase.realtime.RealtimeChannel,
+        val collectorJob: kotlinx.coroutines.Job
+    )
+
+    private val realtimeSubscriptions =
+        java.util.concurrent.CopyOnWriteArrayList<RealtimeSubscription>()
 
     // Serializes start/stop so two auth paths that fire near-simultaneously
     // (session restore racing a manual sign-in) can't both pass the
@@ -934,31 +1007,114 @@ object SupabaseSync {
 
         scope.launch {
             realtimeMutex.withLock {
-                if (realtimeChannels.isNotEmpty()) return@withLock
+                if (realtimeSubscriptions.isNotEmpty()) return@withLock
                 try {
                     // One channel per table; the flow must be created BEFORE the
                     // channel subscribes (supabase-kt requirement).
                     listOf(TABLE_HISTORY, TABLE_WATCHED, TABLE_PREFS).forEach { table ->
-                        val ch = c.channel("kbstream_$table")
-                        val changeFlow = ch.postgresChangeFlow<io.github.jan.supabase.realtime.PostgresAction>(
-                            schema = "public"
-                        ) {
-                            this.table = table
-                        }
-
-                        scope.launch {
-                            changeFlow.collect { action -> onRemoteChange(action) }
-                        }
-
-                        ch.subscribe(blockUntilSubscribed = false)
-                        realtimeChannels.add(ch)
+                        subscribeTable(c, table)
                     }
                     Log.i(TAG, "realtime subscribed to 3 tables")
+                    watchRealtimeHealth()
                 } catch (e: Exception) {
                     Log.w(TAG, "realtime setup failed: ${e.message}")
                 } catch (t: Throwable) {
                     CrashReporter.recordNonFatal(t, mapOf("source" to "realtime_setup"))
                     Log.e(TAG, "realtime setup crashed: ${t.message}")
+                }
+            }
+        }
+    }
+
+    /**
+     * Creates a fresh channel for [table], registers its postgres-change
+     * flow + collector, subscribes, and tracks it.
+     *
+     * Fresh channels for EVERY join — including repairs. supabase-kt's
+     * teardown() (called when a channel closes or errors) resets the
+     * channel's callback manager; re-subscribing the same object would
+     * re-join the topic but silently STOP dispatching change events to the
+     * app's flows. Rebuilding the whole subscription is the only reliable
+     * repair.
+     */
+    private suspend fun subscribeTable(c: SupabaseClient, table: String) {
+        val ch = c.channel("kbstream_$table")
+        val changeFlow = ch.postgresChangeFlow<io.github.jan.supabase.realtime.PostgresAction>(
+            schema = "public"
+        ) {
+            this.table = table
+        }
+        val collector = scope.launch {
+            changeFlow.collect { action -> onRemoteChange(action) }
+        }
+        try {
+            ch.subscribe(blockUntilSubscribed = false)
+        } catch (t: Throwable) {
+            // A channel that never joined must not leak its collector.
+            collector.cancel()
+            throw t
+        }
+        // The subscribe above suspended; the user may have signed out during
+        // it (watcher rebuilds run outside realtimeMutex). Track nothing for
+        // a signed-out session — a zombie subscription here would make the
+        // NEXT sign-in's startRealtime bail on its not-empty check.
+        if (!isSignedIn()) {
+            collector.cancel()
+            runCatching { ch.unsubscribe() }
+            return
+        }
+        realtimeSubscriptions.add(RealtimeSubscription(table, ch, collector))
+    }
+
+    /**
+     * THE core flakiness fix. supabase-kt does NOT re-join a channel that
+     * dropped: a server kick / join error leaves it in Status.UNSUBSCRIBED
+     * forever (the SDK's rejoinChannels only runs after a full WEBSOCKET
+     * reconnect), so remote changes on the other device were simply never
+     * delivered until this device did a manual pull (restart, Sync now,
+     * profile switch). Symptoms matched the reports exactly: "stuff syncs
+     * sometimes and other times it doesn't."
+     *
+     * This watcher detects dead channels and rebuilds those subscriptions
+     * (fresh channel + collector, see [subscribeTable]); each repair is
+     * followed by a one-shot pull so changes written while the channel was
+     * dead are still ingested.
+     */
+    private fun watchRealtimeHealth() {
+        scope.launch {
+            while (isSignedIn()) {
+                delay(REALTIME_HEALTH_CHECK_MS)
+                val c = client ?: break
+                val subs = realtimeSubscriptions.toList()
+                if (subs.isEmpty()) break
+                var repaired = false
+                for (sub in subs) {
+                    if (!isSignedIn()) break
+                    // Only rebuild genuinely DEAD channels. UNSUBSCRIBED is
+                    // the terminal state a kicked/errored channel is left in.
+                    // SUBSCRIBING/UNSUBSCRIBING are transient in-flight states
+                    // — tearing those down mid-join would race the SDK.
+                    if (sub.channel.status.value ==
+                        io.github.jan.supabase.realtime.RealtimeChannel.Status.UNSUBSCRIBED
+                    ) {
+                        try {
+                            Log.w(TAG, "realtime channel ${sub.channel.topic} is UNSUBSCRIBED; rebuilding")
+                            realtimeSubscriptions.remove(sub)
+                            sub.collectorJob.cancel()
+                            subscribeTable(c, sub.table)
+                            repaired = true
+                        } catch (e: Exception) {
+                            Log.w(TAG, "rebuild ${sub.table} failed: ${e.message}")
+                        } catch (t: Throwable) {
+                            CrashReporter.recordNonFatal(t, mapOf("source" to "realtime_resubscribe"))
+                        }
+                    }
+                }
+                if (repaired) {
+                    appContextRef?.get()?.let { ctx ->
+                        runCatching { pullAll(ctx) }
+                            .onFailure { Log.w(TAG, "post-rebuild pull failed: ${it.message}") }
+                    }
                 }
             }
         }
@@ -1072,11 +1228,14 @@ object SupabaseSync {
     }
 
     private fun stopRealtime() {
-        val channels = realtimeChannels.toList()
-        realtimeChannels.clear()
+        val subs = realtimeSubscriptions.toList()
+        realtimeSubscriptions.clear()
         scope.launch {
             realtimeMutex.withLock {
-                channels.forEach { ch -> runCatching { ch.unsubscribe() } }
+                subs.forEach { sub ->
+                    runCatching { sub.collectorJob.cancel() }
+                    runCatching { sub.channel.unsubscribe() }
+                }
             }
         }
     }
@@ -1104,4 +1263,9 @@ object SupabaseSync {
     // Outbox retry cadence. One minute: short enough that an offline burst
     // lands promptly after reconnect, rare enough to be invisible.
     private const val OUTBOX_RETRY_MS = 60_000L
+
+    // How often the realtime health watcher verifies the channels are still
+    // joined and resubscribes the dead ones. 15s: a dropped channel is
+    // repaired well inside the "user noticed nothing synced" window.
+    private const val REALTIME_HEALTH_CHECK_MS = 15_000L
 }

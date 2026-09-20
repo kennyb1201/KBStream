@@ -93,7 +93,7 @@ fun SettingsScreen(
     var bingeGroupReuse by remember { mutableStateOf(AppPreferences.getBingeGroupReuse(context)) }
     var bingeGroupFallback by remember { mutableStateOf(AppPreferences.getBingeGroupFallback(context)) }
     var stillTherePrompt by remember { mutableStateOf(AppPreferences.getStillTherePrompt(context)) }
-    var stillThereEpisodes by remember { mutableIntStateOf(AppPreferences.getStillThereEpisodes(context)) }
+    var stillThereEpisodes by remember { mutableLongStateOf(AppPreferences.getStillThereEpisodes(context)) }
     var autoSelectStream by remember { mutableStateOf(AppPreferences.getAutoSelectStream(context)) }
     var useStreamRanker by remember { mutableStateOf(AppPreferences.getUseStreamRanker(context)) }
     var enableTunneling by remember { mutableStateOf(AppPreferences.getEnableTunneling(context)) }
@@ -839,7 +839,7 @@ fun SettingsScreen(
                     modifier = Modifier.padding(bottom = 4.dp)
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(2, 3, 5, 8).forEach { count ->
+                    listOf(2L, 3L, 5L, 8L).forEach { count ->
                         KBCard(onClick = {
                             stillThereEpisodes = count
                             AppPreferences.setStillThereEpisodes(context, count)
