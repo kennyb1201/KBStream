@@ -48,6 +48,8 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
@@ -73,6 +75,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
+import com.kennyb1201.kbstream.data.player.PlayerTitlePrefs
 import com.kennyb1201.kbstream.data.player.PlayerTrackMemory
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
@@ -202,6 +205,24 @@ private class SplitModeRenderersFactory(
             out
         )
     }
+
+    /**
+     * Installs the A/V sync offset processor. Media3 has no audio offset API,
+     * so the shift rides in the PCM stream (see [AudioDelayProcessor]). It is
+     * attached unconditionally — at 0 ms it is a pure pass-through — so moving
+     * the slider takes effect without rebuilding the player, and so no audio
+     * path can ever silently lose the correction.
+     */
+    override fun buildAudioSink(
+        context: Context,
+        enableFloatOutput: Boolean,
+        enableAudioTrackPlaybackParams: Boolean
+    ): AudioSink =
+        DefaultAudioSink.Builder(context)
+            .setAudioProcessors(arrayOf(AudioDelayProcessor.instance))
+            .setEnableFloatOutput(enableFloatOutput)
+            .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+            .build()
 }
 
 
@@ -1130,8 +1151,48 @@ class NativePlayerActivity : ComponentActivity() {
         subtitleSize = AppPreferences.getDefaultSubtitleSize(this)
         subtitleBackground = AppPreferences.getDefaultSubtitleBackground(this)
         autoPlayNext = AppPreferences.getAutoPlayNext(this)
-        preferredAudioLang = AppPreferences.getPreferredAudioLanguage(this)
-        preferredSubtitleLang = AppPreferences.getPreferredSubtitleLanguage(this)
+        val globalAudioLang = AppPreferences.getPreferredAudioLanguage(this)
+        val globalSubtitleLang = AppPreferences.getPreferredSubtitleLanguage(this)
+        preferredAudioLang = globalAudioLang
+        preferredSubtitleLang = globalSubtitleLang
+
+        // Per-show memory: this title's own language / A-V offset choices beat
+        // the global defaults, so binging a series does not mean re-picking
+        // tracks or re-tuning the offsets on every episode. Live channels have
+        // no title key, so nothing is remembered for them (the panel still
+        // applies for the session).
+        PlayerTrackBridge.setGlobalLanguages(globalAudioLang, globalSubtitleLang)
+        PlayerTrackBridge.loadFor(
+            context = this,
+            titleKey =
+                if (isLiveChannel) null
+                else PlayerTitlePrefs.titleKeyFor(parentId, historyId),
+            globalAudioLanguage = globalAudioLang,
+            globalSubtitleLanguage = globalSubtitleLang
+        )
+        preferredAudioLang = PlayerTrackBridge.audioLanguage.ifBlank { globalAudioLang }
+        preferredSubtitleLang = PlayerTrackBridge.subtitleLanguage.ifBlank { globalSubtitleLang }
+        subtitleOffsetMs = PlayerTrackBridge.subtitleOffsetMs
+        AudioDelayProcessor.instance.setDelayMs(PlayerTrackBridge.audioDelayMs)
+
+        // The playback panel lives in its own file and drives the running
+        // player through these appliers (weak refs: a finished activity must
+        // never be kept alive by the bridge singleton).
+        val bridgeSelf = java.lang.ref.WeakReference(this)
+        PlayerTrackBridge.register(
+            applyAudioLanguage = { code ->
+                bridgeSelf.get()?.applyChosenAudioLanguage(code)
+            },
+            applySubtitleLanguage = { code ->
+                bridgeSelf.get()?.applyChosenSubtitleLanguage(code)
+            },
+            applyAudioDelay = { ms ->
+                AudioDelayProcessor.instance.setDelayMs(ms)
+            },
+            applySubtitleOffset = { ms ->
+                bridgeSelf.get()?.applyChosenSubtitleOffset(ms)
+            }
+        )
 
         // Bring back the subtitle attached to THIS video last time. Only the
         // URI is seeded here: createPlayer() turns it into the sidecar
@@ -1295,6 +1356,35 @@ class NativePlayerActivity : ComponentActivity() {
         setupKeyboardHandler()
         setupIntroDb()
         createPlayer()
+    }
+
+    /**
+     * Audio language chosen in the playback panel. Blank is "Auto": drop our
+     * own override and let the stream's default track win.
+     */
+    private fun applyChosenAudioLanguage(code: String) {
+        preferredAudioLang = code
+        val player = exoPlayer ?: return
+        if (code.isBlank()) {
+            player.trackSelectionParameters = player.trackSelectionParameters
+                .buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                .build()
+            return
+        }
+        PlayerTrackBridge.applyLanguage(player, C.TRACK_TYPE_AUDIO, code)
+    }
+
+    /** Subtitle language chosen in the panel (blank = subtitles off). */
+    private fun applyChosenSubtitleLanguage(code: String) {
+        preferredSubtitleLang = code
+        PlayerTrackBridge.applyLanguage(exoPlayer, C.TRACK_TYPE_TEXT, code)
+    }
+
+    /** Subtitle offset chosen in the panel: same path as the +/- buttons. */
+    private fun applyChosenSubtitleOffset(ms: Int) {
+        subtitleOffsetMs = ms
+        runCatching { subtitleOffsetValue.text = "${ms}ms" }
     }
 
     private fun bindViews() {

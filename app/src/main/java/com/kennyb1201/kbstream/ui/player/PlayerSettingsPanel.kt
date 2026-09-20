@@ -24,6 +24,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
@@ -59,6 +60,16 @@ fun SettingsPanel(
     onAutoPlayNextChange: (Boolean) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
+
+    // Live channels have no title to remember choices against; the rows still
+    // apply for the session, they just do not persist.
+    val memoryLabel = if (PlayerTrackBridge.titleKey == null) {
+        "Follows your global Language settings"
+    } else {
+        "Remembered for this show"
+    }
+
     val subtitleSizeOptions = listOf("Small", "Normal", "Large")
     // "Text" paints the dark strip behind just the glyph runs (spans),
     // unlike Semi/Solid which draw a padded box around the whole cue.
@@ -148,7 +159,13 @@ fun SettingsPanel(
             )
             Slider(
                 value = subtitleOffsetMs.toFloat(),
-                onValueChange = { onSubtitleOffsetChange(it.toInt()) },
+                onValueChange = {
+                    val value = it.toInt()
+                    onSubtitleOffsetChange(value)
+                    // Also remember it for this show, so the next episode of a
+                    // series that needs an offset does not need re-tuning.
+                    PlayerTrackBridge.chooseSubtitleOffset(context, value)
+                },
                 valueRange = -5000f..5000f,
                 steps = 19,
                 colors = androidx.compose.material3.SliderDefaults.colors(
@@ -166,6 +183,78 @@ fun SettingsPanel(
                     color = KBTextLo,
                     style = MaterialTheme.typography.labelSmall
                 )
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // ── LANGUAGE ───────────────────────────────────────────
+            // Track choices made here are applied immediately and remembered
+            // per show (profile-scoped, device-local — never synced).
+            SectionHeader("LANGUAGE")
+            Text(
+                text = memoryLabel,
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+
+            Text(
+                text = "Audio",
+                color = KBTextHi,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+            LanguageOptions(
+                selected = PlayerTrackBridge.audioLanguage,
+                onSelect = { code -> PlayerTrackBridge.chooseAudioLanguage(context, code) }
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Subtitles",
+                color = KBTextHi,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+            LanguageOptions(
+                selected = PlayerTrackBridge.subtitleLanguage,
+                onSelect = { code -> PlayerTrackBridge.chooseSubtitleLanguage(context, code) }
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // ── A/V SYNC ──────────────────────────────────────────
+            SectionHeader("A/V SYNC")
+            Text(
+                text = "Audio delay: ${PlayerTrackBridge.audioDelayMs}ms",
+                color = KBTextHi,
+                style = MaterialTheme.typography.bodySmall
+            )
+            Slider(
+                value = PlayerTrackBridge.audioDelayMs.toFloat(),
+                onValueChange = { PlayerTrackBridge.chooseAudioDelay(context, it.toInt()) },
+                valueRange = -5000f..5000f,
+                steps = 19,
+                colors = androidx.compose.material3.SliderDefaults.colors(
+                    thumbColor = KBAccent,
+                    activeTrackColor = KBAccent,
+                    inactiveTrackColor = KBSurface
+                ),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                text = "Positive = audio later than video",
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelSmall
+            )
+
+            if (PlayerTrackBridge.titleKey != null) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    KBCard(onClick = { PlayerTrackBridge.forgetTitle(context) }) {
+                        PillChip("Reset this show", false)
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(14.dp))
@@ -216,6 +305,25 @@ fun SettingsPanel(
 
             Spacer(modifier = Modifier.height(8.dp))
         }
+    }
+}
+
+@Composable
+private fun LanguageOptions(
+    selected: String,
+    onSelect: (String) -> Unit
+) {
+    // Four per row keeps every option one remote-press away without scrolling
+    // sideways past the panel edge.
+    PlayerTrackBridge.LANGUAGE_OPTIONS.chunked(4).forEach { rowOptions ->
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            rowOptions.forEach { (label, code) ->
+                KBCard(onClick = { onSelect(code) }) {
+                    PillChip(label, selected == code)
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(6.dp))
     }
 }
 
