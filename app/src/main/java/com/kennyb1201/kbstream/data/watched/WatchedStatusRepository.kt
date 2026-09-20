@@ -1621,10 +1621,17 @@ class WatchedStatusRepository(
                         /*
                          * Membership-only lookup:
                          * no individual network call.
+                         *
+                         * MDBList's /sync/watched "shows" entries are not
+                         * proof of completion (see MdbListWatchedSnapshot —
+                         * they only say the show was STARTED), so they must
+                         * not land in this completed set: doing so painted
+                         * the completed checkmark over in-progress shows and
+                         * hid the eye badge. They stay in the partial set
+                         * below, which is exactly what "started" means.
                          */
                         manuallyWatched ||
-                            id in remoteSnapshot.simklShowKeys ||
-                            id in remoteSnapshot.mdbListStartedShowKeys
+                            id in remoteSnapshot.simklShowKeys
                     }
 
                     else ->
