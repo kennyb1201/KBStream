@@ -70,14 +70,14 @@ class TmdbRepository private constructor(context: Context) {
         .add(KotlinJsonAdapterFactory())
         .build()
 
-    private val api: TmdbApiService = Retrofit.Builder()
+    internal val api: TmdbApiService = Retrofit.Builder()
         .baseUrl("https://api.themoviedb.org/3/")
         .client(sharedOkHttpClient())
         .addConverterFactory(MoshiConverterFactory.create(moshi))
         .build()
         .create(TmdbApiService::class.java)
 
-    private val apiKey = BuildConfig.TMDB_API_KEY
+    internal val apiKey = BuildConfig.TMDB_API_KEY
     private val appContext = context.applicationContext
 
     // Caps parallel TMDB availability lookups for the digital-release filter.
@@ -87,14 +87,14 @@ class TmdbRepository private constructor(context: Context) {
     // no-title junk); POPULAR and TOP RATED use 10 so smaller catalogs
     // (Tubi, Pluto, Crunchyroll, keywords, mid-size studios) keep real rows
     // instead of starving to empty.
-    private val minVoteCount = 10
+    internal val minVoteCount = 10
 
     /** TOP-RATED / "Most Voted" rail floor (sort is vote_count.desc). */
-    private val minTopRatedVoteCount = 10
+    internal val minTopRatedVoteCount = 10
 
     /** RECENT-rail floor: newest-first with only junk filtered out. */
-    private val minRecentVoteCount = 5
-    private val today: String
+    internal val minRecentVoteCount = 5
+    internal val today: String
         get() = LocalDate.now().toString()
 
     private val database = WatchHistoryDatabase.getInstance(context)
@@ -1155,84 +1155,18 @@ class TmdbRepository private constructor(context: Context) {
     }
 
     /** Kids filter for a rail page (shared return shape of every rail loader). */
-    private suspend fun kidsFilterPage(page: TagRailPage): TagRailPage {
+    internal suspend fun kidsFilterPage(page: TagRailPage): TagRailPage {
         if (page.items.isEmpty() || kidsMaxAge() == null) return page
         return page.copy(items = kidsFilterItems(page.items))
     }
 
-    suspend fun getGenreRailPage(genreId: Int, title: String, page: Int): TagRailPage {
-        if (apiKey.isBlank()) return TagRailPage(emptyList(), false)
-
-        val results = when (title) {
-            "MOVIES · RECENT" -> runCatching {
-                api.discoverMovieByGenre(
-                    genreId,
-                    apiKey,
-                    "primary_release_date.desc",
-                    minRecentVoteCount,
-                    releaseDateLte = today,
-                    page = page
-                ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
-
-            "MOVIES · POPULAR" -> runCatching {
-                api.discoverMovieByGenre(
-                    genreId,
-                    apiKey,
-                    "popularity.desc",
-                    minVoteCount,
-                    releaseDateLte = today,
-                    page = page
-                ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
-
-            "MOVIES · TOP RATED" -> runCatching {
-                api.discoverMovieByGenre(
-                    genreId,
-                    apiKey,
-                    "vote_count.desc",
-                    minTopRatedVoteCount,
-                    releaseDateLte = today,
-                    page = page
-                ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
-
-            "SERIES · RECENT" -> runCatching {
-                api.discoverTvByGenre(
-                    genreId,
-                    apiKey,
-                    "first_air_date.desc",
-                    minRecentVoteCount,
-                    firstAirDateLte = today,
-                    page = page
-                ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
-
-            "SERIES · POPULAR" -> runCatching {
-                api.discoverTvByGenre(
-                    genreId,
-                    apiKey,
-                    "popularity.desc",
-                    minVoteCount,
-                    firstAirDateLte = today,
-                    page = page
-                ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
-
-            "SERIES · TOP RATED" -> runCatching {
-                api.discoverTvByGenre(
-                    genreId,
-                    apiKey,
-                    "vote_count.desc",
-                    minTopRatedVoteCount,
-                    firstAirDateLte = today,
-                    page = page
-                ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
-
-            else -> emptyList()
-        }
-
+    /**
+     * Shared tail of every rail-page loader (see [TmdbRailPages]): drop
+     * duplicates, apply the digital-release filter when it is on, then the
+     * active profile's kids ceiling. `hasMore` reflects the RAW result set, so
+     * filtering can never stop a rail from paging.
+     */
+    internal suspend fun finishRailPage(results: List<StudioItem>): TagRailPage {
         val distinct = results.distinctBy { it.item.id }
 
         val filtered =
@@ -1252,248 +1186,17 @@ class TmdbRepository private constructor(context: Context) {
         )
     }
 
-    suspend fun getKeywordRailPage(keywordId: Int, title: String, page: Int): TagRailPage {
-        if (apiKey.isBlank()) return TagRailPage(emptyList(), false)
+    suspend fun getGenreRailPage(genreId: Int, title: String, page: Int): TagRailPage =
+        TmdbRailPages.genrePage(this, genreId, title, page)
 
-        val results = when (title) {
-            "MOVIES · RECENT" -> runCatching {
-                api.discoverMovieByKeyword(
-                    keywordId,
-                    apiKey,
-                    "primary_release_date.desc",
-                    minRecentVoteCount,
-                    releaseDateLte = today,
-                    page = page
-                ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
+    suspend fun getKeywordRailPage(keywordId: Int, title: String, page: Int): TagRailPage =
+        TmdbRailPages.keywordPage(this, keywordId, title, page)
 
-            "MOVIES · POPULAR" -> runCatching {
-                api.discoverMovieByKeyword(
-                    keywordId,
-                    apiKey,
-                    "popularity.desc",
-                    minVoteCount,
-                    releaseDateLte = today,
-                    page = page
-                ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
+    suspend fun getNetworkRailPage(networkId: Int, title: String, page: Int): TagRailPage =
+        TmdbRailPages.networkPage(this, networkId, title, page)
 
-            "MOVIES · TOP RATED" -> runCatching {
-                api.discoverMovieByKeyword(
-                    keywordId,
-                    apiKey,
-                    "vote_count.desc",
-                    minTopRatedVoteCount,
-                    releaseDateLte = today,
-                    page = page
-                ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
-
-            "SERIES · RECENT" -> runCatching {
-                api.discoverTvByKeyword(
-                    keywordId,
-                    apiKey,
-                    "first_air_date.desc",
-                    minRecentVoteCount,
-                    firstAirDateLte = today,
-                    page = page
-                ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
-
-            "SERIES · POPULAR" -> runCatching {
-                api.discoverTvByKeyword(
-                    keywordId,
-                    apiKey,
-                    "popularity.desc",
-                    minVoteCount,
-                    firstAirDateLte = today,
-                    page = page
-                ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
-
-            "SERIES · TOP RATED" -> runCatching {
-                api.discoverTvByKeyword(
-                    keywordId,
-                    apiKey,
-                    "vote_count.desc",
-                    minTopRatedVoteCount,
-                    firstAirDateLte = today,
-                    page = page
-                ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
-
-            else -> emptyList()
-        }
-
-        val distinct = results.distinctBy { it.item.id }
-
-        val filtered =
-            if (isDigitalFilterEnabled()) {
-                filterByHomeAvailability(distinct) {
-                    it.item.id to it.mediaType
-                }
-            } else {
-                distinct
-            }
-
-        return kidsFilterPage(
-            TagRailPage(
-                items = filtered,
-                hasMore = results.isNotEmpty()
-            )
-        )
-    }
-
-    suspend fun getNetworkRailPage(networkId: Int, title: String, page: Int): TagRailPage {
-        if (apiKey.isBlank()) return TagRailPage(emptyList(), false)
-
-        val results = when (title) {
-            "SERIES · RECENT" -> runCatching {
-                api.discoverByNetwork(
-                    networkId,
-                    apiKey,
-                    "first_air_date.desc",
-                    minRecentVoteCount,
-                    firstAirDateLte = today,
-                    page = page
-                ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
-
-            "SERIES · POPULAR" -> runCatching {
-                api.discoverByNetwork(
-                    networkId,
-                    apiKey,
-                    "popularity.desc",
-                    minVoteCount,
-                    firstAirDateLte = today,
-                    page = page
-                ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
-
-            "SERIES · TOP RATED" -> runCatching {
-                api.discoverByNetwork(
-                    networkId,
-                    apiKey,
-                    "vote_count.desc",
-                    minTopRatedVoteCount,
-                    firstAirDateLte = today,
-                    page = page
-                ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
-
-            else -> emptyList()
-        }
-
-        val distinct = results.distinctBy { it.item.id }
-
-        val filtered =
-            if (isDigitalFilterEnabled()) {
-                filterByHomeAvailability(distinct) {
-                    it.item.id to it.mediaType
-                }
-            } else {
-                distinct
-            }
-
-        return kidsFilterPage(
-            TagRailPage(
-                items = filtered,
-                hasMore = results.isNotEmpty()
-            )
-        )
-    }
-
-    suspend fun getCompanyRailPage(companyId: Int, title: String, page: Int): TagRailPage {
-        if (apiKey.isBlank()) return TagRailPage(emptyList(), false)
-
-        val results = when (title) {
-            "MOVIES · RECENT" -> runCatching {
-                api.discoverMovieByCompany(
-                    companyId = companyId,
-                    apiKey = apiKey,
-                    sortBy = "primary_release_date.desc",
-                    voteCountGte = minRecentVoteCount,
-                    releaseDateLte = today,
-                    page = page
-                ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
-
-            "MOVIES · POPULAR" -> runCatching {
-                api.discoverMovieByCompany(
-                    companyId = companyId,
-                    apiKey = apiKey,
-                    sortBy = "popularity.desc",
-                    voteCountGte = minVoteCount,
-                    releaseDateLte = today,
-                    page = page
-                ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
-
-            "MOVIES · TOP RATED" -> runCatching {
-                api.discoverMovieByCompany(
-                    companyId = companyId,
-                    apiKey = apiKey,
-                    sortBy = "vote_count.desc",
-                    voteCountGte = minTopRatedVoteCount,
-                    releaseDateLte = today,
-                    page = page
-                ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
-
-            "SERIES · RECENT" -> runCatching {
-                api.discoverTvByCompany(
-                    companyId = companyId,
-                    apiKey = apiKey,
-                    sortBy = "first_air_date.desc",
-                    voteCountGte = minRecentVoteCount,
-                    firstAirDateLte = today,
-                    page = page
-                ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
-
-            "SERIES · POPULAR" -> runCatching {
-                api.discoverTvByCompany(
-                    companyId = companyId,
-                    apiKey = apiKey,
-                    sortBy = "popularity.desc",
-                    voteCountGte = minVoteCount,
-                    firstAirDateLte = today,
-                    page = page
-                ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
-
-            "SERIES · TOP RATED" -> runCatching {
-                api.discoverTvByCompany(
-                    companyId = companyId,
-                    apiKey = apiKey,
-                    sortBy = "vote_count.desc",
-                    voteCountGte = minTopRatedVoteCount,
-                    firstAirDateLte = today,
-                    page = page
-                ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
-
-            else -> emptyList()
-        }
-
-        val distinct = results.distinctBy { it.item.id }
-
-        val filtered =
-            if (isDigitalFilterEnabled()) {
-                filterByHomeAvailability(distinct) {
-                    it.item.id to it.mediaType
-                }
-            } else {
-                distinct
-            }
-
-        return kidsFilterPage(
-            TagRailPage(
-                items = filtered,
-                hasMore = results.isNotEmpty()
-            )
-        )
-    }
+    suspend fun getCompanyRailPage(companyId: Int, title: String, page: Int): TagRailPage =
+        TmdbRailPages.companyPage(this, companyId, title, page)
 
     /**
      * Keyword id lookup for the Search browse browser: TMDB's search/keyword
