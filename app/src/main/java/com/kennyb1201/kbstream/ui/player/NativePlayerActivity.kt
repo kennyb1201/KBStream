@@ -491,6 +491,7 @@ class NativePlayerActivity : ComponentActivity() {
     private var zapNowTitle: TextView? = null
     private var zapNowMeta: TextView? = null
     private var zapNowProgress: ProgressBar? = null
+    private var zapNowDesc: TextView? = null
     private var zapNextTitle: TextView? = null
     private val zapHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val zapBannerHideRunnable = Runnable {
@@ -656,6 +657,7 @@ class NativePlayerActivity : ComponentActivity() {
             zapNowTitle?.text = if (info == null) "…" else "No guide data"
             zapNowMeta?.text = ""
             zapNowProgress?.visibility = View.GONE
+            zapNowDesc?.visibility = View.GONE
             zapNextTitle?.text = ""
             return
         }
@@ -671,6 +673,10 @@ class NativePlayerActivity : ComponentActivity() {
         val span = (now.endUtcMillis - now.startUtcMillis).coerceAtLeast(1L)
         val elapsed = (System.currentTimeMillis() - now.startUtcMillis)
             .coerceIn(0L, span)
+        val synopsis = now.description?.trim().orEmpty()
+        zapNowDesc?.text = synopsis
+        zapNowDesc?.visibility = if (synopsis.isEmpty()) View.GONE else View.VISIBLE
+
         zapNowProgress?.visibility = View.VISIBLE
         zapNowProgress?.max = 1000
         zapNowProgress?.progress = ((elapsed * 1000L) / span).toInt()
@@ -1155,6 +1161,7 @@ class NativePlayerActivity : ComponentActivity() {
         zapNowTitle = findViewById(R.id.zap_now_title)
         zapNowMeta = findViewById(R.id.zap_now_meta)
         zapNowProgress = findViewById(R.id.zap_now_progress)
+        zapNowDesc = findViewById(R.id.zap_now_desc)
         zapNextTitle = findViewById(R.id.zap_next_title)
         bufferingSpinner = findViewById(R.id.buffering_spinner)
         reconnectingContainer = findViewById(R.id.reconnecting_container)
@@ -1760,17 +1767,40 @@ class NativePlayerActivity : ComponentActivity() {
                     }
                 }
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
-                    if (errorContainer.visibility == View.VISIBLE) {
-                        focusErrorButtons()
-                    } else {
-                        showControls()
-                        // A visible skip prompt beats the overlay: send the
-                        // first D-pad press straight to the button so it can
-                        // actually be reached and confirmed with OK.
-                        if (btnSkipIntro.visibility == View.VISIBLE) {
-                            btnSkipIntro.requestFocus()
-                        } else {
-                            controlsOverlay.requestFocus()
+                    // Live TV behaves like a set-top box: UP/DOWN change
+                    // channels and the info bar reports where you landed.
+                    // OK still opens the overlay on a live channel, and with
+                    // no lineup to zap through this falls back to the old
+                    // "UP/DOWN reveals the controls" behavior.
+                    val liveZap = isLiveChannel &&
+                        !controlsVisible &&
+                        errorContainer.visibility != View.VISIBLE &&
+                        btnSkipIntro.visibility != View.VISIBLE &&
+                        LiveChannelZapRegistry.size() > 0
+                    when {
+                        // Held keys are ignored: every zap tears down and
+                        // restarts playback, so a repeat storm would sprint
+                        // through the lineup without ever settling.
+                        liveZap ->
+                            if (event.repeatCount == 0) {
+                                zapByOffset(
+                                    if (keyCode == KeyEvent.KEYCODE_DPAD_UP) +1 else -1
+                                )
+                            }
+
+                        errorContainer.visibility == View.VISIBLE ->
+                            focusErrorButtons()
+
+                        else -> {
+                            showControls()
+                            // A visible skip prompt beats the overlay: send
+                            // the first D-pad press straight to the button so
+                            // it can actually be reached and confirmed with OK.
+                            if (btnSkipIntro.visibility == View.VISIBLE) {
+                                btnSkipIntro.requestFocus()
+                            } else {
+                                controlsOverlay.requestFocus()
+                            }
                         }
                     }
                     true
@@ -1853,7 +1883,10 @@ class NativePlayerActivity : ComponentActivity() {
             KeyEvent.KEYCODE_MEDIA_REWIND -> { exoPlayer?.seekBack(); return true }
             KeyEvent.KEYCODE_MEDIA_STOP -> { finish(); return true }
             // CH+/CH- channel zapping — live channels only. Banner shows
-            // channel identity + NOW/NEXT so you can see where you landed.
+            // channel identity + NOW (title, air time, synopsis) and NEXT so
+            // you can see where you landed. D-pad UP/DOWN zap too (handled
+            // in the player view's key listener), since most TV remotes have
+            // no dedicated channel keys.
             KeyEvent.KEYCODE_CHANNEL_UP -> {
                 if (isLiveChannel) { zapByOffset(+1); return true }
             }

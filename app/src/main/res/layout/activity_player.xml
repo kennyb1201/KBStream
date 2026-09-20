@@ -1550,6 +1550,21 @@
                 android:progressTint="@color/kb_accent"
                 android:progressBackgroundTint="#338891A0" />
 
+            <!-- Program synopsis. Hidden when the guide has no description
+                 for the current program, so the banner never shows a blank
+                 gap on channels with thin EPG data. -->
+            <TextView
+                android:id="@+id/zap_now_desc"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="5dp"
+                android:ellipsize="end"
+                android:fontFamily="@font/oswald_medium"
+                android:maxLines="2"
+                android:textColor="@color/kb_text_lo"
+                android:textSize="12sp"
+                android:visibility="gone" />
+
             <TextView
                 android:id="@+id/zap_next_title"
                 android:layout_width="wrap_content"
