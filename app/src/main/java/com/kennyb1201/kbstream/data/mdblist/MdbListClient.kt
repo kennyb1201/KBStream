@@ -3,7 +3,12 @@ package com.kennyb1201.kbstream.data.mdblist
 import android.content.Context
 import android.util.Log
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -259,11 +264,105 @@ object MdbListClient {
     //                         paused session (Continue Watching).
     // POST /scrobble/clear  — delete a paused session (Remove from rail).
     //
-    // Body: { movie: {ids:{imdb,tmdb}} | show: {ids:{...}}, season,
-    //         episode, progress (0-100) }. Season/episode use the flat
-    // form documented in the schema.
-    // ------------------------------------------------------------------
+    // ── Losing the start to the player's own cancellation ────────────
+    // The player mirrors scrobbles from the Simkl job, and every later
+    // player event cancels that job. Simkl's call is the FIRST await in it
+    // and the MDBList call is the second, so MDBList is the one that can be
+    // cancelled before its request is ever sent — and playback start is
+    // exactly when the events fire fastest (a stream that buffers toggles
+    // playing -> buffering -> playing, and each toggle cancels the one
+    // before it). A dropped `start` means no session on the dashboard for
+    // the entire playback, which is half of the "live scrobbling never
+    // shows up" report even before the payload was wrong.
+    //
+    // So a start that did not get through is retried from the client's OWN
+    // scope, which the player cannot cancel. Bounded to a few attempts and
+    // cancelled the moment the session ends, so a title that genuinely
+    // cannot be scrobbled costs two extra requests at most.
+    //
+    // Deliberately NOT a periodic refresh: /scrobble/start *replaces* the
+    // session, so re-sending it with a progress we can only hold stale by
+    // would restart the session's clock against a frozen position. A
+    // Trakt-style session is extrapolated server-side from the item's
+    // runtime, so one accurate start per playback is the correct shape.
 
+    private val START_RETRY_DELAYS_MS =
+        longArrayOf(10_000L, 30_000L)
+
+    private val sessionScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private val sessionMutex = Mutex()
+
+    @Volatile
+    private var startRetryJob: Job? = null
+
+    /** What a scrobble session points at (movie, or one show episode). */
+    private data class ScrobbleTarget(
+        val isMovie: Boolean,
+        val imdbId: String?,
+        val tmdbId: Int?,
+        val season: Int?,
+        val episode: Int?
+    )
+
+    /**
+     * Re-posts [action] = "start" after a failure, on a scope the player
+     * cannot cancel. Stops as soon as one attempt succeeds, or when the
+     * session ends ([cancelStartRetry]) / the key is gone.
+     */
+    private suspend fun scheduleStartRetry(
+        context: Context,
+        target: ScrobbleTarget,
+        progress: Double
+    ) {
+        val appContext = context.applicationContext
+        sessionMutex.withLock {
+            startRetryJob?.cancel()
+            startRetryJob = sessionScope.launch {
+                for (delayMs in START_RETRY_DELAYS_MS) {
+                    delay(delayMs)
+                    val apiKey = apiKey(appContext)
+                    if (apiKey.isBlank()) return@launch
+                    val body = scrobbleBody(
+                        target.isMovie, target.imdbId, target.tmdbId,
+                        target.season, target.episode, progress
+                    ) ?: return@launch
+                    if (postScrobble(apiKey, "start", body)) {
+                        Log.i(TAG, "scrobble/start retry succeeded")
+                        return@launch
+                    }
+                }
+                Log.w(TAG, "scrobble/start gave up after retries")
+            }
+        }
+    }
+
+    /** The playback moved on (pause / stop / clear): drop any pending retry. */
+    private fun cancelStartRetry() {
+        startRetryJob?.cancel()
+        startRetryJob = null
+    }
+
+    //
+    // Body (schema: POST /scrobble/{start,pause,stop}):
+    //
+    //   { movie: { ids: { imdb, tmdb } }, progress: 15.5 }
+    //   { show:  { ids: { imdb, tmdb }, season: 1, episode: 2 }, progress: 10 }
+    //
+    // The episode target — `season`/`episode` OR the nested
+    // `season.number`/`season.episode.number` — lives INSIDE the `show`
+    // object, which is the flat form the schema documents. There is no
+    // top-level `season`/`episode`: the schema's only declared body fields
+    // are `movie`, `show` and `progress`, so sending them beside `show`
+    // left the request looking like a show with no episode at all.
+    //
+    // (That is exactly what the old builder did: it put them inside an
+    // `apply` block on the BODY object rather than on the target, so the
+    // server could never resolve the episode. Movies were unaffected —
+    // their body has no episode to lose — which is why movie scrobbles and
+    // the separate /sync/watched writes kept working while series never
+    // appeared as live now-playing sessions.)
     private fun scrobbleBody(
         isMovie: Boolean,
         imdbId: String?,
@@ -278,15 +377,14 @@ object MdbListClient {
         if (ids.length() == 0) return null
 
         val target = JSONObject().put("ids", ids)
+        if (!isMovie) {
+            if (season != null) target.put("season", season)
+            if (episode != null) target.put("episode", episode)
+        }
+
         return JSONObject()
             .put(if (isMovie) "movie" else "show", target)
-            .apply {
-                if (!isMovie) {
-                    if (season != null) put("season", season)
-                    if (episode != null) put("episode", episode)
-                }
-                put("progress", progress)
-            }
+            .put("progress", progress)
     }
 
     private suspend fun postScrobble(
@@ -307,6 +405,7 @@ object MdbListClient {
                             response.body?.string().orEmpty().take(200)
                     )
                 } else {
+                    Log.d(TAG, "scrobble/$action ok")
                     // Watch state just changed: force the next snapshot
                     // read to re-download instead of serving the cache.
                     invalidateWatchedSnapshot()
@@ -316,7 +415,13 @@ object MdbListClient {
         }.getOrDefault(false)
     }
 
-    /** Start (or resume) a scrobble session. Returns true on HTTP 2xx. */
+    /**
+     * Start (or resume) a scrobble session. Returns true on HTTP 2xx.
+     *
+     * A failure here is retried in the background (see
+     * [scheduleStartRetry]) so a start that lost the player's cancellation
+     * race still creates the session.
+     */
     suspend fun scrobbleStart(
         context: Context,
         isMovie: Boolean,
@@ -329,8 +434,23 @@ object MdbListClient {
         val apiKey = apiKey(context)
         if (apiKey.isBlank()) return false
         val body = scrobbleBody(isMovie, imdbId, tmdbId, season, episode, progress)
-            ?: return false
-        return postScrobble(apiKey, "start", body)
+            ?: return false.also {
+                // Neither id resolved (a TVDB-only parent whose TMDB lookup
+                // failed): say so, instead of the silence that made this look
+                // like "live scrobbling just doesn't work".
+                Log.w(TAG, "scrobble/start skipped: no imdb/tmdb id")
+            }
+        val ok = postScrobble(apiKey, "start", body)
+        if (ok) {
+            cancelStartRetry()
+        } else {
+            scheduleStartRetry(
+                context = context,
+                target = ScrobbleTarget(isMovie, imdbId, tmdbId, season, episode),
+                progress = progress
+            )
+        }
+        return ok
     }
 
     /** Pause the session, saving progress (>= 80% marks watched server-side). */
@@ -346,8 +466,10 @@ object MdbListClient {
         val apiKey = apiKey(context)
         if (apiKey.isBlank()) return false
         val body = scrobbleBody(isMovie, imdbId, tmdbId, season, episode, progress)
-            ?: return false
-        return postScrobble(apiKey, "pause", body)
+            ?: return false.also { Log.w(TAG, "scrobble/pause skipped: no imdb/tmdb id") }
+        val ok = postScrobble(apiKey, "pause", body)
+        cancelStartRetry()
+        return ok
     }
 
     /**
@@ -367,8 +489,10 @@ object MdbListClient {
         val apiKey = apiKey(context)
         if (apiKey.isBlank()) return false
         val body = scrobbleBody(isMovie, imdbId, tmdbId, season, episode, progress)
-            ?: return false
-        return postScrobble(apiKey, "stop", body)
+            ?: return false.also { Log.w(TAG, "scrobble/stop skipped: no imdb/tmdb id") }
+        val ok = postScrobble(apiKey, "stop", body)
+        cancelStartRetry()
+        return ok
     }
 
 /**
@@ -391,7 +515,9 @@ object MdbListClient {
         val body = scrobbleBody(isMovie, imdbId, tmdbId, season, episode, 0.0)
             ?: return false
         body.remove("progress")
-        return postScrobble(apiKey, "clear", body)
+        val ok = postScrobble(apiKey, "clear", body)
+        cancelStartRetry()
+        return ok
     }
 
     // ------------------------------------------------------------------
