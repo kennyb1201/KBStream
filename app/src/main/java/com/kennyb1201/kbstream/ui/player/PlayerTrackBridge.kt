@@ -12,6 +12,7 @@ import androidx.media3.common.Format
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
+import com.kennyb1201.kbstream.data.player.LanguageMatch
 import com.kennyb1201.kbstream.data.player.PlayerTitlePrefs
 
 /**
@@ -97,6 +98,10 @@ internal object PlayerTrackBridge {
     @Volatile
     private var rememberedTrackApplied = false
 
+    /** The player we already wired; [setPlayer] can repeat an instance. */
+    @Volatile
+    private var wiredPlayer: Player? = null
+
     fun register(
         applyAudioLanguage: (String) -> Unit,
         applySubtitleLanguage: (String) -> Unit,
@@ -118,6 +123,7 @@ internal object PlayerTrackBridge {
         applySubtitleOffset = null
         playerProvider = null
         titleKey = null
+        wiredPlayer = null
     }
 
     /**
@@ -136,8 +142,12 @@ internal object PlayerTrackBridge {
 
         // "" is "Auto" = follow the global Language settings, which is exactly
         // how the player behaved before per-title memory existed.
-        audioLanguage = remembered?.audioLang.orEmpty()
-        subtitleLanguage = remembered?.subtitleLang.orEmpty()
+        //
+        // Canonicalized on the way in: a language remembered from picking a
+        // specific track ("eng") must come back as the code the panel's pills
+        // and the global setting use ("en"), or nothing lines up.
+        audioLanguage = LanguageMatch.canonical(remembered?.audioLang).orEmpty()
+        subtitleLanguage = LanguageMatch.canonical(remembered?.subtitleLang).orEmpty()
         audioDelayMs = remembered?.audioDelayMs ?: 0
         subtitleOffsetMs = remembered?.subtitleOffsetMs ?: 0
         audioTrackSignature = remembered?.audioTrackSignature.orEmpty()
@@ -153,6 +163,12 @@ internal object PlayerTrackBridge {
         globalAudioLanguage = audio
         globalSubtitleLanguage = subtitle
     }
+
+    /** This show's language, or the global one when the show is on "Auto". */
+    private fun effectiveAudioLanguage(): String = audioLanguage.ifBlank { globalAudioLanguage }
+
+    private fun effectiveSubtitleLanguage(): String =
+        subtitleLanguage.ifBlank { globalSubtitleLanguage }
 
     // ── User choices from the panel ───────────────────────────────────────
 
@@ -197,10 +213,11 @@ internal object PlayerTrackBridge {
             .setOverrideForType(TrackSelectionOverride(match.group.mediaTrackGroup, match.index))
             .build()
         // The chosen language follows the track, so the autoplay path and the
-        // panel agree on what this show should sound like.
-        match.group.getTrackFormat(match.index).language
-            ?.takeIf { it.isNotBlank() }
-            ?.let { audioLanguage = it.lowercase() }
+        // panel agree on what this show should sound like. Stored canonically
+        // ("eng" -> "en") so the panel's language pills highlight, and so the
+        // comparison against the next episode's tags is apples to apples.
+        LanguageMatch.canonical(match.group.getTrackFormat(match.index).language)
+            ?.let { audioLanguage = it }
         refreshAudioTracks()
     }
 
@@ -231,27 +248,78 @@ internal object PlayerTrackBridge {
     }
 
     /**
-     * Re-applies a remembered specific track to a (re)created player.
+     * Applies the language preferences to a player that is ready to be told.
      *
-     * The activity's automatic language selection only knows languages, so
-     * without this a "English DD+ 5.1" choice would silently come back as
-     * whichever English track is first. Called for every player instance the
-     * playback view attaches, and applied once per instance so a manual
-     * change mid-session is never fought.
+     * The activity runs its own automatic selection first, and that one
+     * compares language tags as strings — the settings store "en" while the
+     * muxer writes "eng", so it matched nothing on real files: audio kept the
+     * muxer's first track (a multi-language release plays in whatever language
+     * it was authored in) and a subtitle preference read as "this file has no
+     * such track", which switched subtitles OFF. Both are why a language
+     * setting appeared to do nothing at all.
+     *
+     * Safe to call more than once: each call re-states the same choice.
+     */
+    fun reapplyLanguageSelection(player: Player?) {
+        val player = player ?: return
+        // A remembered specific track beats a language (it was applied as its
+        // own override), and a language pass would pick the FIRST track in
+        // that language — undoing the "ENG DD+ 5.1 rather than ENG stereo"
+        // choice. [applyRememberedAudioTrack] re-asserts that one instead.
+        if (audioTrackSignature.isBlank()) {
+            applyLanguage(player, C.TRACK_TYPE_AUDIO, effectiveAudioLanguage())
+        }
+        // Blank subtitle preference is "Auto" with nothing configured: leave
+        // the file's own default in place (subtitles off stays off, an
+        // always-on track keeps playing) instead of forcing the type disabled.
+        val subtitle = effectiveSubtitleLanguage()
+        if (subtitle.isNotBlank()) applyLanguage(player, C.TRACK_TYPE_TEXT, subtitle)
+    }
+
+    /**
+     * Called for every player instance the playback view attaches: puts the
+     * language preferences back and re-applies a remembered specific track.
+     *
+     * Runs at STATE_READY, and one instance at a time — the view attaches the
+     * player at the END of the activity's createPlayer(), so this listener is
+     * registered after the activity's and therefore runs after its automatic
+     * selection, which is what lets the corrected pass win.
      */
     fun onPlayerAttached(player: Player) {
+        if (wiredPlayer === player) return
+        wiredPlayer = player
         rememberedTrackApplied = false
-        if (audioTrackSignature.isBlank()) return
-        // The player may already be ready (rebuild after a source switch).
-        if (applyRememberedAudioTrack(player)) return
-        val listener = object : Player.Listener {
+        // The player may already be ready (rebuild after a source switch), in
+        // which case a READY listener would never fire for this state.
+        if (player.playbackState == Player.STATE_READY) applyOnReady(player)
+        // Stays for the life of the player, deliberately: the activity re-runs
+        // its own string-exact pass on EVERY ready transition (a rebuffer is
+        // enough to trigger one), and that is what switches subtitles back off
+        // after this pass fixed them. Repeating our own pass is harmless — it
+        // only ever re-states the choice the user made.
+        player.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState != Player.STATE_READY) return
-                player.removeListener(this)
-                applyRememberedAudioTrack(player)
+                if (playbackState == Player.STATE_READY) applyOnReady(player)
+            }
+        })
+    }
+
+    /** One corrected pass over a ready player: languages, then the track. */
+    private fun applyOnReady(player: Player) {
+        reapplyLanguageSelection(player)
+        applyRememberedAudioTrack(player)
+    }
+
+    /** Log of what the file actually carries, for a language that missed. */
+    private fun logTracks(player: Player, type: Int) {
+        val tags = mutableListOf<String>()
+        for (group in player.currentTracks.groups) {
+            if (group.type != type) continue
+            for (i in 0 until group.length) {
+                tags.add(group.getTrackFormat(i).language ?: "(none)")
             }
         }
-        player.addListener(listener)
+        Log.i(TAG, "track type $type carries ${tags.joinToString(", ").ifBlank { "nothing" }}")
     }
 
     /** Applies the remembered track if this file carries it. True when applied. */
@@ -287,7 +355,7 @@ internal object PlayerTrackBridge {
                 if (signatureOf(format) == signature) return TrackRef(group, i)
                 if (
                     looseMatch == null && loose != null &&
-                    loose.first == format.language.orEmpty().lowercase() &&
+                    LanguageMatch.matches(loose.first, format.language) &&
                     loose.second == format.channelCount
                 ) {
                     looseMatch = TrackRef(group, i)
@@ -382,14 +450,20 @@ internal object PlayerTrackBridge {
     // ── Player-side helpers (called from the registered appliers) ──────────
 
     /**
-     * Applies a language to the running player the same way the automatic
-     * selector does: pick the first track whose language matches, or (for
-     * subtitles) leave text disabled when nothing matches — a subtitle
-     * language the stream does not carry must not silently show the wrong
-     * track.
+     * Applies a language to the running player: pick the first track whose
+     * language matches, or (for subtitles) leave text disabled when nothing
+     * matches — a subtitle language the stream does not carry must not
+     * silently show the wrong track.
+     *
+     * Matching goes through [LanguageMatch] because the stored preference is a
+     * two-letter code and the file's tags are almost always three-letter ones.
      */
     fun applyLanguage(player: Player?, type: Int, language: String): Boolean {
         if (player == null) return false
+
+        // Nothing asked for on the audio side ("Auto" with no global default):
+        // leave the file's own choice alone rather than logging a miss.
+        if (type == C.TRACK_TYPE_AUDIO && language.isBlank()) return false
 
         if (type == C.TRACK_TYPE_TEXT && language.isBlank()) {
             player.trackSelectionParameters = player.trackSelectionParameters
@@ -406,7 +480,7 @@ internal object PlayerTrackBridge {
                 if (matched != null) return@forEach
                 for (i in 0 until group.length) {
                     val lang = group.getTrackFormat(i).language
-                    if (lang.equals(language, ignoreCase = true)) {
+                    if (LanguageMatch.matches(language, lang)) {
                         matched = TrackSelectionOverride(group.mediaTrackGroup, i)
                         return@forEach
                     }
@@ -423,6 +497,7 @@ internal object PlayerTrackBridge {
                 Log.i(TAG, "no subtitle track for '$language'; subtitles off")
                 return false
             }
+            if (type == C.TRACK_TYPE_AUDIO) logTracks(player, type)
             Log.i(TAG, "no audio track for '$language'; keeping current")
             return false
         }
