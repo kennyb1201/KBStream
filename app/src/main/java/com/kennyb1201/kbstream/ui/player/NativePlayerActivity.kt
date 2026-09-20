@@ -75,6 +75,9 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tmdb.displayCardMeta
+import com.kennyb1201.kbstream.data.tmdb.displayDescription
+import com.kennyb1201.kbstream.data.tmdb.displayMetaLine
 import com.kennyb1201.kbstream.data.tmdb.list
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.streams.StreamsViewModel
@@ -4669,8 +4672,24 @@ class NativePlayerActivity : ComponentActivity() {
         val cardView: View,
         val nameView: TextView?,
         val logoView: ImageView?,
+        val metaView: TextView?,
         var imdbId: String?
     )
+
+    /**
+     * Per-pick metadata fetched alongside the logo pass: the featured
+     * strip's meta line, the cards' compact line, and the description /
+     * backdrop the ranking tiers could not supply (franchise and credits
+     * candidates carry neither of their own).
+     */
+    private data class BywMeta(
+        val metaLine: String?,
+        val cardLine: String?,
+        val overview: String?,
+        val backdropUrl: String?
+    )
+
+    private val bywMetaCache = mutableMapOf<Int, BywMeta>()
 
     /** Renders the pick cards: poster / clear logo, name, PLAY + DETAILS. */
     private fun buildBecauseYouWatchedRow(picks: List<BywPick>) {
@@ -4733,6 +4752,20 @@ class NativePlayerActivity : ComponentActivity() {
             }
             card.addView(name)
 
+            // Year + length under the name: enough to compare picks
+            // without focusing each one. Filled by the metadata pass.
+            val cardMeta = TextView(this).apply {
+                textSize = 9f
+                setTextColor(getColor(R.color.kb_text_lo))
+                maxWidth = dp(108)
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                gravity = android.view.Gravity.CENTER_HORIZONTAL
+                typeface = resources.getFont(R.font.oswald_medium)
+            }
+            bywMetaCache[pick.tmdbId]?.cardLine?.let { cardMeta.text = it }
+            card.addView(cardMeta)
+
             val buttons = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = android.view.Gravity.CENTER
@@ -4763,6 +4796,7 @@ class NativePlayerActivity : ComponentActivity() {
                 cardView = card,
                 nameView = name,
                 logoView = logoView,
+                metaView = cardMeta,
                 imdbId = null
             )
 
@@ -4809,6 +4843,17 @@ class NativePlayerActivity : ComponentActivity() {
                     ?.sortedWith(
                         compareByDescending { it.iso6391 == "en" }
                     )?.firstOrNull()?.filePath
+                val isMovie = pick.type != "series"
+                val meta = BywMeta(
+                    metaLine = detail.displayMetaLine(isMovie),
+                    cardLine = detail.displayCardMeta(isMovie),
+                    overview = pick.overview ?: detail.displayDescription(),
+                    // Franchise and credits candidates ship a poster only;
+                    // the fetched detail is what gives the strip a backdrop.
+                    backdropUrl = pick.backdropUrl
+                        ?: detail.backdropPath?.takeIf { it.isNotBlank() }
+                            ?.let { TmdbRepository.BACKDROP_BASE + it }
+                )
                 val imdb = withContext(Dispatchers.IO) {
                     runCatching {
                         repo.resolveImdbId(pick.tmdbId, pick.type)
@@ -4821,6 +4866,8 @@ class NativePlayerActivity : ComponentActivity() {
                             TmdbRepository.LOGO_BASE + logo
                         refs.logoView?.load(bywLogoCache[pick.tmdbId])
                     }
+                    bywMetaCache[pick.tmdbId] = meta
+                    refs.metaView?.text = meta.cardLine.orEmpty()
                     imdb?.let { refs.imdbId = it }
                     if (bywFeatured == pick.tmdbId) {
                         featureBywPick(pick)
@@ -4870,6 +4917,20 @@ class NativePlayerActivity : ComponentActivity() {
                 scaleType = ImageView.ScaleType.FIT_START
             }
             textCol.addView(logo)
+            // Full metadata (certification, year, length, genres, rating)
+            // between the logo and the synopsis. Two lines max so a series'
+            // longer scope string cannot push the description out of view.
+            val meta = TextView(this).apply {
+                tag = "byw_featured_meta"
+                textSize = 11f
+                setTextColor(getColor(R.color.kb_accent))
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setPadding(0, dp(5), 0, 0)
+                typeface = resources.getFont(R.font.oswald_medium)
+                visibility = View.GONE
+            }
+            textCol.addView(meta)
             val desc = TextView(this).apply {
                 tag = "byw_featured_desc"
                 textSize = 12f
@@ -4890,8 +4951,17 @@ class NativePlayerActivity : ComponentActivity() {
         val backdrop = strip.findViewWithTag<ImageView>("byw_featured_backdrop")
         val logo = strip.findViewWithTag<ImageView>("byw_featured_logo")
         val desc = strip.findViewWithTag<TextView>("byw_featured_desc")
-        (pick.backdropUrl ?: pick.posterUrl)?.let { backdrop.load(it) }
-        desc.text = pick.overview ?: ""
+        val meta = strip.findViewWithTag<TextView>("byw_featured_meta")
+        // Metadata arrives with the same per-pick fetch as the logo, so the
+        // strip shows what it has and fills in when the answer lands
+        // (featureBywPick is called again for the still-focused card).
+        val fetched = bywMetaCache[pick.tmdbId]
+        meta.text = fetched?.metaLine.orEmpty()
+        meta.visibility =
+            if (fetched?.metaLine.isNullOrBlank()) View.GONE else View.VISIBLE
+        (fetched?.backdropUrl ?: pick.backdropUrl ?: pick.posterUrl)
+            ?.let { backdrop.load(it) }
+        desc.text = (fetched?.overview ?: pick.overview).orEmpty()
         // Logo: from the per-pick logo pass if it landed already.
         bywLogoCache[pick.tmdbId]?.let { logo.load(it) } ?: run { logo.setImageDrawable(null) }
     }

@@ -888,6 +888,68 @@ fun TmdbDetail.displayRating(): String? =
 fun TmdbDetail.displayDescription(): String? =
     overview?.trim()?.takeIf { it.isNotEmpty() }
 
+/** Genre names as TMDB spells them, capped, or null when there are none. */
+fun TmdbDetail.displayGenres(limit: Int = 3): String? =
+    genres
+        .asSequence()
+        .map { it.name.trim() }
+        .filter(String::isNotEmpty)
+        .take(limit)
+        .joinToString(", ")
+        .takeIf { it.isNotEmpty() }
+
+/**
+ * How long the thing is, in the form each type actually has it. A movie has a
+ * single runtime; a series has a commitment (seasons, episodes) and a
+ * per-episode runtime, which is the difference between "an evening" and "the
+ * next three months".
+ */
+fun TmdbDetail.displayLengthLabel(isMovie: Boolean): String? =
+    if (isMovie) {
+        displayRuntime()
+    } else {
+        buildList {
+            numberOfSeasons?.takeIf { it > 0 }?.let {
+                add(if (it == 1) "1 season" else "$it seasons")
+            }
+            numberOfEpisodes?.takeIf { it > 0 }?.let { add("$it eps") }
+            displayRuntime()?.let(::add)
+        }.joinToString(" • ").takeIf { it.isNotEmpty() }
+    }
+
+/**
+ * The one-line "everything you want before pressing play" summary: the same
+ * certification / year / length the detail screen's meta row shows, plus genre
+ * and audience rating. For surfaces with room for a single line, such as the
+ * player's because-you-watched featured strip.
+ */
+fun TmdbDetail.displayMetaLine(isMovie: Boolean): String? =
+    listOfNotNull(
+        certification(isMovie),
+        releaseYear(),
+        displayLengthLabel(isMovie),
+        displayGenres(),
+        displayRating()?.let { "\u2605 $it" }
+    ).joinToString(" • ").takeIf { it.isNotEmpty() }
+
+/**
+ * Single most useful length figure for a small card, where the full series
+ * scope would not fit: seasons for a series, runtime for a movie.
+ */
+fun TmdbDetail.displayShortLength(isMovie: Boolean): String? =
+    if (isMovie) {
+        displayRuntime()
+    } else {
+        numberOfSeasons?.takeIf { it > 0 }?.let { if (it == 1) "1 season" else "$it seasons" }
+            ?: displayRuntime()
+    }
+
+/** Compact "year • length" for recommendation cards. */
+fun TmdbDetail.displayCardMeta(isMovie: Boolean): String? =
+    listOfNotNull(releaseYear(), displayShortLength(isMovie))
+        .joinToString(" • ")
+        .takeIf { it.isNotEmpty() }
+
 fun TmdbDetail.displayLanguage(): String? =
     originalLanguage
         ?.trim()
