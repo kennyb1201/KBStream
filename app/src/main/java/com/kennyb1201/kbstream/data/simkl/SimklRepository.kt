@@ -2002,6 +2002,22 @@ class SimklRepository(
         val now =
             System.currentTimeMillis()
 
+        /*
+         * Capture the profile this fetch belongs to (the token was resolved
+         * from ITS scoped auth prefs). A mid-flight switch must not publish
+         * the result: the memory snapshot would serve the OLD account's
+         * shows to the NEW profile, and diskKey() below resolves the ACTIVE
+         * profile at write time — writing the old account's blob under the
+         * new profile's cache key for 12 hours (the phantom watched-marker
+         * leak). The caller's own post-switch preload re-fetches cleanly.
+         */
+        val profileAtStart =
+            com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id
+
+        fun profileChanged(): Boolean =
+            com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id !=
+                profileAtStart
+
         return allShowItemsMutex.withLock {
 
             val cached =
@@ -2111,6 +2127,14 @@ class SimklRepository(
             if (
                 body != null
             ) {
+                if (profileChanged()) {
+                    Log.w(
+                        "SIMKL_REPO",
+                        "all-show response dropped: profile switched mid-fetch"
+                    )
+                    return@withLock cached
+                }
+
                 cachedAllShowItems =
                     body
 
@@ -2428,6 +2452,21 @@ class SimklRepository(
         val now =
             System.currentTimeMillis()
 
+        /*
+         * Same mid-flight-switch guard as getAllShowItemsCached: this fetch
+         * belongs to the profile whose auth produced [accessToken]. Its
+         * result must not be published (memory) or persisted (diskKey()
+         * resolves the ACTIVE profile at write time) once that profile is
+         * no longer active — otherwise the OLD account's completed movies
+         * become the NEW profile's badge set for up to 12 hours.
+         */
+        val profileAtStart =
+            com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id
+
+        fun profileChanged(): Boolean =
+            com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id !=
+                profileAtStart
+
         return completedMovieKeysMutex.withLock {
 
             val cached =
@@ -2581,6 +2620,18 @@ class SimklRepository(
             val merged =
                 completedKeys +
                     allMovieKeys
+
+            // Discard when the profile switched mid-fetch: publishing here
+            // would write the OLD account's keys under the NEW profile's
+            // disk key (diskKey() resolves the ACTIVE profile at write
+            // time), poisoning its watched badges for 12 hours.
+            if (profileChanged()) {
+                Log.w(
+                    "SIMKL_REPO",
+                    "completed-movies response dropped: profile switched mid-fetch"
+                )
+                return@withLock cached ?: emptySet()
+            }
 
             cachedCompletedMovieKeys =
                 merged

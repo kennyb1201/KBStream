@@ -246,6 +246,24 @@ class WatchedStatusRepository(
         val appContext =
             com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext
 
+        /*
+         * Profile capture for switch-safety: this preload can take seconds
+         * (Simkl + MDBList network round-trips). If the user switches
+         * profiles mid-flight, every write below (memory cache + the
+         * PROFILE-SCOPED Room watched table) would resolve against the NEW
+         * profile — landing the OLD profile's watched resolutions in the
+         * new profile's stores as phantom checkmarks (with clean Simkl/
+         * MDBList dashboards, because the data never came from them).
+         * Everything after the fetches bails when the active profile no
+         * longer matches this capture.
+         */
+        val profileAtStart =
+            com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id
+
+        fun profileChanged(): Boolean =
+            com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id !=
+                profileAtStart
+
         if (cacheEpochObserved != globalCacheEpoch) {
             cacheMutex.withLock {
                 cache.clear()
@@ -435,7 +453,8 @@ class WatchedStatusRepository(
         refreshMdbListSetsIfNeeded(
             appContext = appContext,
             now = now,
-            force = forceRemoteRefresh
+            force = forceRemoteRefresh,
+            profileAtStart = profileAtStart
         )
 
         if (
@@ -449,6 +468,14 @@ class WatchedStatusRepository(
 
             // Still resolve + persist: with only an MDBList key set (no
             // Simkl auth) this is the ONLY remote badge source.
+            if (profileChanged()) {
+                Log.d(
+                    "WATCHED_REPO",
+                    "preload aborted: profile switched mid-flight"
+                )
+                return
+            }
+
             val mdbListOnlyEntities =
                 resolveWithMergedRemoteSets(
                     items = needsLookup,
@@ -588,10 +615,18 @@ class WatchedStatusRepository(
         }
 
         val resolvedEntities =
-            resolveWithMergedRemoteSets(
-                items = needsLookup,
-                now = now
-            )
+            if (profileChanged()) {
+                Log.d(
+                    "WATCHED_REPO",
+                    "preload aborted before persist: profile switched mid-flight"
+                )
+                return
+            } else {
+                resolveWithMergedRemoteSets(
+                    items = needsLookup,
+                    now = now
+                )
+            }
 
         persistResolvedEntities(
             entities = resolvedEntities,
@@ -1455,7 +1490,8 @@ class WatchedStatusRepository(
     private suspend fun refreshMdbListSetsIfNeeded(
         appContext: Context?,
         now: Long,
-        force: Boolean
+        force: Boolean,
+        profileAtStart: String?
     ) {
         if (appContext == null) {
             return
@@ -1486,6 +1522,21 @@ class WatchedStatusRepository(
             }
 
         if (snapshot == null || snapshot.isEmpty) {
+            return
+        }
+
+        // Drop the result if the profile switched during the fetch: the
+        // snapshot was pulled with the OLD profile's MDBList key, and
+        // adopting it here would mark the NEW profile's titles watched for
+        // the whole 15-minute set TTL (no refetch happens while fetchedAt
+        // is fresh).
+        if (com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id !=
+            profileAtStart
+        ) {
+            Log.d(
+                "WATCHED_REPO",
+                "MDBList snapshot dropped: profile switched mid-fetch"
+            )
             return
         }
 

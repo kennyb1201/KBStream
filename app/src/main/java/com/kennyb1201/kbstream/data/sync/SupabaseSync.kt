@@ -41,6 +41,7 @@ import com.kennyb1201.kbstream.data.reporting.CrashReporter
 import com.kennyb1201.kbstream.data.cache.WatchedStatusEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
+import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 
 /**
@@ -184,6 +185,12 @@ object SupabaseSync {
                     val ctx = appContextRef?.get() ?: return@collect
                     runCatching { persistSessionFromClient(ctx) }
                         .onFailure { Log.w(TAG, "session persist failed", it) }
+                    // The cloud half of the one-time cross-profile poison
+                    // sweep needs a session; the ProfileManager.init call
+                    // usually runs before auth restores, so retry here on
+                    // every Authenticated event (flag-guarded → once).
+                    runCatching { runOneTimePoisonSweep(ctx) }
+                        .onFailure { Log.w(TAG, "poison sweep trigger failed", it) }
                 }
             }
         }
@@ -473,14 +480,24 @@ object SupabaseSync {
     private fun outboxId(row: OutboxRow) = "${row.table}|${row.keyColumn}|${row.key}"
 
     /**
-     * Profile scoping: item keys are prefixed with the active profile id so
-     * profiles never see each other's rows (the account-level RLS keeps
-     * other accounts out; this keeps sibling profiles separated).
-     * "p:<profileId>:<originalKey>".
+     * Profile scoping: item keys are prefixed with the profile id captured
+     * at enqueue time so profiles never see each other's rows (the
+     * account-level RLS keeps other accounts out; this keeps sibling
+     * profiles separated). "p:<profileId>:<originalKey>".
+     *
+     * The pid is passed EXPLICITLY by the bulk push paths (pushHistory/
+     * pushWatched stream hundreds of rows through enqueue*): re-resolving
+     * the active profile per row meant a mid-push profile switch stamped
+     * the OLD profile's rows with the NEW profile's scope — those rows then
+     * synced back down onto the new profile as phantom watched markers
+     * (with clean Simkl/MDBList dashboards, because the data never came
+     * from the trackers — it was our own sync table echoing it back).
      */
-    private fun scopedKey(originalKey: String): String {
-        val pid = com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id
-            ?: return originalKey
+    private fun currentProfileId(): String? =
+        com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id
+
+    private fun scopedKey(originalKey: String, pid: String? = currentProfileId()): String {
+        pid ?: return originalKey
         return "p:$pid:$originalKey"
     }
 
@@ -491,11 +508,13 @@ object SupabaseSync {
             storedKey
         }
 
-    private fun storedKeyMatchesActiveProfile(storedKey: String): Boolean {
-        val pid = com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id
-            ?: return !storedKey.startsWith("p:")
+    private fun storedKeyMatchesProfile(storedKey: String, pid: String?): Boolean {
+        pid ?: return !storedKey.startsWith("p:")
         return storedKey.startsWith("p:$pid:")
     }
+
+    private fun storedKeyMatchesActiveProfile(storedKey: String): Boolean =
+        storedKeyMatchesProfile(storedKey, currentProfileId())
 
     /** Account-wide keys (the profiles list itself) bypass the profile filter. */
     private fun storedKeyApplies(storedKey: String): Boolean {
@@ -503,7 +522,206 @@ object SupabaseSync {
         return storedKeyMatchesActiveProfile(storedKey)
     }
 
-    fun enqueueHistory(entity: WatchHistoryEntity) {
+    // ── One-time cross-profile poison sweep ─────────────────────────
+    //
+    // The profile-switch races fixed above let bulk operations that
+    // STARTED under profile A land under profile B when the user
+    // switched profiles mid-flight. The races are gone, but whatever
+    // ALREADY leaked stays behind:
+    //
+    //   1. watched_status_cache rows inside the WRONG profile's scoped
+    //      Room DB — the phantom watched markers (with clean Simkl/
+    //      MDBList dashboards, because the data never came from the
+    //      trackers),
+    //   2. Simkl per-profile disk blobs cached under the wrong
+    //      "<profileId>/simkl:*" key — poisoning badges for up to 12h,
+    //   3. sync_watched_status rows in the CLOUD stamped under the
+    //      wrong profile scope. These re-download on every pull and
+    //      would resurrect the phantom markers even after 1 and 2 were
+    //      wiped.
+    //
+    // The sweep runs once per install (flags live in kbstream_sync_meta,
+    // a prefs file that never syncs). It only touches DERIVED state and
+    // mis-scoped cloud rows — user history, watched overrides, and the
+    // continue-watching table are deliberately left alone.
+
+    private const val SWEEP_PREFS = "kbstream_sync_meta"
+    private const val SWEEP_FLAG_LOCAL = "poison_sweep_local_done"
+    private const val SWEEP_FLAG_CLOUD = "poison_sweep_cloud_done"
+
+    private val sweepMutex = Mutex()
+
+    /**
+     * Fire-and-forget entry point; safe to call from anywhere (startup,
+     * auth events). Concurrent callers are serialized by [sweepMutex]
+     * and the flags make each part idempotent.
+     */
+    fun runOneTimePoisonSweep(context: Context) {
+        val appCtx = context.applicationContext
+        scope.launch {
+            sweepMutex.withLock {
+                runCatching { runPoisonSweepInternal(appCtx) }
+                    .onFailure { Log.w(TAG, "poison sweep failed: ${it.message}") }
+            }
+        }
+    }
+
+    private suspend fun runPoisonSweepInternal(context: Context) {
+        val flags = context.getSharedPreferences(SWEEP_PREFS, Context.MODE_PRIVATE)
+
+        // ── Part 1: local derived caches (no network needed) ─────────
+        if (!flags.getBoolean(SWEEP_FLAG_LOCAL, false)) {
+            val profiles = ProfileManager.profiles.value
+            val activePid = ProfileManager.activeProfile.value?.id
+            // Wipe the watched-status CACHE for every profile namespace.
+            // It is fully derived (Simkl/MDBList/history/overrides/cloud
+            // resolve it back within seconds of first use), so clearing is
+            // lossless — and it is exactly where the phantom markers live.
+            for (profile in profiles) {
+                if (profile.id == activePid) {
+                    // Active profile's DB may be open by Room — go through
+                    // the DAO instead of raw SQL.
+                    runCatching {
+                        WatchHistoryDatabase.getInstanceScoped(context)
+                            .watchedStatusDao().clearAll()
+                    }.onFailure {
+                        Log.w(TAG, "poison sweep: active watched cache clear failed: ${it.message}")
+                    }
+                } else {
+                    rawClearWatchedCacheTable(context, "${profile.id}.kbstream_watch_history")
+                }
+            }
+            // Legacy (pre-profiles) unscoped DB — same cache table.
+            runCatching {
+                WatchHistoryDatabase.getInstance(context)
+                    .watchedStatusDao().clearAll()
+            }
+            // Simkl per-profile disk blobs in the SHARED cache table. A
+            // mid-flight switch wrote profile A's lists under profile B's
+            // key; deleting them forces a clean refetch from each
+            // profile's own Simkl account.
+            runCatching {
+                val keys = buildList {
+                    for (profile in profiles) {
+                        add("${profile.id}/simkl:all_show_items")
+                        add("${profile.id}/simkl:continue_watching")
+                        add("${profile.id}/simkl:completed_movies")
+                    }
+                    // Legacy bare keys (pre-profiles layout).
+                    add("simkl:all_show_items")
+                    add("simkl:continue_watching")
+                    add("simkl:completed_movies")
+                }
+                WatchHistoryDatabase.getInstance(context).tmdbJsonCacheDao().deleteByKeys(keys)
+            }.onFailure {
+                Log.w(TAG, "poison sweep: simkl blob clear failed: ${it.message}")
+            }
+            // Drop the matching in-memory caches so nothing stale is
+            // served from RAM after the disk wipe.
+            WatchedStatusRepository.invalidateAllCaches()
+            SimklRepository.clearTransientCaches()
+            flags.edit().putBoolean(SWEEP_FLAG_LOCAL, true).apply()
+            Log.i(TAG, "poison sweep: local watched caches cleared for ${profiles.size} profile(s)")
+        }
+
+        // ── Part 2: cloud rows stamped under the wrong profile ───────
+        // Needs a signed-in session; skipped (flag NOT set) when signed
+        // out so the Authenticated hook retries after sign-in.
+        if (!flags.getBoolean(SWEEP_FLAG_CLOUD, false)) {
+            val c = client ?: return
+            if (authState.value !is AuthState.SignedIn) return
+            val profiles = ProfileManager.profiles.value
+            // Cross-profile poison requires ≥2 profiles; with fewer there
+            // is nothing to attribute, so mark done.
+            if (profiles.size < 2) {
+                flags.edit().putBoolean(SWEEP_FLAG_CLOUD, true).apply()
+                return
+            }
+            // Heuristic: a watch mark that exists under TWO profile
+            // scopes for the same account is almost always the push/pull
+            // race's signature (the user watches a title in one profile).
+            // Keep each mark on the OLDEST profile (where watching
+            // actually accumulated — leaks flowed INTO newer profiles);
+            // delete the copies from every other scope.
+            val rows = runCatching {
+                c.from(TABLE_WATCHED).select().decodeList<SyncRowDto>()
+            }.getOrElse {
+                Log.w(TAG, "poison sweep: cloud read failed: ${it.message}")
+                return
+            }
+            val keysByScope = HashMap<String, MutableSet<String>>()
+            for (row in rows) {
+                val stored = row.itemKey ?: continue
+                if (!stored.startsWith("p:")) continue // legacy rows: can't attribute, leave
+                val pid = stored.removePrefix("p:").substringBefore(':')
+                keysByScope.getOrPut(pid) { mutableSetOf() }.add(unscopedKey(stored))
+            }
+            val keeper = profiles.minByOrNull { it.createdAt }
+            val localPids = profiles.map { it.id }.toSet()
+            val keeperKeys = keysByScope[keeper?.id] ?: emptySet()
+            val toDelete = mutableListOf<String>()
+            for ((pid, keys) in keysByScope) {
+                // Only scopes that belong to a profile we know locally —
+                // poison is always stamped with a LOCAL profile id, and a
+                // profile created on another device must not be touched
+                // (its rows may be legitimate).
+                if (pid !in localPids) continue
+                if (pid == keeper?.id) continue
+                for (key in keys) {
+                    if (key in keeperKeys) toDelete.add("p:$pid:$key")
+                }
+            }
+            if (toDelete.isEmpty()) {
+                flags.edit().putBoolean(SWEEP_FLAG_CLOUD, true).apply()
+                Log.i(TAG, "poison sweep: no cross-profile cloud watched rows found")
+                return
+            }
+            var deleted = 0
+            for (chunk in toDelete.chunked(50)) {
+                runCatching {
+                    c.from(TABLE_WATCHED).delete {
+                        filter { isIn("item_key", chunk) }
+                    }
+                    deleted += chunk.size
+                }.onFailure {
+                    Log.w(TAG, "poison sweep: cloud delete failed (${it.message}); will not retry this run")
+                    return
+                }
+            }
+            flags.edit().putBoolean(SWEEP_FLAG_CLOUD, true).apply()
+            Log.i(TAG, "poison sweep: deleted $deleted cross-profile cloud watched rows")
+            // Converge local state with the now-clean cloud table.
+            WatchedStatusRepository.invalidateAllCaches()
+            runCatching { pullAllNow(context) }
+                .onFailure { Log.w(TAG, "poison sweep: post-clean pull failed: ${it.message}") }
+        }
+    }
+
+    /**
+     * Raw-SQL wipe of watched_status_cache in a profile DB that Room has
+     * NOT opened (only the active profile's scoped DB is open at any
+     * time; the caller routes that one through the DAO instead).
+     */
+    private fun rawClearWatchedCacheTable(context: Context, dbName: String) {
+        runCatching {
+            val file = context.getDatabasePath(dbName)
+            if (!file.exists()) return
+            val db = android.database.sqlite.SQLiteDatabase.openDatabase(
+                file.absolutePath,
+                null,
+                android.database.sqlite.SQLiteDatabase.OPEN_READWRITE
+            )
+            try {
+                db.execSQL("DELETE FROM watched_status_cache")
+            } finally {
+                db.close()
+            }
+        }.onFailure {
+            Log.w(TAG, "poison sweep: raw clear of $dbName failed: ${it.message}")
+        }
+    }
+
+    fun enqueueHistory(entity: WatchHistoryEntity, profileId: String? = currentProfileId()) {
         if (!isSignedIn()) return
         val payload = buildJsonObject {
             put("id", entity.id)
@@ -526,12 +744,12 @@ object SupabaseSync {
             put("isCompleted", entity.isCompleted)
             entity.completedAt?.let { put("completedAt", it) }
         }
-        val row = OutboxRow(TABLE_HISTORY, "item_id", scopedKey(entity.id), payload)
+        val row = OutboxRow(TABLE_HISTORY, "item_id", scopedKey(entity.id, profileId), payload)
         outbox[outboxId(row)] = row
         scheduleFlush()
     }
 
-    fun enqueueWatched(entity: WatchedStatusEntity) {
+    fun enqueueWatched(entity: WatchedStatusEntity, profileId: String? = currentProfileId()) {
         if (!isSignedIn()) return
         val payload = buildJsonObject {
             put("key", entity.key)
@@ -540,7 +758,7 @@ object SupabaseSync {
             put("isWatched", entity.isWatched)
             put("updatedAt", entity.updatedAt)
         }
-        val row = OutboxRow(TABLE_WATCHED, "item_key", scopedKey(entity.key), payload)
+        val row = OutboxRow(TABLE_WATCHED, "item_key", scopedKey(entity.key, profileId), payload)
         outbox[outboxId(row)] = row
         scheduleFlush()
     }
@@ -551,12 +769,17 @@ object SupabaseSync {
      * profile-scoped ("p:<profileId>:<prefKey>") so sibling profiles never
      * overwrite or read each other's settings in the cloud.
      */
-    fun enqueuePrefs(context: Context, prefKey: String, payload: JsonObject) {
+    fun enqueuePrefs(
+        context: Context,
+        prefKey: String,
+        payload: JsonObject,
+        profileId: String? = currentProfileId()
+    ) {
         if (!isSignedIn()) return
         val stored = if (prefKey == PrefsPayloadBuilder.KEY_PROFILES) {
             prefKey
         } else {
-            scopedKey(prefKey)
+            scopedKey(prefKey, profileId)
         }
         val row = OutboxRow(TABLE_PREFS, "pref_key", stored, payload)
         outbox[outboxId(row)] = row
@@ -752,6 +975,11 @@ object SupabaseSync {
 
     private suspend fun pullHistory(context: Context) {
         val c = client ?: return
+        // Scope the whole pull to the profile active at START: a switch
+        // mid-pull would otherwise filter rows against the NEW profile while
+        // still writing into the OLD profile's Room instance (captured
+        // below), stranding rows in the wrong database.
+        val pid = currentProfileId()
         try {
             val rows = c.from(TABLE_HISTORY)
                 .select()
@@ -765,15 +993,18 @@ object SupabaseSync {
             val localById = db.watchHistoryDao()
                 .getByIds(rows.mapNotNull { row ->
                     val storedId = row.itemId ?: return@mapNotNull null
-                    if (!storedKeyMatchesActiveProfile(storedId)) null else unscopedKey(storedId)
+                    if (!storedKeyMatchesProfile(storedId, pid)) null else unscopedKey(storedId)
                 }.distinct())
                 .associateBy { it.id }
             var applied = 0
             for (row in rows) {
+                // Bail on a mid-pull profile switch: remaining rows belong
+                // to a filter/DB pair that no longer matches.
+                if (currentProfileId() != pid) return
                 val remote = row.payload
                 val remoteUpdated = remote["updatedAt"]?.jsonPrimitive?.content?.toLongOrNull() ?: continue
                 val storedId = row.itemId ?: continue
-                if (!storedKeyMatchesActiveProfile(storedId)) continue
+                if (!storedKeyMatchesProfile(storedId, pid)) continue
                 val id = unscopedKey(storedId)
 
                 val localUpdated = localById[id]?.updatedAt ?: 0L
@@ -824,6 +1055,8 @@ object SupabaseSync {
 
     private suspend fun pullWatched(context: Context) {
         val c = client ?: return
+        // Same captured-scope rule as pullHistory above.
+        val pid = currentProfileId()
         try {
             val rows = c.from(TABLE_WATCHED)
                 .select()
@@ -835,7 +1068,7 @@ object SupabaseSync {
             // remote row.
             val keysForActiveProfile = rows.mapNotNull { row ->
                 val storedKey = row.itemKey ?: return@mapNotNull null
-                if (!storedKeyMatchesActiveProfile(storedKey)) null else unscopedKey(storedKey)
+                if (!storedKeyMatchesProfile(storedKey, pid)) null else unscopedKey(storedKey)
             }.distinct()
             val localByKey = if (keysForActiveProfile.isEmpty()) {
                 emptyMap()
@@ -845,10 +1078,12 @@ object SupabaseSync {
             val pendingUpdates = mutableListOf<WatchedStatusEntity>()
             var applied = 0
             for (row in rows) {
+                // Bail on a mid-pull profile switch (same rule as pullHistory).
+                if (currentProfileId() != pid) return
                 val remote = row.payload
                 val remoteUpdated = remote["updatedAt"]?.jsonPrimitive?.content?.toLongOrNull() ?: continue
                 val storedKey = row.itemKey ?: continue
-                if (!storedKeyMatchesActiveProfile(storedKey)) continue
+                if (!storedKeyMatchesProfile(storedKey, pid)) continue
                 val key = unscopedKey(storedKey)
 
                 val localUpdated = localByKey[key]?.updatedAt ?: 0L
@@ -866,8 +1101,9 @@ object SupabaseSync {
                     applied++
                 }
             }
-            // One batch write instead of one upsert per row.
-            if (pendingUpdates.isNotEmpty()) {
+            // One batch write instead of one upsert per row. Dropped if the
+            // profile switched mid-pull (the new profile's own pull re-runs).
+            if (pendingUpdates.isNotEmpty() && currentProfileId() == pid) {
                 db.watchedStatusDao().upsertAll(pendingUpdates)
             }
             if (applied > 0) {
@@ -899,10 +1135,16 @@ object SupabaseSync {
             }
             // Pass 2: apply the active profile's scoped rows (plus unscoped
             // rows when no profiles exist — legacy/no-profiles mode).
+            val pid = currentProfileId()
             for (row in rows) {
                 val storedKey = row.prefKey ?: continue
                 if (storedKey == PrefsPayloadBuilder.KEY_PROFILES) continue
-                if (!storedKeyMatchesActiveProfile(storedKey)) continue
+                if (!storedKeyMatchesProfile(storedKey, pid)) continue
+                // Bail on a mid-pull profile switch: the applier resolves the
+                // ACTIVE profile's prefs files at apply time, so continuing
+                // here would land the previous profile's blobs (watched
+                // overrides included) in the new profile's stores.
+                if (currentProfileId() != pid) return
                 PrefsPayloadApplier.apply(context, unscopedKey(storedKey), row.payload)
             }
         } catch (e: Exception) {
@@ -919,18 +1161,29 @@ object SupabaseSync {
     private suspend fun pushHistory(context: Context) {
         val db = WatchHistoryDatabase.getInstanceScoped(context)
         val all = db.watchHistoryDao().getAll()
-        all.forEach { enqueueHistory(it) }
+        // Scope EVERY row with the profile that was active when the push
+        // STARTED. Re-resolving per row (the old behavior) meant a profile
+        // switch mid-loop stamped the OLD profile's rows with the NEW
+        // profile's cloud scope — those poisoned rows then synced back down
+        // onto the new profile as phantom watched markers.
+        val pid = currentProfileId()
+        all.forEach { enqueueHistory(it, pid) }
         flushOutbox()
     }
 
     private suspend fun pushWatched(context: Context) {
         val db = WatchHistoryDatabase.getInstanceScoped(context)
         val all = db.watchedStatusDao().getAll()
-        all.forEach { enqueueWatched(it) }
+        // Same captured-scope rule as pushHistory above.
+        val pid = currentProfileId()
+        all.forEach { enqueueWatched(it, pid) }
         flushOutbox()
     }
 
     private suspend fun pushPrefsBlobs(context: Context) {
+        // Captured once so every blob in this pass carries the SAME scope
+        // even if the profile switches mid-loop (same rule as pushHistory).
+        val pid = currentProfileId()
         PrefsPayloadBuilder.buildAll(context).forEach { (key, payload) ->
             // Belt-and-braces guard: an empty local profiles list must never
             // reach the cloud. A fresh device pushing before its first pull
@@ -943,7 +1196,7 @@ object SupabaseSync {
             ) {
                 return@forEach
             }
-            enqueuePrefs(context, key, payload)
+            enqueuePrefs(context, key, payload, pid)
         }
         flushOutbox()
     }

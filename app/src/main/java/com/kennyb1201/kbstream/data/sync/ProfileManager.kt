@@ -83,6 +83,13 @@ object ProfileManager {
         _activeProfile.value = list.firstOrNull { it.id == activeId } ?: list.firstOrNull()
 
         migrateLegacyDataIfNeeded(context)
+
+        // One-time cleanup for the cross-profile watched-marker leak: wipes
+        // the derived watched caches + Simkl disk blobs that a mid-switch
+        // race could have poisoned, and (once signed in) deletes cloud
+        // watch rows that were stamped under the wrong profile scope.
+        // Idempotent — flags in kbstream_sync_meta make it run only once.
+        SupabaseSync.runOneTimePoisonSweep(context)
     }
 
     fun setActive(context: Context, profile: Profile) {
