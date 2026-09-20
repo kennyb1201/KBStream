@@ -128,6 +128,19 @@ object MdbListClient {
     private const val SNAPSHOT_TTL_MS = 5 * 60 * 1000L
     @Volatile private var cachedSnapshot: MdbListWatchedSnapshot? = null
     @Volatile private var cachedSnapshotAt = 0L
+
+    /*
+     * The API key that produced [cachedSnapshot]. This object is
+     * process-wide while the key is PROFILE-scoped (scoped prefs), so the
+     * cache used to outlive a profile switch and answer the incoming
+     * profile with the previous profile's ENTIRE watch history: its
+     * started-shows set paints eye badges on the new profile's series and
+     * its movies paint checkmarks, with both profiles' Simkl and MDBList
+     * histories clean, because the data never came from either account.
+     * Stamping the key makes that impossible — a different key always
+     * refetches instead of being served from someone else's snapshot.
+     */
+    @Volatile private var cachedSnapshotKey = ""
     private val snapshotMutex = kotlinx.coroutines.sync.Mutex()
 
     /** Reads the user-pasted (or build-injected) key, or "" when unset. */    fun apiKey(context: Context): String =
@@ -713,9 +726,12 @@ object MdbListClient {
         if (apiKey.isBlank()) return MdbListWatchedSnapshot()
 
         // Fast path: a fresh cached snapshot answers instantly, so series
-        // detail loads never block on the full-history download.
+        // detail loads never block on the full-history download. It only
+        // counts when the KEY matches: the cache is per object, the key is
+        // per profile (see [cachedSnapshotKey]).
         val cached = cachedSnapshot
         if (!forceRefresh && cached != null &&
+            cachedSnapshotKey == apiKey &&
             System.currentTimeMillis() - cachedSnapshotAt < SNAPSHOT_TTL_MS
         ) {
             return cached
@@ -726,6 +742,7 @@ object MdbListClient {
             // refreshed it while this one waited.
             val fresh = cachedSnapshot
             if (!forceRefresh && fresh != null &&
+                cachedSnapshotKey == apiKey &&
                 System.currentTimeMillis() - cachedSnapshotAt < SNAPSHOT_TTL_MS
             ) {
                 return@withLock fresh
@@ -816,6 +833,7 @@ object MdbListClient {
             if (result != null && !result.isEmpty) {
                 cachedSnapshot = result
                 cachedSnapshotAt = System.currentTimeMillis()
+                cachedSnapshotKey = apiKey
             }
             result
         }
@@ -829,6 +847,7 @@ object MdbListClient {
     fun invalidateWatchedSnapshot() {
         cachedSnapshot = null
         cachedSnapshotAt = 0L
+        cachedSnapshotKey = ""
     }
 
     // ------------------------------------------------------------------

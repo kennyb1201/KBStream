@@ -51,11 +51,22 @@ internal object PoisonSweep {
     private const val TAG = "SUPABASE_SYNC"
 
     private const val PREFS = "kbstream_sync_meta"
-    // "v2" flags: the sweep was extended (history rows + watched-override
-    // blobs), so a device that ran the narrower first version still gets the
-    // wider one.
-    private const val FLAG_LOCAL = "poison_sweep_v2_local_done"
-    private const val FLAG_CLOUD = "poison_sweep_v2_cloud_done"
+    // "v3" flags: the sweep was extended again, so a device that ran either
+    // earlier version still gets the wider one.
+    //
+    //   v1 → v2: history rows + watched-override blobs.
+    //   v2 → v3: a THIRD source of the same phantom markers — the MDBList
+    //            watched snapshot was cached per PROCESS while the API key
+    //            is per PROFILE, so the first preload after a profile switch
+    //            resolved the new profile's titles from the previous
+    //            profile's watch history and stamped those eye badges into
+    //            the new profile's own cache (again with clean Simkl/MDBList
+    //            dashboards). The resolver is fixed (MdbListClient stamps the
+    //            snapshot with the key that produced it); this re-run clears
+    //            the rows it already wrote, which would otherwise sit out
+    //            their full 6h TTL and keep the badges wrong.
+    private const val FLAG_LOCAL = "poison_sweep_v3_local_done"
+    private const val FLAG_CLOUD = "poison_sweep_v3_cloud_done"
     // Duplicated override sets found locally, kept until their cloud blobs
     // are deleted too — clearing the local set erases the evidence needed to
     // find them.
