@@ -42,7 +42,7 @@ suspend fun SimklRepository.pushWatchedMovieImpl(
 
     return try {
         val response = api.addToWatchedHistory(
-            authorization = historyAuthHeader(),
+            authorization = trackedAuthHeader(),
             body = SimklHistoryRequest(
                 movies = listOf(
                     SimklHistoryMovie(
@@ -113,7 +113,7 @@ suspend fun SimklRepository.pushWatchedShowImpl(
 
     return try {
         val response = api.addToWatchedHistory(
-            authorization = historyAuthHeader(),
+            authorization = trackedAuthHeader(),
             body = SimklHistoryRequest(
                 shows = listOf(
                     SimklHistoryShow(
@@ -184,7 +184,7 @@ suspend fun SimklRepository.removeWatchedMovieImpl(
 
     return try {
         val response = api.removeFromWatchedHistory(
-            authorization = historyAuthHeader(),
+            authorization = trackedAuthHeader(),
             body = SimklHistoryRequest(
                 movies = listOf(
                     SimklHistoryMovie(
@@ -250,7 +250,7 @@ suspend fun SimklRepository.removeWatchedShowImpl(
 
     return try {
         val response = api.removeFromWatchedHistory(
-            authorization = historyAuthHeader(),
+            authorization = trackedAuthHeader(),
             body = SimklHistoryRequest(
                 shows = listOf(
                     SimklHistoryShow(
@@ -317,7 +317,7 @@ suspend fun SimklRepository.pushWatchedEpisodeImpl(
 
     return try {
         val response = api.addToWatchedHistory(
-            authorization = historyAuthHeader(),
+            authorization = trackedAuthHeader(),
             body = SimklHistoryRequest(
                 shows = listOf(
                     SimklHistoryShow(
@@ -405,7 +405,7 @@ suspend fun SimklRepository.pushWatchedSeasonImpl(
 
     return try {
         val response = api.addToWatchedHistory(
-            authorization = historyAuthHeader(),
+            authorization = trackedAuthHeader(),
             body = SimklHistoryRequest(
                 shows = listOf(
                     SimklHistoryShow(
@@ -497,7 +497,7 @@ suspend fun SimklRepository.removeWatchedSeasonImpl(
 
     return try {
         val response = api.removeFromWatchedHistory(
-            authorization = historyAuthHeader(),
+            authorization = trackedAuthHeader(),
             body = SimklHistoryRequest(
                 shows = listOf(
                     SimklHistoryShow(

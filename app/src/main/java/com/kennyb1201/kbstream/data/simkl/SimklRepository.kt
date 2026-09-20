@@ -28,7 +28,7 @@ class SimklRepository(
     private val context: Context? = null
 ) {
 
-    private val clientId =
+    internal val clientId =
         BuildConfig.SIMKL_CLIENT_ID
 
     private val clientSecret =
@@ -581,12 +581,23 @@ class SimklRepository(
     }
 
     /**
-     * Auth header for the outbound history writes in
-     * [com.kennyb1201.kbstream.data.simkl.SimklHistoryWrites]. Those are
+     * Auth header for the outbound tracking calls in
+     * [com.kennyb1201.kbstream.data.simkl.SimklHistoryWrites] and
+     * [com.kennyb1201.kbstream.data.simkl.SimklPlaybackTracking]. Those are
      * [SimklRepository] extensions, so they cannot reach the token helpers
      * directly the way the members below can.
      */
-    internal fun historyAuthHeader(): String = bearer(requireAccessToken())
+    internal fun trackedAuthHeader(): String = bearer(requireAccessToken())
+
+    /**
+     * Access token for the read helpers in
+     * [com.kennyb1201.kbstream.data.simkl.SimklReads]. Same reason as
+     * [trackedAuthHeader]: those are [SimklRepository] extensions.
+     */
+    internal fun trackedAccessToken(): String = requireAccessToken()
+
+    /** Auth header for an explicit token; twin of [trackedAuthHeader]. */
+    internal fun trackedAuthHeaderFor(token: String): String = bearer(token)
 
     /*
      * Outbound scrobble: record a completed movie or episode to the
@@ -697,73 +708,14 @@ class SimklRepository(
      * deletes the paused playback session (the progress record behind the
      * Continue Watching feed) so the title stops coming back from the
      * remote feed even though watch history is stored separately. Used
-     * together with the history removals above. Failures are logged, never
-     * thrown.
+     * together with the history removals above.
+     *
+     * Bodies live in SimklPlaybackTracking.kt, along with the shared
+     * "which sessions belong to this parent" matching rule.
      */
     suspend fun deletePlaybackSession(
         playbackId: Int?
-    ): Boolean {
-
-        if (
-            !isConfigured() ||
-            !hasToken() ||
-            playbackId == null ||
-            playbackId <= 0
-        ) {
-            Log.d(
-                "SIMKL_REPO",
-                "deletePlaybackSession skipped: " +
-                    "no valid playback id=$playbackId"
-            )
-            return false
-        }
-
-        return try {
-            val response = api.deletePlaybackSession(
-                id = playbackId,
-                authorization = bearer(requireAccessToken())
-            )
-
-            val alreadyGone =
-                response.code() == 404
-
-            if (!response.isSuccessful && !alreadyGone) {
-                val errorText = try {
-                    response.errorBody()?.string()
-                } catch (e: Exception) {
-                    "unreadable: ${e.message}"
-                }
-                Log.e(
-                    "SIMKL_REPO",
-                    "deletePlaybackSession failed " +
-                        "code=${response.code()} body=$errorText"
-                )
-            } else {
-                // Drop the Continue Watching snapshot so the next rail
-                // refresh sees the updated remote state instead of
-                // resurrecting the deleted session from the stale copy.
-                // 404 means the session is already gone (204 is the
-                // success code) - count it as removed so a stale snapshot
-                // can't keep a ghost card around until its disk TTL ends.
-                clearContinueWatchingCache()
-
-                Log.d(
-                    "SIMKL_REPO",
-                    "deletePlaybackSession ok id=$playbackId" +
-                        if (alreadyGone) " (already gone)" else ""
-                )
-            }
-
-            response.isSuccessful || alreadyGone
-        } catch (e: Exception) {
-            Log.e(
-                "SIMKL_REPO",
-                "deletePlaybackSession error: ${e.message}",
-                e
-            )
-            false
-        }
-    }
+    ): Boolean = deletePlaybackSessionImpl(playbackId)
 
     /**
      * Deletes every open Simkl playback session whose show/movie matches the
@@ -778,81 +730,7 @@ class SimklRepository(
     suspend fun deletePlaybackSessionsForParent(
         parentId: String,
         title: String? = null
-    ): Int {
-
-        if (
-            !isConfigured() ||
-            !hasToken()
-        ) {
-            Log.d(
-                "SIMKL_REPO",
-                "deletePlaybackSessionsForParent skipped: " +
-                    "not configured/authenticated"
-            )
-            return 0
-        }
-
-        val ref =
-            parsePlaybackIds(
-                parentId
-            )
-                ?: return 0
-
-        return try {
-
-            val matchingSessions =
-                getPlaybackItems()
-                    .filter { item ->
-                        playbackItemMatchesParent(
-                            item = item,
-                            imdb = ref.imdb,
-                            tmdb = ref.tmdb,
-                            title = title
-                        )
-                    }
-
-            if (matchingSessions.isEmpty()) {
-                Log.d(
-                    "SIMKL_REPO",
-                    "deletePlaybackSessionsForParent: no open session " +
-                        "for parent=$parentId"
-                )
-                return 0
-            }
-
-            var removed =
-                0
-
-            matchingSessions.forEach { item ->
-                if (
-                    deletePlaybackSession(
-                        item.id
-                    )
-                ) {
-                    removed += 1
-                }
-            }
-
-            Log.d(
-                "SIMKL_REPO",
-                "deletePlaybackSessionsForParent parent=$parentId " +
-                    "matched=${matchingSessions.size} removed=$removed"
-            )
-
-            removed
-        } catch (
-            e: kotlinx.coroutines.CancellationException
-        ) {
-            throw e
-        } catch (e: Exception) {
-            Log.e(
-                "SIMKL_REPO",
-                "deletePlaybackSessionsForParent error: ${e.message}",
-                e
-            )
-            0
-        }
-    }
+    ): Int = deletePlaybackSessionsForParentImpl(parentId, title)
 
     /**
      * Deletes every open Simkl playback session for a title whose watched
@@ -860,7 +738,7 @@ class SimklRepository(
      * (or a specific episode of a show) is marked completed so the paused
      * pre-completion session record can't keep resurfacing in Continue
      * Watching at its old progress (e.g. "99% watched"). Returns the number
-     * of sessions removed. Failures are logged, never thrown.
+     * of sessions removed.
      */
     suspend fun deleteOpenPlaybackSessionsForWatched(
         parentId: String,
@@ -869,141 +747,19 @@ class SimklRepository(
         episode: Int? = null,
         episodes: List<Int>? = null,
         minProgress: Float = 95f
-    ): Int {
-
-        if (
-            !isConfigured() ||
-            !hasToken()
-        ) {
-            return 0
-        }
-
-        val ref =
-            parsePlaybackIds(parentId, tmdbId)
-                ?: return 0
-
-        val episodeSet =
-            episodes?.toSet()
-
-        return try {
-            val matchingSessions =
-                getPlaybackItems()
-                    .filter { item ->
-                        playbackItemMatchesParent(
-                            item = item,
-                            imdb = ref.imdb,
-                            tmdb = ref.tmdb,
-                            title = null
-                        ) &&
-                            // When specific episode(s) were completed, only
-                            // those episodes' sessions are stale; a paused
-                            // session on another episode must survive.
-                            when {
-                                episodeSet != null && season != null ->
-                                    item.episode?.season == season &&
-                                        item.episode?.episode
-                                            ?.let { it in episodeSet } == true
-
-                                season != null && episode != null ->
-                                    item.episode?.season == season &&
-                                        item.episode?.episode == episode
-
-                                else -> true
-                            }
-                    }
-                    .filter { item ->
-                        (item.progress ?: 0f) >= minProgress
-                    }
-
-            var removed = 0
-
-            matchingSessions.forEach { item ->
-                if (deletePlaybackSession(item.id)) {
-                    removed += 1
-                }
-            }
-
-            if (removed > 0) {
-                Log.d(
-                    "SIMKL_REPO",
-                    "deleteOpenPlaybackSessionsForWatched " +
-                        "parent=$parentId s=$season e=$episode removed=$removed"
-                )
-            }
-
-            removed
-        } catch (
-            e: kotlinx.coroutines.CancellationException
-        ) {
-            throw e
-        } catch (e: Exception) {
-            Log.e(
-                "SIMKL_REPO",
-                "deleteOpenPlaybackSessionsForWatched error: ${e.message}",
-                e
-            )
-            0
-        }
-    }
-
-    private fun playbackItemMatchesParent(
-        item: SimklPlaybackItem,
-        imdb: String?,
-        tmdb: Int?,
-        title: String?
-    ): Boolean {
-
-        // A session is exactly one movie OR one show, and the two model
-        // types share no interface, so read ids/title off each side
-        // instead of combining them (item.movie ?: item.show would infer
-        // Any and make these members unresolvable).
-        val ids =
-            item.movie?.ids
-                ?: item.show?.ids
-
-        if (
-            imdb != null &&
-            ids?.imdb?.equals(
-                imdb,
-                ignoreCase = true
-            ) == true
-        ) {
-            return true
-        }
-
-        if (
-            tmdb != null &&
-            ids?.tmdb == tmdb
-        ) {
-            return true
-        }
-
-        // The Simkl id is not in the ref (it is resolved from the remote
-        // feed, never derived from a local parent id); only fall back to
-        // the title when the session carries no ids at all.
-        if (
-            ids == null &&
-            title != null
-        ) {
-            val mediaTitle =
-                item.movie?.title
-                    ?: item.show?.title
-
-            return mediaTitle
-                ?.equals(
-                    title,
-                    ignoreCase = true
-                ) == true
-        }
-
-        return false
-    }
+    ): Int = deleteOpenPlaybackSessionsForWatchedImpl(
+        parentId = parentId,
+        tmdbId = tmdbId,
+        season = season,
+        episode = episode,
+        episodes = episodes,
+        minProgress = minProgress
+    )
 
     /*
      * Live scrobble (POST /scrobble/start|pause|stop). Called from the
      * player on play/pause/end so Simkl records in-progress playback and
-     * extrapolates the watch between events. Failures are logged, never
-     * thrown, so playback is never blocked by tracking.
+     * extrapolates the watch between events.
      */
     suspend fun scrobble(
         action: String,
@@ -1014,128 +770,16 @@ class SimklRepository(
         title: String? = null,
         progress: Double,
         tmdbId: Int? = null
-    ): Boolean {
-
-        if (!isConfigured() || !hasToken()) {
-            Log.d("SIMKL_REPO", "scrobble/$action skipped: not configured/authenticated")
-            return false
-        }
-
-        val ids = parsePlaybackIds(parentId, tmdbId)
-        if (ids == null) {
-            Log.d("SIMKL_REPO", "scrobble/$action skipped: unparseable id=$parentId")
-            return false
-        }
-
-        val isMovie =
-            parentType.lowercase() == "movie"
-
-        val body =
-            SimklScrobbleRequest(
-                progress = progress,
-                movie =
-                    if (isMovie) {
-                        SimklScrobbleMovie(
-                            title = title,
-                            ids = ids
-                        )
-                    } else {
-                        null
-                    },
-                show =
-                    if (!isMovie) {
-                        SimklScrobbleShow(
-                            title = title,
-                            ids = ids
-                        )
-                    } else {
-                        null
-                    },
-                episode =
-                    if (!isMovie && season != null && episode != null) {
-                        SimklScrobbleEpisode(
-                            season = season,
-                            number = episode
-                        )
-                    } else {
-                        null
-                    }
-            )
-
-        return try {
-            val response =
-                when (action) {
-                    "pause" ->
-                        api.scrobblePause(
-                            authorization =
-                                bearer(
-                                    requireAccessToken()
-                                ),
-
-                            body =
-                                body
-                        )
-
-                    "stop" ->
-                        api.scrobbleStop(
-                            authorization =
-                                bearer(
-                                    requireAccessToken()
-                                ),
-
-                            body =
-                                body
-                        )
-
-                    else ->
-                        api.scrobbleStart(
-                            authorization =
-                                bearer(
-                                    requireAccessToken()
-                                ),
-
-                            body =
-                                body
-                        )
-                }
-
-            if (!response.isSuccessful) {
-                val errorText =
-                    try {
-                        response
-                            .errorBody()
-                            ?.string()
-                    } catch (e: Exception) {
-                        "unreadable: " +
-                            e.message
-                    }
-
-                Log.e(
-                    "SIMKL_REPO",
-                    "scrobble/$action failed " +
-                        "code=${response.code()} " +
-                        "body=$errorText"
-                )
-            } else {
-                Log.d(
-                    "SIMKL_REPO",
-                    "scrobble/$action ok " +
-                        "id=$parentId tmdb=$tmdbId progress=$progress"
-                )
-            }
-
-            response.isSuccessful
-        } catch (e: Exception) {
-            Log.e(
-                "SIMKL_REPO",
-                "scrobble/$action error: " +
-                    e.message,
-                e
-            )
-
-            false
-        }
-    }
+    ): Boolean = scrobbleImpl(
+        action = action,
+        parentId = parentId,
+        parentType = parentType,
+        season = season,
+        episode = episode,
+        title = title,
+        progress = progress,
+        tmdbId = tmdbId
+    )
 
     /*
      * Normalize a catalog item id into Simkl id refs. Accepts:
@@ -1227,52 +871,16 @@ class SimklRepository(
         )
     }
 
+    // Bodies live in SimklReads.kt.
     suspend fun getPlaybackItems(
         accessToken: String =
-            requireAccessToken()
-    ): List<SimklPlaybackItem> {
-
-        require(
-            clientId.isNotBlank()
-        ) {
-            "SIMKL_CLIENT_ID is missing"
-        }
-
-        return api.getPlayback(
-            authorization =
-                bearer(
-                    accessToken
-                ),
-
-            extended =
-                "full"
-        )
-    }
+            trackedAccessToken()
+    ): List<SimklPlaybackItem> = getPlaybackItemsImpl(accessToken)
 
     suspend fun getWatchingShows(
         accessToken: String =
-            requireAccessToken()
-    ): SimklWatchingShowsResponse {
-
-        require(
-            clientId.isNotBlank()
-        ) {
-            "SIMKL_CLIENT_ID is missing"
-        }
-
-        return api.getWatchingShows(
-            authorization =
-                bearer(
-                    accessToken
-                ),
-
-            dateFrom =
-                null,
-
-            extended =
-                "full"
-        )
-    }
+            trackedAccessToken()
+    ): SimklWatchingShowsResponse = getWatchingShowsImpl(accessToken)
 
     /**
      * Library totals for the connect screen: how many distinct shows and
@@ -1281,46 +889,7 @@ class SimklRepository(
      * resolves against) and movies from the all-items movies endpoint.
      * Returns null on failure so the UI can simply hide the counters.
      */
-    suspend fun getWatchedCounts(): SimklWatchedCounts? {
-        val accessToken =
-            runCatching { requireAccessToken() }.getOrNull()
-                ?: return null
-
-        // Both legs are forced fresh so the pair is a coherent snapshot:
-        // the old mix (shows from a 12h-cached blob + movies fetched live)
-        // made the two numbers disagree on every visit — the screen always
-        // displayed counts from two different moments.
-        //
-        // Series counts only WATCHING + COMPLETED shows: the all-items
-        // endpoint returns every list (including plantowatch / hold /
-        // dropped), and "SERIES WATCHED" over-counts when it includes
-        // shows never actually watched. Matches what Simkl's own site
-        // reports as watched.
-        val watchedShowStatuses = setOf("watching", "completed")
-        val shows =
-            runCatching {
-                getAllShowItemsCached(
-                    accessToken = accessToken,
-                    forceRefresh = true
-                )
-            }.getOrNull()?.shows
-                ?.count { it.status?.lowercase()?.trim() in watchedShowStatuses }
-
-        val movies =
-            runCatching {
-                api.getAllMovieItems(
-                    authorization = bearer(accessToken),
-                    dateFrom = null,
-                    extended = "min"
-                ).body()?.movies?.size
-            }.getOrNull()
-
-        if (shows == null && movies == null) return null
-        return SimklWatchedCounts(
-            series = shows ?: 0,
-            movies = movies ?: 0
-        )
-    }
+    suspend fun getWatchedCounts(): SimklWatchedCounts? = getWatchedCountsImpl()
 
     /**
      * The connected account's identity for the connect screen ("Signed in
@@ -1329,17 +898,7 @@ class SimklRepository(
      * more than latency (this is how the user verifies WHICH profile's
      * Simkl they are looking at).
      */
-    suspend fun getAccountInfo(): SimklUser? {
-        val accessToken =
-            runCatching { requireAccessToken() }.getOrNull()
-                ?: return null
-
-        return runCatching {
-            api.getUserSettings(
-                authorization = bearer(accessToken)
-            ).user
-        }.getOrNull()
-    }
+    suspend fun getAccountInfo(): SimklUser? = getAccountInfoImpl()
 
     suspend fun getWatchedBulkImport(
         movieImdbIds: List<String> =
@@ -1470,123 +1029,7 @@ class SimklRepository(
         )
     }
 
-    private fun isShowFullyWatched(
-        item: SimklWatchingShowItem
-    ): Boolean {
-
-        val status =
-            item.status
-                ?.trim()
-                ?.lowercase()
-
-        val watched =
-            item.watchedEpisodesCount ?: 0
-
-        val total =
-            item.totalEpisodesCount ?: 0
-
-        val notAired =
-            item.notAiredEpisodesCount ?: 0
-
-        val airedTotal =
-            if (total > 0) {
-                total - notAired
-            } else {
-                0
-            }
-
-        if (
-            airedTotal > 0 &&
-            watched >= airedTotal
-        ) {
-            return true
-        }
-
-        val hasNext =
-            !item.nextToWatch
-                .isNullOrBlank()
-
-        val isFinishedStatus =
-            status == "completed" ||
-                status == "ended" ||
-                status == "canceled"
-
-        if (
-            isFinishedStatus &&
-            !hasNext
-        ) {
-            return true
-        }
-
-        if (
-            total > 0 &&
-            watched >= total
-        ) {
-            return true
-        }
-
-        return false
-    }
-
-    private fun isShowFullyWatched(
-        item: SimklWatchingShowDetailedItem
-    ): Boolean {
-
-        val status =
-            item.status
-                ?.trim()
-                ?.lowercase()
-
-        val watched =
-            item.watchedEpisodesCount ?: 0
-
-        val total =
-            item.totalEpisodesCount ?: 0
-
-        val notAired =
-            item.notAiredEpisodesCount ?: 0
-
-        val airedTotal =
-            if (total > 0) {
-                total - notAired
-            } else {
-                0
-            }
-
-        if (
-            airedTotal > 0 &&
-            watched >= airedTotal
-        ) {
-            return true
-        }
-
-        val hasNext =
-            !item.nextToWatch
-                .isNullOrBlank()
-
-        val isFinishedStatus =
-            status == "completed" ||
-                status == "ended" ||
-                status == "canceled"
-
-        if (
-            isFinishedStatus &&
-            !hasNext
-        ) {
-            return true
-        }
-
-        if (
-            total > 0 &&
-            watched >= total
-        ) {
-            return true
-        }
-
-        return false
-    }
-
-    private suspend fun getAllShowItemsCached(
+    internal suspend fun getAllShowItemsCached(
         accessToken: String,
         forceRefresh: Boolean =
             false
