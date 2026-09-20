@@ -617,6 +617,13 @@ object ProfileStorage {
         return "$active.$baseName"
     }
 
+    /**
+     * SharedPreferences name for a SPECIFIC profile (not necessarily the
+     * active one). Used by the one-time poison sweep to read/clear another
+     * profile's scoped stores without switching profiles.
+     */
+    fun prefsName(profileId: String, baseName: String): String = "$profileId.$baseName"
+
     /** Returns the database file name for a profile-scoped Room DB. */
     fun dbName(profileId: String, baseName: String): String = "$profileId.$baseName"
 

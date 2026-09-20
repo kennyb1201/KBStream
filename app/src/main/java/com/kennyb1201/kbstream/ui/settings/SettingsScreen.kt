@@ -74,6 +74,7 @@ internal enum class SettingsPane(val label: String) {
     LANGUAGE("Language"),
     SUBTITLES("Subtitles"),
     DATA("Data & Backup"),
+    SYNC("Sync"),
     ABOUT("About")
 }
 
@@ -1268,6 +1269,10 @@ fun SettingsScreen(
                 }
                 }
 
+                if (selectedPane == SettingsPane.SYNC) {
+                    SyncHealthSection()
+                }
+
                 if (selectedPane == SettingsPane.ABOUT) {
                     AboutSection()
                 }
@@ -1443,6 +1448,142 @@ private fun AboutSection() {
         )
     }
 }
+
+/**
+ * Sync health: what the sync layer is actually doing, instead of "did that
+ * change make it to the other TV?". Pull and push are reported separately
+ * ("nothing arrives" and "nothing uploads" are different failures), plus the
+ * outbox backlog, realtime channel state, and a one-shot force resync.
+ */
+@Composable
+private fun SyncHealthSection() {
+    val context = LocalContext.current
+    val sync = com.kennyb1201.kbstream.data.sync.SupabaseSync
+    val profileManager = com.kennyb1201.kbstream.data.sync.ProfileManager
+
+    val authState by sync.authState.collectAsStateWithLifecycle()
+    val lastPull by sync.lastPullAtMs.collectAsStateWithLifecycle()
+    val lastPush by sync.lastPushAtMs.collectAsStateWithLifecycle()
+    val pendingUploads by sync.pendingOutboxCount.collectAsStateWithLifecycle()
+    val realtime by sync.realtimeStatus.collectAsStateWithLifecycle()
+    val channels by sync.realtimeChannelCount.collectAsStateWithLifecycle()
+    val syncing by sync.isSyncing.collectAsStateWithLifecycle()
+    val activeProfile by profileManager.activeProfile.collectAsStateWithLifecycle()
+    val profiles by profileManager.profiles.collectAsStateWithLifecycle()
+
+    // Local row counts are read on demand (Room suspends off the main thread
+    // itself) and refreshed whenever a pull or push completes.
+    var localRows by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(lastPull, lastPush) {
+        localRows = runCatching {
+            val db = com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+                .getInstanceScoped(context)
+            "watched cache ${db.watchedStatusDao().getAll().size} · " +
+                "history ${db.watchHistoryDao().getAll().size}"
+        }.getOrNull()
+    }
+
+    val account = when (val state = authState) {
+        is com.kennyb1201.kbstream.data.sync.SupabaseSync.AuthState.SignedIn -> state.email
+        is com.kennyb1201.kbstream.data.sync.SupabaseSync.AuthState.SigningIn -> "signing in…"
+        is com.kennyb1201.kbstream.data.sync.SupabaseSync.AuthState.Error -> state.message
+        else -> "signed out"
+    }
+
+    Column {
+        Text(
+            text = "SYNC HEALTH",
+            color = KBAccent,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+        SyncStatRow("ACCOUNT", account)
+        SyncStatRow(
+            "PROFILE",
+            (activeProfile?.name ?: "none") +
+                (if (profiles.size > 1) " (${profiles.size} profiles)" else "")
+        )
+        SyncStatRow("LAST PULL", syncRelativeTime(lastPull))
+        SyncStatRow("LAST PUSH", syncRelativeTime(lastPush))
+        SyncStatRow(
+            "PENDING UPLOADS",
+            if (pendingUploads == 0) "none — everything uploaded" else "$pendingUploads row(s)"
+        )
+        SyncStatRow("REALTIME", "$realtime ($channels channel(s))")
+        SyncStatRow("LOCAL DATA", localRows ?: "reading…")
+        SyncStatRow("CLEANUP", sync.poisonSweepStatus(context))
+
+        Spacer(modifier = Modifier.height(10.dp))
+        KBCard(
+            onClick = {
+                if (!syncing) sync.forceFullResync(context)
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(KBSurfaceRaised, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                Text(
+                    text = if (syncing) "SYNCING…" else "FORCE FULL RESYNC",
+                    color = if (syncing) KBTextLo else KBAccent,
+                    style = MaterialTheme.typography.labelSmall
+                )
+                Text(
+                    text = "Uploads pending changes, then pulls the account's " +
+                        "history, watched marks and settings for this profile.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        Text(
+            text = "Pull timestamps update when remote changes are merged; push " +
+                "when local writes reach the cloud. \"Realtime\" is the live " +
+                "change channel — if it reads stopped while signed in, use " +
+                "Force full resync (remote changes still arrive on the next pull).",
+            color = KBTextLo.copy(alpha = 0.7f),
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 4.dp)
+        )
+    }
+}
+
+@Composable
+private fun SyncStatRow(label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            text = value,
+            color = KBTextHi,
+            style = MaterialTheme.typography.bodySmall
+        )
+    }
+}
+
+private fun syncRelativeTime(timestampMs: Long): String =
+    if (timestampMs <= 0L) {
+        "never"
+    } else {
+        android.text.format.DateUtils.getRelativeTimeSpanString(
+            timestampMs,
+            System.currentTimeMillis(),
+            android.text.format.DateUtils.MINUTE_IN_MILLIS
+        ).toString()
+    }
 
 @Composable
 private fun UpdateRow() {

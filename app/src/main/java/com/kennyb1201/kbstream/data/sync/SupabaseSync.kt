@@ -34,7 +34,6 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
-import java.util.concurrent.ConcurrentHashMap
 import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.reporting.CrashReporter
@@ -98,6 +97,28 @@ object SupabaseSync {
 
     private val _lastSyncAtMs = MutableStateFlow(0L)
     val lastSyncAtMs: StateFlow<Long> = _lastSyncAtMs.asStateFlow()
+
+    // ── Sync health (Settings → Sync) ───────────────────────────────
+    // Pull and push are tracked separately: "nothing arrives anymore" and
+    // "nothing uploads anymore" are different failures, and the old single
+    // timestamp could not tell them apart.
+    private val _lastPullAtMs = MutableStateFlow(0L)
+    val lastPullAtMs: StateFlow<Long> = _lastPullAtMs.asStateFlow()
+
+    private val _lastPushAtMs = MutableStateFlow(0L)
+    val lastPushAtMs: StateFlow<Long> = _lastPushAtMs.asStateFlow()
+
+    private val _isSyncing = MutableStateFlow(false)
+    val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
+
+    private val _pendingOutbox = MutableStateFlow(0)
+    val pendingOutboxCount: StateFlow<Int> = _pendingOutbox.asStateFlow()
+
+    private val _realtimeStatus = MutableStateFlow("stopped")
+    val realtimeStatus: StateFlow<String> = _realtimeStatus.asStateFlow()
+
+    private val _realtimeChannelCount = MutableStateFlow(0)
+    val realtimeChannelCount: StateFlow<Int> = _realtimeChannelCount.asStateFlow()
 
     /**
      * Last sync failure message, surfaced in Settings → Sync. Without this,
@@ -464,20 +485,10 @@ object SupabaseSync {
 
     // ── Outbox (offline-safe local-write flush) ─────────────────────
 
-    private data class OutboxRow(
-        val table: String,
-        val keyColumn: String,
-        val key: String,
-        val payload: JsonObject,
-        // Wall clock at enqueue time. Uploaded as the row's updated_at column
-        // so a retried STALE flush can never carry a newer timestamp than a
-        // fresh row that was enqueued and flushed later.
-        val enqueuedAtMs: Long = System.currentTimeMillis()
-    )
-
-    private val outbox = ConcurrentHashMap<String, OutboxRow>()
-
-    private fun outboxId(row: OutboxRow) = "${row.table}|${row.keyColumn}|${row.key}"
+    // [OutboxItem] / [OutboxQueue] hold the coalescing contract (and are
+    // unit tested). Every mutation reports the pending count to the Settings
+    // sync-health panel.
+    private val outbox = OutboxQueue { pending -> _pendingOutbox.value = pending }
 
     /**
      * Profile scoping: item keys are prefixed with the profile id captured
@@ -496,22 +507,14 @@ object SupabaseSync {
     private fun currentProfileId(): String? =
         com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id
 
-    private fun scopedKey(originalKey: String, pid: String? = currentProfileId()): String {
-        pid ?: return originalKey
-        return "p:$pid:$originalKey"
-    }
+    // Pure key rules live in [SyncKeys] so they are unit tested directly.
+    private fun scopedKey(originalKey: String, pid: String? = currentProfileId()): String =
+        SyncKeys.scoped(originalKey, pid)
 
-    private fun unscopedKey(storedKey: String): String =
-        if (storedKey.startsWith("p:")) {
-            storedKey.substringAfter("p:").substringAfter(':')
-        } else {
-            storedKey
-        }
+    private fun unscopedKey(storedKey: String): String = SyncKeys.unscoped(storedKey)
 
-    private fun storedKeyMatchesProfile(storedKey: String, pid: String?): Boolean {
-        pid ?: return !storedKey.startsWith("p:")
-        return storedKey.startsWith("p:$pid:")
-    }
+    private fun storedKeyMatchesProfile(storedKey: String, pid: String?): Boolean =
+        SyncKeys.matchesProfile(storedKey, pid)
 
     private fun storedKeyMatchesActiveProfile(storedKey: String): Boolean =
         storedKeyMatchesProfile(storedKey, currentProfileId())
@@ -538,16 +541,33 @@ object SupabaseSync {
     //   3. sync_watched_status rows in the CLOUD stamped under the
     //      wrong profile scope. These re-download on every pull and
     //      would resurrect the phantom markers even after 1 and 2 were
-    //      wiped.
+    //      wiped,
+    //   4. sync_watch_history rows likewise duplicated into the other
+    //      profile's scope — the phantom Continue Watching cards (plus
+    //      their local copies, which would be re-pushed otherwise),
+    //   5. watched-OVERRIDE sets: overrides sync as a full-replace blob,
+    //      so a mid-pull switch copied one profile's entire set onto
+    //      another — phantom manual marks that no tracker explains.
     //
-    // The sweep runs once per install (flags live in kbstream_sync_meta,
-    // a prefs file that never syncs). It only touches DERIVED state and
-    // mis-scoped cloud rows — user history, watched overrides, and the
-    // continue-watching table are deliberately left alone.
+    // The sweep runs once per install (flags live in kbstream_sync_meta, a
+    // prefs file that never syncs). Rows are only ever deleted when they are
+    // provably the same local write under two profile scopes (identical
+    // payload or identical payload timestamp) — see [PoisonDetector].
+    // Nothing else is touched.
 
     private const val SWEEP_PREFS = "kbstream_sync_meta"
-    private const val SWEEP_FLAG_LOCAL = "poison_sweep_local_done"
-    private const val SWEEP_FLAG_CLOUD = "poison_sweep_cloud_done"
+    // "v2" flags: the sweep was extended (history rows + watched-override
+    // blobs), so a device that ran the narrower first version still gets the
+    // wider one.
+    private const val SWEEP_FLAG_LOCAL = "poison_sweep_v2_local_done"
+    private const val SWEEP_FLAG_CLOUD = "poison_sweep_v2_cloud_done"
+    // Duplicated override sets found locally, kept until their cloud blobs
+    // are deleted too — clearing the local set erases the evidence needed to
+    // find them.
+    private const val SWEEP_PENDING_OVERRIDE_CLEARS = "poison_sweep_pending_overrides"
+    private const val SWEEP_OVERRIDES_PREFS_BASE = "kbstream_watched_overrides"
+    private const val SWEEP_OVERRIDES_KEY = "watched_overrides"
+    private const val SWEEP_DB_BASE = "kbstream_watch_history"
 
     private val sweepMutex = Mutex()
 
@@ -566,12 +586,30 @@ object SupabaseSync {
         }
     }
 
+    /**
+     * One-line cleanup status for the Settings → Sync panel, so the user can
+     * tell whether the cross-profile cleanup has run on this device.
+     */
+    fun poisonSweepStatus(context: Context): String {
+        val flags = context.getSharedPreferences(SWEEP_PREFS, Context.MODE_PRIVATE)
+        val local = flags.getBoolean(SWEEP_FLAG_LOCAL, false)
+        val cloud = flags.getBoolean(SWEEP_FLAG_CLOUD, false)
+        return when {
+            local && cloud -> "completed"
+            local -> "local done, cloud pending (sign in)"
+            else -> "not run yet"
+        }
+    }
+
     private suspend fun runPoisonSweepInternal(context: Context) {
         val flags = context.getSharedPreferences(SWEEP_PREFS, Context.MODE_PRIVATE)
 
+        val profiles = ProfileManager.profiles.value.sortedBy { it.createdAt }
+        val orderedPids = profiles.map { it.id }
+        val localPids = orderedPids.toSet()
+
         // ── Part 1: local derived caches (no network needed) ─────────
         if (!flags.getBoolean(SWEEP_FLAG_LOCAL, false)) {
-            val profiles = ProfileManager.profiles.value
             val activePid = ProfileManager.activeProfile.value?.id
             // Wipe the watched-status CACHE for every profile namespace.
             // It is fully derived (Simkl/MDBList/history/overrides/cloud
@@ -588,7 +626,7 @@ object SupabaseSync {
                         Log.w(TAG, "poison sweep: active watched cache clear failed: ${it.message}")
                     }
                 } else {
-                    rawClearWatchedCacheTable(context, "${profile.id}.kbstream_watch_history")
+                    rawClearWatchedCacheTable(context, ProfileStorage.dbName(profile.id, SWEEP_DB_BASE))
                 }
             }
             // Legacy (pre-profiles) unscoped DB — same cache table.
@@ -616,6 +654,31 @@ object SupabaseSync {
             }.onFailure {
                 Log.w(TAG, "poison sweep: simkl blob clear failed: ${it.message}")
             }
+            // Watched-override sets that are an exact copy of an OLDER
+            // profile's set: the full-replace blob applier copied one
+            // profile's whole set onto another mid-race. Recorded in prefs so
+            // the cloud half (which needs a session) can delete the matching
+            // blobs even if it runs in a later attempt.
+            runCatching {
+                val duplicates = PoisonDetector.duplicateOverrideOwners(
+                    orderedPids.map { pid -> pid to localOverrideKeys(context, pid) }
+                )
+                for (pid in duplicates) {
+                    context.getSharedPreferences(
+                        ProfileStorage.prefsName(pid, SWEEP_OVERRIDES_PREFS_BASE),
+                        Context.MODE_PRIVATE
+                    ).edit().putStringSet(SWEEP_OVERRIDES_KEY, emptySet()).apply()
+                }
+                if (duplicates.isNotEmpty()) {
+                    val pending = flags.getStringSet(SWEEP_PENDING_OVERRIDE_CLEARS, emptySet()).orEmpty()
+                    flags.edit()
+                        .putStringSet(SWEEP_PENDING_OVERRIDE_CLEARS, pending + duplicates)
+                        .apply()
+                    Log.i(TAG, "poison sweep: cleared ${duplicates.size} duplicated watched-override set(s)")
+                }
+            }.onFailure {
+                Log.w(TAG, "poison sweep: override duplicate check failed: ${it.message}")
+            }
             // Drop the matching in-memory caches so nothing stale is
             // served from RAM after the disk wipe.
             WatchedStatusRepository.invalidateAllCaches()
@@ -630,67 +693,54 @@ object SupabaseSync {
         if (!flags.getBoolean(SWEEP_FLAG_CLOUD, false)) {
             val c = client ?: return
             if (authState.value !is AuthState.SignedIn) return
-            val profiles = ProfileManager.profiles.value
             // Cross-profile poison requires ≥2 profiles; with fewer there
             // is nothing to attribute, so mark done.
             if (profiles.size < 2) {
                 flags.edit().putBoolean(SWEEP_FLAG_CLOUD, true).apply()
                 return
             }
-            // Heuristic: a watch mark that exists under TWO profile
-            // scopes for the same account is almost always the push/pull
-            // race's signature (the user watches a title in one profile).
-            // Keep each mark on the OLDEST profile (where watching
-            // actually accumulated — leaks flowed INTO newer profiles);
-            // delete the copies from every other scope.
-            val rows = runCatching {
-                c.from(TABLE_WATCHED).select().decodeList<SyncRowDto>()
-            }.getOrElse {
-                Log.w(TAG, "poison sweep: cloud read failed: ${it.message}")
-                return
-            }
-            val keysByScope = HashMap<String, MutableSet<String>>()
-            for (row in rows) {
-                val stored = row.itemKey ?: continue
-                if (!stored.startsWith("p:")) continue // legacy rows: can't attribute, leave
-                val pid = stored.removePrefix("p:").substringBefore(':')
-                keysByScope.getOrPut(pid) { mutableSetOf() }.add(unscopedKey(stored))
-            }
-            val keeper = profiles.minByOrNull { it.createdAt }
-            val localPids = profiles.map { it.id }.toSet()
-            val keeperKeys = keysByScope[keeper?.id] ?: emptySet()
-            val toDelete = mutableListOf<String>()
-            for ((pid, keys) in keysByScope) {
-                // Only scopes that belong to a profile we know locally —
-                // poison is always stamped with a LOCAL profile id, and a
-                // profile created on another device must not be touched
-                // (its rows may be legitimate).
-                if (pid !in localPids) continue
-                if (pid == keeper?.id) continue
-                for (key in keys) {
-                    if (key in keeperKeys) toDelete.add("p:$pid:$key")
-                }
-            }
-            if (toDelete.isEmpty()) {
-                flags.edit().putBoolean(SWEEP_FLAG_CLOUD, true).apply()
-                Log.i(TAG, "poison sweep: no cross-profile cloud watched rows found")
-                return
-            }
+
             var deleted = 0
-            for (chunk in toDelete.chunked(50)) {
-                runCatching {
-                    c.from(TABLE_WATCHED).delete {
-                        filter { isIn("item_key", chunk) }
+
+            // (1) watched rows, (2) history rows — same fingerprint in both
+            // tables: one local write present under two profile scopes.
+            for (table in listOf(TABLE_WATCHED, TABLE_HISTORY)) {
+                val rows = readCloudRows(c, table) ?: return
+                val poison = PoisonDetector.crossScopeDuplicates(rows, orderedPids, localPids)
+                if (poison.isEmpty()) continue
+                deleted += deleteCloudKeys(c, table, poison)
+                Log.i(TAG, "poison sweep: $table — deleting ${poison.size} duplicated row(s)")
+                if (table == TABLE_HISTORY) {
+                    // Delete the LOCAL copies too, or the next push re-creates
+                    // them from this device (they are what the card renders).
+                    for ((pid, keys) in poison.groupBy { SyncKeys.scopeOf(it) ?: "" }) {
+                        if (pid.isEmpty()) continue
+                        deleteLocalHistoryRows(context, pid, keys.map { unscopedKey(it) })
                     }
-                    deleted += chunk.size
-                }.onFailure {
-                    Log.w(TAG, "poison sweep: cloud delete failed (${it.message}); will not retry this run")
-                    return
                 }
             }
-            flags.edit().putBoolean(SWEEP_FLAG_CLOUD, true).apply()
-            Log.i(TAG, "poison sweep: deleted $deleted cross-profile cloud watched rows")
-            // Converge local state with the now-clean cloud table.
+
+            // (3) watched-override blobs copied onto a newer profile. Read
+            // the pids recorded by part 1 (the local clear erased them from
+            // the prefs) plus anything detectable now.
+            val overridePids = (flags.getStringSet(SWEEP_PENDING_OVERRIDE_CLEARS, emptySet()).orEmpty() +
+                PoisonDetector.duplicateOverrideOwners(
+                    orderedPids.map { pid -> pid to localOverrideKeys(context, pid) }
+                )).toList()
+            if (overridePids.isNotEmpty()) {
+                val blobKeys = overridePids.map {
+                    scopedKey(PrefsPayloadBuilder.KEY_WATCHED_OVERRIDES, it)
+                }
+                deleted += deleteCloudKeys(c, TABLE_PREFS, blobKeys)
+                Log.i(TAG, "poison sweep: deleting ${blobKeys.size} duplicated override blob(s)")
+            }
+
+            flags.edit()
+                .putBoolean(SWEEP_FLAG_CLOUD, true)
+                .remove(SWEEP_PENDING_OVERRIDE_CLEARS)
+                .apply()
+            Log.i(TAG, "poison sweep: deleted $deleted cross-profile cloud row(s)")
+            // Converge local state with the now-clean cloud tables.
             WatchedStatusRepository.invalidateAllCaches()
             runCatching { pullAllNow(context) }
                 .onFailure { Log.w(TAG, "poison sweep: post-clean pull failed: ${it.message}") }
@@ -721,6 +771,110 @@ object SupabaseSync {
         }
     }
 
+    /** This profile's local watched-override keys (scoped prefs file). */
+    private fun localOverrideKeys(context: Context, pid: String): Set<String> =
+        runCatching {
+            context.getSharedPreferences(
+                ProfileStorage.prefsName(pid, SWEEP_OVERRIDES_PREFS_BASE),
+                Context.MODE_PRIVATE
+            ).getStringSet(SWEEP_OVERRIDES_KEY, emptySet()).orEmpty()
+        }.getOrDefault(emptySet())
+
+    /**
+     * Reads a whole cloud table for this account as poison-detector rows.
+     * Returns null when the read failed (caller leaves the flag unset so the
+     * next sign-in retries the sweep).
+     */
+    private suspend fun readCloudRows(
+        c: SupabaseClient,
+        table: String
+    ): List<PoisonDetector.Row>? =
+        runCatching {
+            c.from(table).select().decodeList<SyncRowDto>().mapNotNull { row ->
+                val stored = row.itemKey ?: row.itemId ?: row.prefKey ?: return@mapNotNull null
+                PoisonDetector.Row(stored, row.payload)
+            }
+        }.onFailure {
+            Log.w(TAG, "poison sweep: reading $table failed: ${it.message}")
+        }.getOrNull()
+
+    /** Deletes [storedKeys] from [table] in chunks; returns how many went. */
+    private suspend fun deleteCloudKeys(
+        c: SupabaseClient,
+        table: String,
+        storedKeys: List<String>
+    ): Int {
+        if (storedKeys.isEmpty()) return 0
+        val keyColumn = when (table) {
+            TABLE_HISTORY -> "item_id"
+            TABLE_PREFS -> "pref_key"
+            else -> "item_key"
+        }
+        var deleted = 0
+        for (chunk in storedKeys.chunked(50)) {
+            runCatching {
+                c.from(table).delete {
+                    filter { isIn(keyColumn, chunk) }
+                }
+                deleted += chunk.size
+            }.onFailure {
+                Log.w(TAG, "poison sweep: deleting from $table failed (${it.message})")
+                return deleted
+            }
+        }
+        return deleted
+    }
+
+    /**
+     * Removes poisoned history rows from the profile they were copied INTO.
+     * The active profile goes through Room (its DB may be open); every other
+     * profile's DB is closed, so a raw delete is safe there.
+     */
+    private suspend fun deleteLocalHistoryRows(
+        context: Context,
+        pid: String,
+        ids: List<String>
+    ) {
+        if (ids.isEmpty()) return
+        if (pid == ProfileManager.activeProfile.value?.id) {
+            runCatching {
+                val dao = WatchHistoryDatabase.getInstanceScoped(context).watchHistoryDao()
+                ids.forEach { dao.deleteById(it) }
+            }.onFailure {
+                Log.w(TAG, "poison sweep: active-profile history delete failed: ${it.message}")
+            }
+            return
+        }
+        rawDeleteHistoryRows(context, ProfileStorage.dbName(pid, SWEEP_DB_BASE), ids)
+    }
+
+    private fun rawDeleteHistoryRows(context: Context, dbName: String, ids: List<String>) {
+        runCatching {
+            val file = context.getDatabasePath(dbName)
+            if (!file.exists()) return
+            val db = android.database.sqlite.SQLiteDatabase.openDatabase(
+                file.absolutePath,
+                null,
+                android.database.sqlite.SQLiteDatabase.OPEN_READWRITE
+            )
+            try {
+                db.beginTransaction()
+                try {
+                    for (id in ids) {
+                        db.execSQL("DELETE FROM watch_history WHERE id = ?", arrayOf(id))
+                    }
+                    db.setTransactionSuccessful()
+                } finally {
+                    db.endTransaction()
+                }
+            } finally {
+                db.close()
+            }
+        }.onFailure {
+            Log.w(TAG, "poison sweep: raw history delete in $dbName failed: ${it.message}")
+        }
+    }
+
     fun enqueueHistory(entity: WatchHistoryEntity, profileId: String? = currentProfileId()) {
         if (!isSignedIn()) return
         val payload = buildJsonObject {
@@ -744,8 +898,8 @@ object SupabaseSync {
             put("isCompleted", entity.isCompleted)
             entity.completedAt?.let { put("completedAt", it) }
         }
-        val row = OutboxRow(TABLE_HISTORY, "item_id", scopedKey(entity.id, profileId), payload)
-        outbox[outboxId(row)] = row
+        val row = OutboxItem(TABLE_HISTORY, "item_id", scopedKey(entity.id, profileId), payload)
+        outbox.put(row)
         scheduleFlush()
     }
 
@@ -758,8 +912,8 @@ object SupabaseSync {
             put("isWatched", entity.isWatched)
             put("updatedAt", entity.updatedAt)
         }
-        val row = OutboxRow(TABLE_WATCHED, "item_key", scopedKey(entity.key, profileId), payload)
-        outbox[outboxId(row)] = row
+        val row = OutboxItem(TABLE_WATCHED, "item_key", scopedKey(entity.key, profileId), payload)
+        outbox.put(row)
         scheduleFlush()
     }
 
@@ -781,8 +935,8 @@ object SupabaseSync {
         } else {
             scopedKey(prefKey, profileId)
         }
-        val row = OutboxRow(TABLE_PREFS, "pref_key", stored, payload)
-        outbox[outboxId(row)] = row
+        val row = OutboxItem(TABLE_PREFS, "pref_key", stored, payload)
+        outbox.put(row)
         scheduleFlush()
     }
 
@@ -808,7 +962,7 @@ object SupabaseSync {
                 // Loop while writes keep arriving so nothing strands: a row
                 // enqueued during flushOutbox() re-arms this loop instead of
                 // waiting for the next enqueue/60s retry.
-                if (outbox.isEmpty()) break
+                if (outbox.isEmpty) break
             }
         }
     }
@@ -824,7 +978,7 @@ object SupabaseSync {
         periodicFlushJob = scope.launch {
             while (isSignedIn()) {
                 delay(OUTBOX_RETRY_MS)
-                if (outbox.isNotEmpty()) {
+                if (!outbox.isEmpty) {
                     runCatching { flushOutbox() }
                 }
             }
@@ -835,7 +989,7 @@ object SupabaseSync {
         val c = client ?: return
         if (!isSignedIn()) return
 
-        val batch = outbox.values.toList()
+        val batch = outbox.snapshot()
         if (batch.isEmpty()) return
 
         // Max one in-flight flush at a time: two flushOutbox() runs racing
@@ -877,7 +1031,7 @@ object SupabaseSync {
                     // holds that newer row — removing by key alone would
                     // silently drop a write that never reached the cloud
                     // (lost update).
-                    chunk.forEach { row -> outbox.remove(outboxId(row), row) }
+                    chunk.forEach { row -> outbox.remove(row) }
                     clearSyncError()
                 } catch (e: Exception) {
                     Log.w(TAG, "flush $table chunk of ${chunk.size} failed: ${e.message}")
@@ -893,7 +1047,9 @@ object SupabaseSync {
             }
         }
         } // flushMutex
-        _lastSyncAtMs.value = System.currentTimeMillis()
+        val flushedAt = System.currentTimeMillis()
+        _lastSyncAtMs.value = flushedAt
+        _lastPushAtMs.value = flushedAt
     }
 
     /** Serializes flushOutbox() bodies (see the mutex acquire above). */
@@ -930,7 +1086,9 @@ object SupabaseSync {
         pullPrefs(context)
         pullHistory(context)
         pullWatched(context)
-        _lastSyncAtMs.value = System.currentTimeMillis()
+        val pulledAt = System.currentTimeMillis()
+        _lastSyncAtMs.value = pulledAt
+        _lastPullAtMs.value = pulledAt
     }
 
     private suspend fun pushAllNow(context: Context) {
@@ -938,7 +1096,9 @@ object SupabaseSync {
         pushWatched(context)
         pushPrefsBlobs(context)
         flushOutbox()
-        _lastSyncAtMs.value = System.currentTimeMillis()
+        val pushedAt = System.currentTimeMillis()
+        _lastSyncAtMs.value = pushedAt
+        _lastPushAtMs.value = pushedAt
     }
 
     /**
@@ -1009,7 +1169,7 @@ object SupabaseSync {
 
                 val localUpdated = localById[id]?.updatedAt ?: 0L
 
-                if (remoteUpdated > localUpdated) {
+                if (remoteWins(remoteUpdated, localUpdated)) {
                     db.watchHistoryDao().upsert(
                         WatchHistoryEntity(
                             id = id,
@@ -1088,7 +1248,7 @@ object SupabaseSync {
 
                 val localUpdated = localByKey[key]?.updatedAt ?: 0L
 
-                if (remoteUpdated > localUpdated) {
+                if (remoteWins(remoteUpdated, localUpdated)) {
                     pendingUpdates.add(
                         WatchedStatusEntity(
                             key = key,
@@ -1212,6 +1372,29 @@ object SupabaseSync {
     }
 
     /**
+     * "Force full resync" from the sync-health panel: ONE awaited
+     * flush → pull → push pass, so the panel reports the result of a single
+     * attempt instead of three racing fire-and-forget jobs. [isSyncing] stays
+     * true for the duration so the button can disable itself.
+     */
+    fun forceFullResync(context: Context): kotlinx.coroutines.Job = scope.launch {
+        if (client == null || !isSignedIn()) return@launch
+        if (_isSyncing.value) return@launch
+        _isSyncing.value = true
+        try {
+            flushOutbox()
+            pullAllNow(context)
+            pushAllNow(context)
+            Log.i(TAG, "force full resync complete")
+        } catch (t: Throwable) {
+            CrashReporter.recordNonFatal(t, mapOf("source" to "force_full_resync"))
+            Log.w(TAG, "force full resync failed: ${t.message}")
+        } finally {
+            _isSyncing.value = false
+        }
+    }
+
+    /**
      * Catch-up re-pull after sign-in/restore. The initial pull races flaky
      * TV networks; a silent failure left a fresh device empty with no retry.
      * One delayed, idempotent re-run (merge is remote-vs-local updatedAt)
@@ -1268,6 +1451,8 @@ object SupabaseSync {
                         subscribeTable(c, table)
                     }
                     Log.i(TAG, "realtime subscribed to 3 tables")
+                    _realtimeStatus.value = "live"
+                    _realtimeChannelCount.value = realtimeSubscriptions.size
                     watchRealtimeHealth()
                 } catch (e: Exception) {
                     Log.w(TAG, "realtime setup failed: ${e.message}")
@@ -1317,6 +1502,10 @@ object SupabaseSync {
             return
         }
         realtimeSubscriptions.add(RealtimeSubscription(table, ch, collector))
+        _realtimeChannelCount.value = realtimeSubscriptions.size
+        _realtimeStatus.value = if (realtimeSubscriptions.any { it.channel.status.value ==
+                io.github.jan.supabase.realtime.RealtimeChannel.Status.UNSUBSCRIBED }
+        ) "reconnecting" else "live"
     }
 
     /**
@@ -1352,9 +1541,12 @@ object SupabaseSync {
                     ) {
                         try {
                             Log.w(TAG, "realtime channel ${sub.channel.topic} is UNSUBSCRIBED; rebuilding")
+                            _realtimeStatus.value = "rebuilding ${sub.table}"
                             realtimeSubscriptions.remove(sub)
                             sub.collectorJob.cancel()
                             subscribeTable(c, sub.table)
+                            _realtimeStatus.value = "live"
+                            _realtimeChannelCount.value = realtimeSubscriptions.size
                             repaired = true
                         } catch (e: Exception) {
                             Log.w(TAG, "rebuild ${sub.table} failed: ${e.message}")
@@ -1425,7 +1617,7 @@ object SupabaseSync {
 
         val local = db.watchHistoryDao().getById(id)
         val localUpdated = local?.updatedAt ?: 0L
-        if (remoteUpdated > localUpdated) {
+        if (remoteWins(remoteUpdated, localUpdated)) {
             db.watchHistoryDao().upsert(
                 WatchHistoryEntity(
                     id = id,
@@ -1464,7 +1656,7 @@ object SupabaseSync {
 
         val local = db.watchedStatusDao().getByKeys(listOf(key)).firstOrNull()
         val localUpdated = local?.updatedAt ?: 0L
-        if (remoteUpdated > localUpdated) {
+        if (remoteWins(remoteUpdated, localUpdated)) {
             db.watchedStatusDao().upsertAll(
                 listOf(
                     WatchedStatusEntity(
@@ -1483,6 +1675,8 @@ object SupabaseSync {
     private fun stopRealtime() {
         val subs = realtimeSubscriptions.toList()
         realtimeSubscriptions.clear()
+        _realtimeStatus.value = "stopped"
+        _realtimeChannelCount.value = 0
         scope.launch {
             realtimeMutex.withLock {
                 subs.forEach { sub ->
