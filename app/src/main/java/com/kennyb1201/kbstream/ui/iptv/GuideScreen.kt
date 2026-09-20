@@ -62,6 +62,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -1333,6 +1334,9 @@ private fun SetupPanel(
     containFocus: Boolean = false,
     modifier: Modifier = Modifier
 ) {    val firstFieldFocusRequester = remember { FocusRequester() }
+    // Recovery target. Deliberately the LOAD card and NOT a text field: see
+    // the recovery block below — re-focusing a field re-opens the IME.
+    val recoveryFocusRequester = remember { FocusRequester() }
     val panelFocusManager = LocalFocusManager.current
 
     // Initial focus grab with retry. A single awaitFrame + requestFocus
@@ -1361,23 +1365,40 @@ private fun SetupPanel(
     // the leanback IME takes window focus while it is open, and when it closes
     // Compose can come back with no focused node at all — the next D-pad press
     // then starts a fresh search from the root and lands on the group chips
-    // behind the panel. The panel's own focus state is watched for that, and
-    // focus is put back on its first field.
+    // behind the panel (which the containment below cannot stop, because that
+    // press never starts from inside the panel).
+    //
+    // Two rules keep this from turning into a trap:
+    //  - A loss that arrives while another window owns focus is ignored. The
+    //    leanback IME is a window of its own, so "nothing focused" then is
+    //    just the keyboard being up — acting on it fights the field the user
+    //    is typing into.
+    //  - Focus goes back to a CARD, never a text field. A field that gains
+    //    focus opens the IME, so restoring onto one made Back only ever close
+    //    the keyboard again — the panel looked impossible to leave, and every
+    //    further Back press re-opened it.
+    //
+    // Window focus is read in composition (it is snapshot state), so the
+    // effect re-runs when the IME gives focus back and the restore still
+    // happens then — without that, the one shot would be spent on the ignored
+    // loss and focus would stay stranded.
     //
     // The two-frame grace matters: a hand-off between two of the panel's own
     // children can report "nothing focused" for a frame, and restoring on that
-    // would yank focus to the top on every ordinary D-pad move.
+    // would yank focus on every ordinary D-pad move.
     var panelHasFocus by remember { mutableStateOf(false) }
     var focusRestores by remember { mutableStateOf(0) }
-    LaunchedEffect(focusRestores) {
+    val windowFocused = LocalWindowInfo.current.isWindowFocused
+    LaunchedEffect(focusRestores, windowFocused) {
         if (focusRestores == 0) return@LaunchedEffect
+        if (!windowFocused) return@LaunchedEffect
         awaitFrame()
         awaitFrame()
         // Only when this panel is the one that should own focus: inline it
         // shares the screen with the header (Up must still reach it), and a
         // dialog opened from the panel owns focus until it closes.
         if (containFocus && !panelHasFocus) {
-            runCatching { firstFieldFocusRequester.requestFocus() }
+            runCatching { recoveryFocusRequester.requestFocus() }
         }
     }
 
@@ -1559,7 +1580,9 @@ private fun SetupPanel(
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            KBCard(onClick = onLoad) {
+            // Carries the recovery requester: this card is where focus lands
+            // when the panel has lost it entirely (see the recovery block).
+            KBCard(onClick = onLoad, modifier = Modifier.focusRequester(recoveryFocusRequester)) {
                 Text(
                     text = if (isLoading) "LOADING..." else "LOAD",
                     color = KBTextHi,
