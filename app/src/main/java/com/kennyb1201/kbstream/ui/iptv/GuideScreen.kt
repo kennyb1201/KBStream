@@ -55,7 +55,9 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalConfiguration
@@ -683,7 +685,7 @@ LaunchedEffect(channelListState, groupedChannelIds) {
 
     // Both the inline (no-playlist) and overlay (showSetup) placements of the
     // setup form share identical wiring - only the surrounding modifier differs.
-    val renderSetupPanel: @Composable (Modifier) -> Unit = { panelModifier ->
+    val renderSetupPanel: @Composable (Modifier, Boolean) -> Unit = { panelModifier, containFocus ->
         SetupPanel(
             playlistUrl = playlistUrl,
             epgUrl = epgUrl,
@@ -713,6 +715,7 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                 viewModel.onExtraEpgUrlsChanged("")
                 showSetup = true
             },
+            containFocus = containFocus,
             modifier = panelModifier
         )
     }
@@ -805,8 +808,10 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                             LocalConfiguration.current.screenHeightDp.dp - 120.dp
                         renderSetupPanel(
                             Modifier
-                                .heightIn(max = inlinePanelMaxHeight)
-                                .verticalScroll(rememberScrollState())
+                                .heightIn(max = inlinePanelMaxHeight)                                    .verticalScroll(rememberScrollState()),
+                            // Inline: no guide behind the panel to escape into,
+                            // and the header has to stay reachable.
+                            false
                         )
                     } else {
                         if (groups.isNotEmpty()) {
@@ -1053,7 +1058,15 @@ Spacer(modifier = Modifier.height(14.dp))
                             .padding(top = 104.dp, end = 24.dp)
                             .width(500.dp)
                             .heightIn(max = panelMaxHeight)
-                            .verticalScroll(rememberScrollState())
+                            .verticalScroll(rememberScrollState()),
+                        // This placement sits OVER the guide, so it keeps every
+                        // D-pad press inside itself rather than letting one
+                        // land on the group chips behind it — except while a
+                        // dialog opened FROM the panel (hidden items, channel
+                        // menu, search, catch-up: all reachable from here)
+                        // owns focus.
+                        !showHiddenManager && menuItem == null && !showSearch &&
+                            catchupChannel == null && reminderBanner == null
                     )
                 }
 
@@ -1289,6 +1302,7 @@ Spacer(modifier = Modifier.height(14.dp))
 }
 
 @Composable
+@OptIn(ExperimentalComposeUiApi::class)
 private fun SetupPanel(
     playlistUrl: String,
     epgUrl: String,
@@ -1311,6 +1325,12 @@ private fun SetupPanel(
     onImportGuide: () -> Unit,
     onManageHidden: () -> Unit,
     onClear: () -> Unit,
+    /**
+     * Keeps every D-pad press inside the panel. True for the overlay placement
+     * (which sits over the guide) and false for the inline one, where the panel
+     * is the whole screen and the header must stay reachable.
+     */
+    containFocus: Boolean = false,
     modifier: Modifier = Modifier
 ) {    val firstFieldFocusRequester = remember { FocusRequester() }
     val panelFocusManager = LocalFocusManager.current
@@ -1337,6 +1357,30 @@ private fun SetupPanel(
         }
     }
 
+    // Focus recovery. The grab above only covers the first frames: on Fire TV
+    // the leanback IME takes window focus while it is open, and when it closes
+    // Compose can come back with no focused node at all — the next D-pad press
+    // then starts a fresh search from the root and lands on the group chips
+    // behind the panel. The panel's own focus state is watched for that, and
+    // focus is put back on its first field.
+    //
+    // The two-frame grace matters: a hand-off between two of the panel's own
+    // children can report "nothing focused" for a frame, and restoring on that
+    // would yank focus to the top on every ordinary D-pad move.
+    var panelHasFocus by remember { mutableStateOf(false) }
+    var focusRestores by remember { mutableStateOf(0) }
+    LaunchedEffect(focusRestores) {
+        if (focusRestores == 0) return@LaunchedEffect
+        awaitFrame()
+        awaitFrame()
+        // Only when this panel is the one that should own focus: inline it
+        // shares the screen with the header (Up must still reach it), and a
+        // dialog opened from the panel owns focus until it closes.
+        if (containFocus && !panelHasFocus) {
+            runCatching { firstFieldFocusRequester.requestFocus() }
+        }
+    }
+
     // When the panel goes away (SETUP toggled, playlist loaded) its fields
     // must not keep view focus: a still-focused (now invisible) field keeps
     // consuming D-pad events and the screen appears dead to navigation.
@@ -1348,6 +1392,21 @@ private fun SetupPanel(
         modifier = modifier
             .fillMaxWidth()
             .focusGroup()
+            .onFocusChanged { state ->
+                panelHasFocus = state.hasFocus
+                if (!state.hasFocus && containFocus) focusRestores++
+            }
+            .then(
+                if (containFocus) {
+                    // The overlay covers the guide but does not own its focus, so
+                    // a search past the panel's edge used to land on the group
+                    // chips behind it. Cancelling the exit keeps the press
+                    // inside — the panel leaves with Back, not with the D-pad.
+                    Modifier.focusProperties { onExit = { cancelFocusChange() } }
+                } else {
+                    Modifier
+                }
+            )
             .background(KBSurface, RoundedCornerShape(18.dp))
             .padding(18.dp)
     ) {
