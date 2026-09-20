@@ -1,6 +1,9 @@
 package com.kennyb1201.kbstream.data.iptv
 
+import android.content.Context
 import android.content.SharedPreferences
+import com.kennyb1201.kbstream.data.notifications.ReminderRules
+import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -23,11 +26,53 @@ object IptvReminderStore {
         val startUtcMillis: Long,
         val endUtcMillis: Long
     ) {
-        val key: String get() = "$channelId|$startUtcMillis"
+        val key: String get() = ReminderRules.reminderKey(channelId, startUtcMillis)
     }
 
     private const val KEY = "programme_reminders_json"
     private const val MAX_REMINDERS = 40
+
+    /**
+     * Keys already announced by a system notification, so a reminder that
+     * fired while the app was backgrounded never buzzes twice. The guide's
+     * in-screen banner is deliberately independent of this — it is the
+     * "WATCH NOW" affordance for whatever reminder is live right now.
+     */
+    private const val KEY_NOTIFIED = "programme_reminders_notified"
+
+    /**
+     * The guide store for the profile in use — the same file the guide
+     * writes reminders into, so scheduled work outside the UI resolves the
+     * exact same list. Guide-level sets were put in their own store for
+     * profile scoping (see PrefsPayloadBuilder.buildIptv).
+     */
+    fun prefsFor(context: Context): SharedPreferences =
+        context.getSharedPreferences(
+            ProfileStorage.prefsName(context, "iptv_guide_preferences"),
+            Context.MODE_PRIVATE
+        )
+
+    fun notifiedKeys(prefs: SharedPreferences): Set<String> =
+        prefs.getStringSet(KEY_NOTIFIED, emptySet()).orEmpty().toSet()
+
+    fun markNotified(prefs: SharedPreferences, key: String) {
+        // Copy: the set from getStringSet must never be mutated in place.
+        prefs.edit().putStringSet(KEY_NOTIFIED, notifiedKeys(prefs) + key).apply()
+    }
+
+    fun clearNotified(prefs: SharedPreferences, key: String) {
+        prefs.edit().putStringSet(KEY_NOTIFIED, notifiedKeys(prefs) - key).apply()
+    }
+
+    /**
+     * Drops announcement keys whose reminder is gone, so the set tracks the
+     * reminders it describes instead of growing for the life of the install.
+     */
+    fun pruneNotified(prefs: SharedPreferences, liveKeys: Set<String>) {
+        val current = notifiedKeys(prefs)
+        val kept = current intersect liveKeys
+        if (kept.size != current.size) prefs.edit().putStringSet(KEY_NOTIFIED, kept).apply()
+    }
 
     fun load(prefs: SharedPreferences): List<Reminder> {
         val raw = prefs.getString(KEY, null) ?: return emptyList()

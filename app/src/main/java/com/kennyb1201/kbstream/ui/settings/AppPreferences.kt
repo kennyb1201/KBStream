@@ -48,6 +48,7 @@ object AppPreferences {
     private const val KEY_HERO_TRAILER_MUTED = "hero_trailer_muted"
     private const val KEY_USE_24H_CLOCK = "use_24h_clock"
     private const val KEY_NOTIFY_NEW_EPISODES = "new_episode_notifications"
+    private const val KEY_LIVE_REMINDER_NOTIFICATIONS = "live_reminder_notifications"
     private const val KEY_SHOW_CATALOG_TYPE = "home_rail_show_catalog_type"
     private const val KEY_SHOW_ADDON_NAME = "home_rail_show_addon_name"
     private const val KEY_SEARCH_SHOW_CATALOG_TYPE = "search_rail_show_catalog_type"
@@ -202,6 +203,20 @@ object AppPreferences {
 
     fun setNewEpisodeNotifications(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_NOTIFY_NEW_EPISODES, enabled).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
+    /**
+     * "REMIND ME" alerts for live programmes, delivered as system
+     * notifications. On by default: pressing REMIND ME in the guide is already
+     * an explicit request for an alert, and until now nothing delivered it
+     * outside the guide screen.
+     */
+    fun getLiveReminderNotifications(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_LIVE_REMINDER_NOTIFICATIONS, true)
+
+    fun setLiveReminderNotifications(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_LIVE_REMINDER_NOTIFICATIONS, enabled).apply()
         syncDisplayPrefsBlob(context)
     }
 

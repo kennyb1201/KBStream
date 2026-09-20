@@ -101,6 +101,9 @@ fun SettingsScreen(
     var newEpisodeNotifications by remember {
         mutableStateOf(AppPreferences.getNewEpisodeNotifications(context))
     }
+    var liveReminderNotifications by remember {
+        mutableStateOf(AppPreferences.getLiveReminderNotifications(context))
+    }
     // Whether the OS will actually deliver an alert. Separate from the toggle:
     // the pref can be ON while the app's notifications are revoked in system
     // settings (or POST_NOTIFICATIONS was never granted on Android 13+), which
@@ -125,6 +128,13 @@ fun SettingsScreen(
                     enabled = true,
                     runImmediate = true
                 )
+            }
+        }
+        // Same race for reminder alerts: the arm call that ran with the toggle
+        // tap may have found notifications still unauthorized.
+        if (notificationsAllowed && AppPreferences.getLiveReminderNotifications(context)) {
+            runCatching {
+                com.kennyb1201.kbstream.work.ReminderWorker.syncSchedule(context, enabled = true)
             }
         }
     }
@@ -913,6 +923,42 @@ fun SettingsScreen(
                         }
                         // Android 13+ needs the runtime grant; asking on the
                         // enabling tap is the only moment it makes sense.
+                        if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            runCatching {
+                                notificationPermissionLauncher.launch(
+                                    Manifest.permission.POST_NOTIFICATIONS
+                                )
+                            }
+                        }
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                ToggleRow(
+                    label = "Live TV Reminder Alerts",
+                    description = if (!notificationsAllowed) {
+                        "Alerts when a programme you set a reminder for starts. " +
+                            "Blocked by the system — allow notifications for KBStream in your " +
+                            "device settings."
+                    } else {
+                        "Alerts when a programme you set a reminder for starts (REMIND ME in " +
+                            "the guide). Without this you'd only see the reminder if the " +
+                            "guide happened to be open at that moment."
+                    },
+                    checked = liveReminderNotifications,
+                    onToggle = { enabled ->
+                        liveReminderNotifications = enabled
+                        AppPreferences.setLiveReminderNotifications(context, enabled)
+                        // Both halves of the toggle are real work: off cancels
+                        // every armed alert, on re-arms the reminders that
+                        // haven't started yet.
+                        runCatching {
+                            com.kennyb1201.kbstream.work.ReminderWorker.syncSchedule(
+                                context,
+                                enabled
+                            )
+                        }
                         if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                             runCatching {
                                 notificationPermissionLauncher.launch(

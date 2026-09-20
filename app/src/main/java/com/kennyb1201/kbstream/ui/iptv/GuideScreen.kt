@@ -80,7 +80,11 @@ import com.kennyb1201.kbstream.data.iptv.EpgMatchType
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.iptv.IptvPlaylist
 import com.kennyb1201.kbstream.data.iptv.IptvReminderStore
+import com.kennyb1201.kbstream.data.iptv.LiveChannelZapRegistry
+import com.kennyb1201.kbstream.data.iptv.PendingChannelTune
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
+import com.kennyb1201.kbstream.data.notifications.ReminderRules
+import com.kennyb1201.kbstream.work.ReminderWorker
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
@@ -288,6 +292,46 @@ fun GuideScreen(
             else -> unhiddenChannels.filter { it.channel.groupTitle?.trim() == selectedGroup }
         }
     }
+
+    // Publish the list being browsed as the zapping lineup. UP/DOWN in the
+    // player walks THIS list, so the group you are in — and its ordering, how
+    // "Favorites"/"Recent" are built included — is what changes channels;
+    // zapping across the whole playlist was what made it uselessly long. The
+    // same lineup resolves a typed channel number in the player, so both stay
+    // in step by construction rather than by a second filtering rule.
+    LaunchedEffect(selectedGroup, groupedChannels, epgUrl) {
+        // An empty list is always transient here (the lineup flow restarts
+        // empty on resubscribe); publishing it would blank a lineup that is
+        // still correct for the moment the user is playing from.
+        if (groupedChannels.isEmpty()) return@LaunchedEffect
+        LiveChannelZapRegistry.set(
+            channels = groupedChannels.map { item ->
+                LiveChannelZapRegistry.ZapChannel(
+                    channelId = channelKey(item),
+                    name = item.channel.displayName.ifBlank { "Live Channel" },
+                    streamUrl = item.channel.streamUrl,
+                    logoUrl = item.channel.logoUrl ?: item.epgChannel?.iconUrl,
+                    headers = item.channel.headers,
+                    chno = item.channel.tvgChno?.trim()?.takeIf { it.isNotBlank() },
+                    epgChannelId = item.epgChannel?.id,
+                    epgUrl = epgUrl.trim().takeIf { it.isNotBlank() }
+                )
+            },
+            browsingGroup = selectedGroup
+        )
+    }
+
+    // A reminder notification's tap asked for a specific channel; play it as
+    // soon as the lineup can resolve it, exactly once (see PendingChannelTune
+    // for why a channel that no longer exists just lands on the guide).
+    LaunchedEffect(unhiddenChannels.size, activeProfileId) {
+        if (unhiddenChannels.isEmpty()) return@LaunchedEffect
+        val wanted = PendingChannelTune.consume() ?: return@LaunchedEffect
+        val item = unhiddenChannels.firstOrNull { channelKey(it) == wanted }
+            ?: return@LaunchedEffect
+        latestOnPlayChannel?.invoke(item)
+    }
+
     fun moveSelectedGroup(direction: Int) {
     if (groups.isEmpty()) return
 
@@ -997,8 +1041,14 @@ Spacer(modifier = Modifier.height(14.dp))
                         onDismiss = { menuItem = null },
                         onToggleReminder = item.next?.let { nxt ->
                             {
+                                val reminderKey = ReminderRules.reminderKey(
+                                    item.channel.id, nxt.startUtcMillis
+                                )
                                 if (itemReminderActive) {
                                     IptvReminderStore.remove(guidePreferences, item.channel.id, nxt.startUtcMillis)
+                                    // Drop the armed alert too, or the reminder
+                                    // the user just cancelled still buzzes.
+                                    ReminderWorker.cancel(appContext, reminderKey)
                                     reminders = IptvReminderStore.load(guidePreferences)
                                 } else {
                                     IptvReminderStore.add(
@@ -1012,6 +1062,16 @@ Spacer(modifier = Modifier.height(14.dp))
                                             endUtcMillis = nxt.endUtcMillis
                                         )
                                     )
+                                    // Arm the alert at the programme's start: the
+                                    // guide's own banner only exists while the
+                                    // guide is on screen, so without this a
+                                    // reminder fires only if you happen to be
+                                    // sitting in the guide at that moment.
+                                    if (nxt.startUtcMillis > System.currentTimeMillis()) {
+                                        ReminderWorker.arm(
+                                            appContext, reminderKey, nxt.startUtcMillis
+                                        )
+                                    }
                                     reminders = IptvReminderStore.load(guidePreferences)
                                 }
                                 menuItem = null

@@ -71,7 +71,8 @@ import com.kennyb1201.kbstream.ui.home.CatalogGridScreen
 import com.kennyb1201.kbstream.ui.profiles.ProfileEditScreen
 import com.kennyb1201.kbstream.ui.profiles.ProfilePickerScreen
 import com.kennyb1201.kbstream.ui.home.HomeScreen
-import com.kennyb1201.kbstream.data.iptv.LiveChannelZapRegistry
+import com.kennyb1201.kbstream.data.iptv.PendingChannelTune
+import com.kennyb1201.kbstream.data.notifications.NotificationCenter
 import com.kennyb1201.kbstream.ui.iptv.GuideScreen
 import com.kennyb1201.kbstream.ui.iptv.IptvViewModel
 import com.kennyb1201.kbstream.ui.onboarding.OnboardingPrefs
@@ -951,6 +952,16 @@ fun AppRoot() {
         val intent = (context as? android.app.Activity)?.intent
         val launcherType = intent?.getStringExtra(TvLauncherPublisher.EXTRA_TYPE)
         val launcherId = intent?.getStringExtra(TvLauncherPublisher.EXTRA_ID)
+        // A live-TV reminder tap: the reminder stores the channel but not its
+        // stream URL, so hand the id to the guide, which resolves it against
+        // the playlist it loads and plays it (see PendingChannelTune).
+        val reminderChannelId =
+            intent?.getStringExtra(NotificationCenter.EXTRA_REMINDER_CHANNEL_ID)
+        val reminderPending = !reminderChannelId.isNullOrBlank()
+        if (reminderPending) {
+            PendingChannelTune.set(reminderChannelId)
+            screen = Screen.Guide
+        }
         if (!launcherType.isNullOrBlank() && !launcherId.isNullOrBlank()) {
             screen = Screen.Detail(
                 if (launcherType == "tv") "series" else launcherType,
@@ -965,7 +976,7 @@ fun AppRoot() {
         // instead of silently landing on Home. The pending Detail.target routes
         // through the same one-shot Continue Watching autoplay path. Skipped
         // when a launcher deep link is present - that launch intent wins.
-        if (launcherType.isNullOrBlank() && launcherId.isNullOrBlank()) {
+        if (launcherType.isNullOrBlank() && launcherId.isNullOrBlank() && !reminderPending) {
             NextEpisodeResult.restoreIfDropped(context)?.let { pending ->
                 // PendingNext carries the Stremio stream id ("tt123:S:E"), so
                 // the show id is its double-colon prefix; next episodes only
@@ -1493,25 +1504,10 @@ fun AppRoot() {
                     // player can zap between live channels with CH+/CH− and
                     // show an EPG info banner. Kept in lockstep with every
                     // launch so edits in the guide are reflected next time.
-                    LiveChannelZapRegistry.set(
-                        iptvViewModel.visibleChannels.value.map { item ->
-                            LiveChannelZapRegistry.ZapChannel(
-                                channelId = item.channel.id
-                                    .ifBlank { item.channel.streamUrl },
-                                name = item.channel.displayName
-                                    .ifBlank { "Live Channel" },
-                                streamUrl = item.channel.streamUrl,
-                                logoUrl = item.channel.logoUrl
-                                    ?: item.epgChannel?.iconUrl,
-                                headers = item.channel.headers,
-                                chno = item.channel.tvgChno?.trim()
-                                    ?.takeIf { it.isNotBlank() },
-                                epgChannelId = item.epgChannel?.id,
-                                epgUrl = iptvViewModel.epgUrl.value.trim()
-                                    .takeIf { it.isNotBlank() }
-                            )
-                        }
-                    )
+                    // The zap lineup is published by the guide itself, from
+                    // the group being browsed (see GuideScreen) — publishing
+                    // the whole visible list here is what used to make UP/DOWN
+                    // jump out of the group you were in.
 
                     val directSource =
                         Stream(

@@ -1578,6 +1578,27 @@
         </LinearLayout>
     </LinearLayout>
 
+    <!-- Channel-number entry HUD: the digits typed on the remote while
+         watching live TV. No channel-numbering affordance elsewhere in the
+         player, so the typed number is the only feedback until it tunes
+         (then the zap banner above takes over) or reports no such channel. -->
+    <TextView
+        android:id="@+id/channel_number_hud"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_margin="26dp"
+        android:background="@drawable/panel_bg"
+        android:fontFamily="@font/oswald_semibold"
+        android:letterSpacing="0.08"
+        android:paddingStart="24dp"
+        android:paddingTop="12dp"
+        android:paddingEnd="24dp"
+        android:paddingBottom="12dp"
+        android:textColor="@color/kb_text_hi"
+        android:textSize="30sp"
+        android:visibility="gone" />
+
     <!-- Scrim behind panels (clickable to dismiss) -->
     <View
         android:id="@+id/scrim"

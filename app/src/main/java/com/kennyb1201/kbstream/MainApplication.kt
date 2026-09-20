@@ -14,6 +14,7 @@ import coil3.request.crossfade
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.work.AddonManifestRefreshWorker
 import com.kennyb1201.kbstream.work.NewEpisodeWorker
+import com.kennyb1201.kbstream.work.ReminderWorker
 import com.kennyb1201.kbstream.work.SimklSyncWorker
 import io.sentry.android.core.SentryAndroid
 import java.util.concurrent.TimeUnit
@@ -57,6 +58,12 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             .onFailure {
                 com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
                     it, mapOf("source" to "app_create_new_episode_worker")
+                )
+            }
+        runCatching { scheduleReminderAlerts() }
+            .onFailure {
+                com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
+                    it, mapOf("source" to "app_create_reminder_worker")
                 )
             }
         runCatching { scheduleAddonManifestRefresh() }
@@ -180,6 +187,18 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
         NewEpisodeWorker.syncSchedule(
             this,
             AppPreferences.getNewEpisodeNotifications(this)
+        )
+    }
+
+    /**
+     * Live-TV programme reminder alerts. Each reminder gets its own delayed
+     * job armed at the programme's start time; this is what re-arms the
+     * reminders stored on a previous run, and what honors the toggle.
+     */
+    private fun scheduleReminderAlerts() {
+        ReminderWorker.syncSchedule(
+            this,
+            AppPreferences.getLiveReminderNotifications(this)
         )
     }
 

@@ -25,6 +25,34 @@ internal object NotificationCenter {
     private const val TAG = "NOTIFICATIONS"
 
     const val CHANNEL_NEW_EPISODES = "new_episodes"
+    const val CHANNEL_LIVE_REMINDERS = "live_reminders"
+
+    /**
+     * Extras on the guide deep link: which channel a reminder tap should tune
+     * to. MainActivity reads them, the guide resolves the channel against its
+     * loaded lineup.
+     */
+    const val EXTRA_REMINDER_CHANNEL_ID = "kbstream_reminder_channel_id"
+
+    /** Two channels, so a user can silence one kind of alert without the other. */
+    private data class ChannelSpec(
+        val id: String,
+        val name: String,
+        val description: String
+    )
+
+    private val CHANNELS = listOf(
+        ChannelSpec(
+            CHANNEL_NEW_EPISODES,
+            "New episodes",
+            "Alerts when a new episode of a show you watch has aired."
+        ),
+        ChannelSpec(
+            CHANNEL_LIVE_REMINDERS,
+            "Live TV reminders",
+            "Alerts when a live programme you asked to be reminded about starts."
+        )
+    )
 
     /**
      * Registers the channels once per process start. Safe to call repeatedly:
@@ -37,19 +65,90 @@ internal object NotificationCenter {
             runCatching {
                 context.getSystemService(NotificationManager::class.java)
             }.getOrNull() ?: return
-        if (runCatching { manager.getNotificationChannel(CHANNEL_NEW_EPISODES) }.getOrNull() != null) {
-            return
+        CHANNELS.forEach { spec ->
+            if (manager.getNotificationChannel(spec.id) != null) return@forEach
+            val channel = NotificationChannel(
+                spec.id,
+                spec.name,
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = spec.description
+                setShowBadge(true)
+            }
+            runCatching { manager.createNotificationChannel(channel) }
+                .onFailure { Log.w(TAG, "channel registration failed: ${it.message}") }
         }
-        val channel = NotificationChannel(
-            CHANNEL_NEW_EPISODES,
-            "New episodes",
-            NotificationManager.IMPORTANCE_DEFAULT
-        ).apply {
-            description = "Alerts when a new episode of a show you watch has aired."
-            setShowBadge(true)
+    }
+
+    /**
+     * Posts the "your programme is starting" alert for a live-TV reminder and
+     * deep-links its tap into the guide.
+     *
+     * The tap deliberately does NOT tune straight into the player: a reminder
+     * stores the channel identity but no stream URL (the guide resolves that
+     * from the live playlist), and the guide is where a dead channel can still
+     * fall back to something sensible. MainActivity hands the channel id over
+     * and the guide plays it as soon as its lineup is loaded.
+     */
+    fun programmeReminder(
+        context: Context,
+        reminderKey: String,
+        channelId: String,
+        channelName: String,
+        programmeTitle: String
+    ): Boolean {
+        ensureChannels(context)
+        if (!canPost(context)) {
+            Log.i(TAG, "reminder for $channelId skipped: notifications disabled")
+            return false
         }
-        runCatching { manager.createNotificationChannel(channel) }
-            .onFailure { Log.w(TAG, "channel registration failed: ${it.message}") }
+
+        val body = buildString {
+            append(programmeTitle.ifBlank { "Your programme" })
+            append(" is starting now")
+        }
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_LIVE_REMINDERS)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle(channelName.ifBlank { "Live TV" })
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setContentIntent(reminderIntent(context, reminderKey, channelId))
+            .build()
+
+        return runCatching {
+            NotificationManagerCompat.from(context)
+                .notify(ReminderRules.notificationId(reminderKey), notification)
+            true
+        }.getOrElse {
+            Log.w(TAG, "could not post reminder: ${it.message}")
+            false
+        }
+    }
+
+    /**
+     * Tap target: the guide, carrying the channel to play. Same activity flags
+     * as the new-episode deep link and the TV Watch Next cards — CLEAR_TOP
+     * without SINGLE_TOP deliberately recreates the activity so the
+     * launch-intent handler (which reads extras once, at startup) sees them.
+     */
+    private fun reminderIntent(
+        context: Context,
+        reminderKey: String,
+        channelId: String
+    ): PendingIntent {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(EXTRA_REMINDER_CHANNEL_ID, channelId)
+        }
+        return PendingIntent.getActivity(
+            context,
+            ReminderRules.notificationId(reminderKey),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
     }
 
     /**

@@ -68,6 +68,7 @@ object PrefsPayloadBuilder {
         "still_there_prompt",                // binge watchdog, not device-specific
         "still_there_episodes",
         "new_episode_notifications",         // new-episode alerts: behavior, not device-specific
+        "live_reminder_notifications",       // live TV reminder alerts: same reasoning
         "amoled_black",                      // AMOLED theme toggle (pure display pref)
         "pure_black_surface",                // Pure black cards/panels/containers toggle
         "mdblist_api_key",

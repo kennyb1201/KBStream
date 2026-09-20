@@ -34,12 +34,41 @@ object LiveChannelZapRegistry {
     @Volatile
     private var channels: List<ZapChannel> = emptyList()
 
-    fun set(channels: List<ZapChannel>) {
+    /**
+     * The guide group the lineup stands for ("All", "Favorites", "Recent", a
+     * category…). Shown in the zap banner so it is obvious why UP/DOWN went
+     * where it went.
+     */
+    @Volatile
+    private var browsingGroupLabel: String? = null
+
+    /**
+     * @param channels the ordered channels to zap through — the guide's own
+     *        visible list for the group being browsed, so UP/DOWN stays inside
+     *        that group instead of jumping the whole playlist.
+     * @param browsingGroup the group [channels] came from, for the banner.
+     */
+    fun set(channels: List<ZapChannel>, browsingGroup: String? = null) {
         this.channels = channels
+        this.browsingGroupLabel = browsingGroup?.trim()?.takeIf { it.isNotBlank() }
     }
+
+    /** True when there is more than one channel to move between. */
+    fun zapEnabled(): Boolean = channels.size > 1
+
+    /** Group the current lineup represents, or null when unknown. */
+    fun browsingGroup(): String? = browsingGroupLabel
 
     fun indexOfChannel(channelId: String): Int =
         channels.indexOfFirst { it.channelId == channelId }
+
+    /** Index of the channel a typed number tunes to, or -1 (see [ChannelNumberEntry]). */
+    fun indexOfChannelNumber(entry: String): Int =
+        ChannelNumberEntry.target(channels.map { it.chno }, entry)
+
+    /** The channel's number as a remote user would type it, for the banner. */
+    fun numberFor(index: Int): String? =
+        channels.getOrNull(index)?.chno?.trim()?.takeIf { it.isNotBlank() }
 
     /**
      * First index whose stream URL matches — fallback identity when the
@@ -63,5 +92,6 @@ object LiveChannelZapRegistry {
 
     fun clear() {
         channels = emptyList()
+        browsingGroupLabel = null
     }
 }

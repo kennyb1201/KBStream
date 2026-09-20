@@ -122,6 +122,16 @@ private const val NEXT_UP_COUNTDOWN_SECONDS = 5
 // Zap banner: how long the channel-info overlay stays on screen after the
 // last CH+/CH− press, and how much EPG lookahead a single lookup loads.
 private const val ZAP_BANNER_VISIBLE_MS = 5_000L
+
+/**
+ * How long a typed channel number waits for more digits before it tunes —
+ * the same pause the guide uses, so typing a number feels identical in both
+ * places.
+ */
+private const val CHANNEL_NUMBER_COMMIT_MS = 1_200L
+
+/** How long "NO CHANNEL 12" stays up before the entry HUD hides itself. */
+private const val CHANNEL_NUMBER_ERROR_MS = 1_800L
 private const val ZAP_EPG_LOOKAHEAD_MS = 6L * 60L * 60L * 1000L
 private const val ZAP_EPG_ROW_LIMIT = 4
 // Repaint a cached banner instantly, but still re-query the guide if the
@@ -493,6 +503,21 @@ class NativePlayerActivity : ComponentActivity() {
     private var zapNowProgress: ProgressBar? = null
     private var zapNowDesc: TextView? = null
     private var zapNextTitle: TextView? = null
+
+    /**
+     * Channel-number entry HUD and its pending commits. Typing digits while
+     * watching live TV tunes directly, the way a set-top box does, so this
+     * lives alongside the zap state.
+     */
+    private var channelNumberHud: TextView? = null
+    private var channelNumberEntry = ""
+    private val channelNumberHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val channelNumberCommitRunnable = Runnable { commitChannelNumberEntry() }
+    private val channelNumberHudHideRunnable = Runnable {
+        // Defensive: mirrors the zap banner's rule — a queued callback can
+        // outlive the activity, and touching a detached view is pointless.
+        if (!isDestroyed) channelNumberHud?.visibility = View.GONE
+    }
     private val zapHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val zapBannerHideRunnable = Runnable {
         // Defensive: after onDestroy the callback can still sit in the
@@ -525,7 +550,9 @@ class NativePlayerActivity : ComponentActivity() {
 
     /** Move to the channel [delta] positions away in the guide lineup. */
     private fun zapByOffset(delta: Int) {
-        if (LiveChannelZapRegistry.size() == 0) return
+        // One channel is not a lineup: nothing to move to, and a "zap" to
+        // itself would only flash the banner.
+        if (!LiveChannelZapRegistry.zapEnabled()) return
 
         // Establish the anchor once per player session: the entry whose id
         // (or stream URL) matches what we were launched with.
@@ -536,22 +563,33 @@ class NativePlayerActivity : ComponentActivity() {
         }
         if (zapChannelIndex < 0) return
 
-        val target = LiveChannelZapRegistry.offsetChannel(zapChannelIndex, delta) ?: return
-        val targetIndex = LiveChannelZapRegistry.indexOfChannel(target.channelId)
+        val targetIndex = LiveChannelZapRegistry.indexOfChannel(
+            LiveChannelZapRegistry.offsetChannel(zapChannelIndex, delta)?.channelId ?: return
+        )
         if (targetIndex < 0) return
-        zapChannelIndex = targetIndex
+        val target = LiveChannelZapRegistry.channelAt(targetIndex) ?: return
+        tuneToChannel(targetIndex, target)
+    }
+
+    /**
+     * Switch to a channel from the zap lineup and report it in the banner.
+     * Shared by UP/DOWN zapping and by typed channel numbers so both land the
+     * user the same way.
+     */
+    private fun tuneToChannel(index: Int, channel: LiveChannelZapRegistry.ZapChannel) {
+        zapChannelIndex = index
 
         // Always show the banner immediately with cached/known info — the
         // EPG row fills in async a moment later. Rapid-fire zapping re-shows
         // it and re-reads the (now cached) row.
-        showZapBanner(target)
+        showZapBanner(channel)
 
-        streamHeaders = target.headers
-        if (target.streamUrl != currentUrl) {
+        streamHeaders = channel.headers
+        if (channel.streamUrl != currentUrl) {
             val zapStream = Stream(
-                name = target.name,
-                title = target.name,
-                url = target.streamUrl,
+                name = channel.name,
+                title = channel.name,
+                url = channel.streamUrl,
                 audioUrl = null
             )
             // Replace the source list with the zapped channel only — keeps
@@ -563,6 +601,71 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     /**
+     * Digits typed on the remote, accumulated until they stop or OK confirms
+     * them. Gated to live playback with an overlay-free screen: everywhere
+     * else the D-pad belongs to whatever panel is up.
+     */
+    /** OK in its several spellings across TV remotes and gamepads. */
+    private fun isConfirmKey(keyCode: Int): Boolean =
+        keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
+            keyCode == KeyEvent.KEYCODE_ENTER ||
+            keyCode == KeyEvent.KEYCODE_BUTTON_SELECT
+
+    private fun channelNumberEntryAllowed(): Boolean =
+        isLiveChannel &&
+            !controlsVisible &&
+            !showSettingsPanel &&
+            !isPickerShowing &&
+            infoPanel.visibility != View.VISIBLE &&
+            errorContainer.visibility != View.VISIBLE &&
+            btnSkipIntro.visibility != View.VISIBLE &&
+            LiveChannelZapRegistry.zapEnabled()
+
+    private fun appendChannelNumberDigit(digit: Int) {
+        val next = com.kennyb1201.kbstream.data.iptv.ChannelNumberEntry.push(
+            channelNumberEntry, digit
+        )
+        if (next == channelNumberEntry) return
+        channelNumberEntry = next
+        channelNumberHud?.text = "CH $channelNumberEntry"
+        channelNumberHud?.visibility = View.VISIBLE
+        channelNumberHandler.removeCallbacks(channelNumberCommitRunnable)
+        channelNumberHandler.postDelayed(channelNumberCommitRunnable, CHANNEL_NUMBER_COMMIT_MS)
+    }
+
+    private fun clearChannelNumberEntry() {
+        channelNumberHandler.removeCallbacks(channelNumberCommitRunnable)
+        channelNumberHandler.removeCallbacks(channelNumberHudHideRunnable)
+        channelNumberEntry = ""
+        channelNumberHud?.visibility = View.GONE
+    }
+
+    /**
+     * Tune to whatever the typed number means, or say so. The number is
+     * resolved against the same lineup UP/DOWN walks, so a number outside the
+     * group being browsed is reported as absent rather than silently jumping
+     * to another group.
+     */
+    private fun commitChannelNumberEntry() {
+        val entry = channelNumberEntry
+        if (entry.isEmpty()) return
+        channelNumberHandler.removeCallbacks(channelNumberCommitRunnable)
+        channelNumberEntry = ""
+
+        val index = LiveChannelZapRegistry.indexOfChannelNumber(entry)
+        val target = LiveChannelZapRegistry.channelAt(index)
+        if (target == null) {
+            channelNumberHud?.text = "NO CHANNEL $entry"
+            channelNumberHud?.visibility = View.VISIBLE
+            channelNumberHandler.removeCallbacks(channelNumberHudHideRunnable)
+            channelNumberHandler.postDelayed(channelNumberHudHideRunnable, CHANNEL_NUMBER_ERROR_MS)
+            return
+        }
+        channelNumberHud?.visibility = View.GONE
+        tuneToChannel(index, target)
+    }
+
+    /**
      * Transient channel-info banner: channel identity + the NOW program
      * (with a progress bar) and NEXT. EPG data comes from the same Room DB
      * the guide uses, keyed off the channel's resolved guide id.
@@ -570,11 +673,17 @@ class NativePlayerActivity : ComponentActivity() {
     private fun showZapBanner(channel: LiveChannelZapRegistry.ZapChannel) {
         val banner = zapBanner ?: return
 
-        zapChannelLabel?.text = if (channel.chno?.isNotBlank() == true) {
-            "CH ${channel.chno}  •  LIVE"
-        } else {
-            "LIVE"
-        }
+        // The lineup is the group the guide was browsing, not the whole
+        // playlist, so name that group: it explains where UP/DOWN is moving
+        // through (and why a channel that lives elsewhere won't come up).
+        val scopeLabel = LiveChannelZapRegistry.browsingGroup()
+            ?.takeIf { it.isNotBlank() && !it.equals("All", ignoreCase = true) }
+            ?.uppercase()
+        zapChannelLabel?.text = buildList {
+            if (channel.chno?.isNotBlank() == true) add("CH ${channel.chno}")
+            add("LIVE")
+            scopeLabel?.let(::add)
+        }.joinToString("  •  ")
         zapChannelName?.text = channel.name
         if (channel.logoUrl.isNullOrBlank()) {
             zapLogo?.setImageDrawable(null)
@@ -1163,6 +1272,7 @@ class NativePlayerActivity : ComponentActivity() {
         zapNowProgress = findViewById(R.id.zap_now_progress)
         zapNowDesc = findViewById(R.id.zap_now_desc)
         zapNextTitle = findViewById(R.id.zap_next_title)
+        channelNumberHud = findViewById(R.id.channel_number_hud)
         bufferingSpinner = findViewById(R.id.buffering_spinner)
         reconnectingContainer = findViewById(R.id.reconnecting_container)
         reconnectingText = findViewById(R.id.reconnecting_text)
@@ -1741,6 +1851,23 @@ class NativePlayerActivity : ComponentActivity() {
                 (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) &&
                 event.action != KeyEvent.ACTION_DOWN
             if (event.action != KeyEvent.ACTION_DOWN && !scrubRelease) return@setOnKeyListener false
+
+            // Channel-number entry: digits typed with the overlay hidden tune
+            // straight to a channel, and OK confirms a partly typed number
+            // instead of opening the overlay.
+            if (channelNumberEntryAllowed()) {
+                val digit = com.kennyb1201.kbstream.data.iptv.ChannelNumberEntry.digitFor(keyCode)
+                if (digit != null) {
+                    // One press is one digit; a held key would fill all four.
+                    if (event.repeatCount == 0) appendChannelNumberDigit(digit)
+                    return@setOnKeyListener true
+                }
+                if (channelNumberEntry.isNotEmpty() && isConfirmKey(keyCode)) {
+                    commitChannelNumberEntry()
+                    return@setOnKeyListener true
+                }
+            }
+
             when (keyCode) {
                 KeyEvent.KEYCODE_MEDIA_PAUSE -> {
                     exoPlayer?.pause(); showControls(); true
@@ -1776,7 +1903,7 @@ class NativePlayerActivity : ComponentActivity() {
                         !controlsVisible &&
                         errorContainer.visibility != View.VISIBLE &&
                         btnSkipIntro.visibility != View.VISIBLE &&
-                        LiveChannelZapRegistry.size() > 0
+                        LiveChannelZapRegistry.zapEnabled()
                     when {
                         // Held keys are ignored: every zap tears down and
                         // restarts playback, so a repeat storm would sprint
@@ -1868,6 +1995,19 @@ class NativePlayerActivity : ComponentActivity() {
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (isPickerShowing || showSettingsPanel || infoPanel.visibility == View.VISIBLE) {
             return super.onKeyDown(keyCode, event)
+        }
+        // Channel-number entry, handled here too: external remotes can deliver
+        // digits while something other than the video surface holds focus.
+        if (channelNumberEntryAllowed()) {
+            val digit = com.kennyb1201.kbstream.data.iptv.ChannelNumberEntry.digitFor(keyCode)
+            if (digit != null) {
+                if ((event?.repeatCount ?: 0) == 0) appendChannelNumberDigit(digit)
+                return true
+            }
+            if (channelNumberEntry.isNotEmpty() && isConfirmKey(keyCode)) {
+                commitChannelNumberEntry()
+                return true
+            }
         }
         when (keyCode) {
             KeyEvent.KEYCODE_MEDIA_PLAY -> { exoPlayer?.play(); hideControls(); return true }
@@ -5309,6 +5449,9 @@ class NativePlayerActivity : ComponentActivity() {
             return
         }
         when {
+            // A typed number is a pending action, so Back cancels it before
+            // Back means "leave the channel".
+            channelNumberEntry.isNotEmpty() -> { clearChannelNumberEntry(); return }
             isPickerShowing -> { dismissPicker(); showControls(); return }
             showSettingsPanel -> { dismissSettingsPanel(); showControls(); return }
             infoPanel.visibility == View.VISIBLE -> { hideInfoPanel(); showControls(); return }
@@ -5360,6 +5503,7 @@ class NativePlayerActivity : ComponentActivity() {
         p5VideoGlesView.release()
         handler.removeCallbacksAndMessages(null)
         scrubHintHandler.removeCallbacksAndMessages(null)
+        channelNumberHandler.removeCallbacksAndMessages(null)
         nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
         scope?.cancel()
         subtitleCueHandler?.cancelPending()
