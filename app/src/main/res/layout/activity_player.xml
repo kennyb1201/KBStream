@@ -71,6 +71,24 @@
             android:scaleType="fitCenter"
             android:adjustViewBounds="true"
             android:contentDescription="Clear logo" />
+
+        <!-- Title text, for items with no clear logo art. The poster used to
+             stand in for the logo in that case, which put a portrait image
+             (pulsing, because this slot animates) where the title belongs. -->
+        <TextView
+            android:id="@+id/splash_item_name"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:paddingStart="64dp"
+            android:paddingEnd="64dp"
+            android:gravity="center"
+            android:fontFamily="@font/oswald_semibold"
+            android:textColor="@color/kb_text_hi"
+            android:textSize="26sp"
+            android:maxLines="2"
+            android:ellipsize="end"
+            android:visibility="gone" />
     </FrameLayout>
 
     <!-- LIVE badge (top-left) -->

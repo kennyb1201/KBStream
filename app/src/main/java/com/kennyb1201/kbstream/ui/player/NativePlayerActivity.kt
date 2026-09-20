@@ -79,6 +79,7 @@ import com.kennyb1201.kbstream.data.player.PlayerTitlePrefs
 import com.kennyb1201.kbstream.data.player.PlayerTrackMemory
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
 import com.kennyb1201.kbstream.data.tmdb.displayCardMeta
 import com.kennyb1201.kbstream.data.tmdb.displayDescription
 import com.kennyb1201.kbstream.data.tmdb.displayMetaLine
@@ -248,6 +249,14 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var splashContainer: View
     private lateinit var splashBackdrop: ImageView
     private lateinit var splashClearLogo: ImageView
+    // Title text inside the splash, shown when the item has no clear logo.
+    // Resolved lazily rather than in bindViews(): the splash's own binding sits
+    // past the tooling's edit window.
+    private var splashItemName: TextView? = null
+    /** See enforceTitleGraphicPolicy: the follow-up passes are posted once. */
+    private var titleGraphicRechecksPosted = false
+    /** See resolveClearLogoFromTmdb: one lookup per player session. */
+    private var clearLogoLookupStarted = false
     private lateinit var clearLogo: ImageView
     private lateinit var itemNameView: TextView
     private lateinit var episodeLabel: TextView
@@ -1128,6 +1137,120 @@ class NativePlayerActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Keeps the poster out of the two title-graphic slots.
+     *
+     * With no clear logo art, updateHeaderInfo() falls back to [itemPoster].
+     * That is a PORTRAIT image being put where a wide title graphic belongs:
+     * in the controls header it stands in for the clearlogo, and in the splash
+     * it is drawn into the 240x80 logo slot, which PULSES (1.0 -> 1.08,
+     * 0.7 -> 1.0 alpha) — so a portrait poster ends up pulsing where the title
+     * should be, which is what reads as a poster flashing on the loading
+     * splash. Both slots already have a designed no-logo state (the item name),
+     * and that is exactly what the header shows when a logo is absent, so the
+     * poster fallback is undone here instead of being relied on.
+     *
+     * Deliberately narrow: it only acts when there is no clear logo at all, so
+     * a real logo is never touched. Called again from a bounds listener on each
+     * affected view, because the poster arrives asynchronously from the image
+     * loader.
+     */
+    private fun enforceTitleGraphicPolicy() {
+        if (!clearLogoUrl.isNullOrBlank()) {
+            // Real logo art: the title text has no business showing.
+            splashItemName?.visibility = View.GONE
+            return
+        }
+        // Nothing arrived with the launch. Before settling for the name text,
+        // look for the art the launch did not carry — this is the difference
+        // between the same show showing its clearlogo or a poster.
+        resolveClearLogoFromTmdb()
+        if (itemName.isBlank()) return
+        if (clearLogo.drawable != null) {
+            clearLogo.setImageDrawable(null)
+            clearLogo.visibility = View.GONE
+        }
+        if (splashClearLogo.drawable != null) {
+            splashClearLogo.setImageDrawable(null)
+            splashClearLogo.visibility = View.GONE
+        }
+        // The same treatment updateHeaderInfo() gives the no-logo case, guarded
+        // so a repeated pass asks for no layout of its own.
+        if (itemNameView.text?.toString() != itemName) itemNameView.text = itemName
+        if (itemNameView.visibility != View.VISIBLE) itemNameView.visibility = View.VISIBLE
+
+        // The poster can also land WITHOUT resizing its view (an image whose
+        // aspect happens to match the slot), so a bounds change is not a
+        // guaranteed signal. Re-assert a few times across the splash's
+        // lifetime instead of trusting any single one. Posted once per session.
+        if (!titleGraphicRechecksPosted) {
+            titleGraphicRechecksPosted = true
+            for (delayMs in longArrayOf(150L, 500L, 1200L)) {
+                window.decorView.postDelayed({ enforceTitleGraphicPolicy() }, delayMs)
+            }
+        }
+
+        // And the no-logo state for the splash itself: the item name centred on
+        // the backdrop, exactly how the pre-player "Finding sources" splash
+        // shows a title it has no logo art for.
+        val title = splashItemName ?: findViewById<TextView>(R.id.splash_item_name)?.also {
+            splashItemName = it
+        }
+        if (title != null) {
+            if (title.text?.toString() != itemName) title.text = itemName
+            if (title.visibility != View.VISIBLE) title.visibility = View.VISIBLE
+        }
+    }
+
+    /**
+     * Fetches the title's logo art when the launch handed the player none.
+     *
+     * Which logo a playback gets depends on WHERE it was started: the detail
+     * page resolves the title's own TMDB logo art, while the streams picker
+     * passes only the addon meta's `logo` — and plenty of metas carry none. So
+     * the same show shows its clearlogo when played from the detail page and
+     * the poster when a stream is picked again afterwards; the two launches
+     * differ only in what they carry, not in what art exists.
+     *
+     * This is the cached lookup, so a replay of a title whose detail page was
+     * just open resolves from memory (or disk) rather than the network.
+     */
+    private fun resolveClearLogoFromTmdb() {
+        if (!clearLogoUrl.isNullOrBlank() || clearLogoLookupStarted) return
+        if (isLiveChannel || parentId.isBlank()) return
+        val type = parentType.lowercase()
+        if (type != "movie" && type != "series") return
+        clearLogoLookupStarted = true
+        lifecycleScope.launch {
+            val path = runCatching {
+                withContext(Dispatchers.IO) {
+                    TmdbRepository.getInstance(this@NativePlayerActivity)
+                        .fetchEnrichedMetaCached(parentId, type)
+                }
+            }.getOrNull()?.bestLogoPath()?.takeIf { it.isNotBlank() }
+            if (path == null) return@launch
+            val url = TmdbRepository.LOGO_BASE + path
+            // Recorded first: the policy pass early-returns once a logo exists,
+            // so the loads below are what put it on screen.
+            clearLogoUrl = url
+            applyClearLogo(url)
+        }
+    }
+
+    /**
+     * Puts a logo into both title slots in place of the name-text fallback.
+     * The image loader delivers it asynchronously, which is exactly why the
+     * policy pass runs more than once.
+     */
+    private fun applyClearLogo(url: String) {
+        clearLogo.load(url)
+        clearLogo.visibility = View.VISIBLE
+        splashClearLogo.load(url)
+        splashClearLogo.visibility = View.VISIBLE
+        itemNameView.visibility = View.GONE
+        splashItemName?.visibility = View.GONE
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -1437,6 +1560,18 @@ class NativePlayerActivity : ComponentActivity() {
         btnNext.visibility = if (season != null && episode != null) View.VISIBLE else View.GONE
 
         updateHeaderInfo()
+        // A poster is not a title graphic: see enforceTitleGraphicPolicy.
+        enforceTitleGraphicPolicy()
+        // Re-assert it as the images land. The poster comes from the image
+        // loader asynchronously, and adjustViewBounds means a landed image
+        // always resizes its view — so a bounds change is exactly the signal
+        // that something was just drawn into one of these slots.
+        clearLogo.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            enforceTitleGraphicPolicy()
+        }
+        splashClearLogo.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            enforceTitleGraphicPolicy()
+        }
         updateControlsInfo()
 
         setupListeners()
