@@ -61,8 +61,8 @@ fun computeEpisodeWatched(
 class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
     private val repository = AddonRepository.getInstance()
     private val addonManager = AddonManager.getInstance(app)
-    private val tmdbRepository = TmdbRepository.getInstance(app)
-    private val simklRepository = SimklRepository.getInstance(app)
+    internal val tmdbRepository = TmdbRepository.getInstance(app)
+    internal val simklRepository = SimklRepository.getInstance(app)
     // Resolved per access: the scoped DB instance is bound to the ACTIVE
     // profile. Capturing the DAO once meant a Detail page opened before a
     // profile switch kept writing resume/watch progress into the previous
@@ -165,7 +165,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
     private val _playButtonText = MutableStateFlow("Play")
     val playButtonText: StateFlow<String> = _playButtonText.asStateFlow()
 
-    private var imdbId: String = ""
+    internal var imdbId: String = ""
     private var latestEpisodeSeasonRequest: Int? = null
 
     // Hot reactive StateFlow checking if stream addons are configured and present globally
@@ -780,155 +780,19 @@ for (metaAddon in metaAddons) {
      * are already tt-id based for movies/series; for TMDB-only ids fall back
      * to the external_ids lookup.
      */
-    private fun mdbListApiKey(): String {
-        val fromPrefs = runCatching {
-            com.kennyb1201.kbstream.ui.settings.AppPreferences
-                .getMdbListApiKey(getApplication())
-        }.getOrDefault("")
-        if (fromPrefs.isNotBlank()) return fromPrefs
+    /** MDBList ratings + the full review list (see [DetailRatingEnrichment]). */
+    private fun fetchMdbListRatings(normalizedType: String, retryOnResolve: Boolean = true) =
+        DetailRatingEnrichment.ratings(this, normalizedType, retryOnResolve)
 
-        return runCatching {
-            com.kennyb1201.kbstream.BuildConfig.MDBLIST_API_KEY
-        }.getOrDefault("")
+    private fun fetchExtraReviews(normalizedType: String) =
+        DetailRatingEnrichment.extraReviews(this, normalizedType)
+
+    internal fun setMdbListRatings(value: MdbListRatings?) {
+        _mdbListRatings.value = value
     }
 
-    private fun fetchMdbListRatings(normalizedType: String, retryOnResolve: Boolean = true) {
-        val key = mdbListApiKey()
-        if (key.isBlank()) {
-            Log.i(
-                "KBStream",
-                "MDBList ratings skipped: no API key (add one in Settings or MDBLIST_API_KEY build field)"
-            )
-            return
-        }
-        viewModelScope.launch {
-            val meta = _meta.value
-            val rawId = meta?.id ?: imdbId
-            val resolved = rawId.takeIf { it.startsWith("tt") }
-                ?: run {
-                    val tmdbId = _tmdbDetail.value?.id?.takeIf { it > 0 }
-                    if (tmdbId == null) {
-                        Log.i(
-                            "KBStream",
-                            "MDBList ratings waiting: no imdb id and no tmdb id yet"
-                        )
-                        return@launch
-                    }
-                    tmdbRepository.resolveImdbId(tmdbId, normalizedType).orEmpty()
-                }
-            if (!resolved.startsWith("tt")) {
-                Log.i(
-                    "KBStream",
-                    "MDBList ratings skipped: could not resolve an imdb id (raw=$rawId)"
-                )
-                return@launch
-            }
-            val ratings = MdbListClient.fetchRatings(resolved, normalizedType, key)
-            if (ratings?.hasAny != true) {
-                Log.i(
-                    "KBStream",
-                    "MDBList ratings empty for $resolved ($normalizedType) — " +
-                        "title may not be rated on mdblist.com"
-                )
-            }
-            _mdbListRatings.value = ratings
-        }
-    }
-
-    /**
-     * Reviews beyond the first page. TMDB's detail payload bundles only page
-     * 1 of reviews (often just a handful); the standalone endpoint paginates
-     * the full list. Fetch pages 2..totalPages (bounded) in the background
-     * and merge, de-duped, after the bundled page so the UI paints
-     * immediately. Trakt's public comments (same IMDb id, sorted by likes)
-     * are then appended as a supplementary source — most titles carry only
-     * a handful of written TMDB reviews, so this is where the volume comes
-     * from. Everything fails soft: reviews must never block the detail UI.
-     */
-    private fun fetchExtraReviews(normalizedType: String) {
-        val detail = _tmdbDetail.value ?: return
-        val tmdbId = detail.id.takeIf { it > 0 } ?: return
-        val bundled = detail.reviews?.results.orEmpty()
-
-        viewModelScope.launch {
-            val extras = mutableListOf<TmdbReview>()
-            var lastPage = 1
-
-            // Probe page 2 for the total; short-circuit when the title only
-            // has one page (the common case).
-            val second = tmdbRepository.getReviews(tmdbId, normalizedType, 2)
-            if (second == null || second.results.isEmpty()) {
-                if (second?.results != null) lastPage = second.totalPages ?: 1
-            } else {
-                lastPage = second.totalPages ?: 2
-                extras += second.results
-            }
-
-            if (lastPage > 2) {
-                // Hard safety cap (server totalPages minus page 1) so a
-                // pathological response can never spin the loop; 30 pages
-                // = 600 reviews is far beyond any title's real list.
-                val maxPage = minOf(lastPage, 31)
-                (3..maxPage).forEach { page ->
-                    val pageResults = tmdbRepository.getReviews(
-                        tmdbId,
-                        normalizedType,
-                        page
-                    )?.results.orEmpty()
-                    if (pageResults.isEmpty()) return@forEach
-                    extras += pageResults
-                }
-            }
-
-            // Publish TMDB pages immediately so the row grows as fast as the
-            // network allows, then merge Trakt comments on top when they land.
-            _allReviews.value = (bundled + extras).distinctBy { it.id }
-
-            // Trakt supplementary comments by IMDb id (same id the OMDb flow
-            // already resolves). Sorted by likes server-side, so the first
-            // page carries the substantive reviews.
-            val rawImdb = _meta.value?.id ?: imdbId
-            val resolved = rawImdb.takeIf { it.startsWith("tt") }
-                ?: tmdbRepository.resolveImdbId(tmdbId, normalizedType)
-            if (!resolved.isNullOrBlank()) {
-                val traktReviews = runCatching {
-                    TraktCommentsClient.fetchReviews(resolved, normalizedType)
-                }.getOrDefault(emptyList())
-                if (traktReviews.isNotEmpty()) {
-                    _allReviews.value = (_allReviews.value + traktReviews)
-                        .distinctBy { it.id }
-                }
-            }
-
-            // Keyless Reddit backfill — the volume source now that Trakt
-            // rejects most bundled client ids. Top-upvoted title+year
-            // discussion posts, gated so only real write-ups qualify.
-            runCatching {
-                val detailNow = _tmdbDetail.value
-                val title = detailNow?.title ?: detailNow?.name
-                if (!title.isNullOrBlank()) {
-                    val year = (
-                        detailNow?.releaseDate ?: detailNow?.firstAirDate
-                        )?.takeIf { it.length >= 4 }?.substring(0, 4)
-                    val redditReviews = RedditDiscussionsClient.fetchReviews(
-                        title = title,
-                        year = year,
-                        type = normalizedType
-                    )
-                    if (redditReviews.isNotEmpty()) {
-                        _allReviews.value = (_allReviews.value + redditReviews)
-                            .distinctBy { it.id }
-                        Log.d(
-                            "KBStream",
-                            "reddit reviews merged: ${redditReviews.size} " +
-                                "for \"$title\" ($year)"
-                        )
-                    }
-                }
-            }.onFailure {
-                Log.w("KBStream", "reddit reviews failed: ${it.message}")
-            }
-        }
+    internal fun setAllReviews(value: List<TmdbReview>) {
+        _allReviews.value = value
     }
 
     private fun autoLoadRelevantSeason(
@@ -1057,247 +921,18 @@ for (metaAddon in metaAddons) {
      * position = progress% x episode runtime (Simkl exposes only a
      * percentage). Never written back to the local database.
      */
+    /** Tracker playback-resume rows (see [DetailPlaybackResume]). */
     private suspend fun simklPlaybackResumeFor(
         id: String,
         type: String,
         tmdbId: Int?
-    ): WatchHistoryEntity? {
+    ): WatchHistoryEntity? = DetailPlaybackResume.simkl(this, id, type, tmdbId)
 
-        if (!simklRepository.isConfigured() || !simklRepository.hasToken()) {
-            return null
-        }
-
-        val sessions = runCatching { simklRepository.getPlaybackItems() }
-            .getOrDefault(emptyList())
-
-        val normalizedType = type.lowercase()
-        val match = sessions.firstOrNull { session ->
-            when (normalizedType) {
-                "movie" -> {
-                    val ids = session.movie?.ids
-                    ids != null && (
-                        ids.imdb?.equals(id, ignoreCase = true) == true ||
-                            (tmdbId != null && ids.tmdb == tmdbId)
-                        )
-                }
-                "series" -> {
-                    val ids = session.show?.ids
-                    val ep = session.episode
-                    if (ids == null || ep == null) {
-                        false
-                    } else {
-                        ep.season != null && ep.episode != null && (
-                            ids.imdb?.equals(id, ignoreCase = true) == true ||
-                                (tmdbId != null && ids.tmdb == tmdbId)
-                            )
-                    }
-                }
-                else -> false
-            }
-        } ?: return null
-
-        val progress = (match.progress ?: return null)
-            .takeIf { it > 0f && it < 100f }
-            ?: return null
-
-        val season: Int?
-        val episode: Int?
-        var episodeTitle: String? = null
-        var name: String
-        var runtimeMinutes: Int? = null
-
-        if (normalizedType == "movie") {
-            season = null
-            episode = null
-            name = match.movie?.title ?: "movie-$id"
-            // Position estimate needs the movie runtime.
-            val movieDetail = tmdbId?.let {
-                runCatching { tmdbRepository.getDetailByTmdbId(it, "movie") }.getOrNull()
-            }
-            runtimeMinutes = movieDetail?.displayRuntimeMinutes()
-        } else {
-            season = match.episode?.season
-            episode = match.episode?.episode
-            episodeTitle = match.episode?.title
-            name = match.show?.title ?: "show-$id"
-            // Position estimate needs an episode runtime; TMDB episode
-            // runtime is often empty for TV, so also try the show-level
-            // episode_run_time list.
-            val detail = tmdbId?.let {
-                runCatching { tmdbRepository.getDetailByTmdbId(it, "tv") }.getOrNull()
-            }
-            runtimeMinutes = detail?.displayRuntimeMinutes()
-        }
-
-        val durationMs = runtimeMinutes?.times(60_000L)?.takeIf { it > 0L } ?: 0L
-        val positionMs = if (durationMs > 0L) {
-            (durationMs * (progress / 100f)).toLong()
-        } else {
-            0L
-        }
-
-        // Synthetic row: display-only. Synthetic rows keep positionMs even
-        // when the runtime estimate is missing (positionMs = 0) ONLY when a
-        // duration exists; otherwise the UI would show a bar with no time.
-        if (positionMs <= 0L && durationMs <= 0L) {
-            return null
-        }
-
-        val syntheticId =
-            if (normalizedType == "movie") "simkl-playback:$id"
-            else "simkl-playback:$id:$season:$episode"
-
-        return WatchHistoryEntity(
-            id = syntheticId,
-            parentId = id,
-            type = normalizedType,
-            name = name,
-            episodeTitle = episodeTitle?.takeIf { it.isNotBlank() },
-            overview = null,
-            clearLogo = null,
-            backdropUrl = null,
-            totalEpisodesInSeason = null,
-            poster = null,
-            streamUrl = null,
-            season = season,
-            episode = episode,
-            // Same "imdbId:season:episode" convention TMDB-resolved
-            // rows use, so the per-episode progress bar binds.
-            episodeStreamId =
-                if (normalizedType == "series" && season != null && episode != null) {
-                    "$id:$season:$episode"
-                } else {
-                    null
-                },
-            positionMs = positionMs,
-            durationMs = durationMs,
-            updatedAt = System.currentTimeMillis(),
-            isCompleted = false,
-            completedAt = null
-        )
-    }
-
-    /**
-     * MDBList playback fallback for the Detail screen.
-     *
-     * Same synthetic-row contract as [simklPlaybackResumeFor]: when local
-     * history and the Simkl cloud session have no in-progress position for
-     * this title, derive a display-only resume row from the paused MDBList
-     * playback session (GET /sync/playback) so Detail shows RESUME +
-     * progress for MDBList-tracked progress too. Never written to disk.
-     */
     private suspend fun mdbListPlaybackResumeFor(
         id: String,
         type: String,
         tmdbId: Int?
-    ): WatchHistoryEntity? {
-
-        val appContext = getApplication<Application>()
-
-        if (!MdbListClient.isConfigured(appContext)) {
-            return null
-        }
-
-        val sessions = runCatching {
-            MdbListClient.getPlaybackSessions(appContext)
-        }.getOrDefault(emptyList())
-
-        val normalizedType = type.lowercase()
-        val match = sessions.firstOrNull { session ->
-            val idMatch =
-                session.imdbId?.equals(id, ignoreCase = true) == true ||
-                    (tmdbId != null && session.tmdbId == tmdbId)
-
-            when (normalizedType) {
-                "movie" -> session.isMovie && idMatch
-                "series" -> !session.isMovie &&
-                    session.season != null &&
-                    session.episode != null &&
-                    idMatch
-                else -> false
-            }
-        } ?: return null
-
-        val progress = match.progress
-            .takeIf { it > 0.0 && it < 100.0 }
-            ?: return null
-
-        val season: Int?
-        val episode: Int?
-        val name: String
-        var runtimeMinutes: Int? = match.runtimeMinutes.takeIf { it > 0 }
-
-        if (normalizedType == "movie") {
-            season = null
-            episode = null
-            name = match.title ?: "movie-$id"
-            // Position estimate needs the movie runtime.
-            val movieDetail = tmdbId?.let {
-                runCatching { tmdbRepository.getDetailByTmdbId(it, "movie") }.getOrNull()
-            }
-            runtimeMinutes = movieDetail?.displayRuntimeMinutes()
-                ?: runtimeMinutes
-        } else {
-            season = match.season
-            episode = match.episode
-            name = match.title ?: "show-$id"
-            // Position estimate needs an episode runtime; TMDB episode
-            // runtime is often empty for TV, so also try the show-level
-            // episode_run_time list.
-            val detail = tmdbId?.let {
-                runCatching { tmdbRepository.getDetailByTmdbId(it, "tv") }.getOrNull()
-            }
-            runtimeMinutes = detail?.displayRuntimeMinutes()
-                ?: runtimeMinutes
-        }
-
-        val durationMs = runtimeMinutes?.times(60_000L)?.takeIf { it > 0L } ?: 0L
-        val positionMs = if (durationMs > 0L) {
-            (durationMs * (progress / 100.0)).toLong()
-        } else {
-            0L
-        }
-
-        // Synthetic row: display-only. Keep positionMs even when the
-        // runtime estimate is missing (positionMs = 0) ONLY when a
-        // duration exists; otherwise the UI would show a bar with no time.
-        if (positionMs <= 0L && durationMs <= 0L) {
-            return null
-        }
-
-        val syntheticId =
-            if (normalizedType == "movie") "mdblist-playback:$id"
-            else "mdblist-playback:$id:$season:$episode"
-
-        return WatchHistoryEntity(
-            id = syntheticId,
-            parentId = id,
-            type = normalizedType,
-            name = name,
-            episodeTitle = null,
-            overview = null,
-            clearLogo = null,
-            backdropUrl = null,
-            totalEpisodesInSeason = null,
-            poster = null,
-            streamUrl = null,
-            season = season,
-            episode = episode,
-            // Same "imdbId:season:episode" convention TMDB-resolved
-            // rows use, so the per-episode progress bar binds.
-            episodeStreamId =
-                if (normalizedType == "series" && season != null && episode != null) {
-                    "$id:$season:$episode"
-                } else {
-                    null
-                },
-            positionMs = positionMs,
-            durationMs = durationMs,
-            updatedAt = System.currentTimeMillis(),
-            isCompleted = false,
-            completedAt = null
-        )
-    }
+    ): WatchHistoryEntity? = DetailPlaybackResume.mdbList(this, id, type, tmdbId)
 
     fun loadEpisodesForSeason(season: Int) {
         // Synthetic (addon-videos) detail: build the episode list from the
