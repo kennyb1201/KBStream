@@ -80,6 +80,9 @@ fun SettingsPanel(
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) {
         runCatching { focusRequester.requestFocus() }
+        // The tracks of the playing file are only known once the player has
+        // parsed it, so ask for them when the panel is opened.
+        PlayerTrackBridge.refreshAudioTracks()
     }
     BackHandler { onDismiss() }
     Box(
@@ -208,6 +211,29 @@ fun SettingsPanel(
                 selected = PlayerTrackBridge.audioLanguage,
                 onSelect = { code -> PlayerTrackBridge.chooseAudioLanguage(context, code) }
             )
+
+            // The language rows pick "any English track"; when a file carries
+            // several (5.1 + stereo, commentary), this picks the exact one.
+            if (PlayerTrackBridge.audioTracks.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Specific track (this file)",
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+                KBCard(onClick = { PlayerTrackBridge.chooseAudioTrack(context, "") }) {
+                    PillChip("Default", PlayerTrackBridge.audioTrackSignature.isBlank())
+                }
+                PlayerTrackBridge.audioTracks.forEach { track ->
+                    Spacer(modifier = Modifier.height(4.dp))
+                    KBCard(onClick = {
+                        PlayerTrackBridge.chooseAudioTrack(context, track.signature)
+                    }) {
+                        PillChip(track.label, track.selected)
+                    }
+                }
+            }
 
             Spacer(modifier = Modifier.height(8.dp))
             Text(

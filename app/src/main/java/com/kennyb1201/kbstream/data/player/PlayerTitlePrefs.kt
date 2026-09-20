@@ -37,14 +37,26 @@ internal object PlayerTitlePrefs {
         val audioLang: String = "",
         val subtitleLang: String = "",
         val subtitleOffsetMs: Int = 0,
-        val audioDelayMs: Int = 0
+        val audioDelayMs: Int = 0,
+        /**
+         * One specific audio track in this show's files, as
+         * `language|codecs|channels` (see PlayerTrackBridge.signatureOf), or
+         * blank for "whichever track my language preference picks".
+         *
+         * A signature, not an index: the same episode on another source (or a
+         * different episode) numbers its tracks differently, but "English
+         * E-AC3 5.1" keeps meaning the same thing — which is exactly the track
+         * a language-only preference picks wrong.
+         */
+        val audioTrackSignature: String = ""
     ) {
         /** True when nothing differs from the global defaults. */
         val isEmpty: Boolean
             get() = audioLang.isBlank() &&
                 subtitleLang.isBlank() &&
                 subtitleOffsetMs == 0 &&
-                audioDelayMs == 0
+                audioDelayMs == 0 &&
+                audioTrackSignature.isBlank()
     }
 
     @Serializable

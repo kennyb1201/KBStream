@@ -1191,7 +1191,10 @@ class NativePlayerActivity : ComponentActivity() {
             },
             applySubtitleOffset = { ms ->
                 bridgeSelf.get()?.applyChosenSubtitleOffset(ms)
-            }
+            },
+            // Lets the panel list the file's real audio tracks and override
+            // directly; resolved lazily because the player is built later.
+            playerProvider = { bridgeSelf.get()?.exoPlayer }
         )
 
         // Bring back the subtitle attached to THIS video last time. Only the

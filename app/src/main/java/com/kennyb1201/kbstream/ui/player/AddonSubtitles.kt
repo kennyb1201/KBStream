@@ -50,6 +50,10 @@ class KBPlayerView @JvmOverloads constructor(
     override fun setPlayer(player: Player?) {
         super.setPlayer(player)
         if (player != null) {
+            // A specific audio track chosen for this show has to be re-applied
+            // to every player instance (the activity's own setup only knows
+            // languages); the bridge tracks that per title.
+            PlayerTrackBridge.onPlayerAttached(player)
             onPlayerAttached?.invoke(player)
         }
     }
