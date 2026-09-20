@@ -765,6 +765,15 @@ class MainActivity : ComponentActivity() {
         savedInstanceState: Bundle?
     ) {
         super.onCreate(savedInstanceState)
+        // Application.onCreate → this activity's create: the part of the
+        // launch the user actually waits on before the first frame.
+        com.kennyb1201.kbstream.data.reporting.PerfTrace
+            .sinceAppStartMs()
+            .takeIf { it >= 0 }
+            ?.let {
+                com.kennyb1201.kbstream.data.reporting.PerfTrace
+                    .record("startup.mainCreate", it)
+            }
 
         WindowCompat.setDecorFitsSystemWindows(
             window,
@@ -968,6 +977,17 @@ fun AppRoot() {
                 launcherId,
                 returnTo = Screen.Home
             )
+        }
+
+        // Voice / system search (see VoiceSearchActivity): land on Search with
+        // the spoken query already submitted instead of an empty field. The
+        // seed is also read by the Search screen itself, which covers the warm
+        // case where the view model already exists.
+        val spokenQuery =
+            intent?.getStringExtra(com.kennyb1201.kbstream.ui.search.SearchSeed.EXTRA_QUERY)
+        if (!spokenQuery.isNullOrBlank()) {
+            com.kennyb1201.kbstream.ui.search.SearchSeed.set(spokenQuery)
+            screen = Screen.Search
         }
 
         // Safety net: if the app was killed while a next-episode handoff was

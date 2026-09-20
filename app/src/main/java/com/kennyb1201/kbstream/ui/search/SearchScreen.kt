@@ -155,6 +155,14 @@ fun SearchScreen(
         viewModel.onOpenStudioScreen = onOpenStudioScreen
         viewModel.onOpenCollectionScreen = onOpenCollectionScreen
         viewModel.onOpenDecadeScreen = onOpenDecadeScreen
+
+        // A query handed over by the system search surface (TV remote mic) or
+        // a voice deep link: submit it as if it had been typed, so the results
+        // are already loading when this screen appears. Consume-and-forget, so
+        // returning to Search later does not re-run the old query.
+        SearchSeed.consume()?.let { spoken ->
+            if (spoken.isNotBlank()) viewModel.onQueryChanged(spoken)
+        }
     }
 
     // NOTE: no onDispose reset here — SearchViewModel is activity-scoped, so

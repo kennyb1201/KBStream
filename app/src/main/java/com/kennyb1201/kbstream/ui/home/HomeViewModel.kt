@@ -17,6 +17,7 @@ import com.kennyb1201.kbstream.data.library.LibraryMirror
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.mdblist.MdbListPlaybackItem
+import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.data.simkl.SimklContinueWatchingItem
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
@@ -1411,12 +1412,21 @@ Log.d(
 
         viewModelScope.launch {
 
+            // Timed end-to-end: this is the "pull to refresh" the user waits
+            // on, and the number the diagnostics perf block reports.
+            val startedAt = android.os.SystemClock.elapsedRealtime()
+
             clearWatchedStateCaches()
 
             _refreshTrigger.value += 1
 
             loadRailsInternal(
                 forceRefresh = true
+            )
+
+            PerfTrace.record(
+                "home.refreshAll",
+                android.os.SystemClock.elapsedRealtime() - startedAt
             )
         }
     }

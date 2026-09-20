@@ -1,6 +1,8 @@
 package com.kennyb1201.kbstream.data.addon
 
 import com.kennyb1201.kbstream.BuildConfig
+import com.kennyb1201.kbstream.data.reporting.NetworkTraceInterceptor
+import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.CompletableDeferred
@@ -84,6 +86,9 @@ private val sharedAddonClient: OkHttpClient by lazy {
             TimeUnit.SECONDS
         )
         .addInterceptor(sharedAddonLogging)
+        // Per-service request timing for the diagnostics perf block. Read-only
+        // (it only inspects the host), so it cannot change behavior.
+        .addInterceptor(NetworkTraceInterceptor())
         .build()
 }
 
@@ -220,6 +225,15 @@ class AddonRepository private constructor() {
      * the same page share one HTTP request.
      */
     suspend fun getCatalog(
+        baseUrl: String,
+        type: String,
+        catalogId: String,
+        skip: Int = 0
+    ): List<MetaPreview> = PerfTrace.timedSuspend("addon.catalog") {
+        getCatalogInternal(baseUrl, type, catalogId, skip)
+    }
+
+    private suspend fun getCatalogInternal(
         baseUrl: String,
         type: String,
         catalogId: String,

@@ -58,6 +58,11 @@ object Diagnostics {
         report.appendLine(localLine(app))
         markerLines(app).forEach { report.appendLine(it) }
         report.appendLine(addonLine(app))
+        // Where the time goes: startup + per-service HTTP + home refresh, with
+        // the slowest samples named. Empty on a session that recorded nothing.
+        PerfTrace.summary().takeIf { it.isNotEmpty() }?.let { perf ->
+            perf.lineSequence().forEach { report.appendLine(it) }
+        }
         appendRecentErrors(report)
 
         val text = report.toString()

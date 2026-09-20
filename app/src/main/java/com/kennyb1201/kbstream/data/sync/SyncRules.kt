@@ -1,7 +1,9 @@
 package com.kennyb1201.kbstream.data.sync
 
+import com.kennyb1201.kbstream.data.cache.WatchedStatusEntity
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * Pure rules behind the sync layer, extracted so they can be unit tested
@@ -205,6 +207,19 @@ internal object WatchedMarkerRules {
     fun shouldPublish(isWatched: Boolean, isPartiallyWatched: Boolean): Boolean =
         isWatched || isPartiallyWatched
 
+    /**
+     * True when the local marker may overwrite the account's copy.
+     *
+     * Publishing is conditional because a device only knows what it last
+     * pulled: a TV still holding "started, unfinished" (t1) would otherwise
+     * overwrite its sibling's "finished" (t2 > t1) in the cloud, and the two
+     * would then ignore each other forever — the cloud row had regressed to the
+     * older marker, so neither side saw anything newer to adopt. An absent
+     * cloud row (fresh account, or this device pushing first) always publishes.
+     */
+    fun shouldPush(localUpdatedAt: Long, cloudUpdatedAt: Long?): Boolean =
+        localUpdatedAt > (cloudUpdatedAt ?: 0L)
+
     /** The exact payload written for one entity (field names are wire format). */
     fun payload(
         key: String,
@@ -241,6 +256,34 @@ internal object WatchedMarkerRules {
             ?.content
             ?.toBooleanStrictOrNull()
             ?: false
+}
+
+/**
+ * One remote marker row merged into the local cache: null when the remote copy
+ * does not win (an older row, or a payload without a usable timestamp),
+ * otherwise the row to store.
+ *
+ * This is the ONLY place a marker row is turned into a cached entity, shared by
+ * the pull path and the realtime applier, so the two can never disagree about
+ * which flags travel. Both do: a variant that read `isWatched` alone silently
+ * dropped the eye badge on the receiving device (see [WatchedMarkerRules]).
+ */
+internal fun watchedMarkerRow(
+    key: String,
+    remote: JsonObject,
+    localUpdatedAt: Long
+): WatchedStatusEntity? {
+    val remoteUpdated = remote["updatedAt"]?.jsonPrimitive?.content?.toLongOrNull() ?: return null
+    if (!remoteWins(remoteUpdated, localUpdatedAt)) return null
+    val markers = WatchedMarkerRules.read(remote)
+    return WatchedStatusEntity(
+        key = key,
+        imdbId = remote["imdbId"]?.jsonPrimitive?.content ?: "",
+        mediaType = remote["mediaType"]?.jsonPrimitive?.content ?: "movie",
+        isWatched = markers.isWatched,
+        isPartiallyWatched = markers.isPartiallyWatched,
+        updatedAt = remoteUpdated
+    )
 }
 
 /**

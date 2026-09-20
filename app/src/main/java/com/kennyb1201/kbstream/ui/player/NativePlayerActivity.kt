@@ -73,6 +73,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
+import com.kennyb1201.kbstream.data.player.PlayerTrackMemory
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.displayCardMeta
@@ -958,12 +959,33 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     /**
+     * Identity of the video the remembered subtitle belongs to. Shows key on
+     * show + season + episode (a sidecar file is authored for one episode);
+     * everything else falls back to the history item id.
+     */
+    private fun subtitleMemoryKey(): String? =
+        PlayerTrackMemory.keyFor(
+            parentId = parentId,
+            mediaId = historyId,
+            season = season,
+            episode = episode
+        )
+
+    /**
      * Shared apply path for every subtitle source: file picker, URL import,
      * and OpenSubtitles downloads (cache file). Rebuilds the player so the
      * sidecar subtitle config attaches, preserving position.
      */
     private fun attachExternalSubtitle(uri: Uri) {
         externalSubtitleUri = uri
+        // Remembered per video (not per show: a sidecar file belongs to one
+        // episode) so reopening it re-attaches automatically. Profile-scoped
+        // and device-local — the URI only resolves on this device.
+        PlayerTrackMemory.rememberSubtitle(
+            context = this,
+            key = subtitleMemoryKey(),
+            uri = uri.toString()
+        )
         loadExternalSubtitleCues(uri)
         carryPositionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
         recreatePlayer()
@@ -1110,6 +1132,20 @@ class NativePlayerActivity : ComponentActivity() {
         autoPlayNext = AppPreferences.getAutoPlayNext(this)
         preferredAudioLang = AppPreferences.getPreferredAudioLanguage(this)
         preferredSubtitleLang = AppPreferences.getPreferredSubtitleLanguage(this)
+
+        // Bring back the subtitle attached to THIS video last time. Only the
+        // URI is seeded here: createPlayer() turns it into the sidecar
+        // SubtitleConfiguration, and setting it early is what makes the
+        // restored track appear without a second player rebuild.
+        if (!isLiveChannel) {
+            PlayerTrackMemory.rememberedSubtitle(this, subtitleMemoryKey())
+                ?.uri
+                ?.let { remembered ->
+                    runCatching { Uri.parse(remembered) }
+                        .getOrNull()
+                        ?.let { externalSubtitleUri = it }
+                }
+        }
         totalEpisodesInSeason = intent.getIntExtra("total_episodes_in_season", -1).takeIf { it > 0 }
 
         // Discover addon subtitles (Stremio "subtitles" resource) and merge

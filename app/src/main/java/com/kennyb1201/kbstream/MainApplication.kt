@@ -23,6 +23,9 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
 
     override fun onCreate() {
         super.onCreate()
+        // Start the clock the diagnostics perf block measures startup against.
+        // Must stay first: everything below is part of the launch cost.
+        com.kennyb1201.kbstream.data.reporting.PerfTrace.markAppStart()
         com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext =
             applicationContext
         com.kennyb1201.kbstream.data.sync.SupabaseSync.appContextRef =

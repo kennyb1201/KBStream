@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Makes the app eligible as a search target for the system's search surface
+     (TV remote mic / assistant). Queries are delivered to
+     ui.search.VoiceSearchActivity as ACTION_SEARCH and open the in-app Search
+     screen with the query already submitted. -->
+<searchable xmlns:android="http://schemas.android.com/apk/res/android"
+    android:label="KBStream"
+    android:hint="Search movies, shows and channels"
+    android:includeInGlobalSearch="true"
+    android:searchSettingsDescription="Search your add-on catalogs and live TV" />

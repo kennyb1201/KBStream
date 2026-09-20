@@ -527,353 +527,31 @@ object SupabaseSync {
 
     // ── One-time cross-profile poison sweep ─────────────────────────
     //
-    // The profile-switch races fixed above let bulk operations that
-    // STARTED under profile A land under profile B when the user
-    // switched profiles mid-flight. The races are gone, but whatever
-    // ALREADY leaked stays behind:
-    //
-    //   1. watched_status_cache rows inside the WRONG profile's scoped
-    //      Room DB — the phantom watched markers (with clean Simkl/
-    //      MDBList dashboards, because the data never came from the
-    //      trackers),
-    //   2. Simkl per-profile disk blobs cached under the wrong
-    //      "<profileId>/simkl:*" key — poisoning badges for up to 12h,
-    //   3. sync_watched_status rows in the CLOUD stamped under the
-    //      wrong profile scope. These re-download on every pull and
-    //      would resurrect the phantom markers even after 1 and 2 were
-    //      wiped,
-    //   4. sync_watch_history rows likewise duplicated into the other
-    //      profile's scope — the phantom Continue Watching cards (plus
-    //      their local copies, which would be re-pushed otherwise),
-    //   5. watched-OVERRIDE sets: overrides sync as a full-replace blob,
-    //      so a mid-pull switch copied one profile's entire set onto
-    //      another — phantom manual marks that no tracker explains.
-    //
-    // The sweep runs once per install (flags live in kbstream_sync_meta, a
-    // prefs file that never syncs). Rows are only ever deleted when they are
-    // provably the same local write under two profile scopes (identical
-    // payload or identical payload timestamp) — see [PoisonDetector].
-    // Nothing else is touched.
-
-    private const val SWEEP_PREFS = "kbstream_sync_meta"
-    // "v2" flags: the sweep was extended (history rows + watched-override
-    // blobs), so a device that ran the narrower first version still gets the
-    // wider one.
-    private const val SWEEP_FLAG_LOCAL = "poison_sweep_v2_local_done"
-    private const val SWEEP_FLAG_CLOUD = "poison_sweep_v2_cloud_done"
-    // Duplicated override sets found locally, kept until their cloud blobs
-    // are deleted too — clearing the local set erases the evidence needed to
-    // find them.
-    private const val SWEEP_PENDING_OVERRIDE_CLEARS = "poison_sweep_pending_overrides"
-    private const val SWEEP_OVERRIDES_PREFS_BASE = "kbstream_watched_overrides"
-    private const val SWEEP_OVERRIDES_KEY = "watched_overrides"
-    private const val SWEEP_DB_BASE = "kbstream_watch_history"
-
-    private val sweepMutex = Mutex()
+    // The sweep itself — local cache wipe plus cloud-row cleanup for the
+    // phantom markers a mid-flight profile switch used to leak — lives in
+    // [PoisonSweep]. Only these two entry points stay here, so every existing
+    // caller keeps working unchanged.
 
     /**
      * Fire-and-forget entry point; safe to call from anywhere (startup,
-     * auth events). Concurrent callers are serialized by [sweepMutex]
-     * and the flags make each part idempotent.
+     * auth events). Concurrent callers are serialized inside [PoisonSweep]
+     * and its flags make each part idempotent.
      */
     fun runOneTimePoisonSweep(context: Context) {
-        val appCtx = context.applicationContext
-        scope.launch {
-            sweepMutex.withLock {
-                runCatching { runPoisonSweepInternal(appCtx) }
-                    .onFailure { Log.w(TAG, "poison sweep failed: ${it.message}") }
-            }
-        }
+        PoisonSweep.run(
+            context = context,
+            scope = scope,
+            client = { client },
+            isSignedIn = { isSignedIn() },
+            pullNow = { pullAllNow(it) }
+        )
     }
 
     /**
      * One-line cleanup status for the Settings → Sync panel, so the user can
      * tell whether the cross-profile cleanup has run on this device.
      */
-    fun poisonSweepStatus(context: Context): String {
-        val flags = context.getSharedPreferences(SWEEP_PREFS, Context.MODE_PRIVATE)
-        val local = flags.getBoolean(SWEEP_FLAG_LOCAL, false)
-        val cloud = flags.getBoolean(SWEEP_FLAG_CLOUD, false)
-        return when {
-            local && cloud -> "completed"
-            local -> "local done, cloud pending (sign in)"
-            else -> "not run yet"
-        }
-    }
-
-    private suspend fun runPoisonSweepInternal(context: Context) {
-        val flags = context.getSharedPreferences(SWEEP_PREFS, Context.MODE_PRIVATE)
-
-        val profiles = ProfileManager.profiles.value.sortedBy { it.createdAt }
-        val orderedPids = profiles.map { it.id }
-        val localPids = orderedPids.toSet()
-
-        // ── Part 1: local derived caches (no network needed) ─────────
-        if (!flags.getBoolean(SWEEP_FLAG_LOCAL, false)) {
-            val activePid = ProfileManager.activeProfile.value?.id
-            // Wipe the watched-status CACHE for every profile namespace.
-            // It is fully derived (Simkl/MDBList/history/overrides/cloud
-            // resolve it back within seconds of first use), so clearing is
-            // lossless — and it is exactly where the phantom markers live.
-            for (profile in profiles) {
-                if (profile.id == activePid) {
-                    // Active profile's DB may be open by Room — go through
-                    // the DAO instead of raw SQL.
-                    runCatching {
-                        WatchHistoryDatabase.getInstanceScoped(context)
-                            .watchedStatusDao().clearAll()
-                    }.onFailure {
-                        Log.w(TAG, "poison sweep: active watched cache clear failed: ${it.message}")
-                    }
-                } else {
-                    rawClearWatchedCacheTable(context, ProfileStorage.dbName(profile.id, SWEEP_DB_BASE))
-                }
-            }
-            // Legacy (pre-profiles) unscoped DB — same cache table.
-            runCatching {
-                WatchHistoryDatabase.getInstance(context)
-                    .watchedStatusDao().clearAll()
-            }
-            // Simkl per-profile disk blobs in the SHARED cache table. A
-            // mid-flight switch wrote profile A's lists under profile B's
-            // key; deleting them forces a clean refetch from each
-            // profile's own Simkl account.
-            runCatching {
-                val keys = buildList {
-                    for (profile in profiles) {
-                        add("${profile.id}/simkl:all_show_items")
-                        add("${profile.id}/simkl:continue_watching")
-                        add("${profile.id}/simkl:completed_movies")
-                    }
-                    // Legacy bare keys (pre-profiles layout).
-                    add("simkl:all_show_items")
-                    add("simkl:continue_watching")
-                    add("simkl:completed_movies")
-                }
-                WatchHistoryDatabase.getInstance(context).tmdbJsonCacheDao().deleteByKeys(keys)
-            }.onFailure {
-                Log.w(TAG, "poison sweep: simkl blob clear failed: ${it.message}")
-            }
-            // Watched-override sets that are an exact copy of an OLDER
-            // profile's set: the full-replace blob applier copied one
-            // profile's whole set onto another mid-race. Recorded in prefs so
-            // the cloud half (which needs a session) can delete the matching
-            // blobs even if it runs in a later attempt.
-            runCatching {
-                val duplicates = PoisonDetector.duplicateOverrideOwners(
-                    orderedPids.map { pid -> pid to localOverrideKeys(context, pid) }
-                )
-                for (pid in duplicates) {
-                    context.getSharedPreferences(
-                        ProfileStorage.prefsName(pid, SWEEP_OVERRIDES_PREFS_BASE),
-                        Context.MODE_PRIVATE
-                    ).edit().putStringSet(SWEEP_OVERRIDES_KEY, emptySet()).apply()
-                }
-                if (duplicates.isNotEmpty()) {
-                    val pending = flags.getStringSet(SWEEP_PENDING_OVERRIDE_CLEARS, emptySet()).orEmpty()
-                    flags.edit()
-                        .putStringSet(SWEEP_PENDING_OVERRIDE_CLEARS, pending + duplicates)
-                        .apply()
-                    Log.i(TAG, "poison sweep: cleared ${duplicates.size} duplicated watched-override set(s)")
-                }
-            }.onFailure {
-                Log.w(TAG, "poison sweep: override duplicate check failed: ${it.message}")
-            }
-            // Drop the matching in-memory caches so nothing stale is
-            // served from RAM after the disk wipe.
-            WatchedStatusRepository.invalidateAllCaches()
-            SimklRepository.clearTransientCaches()
-            flags.edit().putBoolean(SWEEP_FLAG_LOCAL, true).apply()
-            Log.i(TAG, "poison sweep: local watched caches cleared for ${profiles.size} profile(s)")
-        }
-
-        // ── Part 2: cloud rows stamped under the wrong profile ───────
-        // Needs a signed-in session; skipped (flag NOT set) when signed
-        // out so the Authenticated hook retries after sign-in.
-        if (!flags.getBoolean(SWEEP_FLAG_CLOUD, false)) {
-            val c = client ?: return
-            if (authState.value !is AuthState.SignedIn) return
-            // Cross-profile poison requires ≥2 profiles; with fewer there
-            // is nothing to attribute, so mark done.
-            if (profiles.size < 2) {
-                flags.edit().putBoolean(SWEEP_FLAG_CLOUD, true).apply()
-                return
-            }
-
-            var deleted = 0
-
-            // (1) watched rows, (2) history rows — same fingerprint in both
-            // tables: one local write present under two profile scopes.
-            for (table in listOf(TABLE_WATCHED, TABLE_HISTORY)) {
-                val rows = readCloudRows(c, table) ?: return
-                val poison = PoisonDetector.crossScopeDuplicates(rows, orderedPids, localPids)
-                if (poison.isEmpty()) continue
-                deleted += deleteCloudKeys(c, table, poison)
-                Log.i(TAG, "poison sweep: $table — deleting ${poison.size} duplicated row(s)")
-                if (table == TABLE_HISTORY) {
-                    // Delete the LOCAL copies too, or the next push re-creates
-                    // them from this device (they are what the card renders).
-                    for ((pid, keys) in poison.groupBy { SyncKeys.scopeOf(it) ?: "" }) {
-                        if (pid.isEmpty()) continue
-                        deleteLocalHistoryRows(context, pid, keys.map { unscopedKey(it) })
-                    }
-                }
-            }
-
-            // (3) watched-override blobs copied onto a newer profile. Read
-            // the pids recorded by part 1 (the local clear erased them from
-            // the prefs) plus anything detectable now.
-            val overridePids = (flags.getStringSet(SWEEP_PENDING_OVERRIDE_CLEARS, emptySet()).orEmpty() +
-                PoisonDetector.duplicateOverrideOwners(
-                    orderedPids.map { pid -> pid to localOverrideKeys(context, pid) }
-                )).toList()
-            if (overridePids.isNotEmpty()) {
-                val blobKeys = overridePids.map {
-                    scopedKey(PrefsPayloadBuilder.KEY_WATCHED_OVERRIDES, it)
-                }
-                deleted += deleteCloudKeys(c, TABLE_PREFS, blobKeys)
-                Log.i(TAG, "poison sweep: deleting ${blobKeys.size} duplicated override blob(s)")
-            }
-
-            flags.edit()
-                .putBoolean(SWEEP_FLAG_CLOUD, true)
-                .remove(SWEEP_PENDING_OVERRIDE_CLEARS)
-                .apply()
-            Log.i(TAG, "poison sweep: deleted $deleted cross-profile cloud row(s)")
-            // Converge local state with the now-clean cloud tables.
-            WatchedStatusRepository.invalidateAllCaches()
-            runCatching { pullAllNow(context) }
-                .onFailure { Log.w(TAG, "poison sweep: post-clean pull failed: ${it.message}") }
-        }
-    }
-
-    /**
-     * Raw-SQL wipe of watched_status_cache in a profile DB that Room has
-     * NOT opened (only the active profile's scoped DB is open at any
-     * time; the caller routes that one through the DAO instead).
-     */
-    private fun rawClearWatchedCacheTable(context: Context, dbName: String) {
-        runCatching {
-            val file = context.getDatabasePath(dbName)
-            if (!file.exists()) return
-            val db = android.database.sqlite.SQLiteDatabase.openDatabase(
-                file.absolutePath,
-                null,
-                android.database.sqlite.SQLiteDatabase.OPEN_READWRITE
-            )
-            try {
-                db.execSQL("DELETE FROM watched_status_cache")
-            } finally {
-                db.close()
-            }
-        }.onFailure {
-            Log.w(TAG, "poison sweep: raw clear of $dbName failed: ${it.message}")
-        }
-    }
-
-    /** This profile's local watched-override keys (scoped prefs file). */
-    private fun localOverrideKeys(context: Context, pid: String): Set<String> =
-        runCatching {
-            context.getSharedPreferences(
-                ProfileStorage.prefsName(pid, SWEEP_OVERRIDES_PREFS_BASE),
-                Context.MODE_PRIVATE
-            ).getStringSet(SWEEP_OVERRIDES_KEY, emptySet()).orEmpty()
-        }.getOrDefault(emptySet())
-
-    /**
-     * Reads a whole cloud table for this account as poison-detector rows.
-     * Returns null when the read failed (caller leaves the flag unset so the
-     * next sign-in retries the sweep).
-     */
-    private suspend fun readCloudRows(
-        c: SupabaseClient,
-        table: String
-    ): List<PoisonDetector.Row>? =
-        runCatching {
-            c.from(table).select().decodeList<SyncRowDto>().mapNotNull { row ->
-                val stored = row.itemKey ?: row.itemId ?: row.prefKey ?: return@mapNotNull null
-                PoisonDetector.Row(stored, row.payload)
-            }
-        }.onFailure {
-            Log.w(TAG, "poison sweep: reading $table failed: ${it.message}")
-        }.getOrNull()
-
-    /** Deletes [storedKeys] from [table] in chunks; returns how many went. */
-    private suspend fun deleteCloudKeys(
-        c: SupabaseClient,
-        table: String,
-        storedKeys: List<String>
-    ): Int {
-        if (storedKeys.isEmpty()) return 0
-        val keyColumn = when (table) {
-            TABLE_HISTORY -> "item_id"
-            TABLE_PREFS -> "pref_key"
-            else -> "item_key"
-        }
-        var deleted = 0
-        for (chunk in storedKeys.chunked(50)) {
-            runCatching {
-                c.from(table).delete {
-                    filter { isIn(keyColumn, chunk) }
-                }
-                deleted += chunk.size
-            }.onFailure {
-                Log.w(TAG, "poison sweep: deleting from $table failed (${it.message})")
-                return deleted
-            }
-        }
-        return deleted
-    }
-
-    /**
-     * Removes poisoned history rows from the profile they were copied INTO.
-     * The active profile goes through Room (its DB may be open); every other
-     * profile's DB is closed, so a raw delete is safe there.
-     */
-    private suspend fun deleteLocalHistoryRows(
-        context: Context,
-        pid: String,
-        ids: List<String>
-    ) {
-        if (ids.isEmpty()) return
-        if (pid == ProfileManager.activeProfile.value?.id) {
-            runCatching {
-                val dao = WatchHistoryDatabase.getInstanceScoped(context).watchHistoryDao()
-                ids.forEach { dao.deleteById(it) }
-            }.onFailure {
-                Log.w(TAG, "poison sweep: active-profile history delete failed: ${it.message}")
-            }
-            return
-        }
-        rawDeleteHistoryRows(context, ProfileStorage.dbName(pid, SWEEP_DB_BASE), ids)
-    }
-
-    private fun rawDeleteHistoryRows(context: Context, dbName: String, ids: List<String>) {
-        runCatching {
-            val file = context.getDatabasePath(dbName)
-            if (!file.exists()) return
-            val db = android.database.sqlite.SQLiteDatabase.openDatabase(
-                file.absolutePath,
-                null,
-                android.database.sqlite.SQLiteDatabase.OPEN_READWRITE
-            )
-            try {
-                db.beginTransaction()
-                try {
-                    for (id in ids) {
-                        db.execSQL("DELETE FROM watch_history WHERE id = ?", arrayOf(id))
-                    }
-                    db.setTransactionSuccessful()
-                } finally {
-                    db.endTransaction()
-                }
-            } finally {
-                db.close()
-            }
-        }.onFailure {
-            Log.w(TAG, "poison sweep: raw history delete in $dbName failed: ${it.message}")
-        }
-    }
+    fun poisonSweepStatus(context: Context): String = PoisonSweep.status(context)
 
     fun enqueueHistory(entity: WatchHistoryEntity, profileId: String? = currentProfileId()) {
         if (!isSignedIn()) return
@@ -1061,15 +739,6 @@ object SupabaseSync {
 
     // ── Pull + merge ────────────────────────────────────────────────
 
-    @Serializable
-    private data class SyncRowDto(
-        @SerialName("item_id") val itemId: String? = null,
-        @SerialName("item_key") val itemKey: String? = null,
-        @SerialName("pref_key") val prefKey: String? = null,
-        val payload: JsonObject,
-        @SerialName("updated_at") val updatedAt: String = ""
-    )
-
     fun pullAll(context: Context): kotlinx.coroutines.Job = scope.launch {
         pullAllNow(context)
     }
@@ -1245,28 +914,16 @@ object SupabaseSync {
                 // Bail on a mid-pull profile switch (same rule as pullHistory).
                 if (currentProfileId() != pid) return
                 val remote = row.payload
-                val remoteUpdated = remote["updatedAt"]?.jsonPrimitive?.content?.toLongOrNull() ?: continue
                 val storedKey = row.itemKey ?: continue
                 if (!storedKeyMatchesProfile(storedKey, pid)) continue
                 val key = unscopedKey(storedKey)
 
                 val localUpdated = localByKey[key]?.updatedAt ?: 0L
 
-                if (remoteWins(remoteUpdated, localUpdated)) {
-                    val markers = WatchedMarkerRules.read(remote)
-                    pendingUpdates.add(
-                        WatchedStatusEntity(
-                            key = key,
-                            imdbId = remote.str("imdbId") ?: "",
-                            mediaType = remote.str("mediaType") ?: "movie",
-                            isWatched = markers.isWatched,
-                            // Carried through, not dropped: the eye flag used
-                            // to land here as false and then answer for the
-                            // whole cache TTL (see [WatchedMarkerRules]).
-                            isPartiallyWatched = markers.isPartiallyWatched,
-                            updatedAt = remoteUpdated
-                        )
-                    )
+                // One shared merge rule (also used by the realtime applier) so
+                // both badge flags always travel together.
+                watchedMarkerRow(key, remote, localUpdated)?.let { merged ->
+                    pendingUpdates.add(merged)
                     applied++
                 }
             }
@@ -1349,9 +1006,44 @@ object SupabaseSync {
         // rows: every preloaded rail item gets one, and publishing them makes
         // a sibling device's correct badge lose the last-write-wins race to a
         // fresh negative (see [WatchedMarkerRules.shouldPublish]).
+        //
+        // And only markers NEWER than the account's copy — this device may not
+        // have pulled the sibling's newer answer yet (see
+        // [WatchedMarkerRules.shouldPush]).
+        val cloudTimestamps = cloudMarkerTimestamps()
         all.filter { WatchedMarkerRules.shouldPublish(it.isWatched, it.isPartiallyWatched) }
+            .filter { entity ->
+                WatchedMarkerRules.shouldPush(
+                    localUpdatedAt = entity.updatedAt,
+                    cloudUpdatedAt = cloudTimestamps[scopedKey(entity.key, pid)]
+                )
+            }
             .forEach { enqueueWatched(it, pid) }
         flushOutbox()
+    }
+
+    /**
+     * storedKey -> payload updatedAt for every watched row in the cloud.
+     * Empty when signed out or when the read fails — publishing everything is
+     * the safe fallback, since losing a user's marker is worse than a stale
+     * overwrite that the next pull repairs.
+     */
+    private suspend fun cloudMarkerTimestamps(): Map<String, Long> {
+        val c = client ?: return emptyMap()
+        return runCatching {
+            c.from(TABLE_WATCHED)
+                .select()
+                .decodeList<SyncRowDto>()
+                .mapNotNull { row ->
+                    val stored = row.itemKey ?: return@mapNotNull null
+                    val updated = row.payload["updatedAt"]
+                        ?.jsonPrimitive?.content?.toLongOrNull() ?: return@mapNotNull null
+                    stored to updated
+                }
+                .toMap()
+        }.onFailure {
+            Log.w(TAG, "pushWatched: cloud timestamp read failed (${it.message})")
+        }.getOrDefault(emptyMap())
     }
 
     private suspend fun pushPrefsBlobs(context: Context) {
@@ -1695,18 +1387,11 @@ object SupabaseSync {
 
         val local = db.watchedStatusDao().getByKeys(listOf(key)).firstOrNull()
         val localUpdated = local?.updatedAt ?: 0L
-        if (remoteWins(remoteUpdated, localUpdated)) {
-            db.watchedStatusDao().upsertAll(
-                listOf(
-                    WatchedStatusEntity(
-                        key = key,
-                        imdbId = remote.str("imdbId") ?: "",
-                        mediaType = remote.str("mediaType") ?: "movie",
-                        isWatched = remote.bool("isWatched"),
-                        updatedAt = remoteUpdated
-                    )
-                )
-            )
+        // Same merge rule as the pull path — one place decides which badge
+        // flags a remote row carries, so the live channel can no longer land a
+        // row that erased the eye badge (see [watchedMarkerRow]).
+        watchedMarkerRow(key, remote, localUpdated)?.let { merged ->
+            db.watchedStatusDao().upsertAll(listOf(merged))
             WatchedStatusRepository.invalidateAllCaches()
         }
     }

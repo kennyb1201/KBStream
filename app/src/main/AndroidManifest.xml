@@ -50,6 +50,25 @@
             </intent-filter>
         </activity>
 
+        <!-- System / voice search target: the TV remote's mic (and assistant
+             queries) arrive here as ACTION_SEARCH and are forwarded to
+             MainActivity with the query, which opens the Search screen with it
+             already submitted. Transparent, never in Recents. -->
+        <activity
+            android:name=".ui.search.VoiceSearchActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.SEARCH" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <meta-data
+                android:name="android.app.searchable"
+                android:resource="@xml/searchable" />
+        </activity>
+
         <activity
             android:name=".ui.player.NativePlayerActivity"
             android:exported="false"

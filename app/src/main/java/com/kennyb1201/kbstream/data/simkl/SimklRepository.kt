@@ -19,6 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import com.kennyb1201.kbstream.data.reporting.NetworkTraceInterceptor
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
@@ -59,6 +60,8 @@ class SimklRepository(
                     appVersion = SimklConfig.APP_VERSION
                 )
             )
+            // Per-service request timing for the diagnostics perf block.
+            .addInterceptor(NetworkTraceInterceptor())
             .build()
 
     private val api: SimklApiService =
