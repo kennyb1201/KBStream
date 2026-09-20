@@ -64,7 +64,7 @@ class SimklRepository(
             .addInterceptor(NetworkTraceInterceptor())
             .build()
 
-    private val api: SimklApiService =
+    internal val api: SimklApiService =
         Retrofit.Builder()
             .baseUrl(
                 SimklConfig.BASE_URL
@@ -88,11 +88,11 @@ class SimklRepository(
     // Written under allShowItemsMutex, also read bare for cache checks;
     // @Volatile gives cross-thread visibility of the published list.
     @Volatile
-    private var cachedAllShowItems:
+    internal var cachedAllShowItems:
         SimklAllShowsResponse? = null
 
     @Volatile
-    private var cachedAllShowItemsFetchedAt =
+    internal var cachedAllShowItemsFetchedAt =
         0L
 
     private val tmdbJsonCacheDao:
@@ -293,12 +293,12 @@ class SimklRepository(
         Mutex()
 
     @Volatile
-    private var cachedCompletedMovieKeys:
+    internal var cachedCompletedMovieKeys:
         Set<String>? =
         null
 
     @Volatile
-    private var cachedCompletedMovieKeysFetchedAt =
+    internal var cachedCompletedMovieKeysFetchedAt =
         0L
 
     fun isConfigured(): Boolean {
@@ -580,281 +580,64 @@ class SimklRepository(
         )
     }
 
+    /**
+     * Auth header for the outbound history writes in
+     * [com.kennyb1201.kbstream.data.simkl.SimklHistoryWrites]. Those are
+     * [SimklRepository] extensions, so they cannot reach the token helpers
+     * directly the way the members below can.
+     */
+    internal fun historyAuthHeader(): String = bearer(requireAccessToken())
+
     /*
      * Outbound scrobble: record a completed movie or episode to the
      * user's Simkl history (POST /sync/history). Called from the player
      * when playback completes; failures are logged, never thrown, so
      * playback is never blocked by tracking.
+     *
+     * Bodies live in SimklHistoryWrites.kt.
      */
     suspend fun pushWatchedMovie(
         imdbId: String,
         title: String? = null,
         tmdbId: Int? = null
-    ): Boolean {
-
-        if (!isConfigured() || !hasToken()) {
-            Log.d("SIMKL_REPO", "pushWatchedMovie skipped: not configured/authenticated")
-            return false
-        }
-
-        val ids = parsePlaybackIds(imdbId, tmdbId)
-        if (ids == null) {
-            Log.d("SIMKL_REPO", "pushWatchedMovie skipped: unparseable id=$imdbId")
-            return false
-        }
-
-        return try {
-            val response = api.addToWatchedHistory(
-                authorization = bearer(requireAccessToken()),
-                body = SimklHistoryRequest(
-                    movies = listOf(
-                        SimklHistoryMovie(
-                            title = title,
-                            ids = ids
-                        )
-                    )
-                )
-            )
-
-            if (!response.isSuccessful) {
-                val errorText = try {
-                    response.errorBody()?.string()
-                } catch (e: Exception) {
-                    "unreadable: ${e.message}"
-                }
-                Log.e("SIMKL_REPO", "pushWatchedMovie failed code=${response.code()} body=$errorText")
-            } else {
-                // A fresh watched write invalidates the completed-movie
-                // snapshot and the Continue Watching feed so watched markers
-                // and the rail reflect the new state immediately.
-                cachedCompletedMovieKeys = null
-                cachedCompletedMovieKeysFetchedAt = 0L
-                clearContinueWatchingCache()
-
-                // Close any open playback session for the movie so the just-
-                // watched title can't resurface in Continue Watching at its
-                // pre-completion progress (e.g. "99% watched").
-                runCatching {
-                    deleteOpenPlaybackSessionsForWatched(
-                        parentId = imdbId,
-                        tmdbId = tmdbId
-                    )
-                }
-
-                Log.d("SIMKL_REPO", "pushWatchedMovie ok imdb=$imdbId")
-            }
-
-            response.isSuccessful
-        } catch (e: Exception) {
-            Log.e("SIMKL_REPO", "pushWatchedMovie error: ${e.message}", e)
-            false
-        }
-    }
+    ): Boolean = pushWatchedMovieImpl(imdbId, title, tmdbId)
 
     /*
      * Outbound scrobble: record a WHOLE show as watched (POST
      * /sync/history). Sending a show with no seasons array makes Simkl
      * implicitly auto-fill every episode as watched — the documented
      * "mark whole show watched" behavior. Used by the poster long-press
-     * "Mark as Watched". Failures are logged, never thrown.
+     * "Mark as Watched".
      */
     suspend fun pushWatchedShow(
         showImdbId: String,
         title: String? = null,
         tmdbId: Int? = null
-    ): Boolean {
-
-        if (!isConfigured() || !hasToken()) {
-            Log.d("SIMKL_REPO", "pushWatchedShow skipped: not configured/authenticated")
-            return false
-        }
-
-        val ids = parsePlaybackIds(showImdbId, tmdbId)
-        if (ids == null) {
-            Log.d("SIMKL_REPO", "pushWatchedShow skipped: unparseable id=$showImdbId")
-            return false
-        }
-
-        return try {
-            val response = api.addToWatchedHistory(
-                authorization = bearer(requireAccessToken()),
-                body = SimklHistoryRequest(
-                    shows = listOf(
-                        SimklHistoryShow(
-                            title = title,
-                            ids = ids,
-                            seasons = null
-                        )
-                    )
-                )
-            )
-
-            if (!response.isSuccessful) {
-                val errorText = try {
-                    response.errorBody()?.string()
-                } catch (e: Exception) {
-                    "unreadable: ${e.message}"
-                }
-                Log.e("SIMKL_REPO", "pushWatchedShow failed code=${response.code()} body=$errorText")
-            } else {
-                // A fresh watched write invalidates the cached show library
-                // and the Continue Watching feed so episode-watched filters
-                // and the rail reflect the new state immediately.
-                cachedAllShowItems = null
-                cachedAllShowItemsFetchedAt = 0L
-                clearContinueWatchingCache()
-
-                // Close any open playback sessions for the show so the just-
-                // watched title can't resurface in Continue Watching at its
-                // pre-completion progress (e.g. "99% watched").
-                runCatching {
-                    deleteOpenPlaybackSessionsForWatched(
-                        parentId = showImdbId,
-                        tmdbId = tmdbId
-                    )
-                }
-
-                Log.d("SIMKL_REPO", "pushWatchedShow ok show=$showImdbId")
-            }
-
-            response.isSuccessful
-        } catch (e: Exception) {
-            Log.e("SIMKL_REPO", "pushWatchedShow error: ${e.message}", e)
-            false
-        }
-    }
+    ): Boolean = pushWatchedShowImpl(showImdbId, title, tmdbId)
 
     /*
      * Outbound "mark unwatched": POST /sync/history/remove for a whole
      * movie. Called from the poster long-press "Mark as Unwatched" menu
      * action so the title leaves the user's Simkl history when it is
-     * unmarked locally. Failures are logged, never thrown.
+     * unmarked locally.
      */
     suspend fun removeWatchedMovie(
         imdbId: String,
         title: String? = null,
         tmdbId: Int? = null
-    ): Boolean {
-
-        if (!isConfigured() || !hasToken()) {
-            Log.d("SIMKL_REPO", "removeWatchedMovie skipped: not configured/authenticated")
-            return false
-        }
-
-        val ids = parsePlaybackIds(imdbId, tmdbId)
-        if (ids == null) {
-            Log.d("SIMKL_REPO", "removeWatchedMovie skipped: unparseable id=$imdbId")
-            return false
-        }
-
-        return try {
-            val response = api.removeFromWatchedHistory(
-                authorization = bearer(requireAccessToken()),
-                body = SimklHistoryRequest(
-                    movies = listOf(
-                        SimklHistoryMovie(
-                            title = title,
-                            ids = ids
-                        )
-                    )
-                )
-            )
-
-            if (!response.isSuccessful) {
-                val errorText = try {
-                    response.errorBody()?.string()
-                } catch (e: Exception) {
-                    "unreadable: ${e.message}"
-                }
-                Log.e("SIMKL_REPO", "removeWatchedMovie failed code=${response.code()} body=$errorText")
-            } else {
-                // Drop the in-memory watched sets so a later preload re-fetches
-                // fresh remote state instead of resurrecting this title from a
-                // stale completed-list snapshot.
-                cachedCompletedMovieKeys = null
-                cachedCompletedMovieKeysFetchedAt = 0L
-                cachedAllShowItems = null
-                cachedAllShowItemsFetchedAt = 0L
-
-                // The Continue Watching feed is snapshotted in-memory and on
-                // disk; drop it so the removed title doesn't resurface from
-                // the stale snapshot on the next rail refresh.
-                clearContinueWatchingCache()
-
-                Log.d("SIMKL_REPO", "removeWatchedMovie ok imdb=$imdbId")
-            }
-
-            response.isSuccessful
-        } catch (e: Exception) {
-            Log.e("SIMKL_REPO", "removeWatchedMovie error: ${e.message}", e)
-            false
-        }
-    }
+    ): Boolean = removeWatchedMovieImpl(imdbId, title, tmdbId)
 
     /*
      * Outbound "mark unwatched": POST /sync/history/remove for a WHOLE
      * show. Sending the show with no seasons array removes every episode of
      * it from the user's Simkl history at once, the mirror of
-     * [pushWatchedShow]. Failures are logged, never thrown.
+     * [pushWatchedShow].
      */
     suspend fun removeWatchedShow(
         showImdbId: String,
         title: String? = null,
         tmdbId: Int? = null
-    ): Boolean {
-
-        if (!isConfigured() || !hasToken()) {
-            Log.d("SIMKL_REPO", "removeWatchedShow skipped: not configured/authenticated")
-            return false
-        }
-
-        val ids = parsePlaybackIds(showImdbId, tmdbId)
-        if (ids == null) {
-            Log.d("SIMKL_REPO", "removeWatchedShow skipped: unparseable id=$showImdbId")
-            return false
-        }
-
-        return try {
-            val response = api.removeFromWatchedHistory(
-                authorization = bearer(requireAccessToken()),
-                body = SimklHistoryRequest(
-                    shows = listOf(
-                        SimklHistoryShow(
-                            title = title,
-                            ids = ids,
-                            seasons = null
-                        )
-                    )
-                )
-            )
-
-            if (!response.isSuccessful) {
-                val errorText = try {
-                    response.errorBody()?.string()
-                } catch (e: Exception) {
-                    "unreadable: ${e.message}"
-                }
-                Log.e("SIMKL_REPO", "removeWatchedShow failed code=${response.code()} body=$errorText")
-            } else {
-                cachedCompletedMovieKeys = null
-                cachedCompletedMovieKeysFetchedAt = 0L
-                cachedAllShowItems = null
-                cachedAllShowItemsFetchedAt = 0L
-
-                // The Continue Watching feed is snapshotted in-memory and on
-                // disk; drop it so the removed title doesn't resurface from
-                // the stale snapshot on the next rail refresh.
-                clearContinueWatchingCache()
-
-                Log.d("SIMKL_REPO", "removeWatchedShow ok show=$showImdbId")
-            }
-
-            response.isSuccessful
-        } catch (e: Exception) {
-            Log.e("SIMKL_REPO", "removeWatchedShow error: ${e.message}", e)
-            false
-        }
-    }
+    ): Boolean = removeWatchedShowImpl(showImdbId, title, tmdbId)
 
     /**
      * Drops the in-memory and on-disk Continue Watching snapshot so the next
@@ -862,7 +645,7 @@ class SimklRepository(
      * (e.g. right after a title was removed from history via
      * [removeWatchedMovie]/[removeWatchedShow]).
      */
-    private suspend fun clearContinueWatchingCache() {
+    internal suspend fun clearContinueWatchingCache() {
         cachedContinueWatching = null
         runCatching {
             tmdbJsonCacheDao?.deleteByKeys(
@@ -871,93 +654,21 @@ class SimklRepository(
         }
     }
 
+    /** Player completion scrobble for one episode; body in SimklHistoryWrites.kt. */
     suspend fun pushWatchedEpisode(
         showImdbId: String,
         season: Int,
         episode: Int,
         title: String? = null,
         tmdbId: Int? = null
-    ): Boolean {
-
-        if (!isConfigured() || !hasToken()) {
-            Log.d("SIMKL_REPO", "pushWatchedEpisode skipped: not configured/authenticated")
-            return false
-        }
-
-        if (showImdbId.isBlank() || season <= 0 || episode <= 0) {
-            Log.d("SIMKL_REPO", "pushWatchedEpisode skipped: ids incomplete show=$showImdbId s=$season e=$episode")
-            return false
-        }
-
-        val ids = parsePlaybackIds(showImdbId, tmdbId)
-        if (ids == null) {
-            Log.d("SIMKL_REPO", "pushWatchedEpisode skipped: unparseable id=$showImdbId")
-            return false
-        }
-
-        return try {
-            val response = api.addToWatchedHistory(
-                authorization = bearer(requireAccessToken()),
-                body = SimklHistoryRequest(
-                    shows = listOf(
-                        SimklHistoryShow(
-                            title = title,
-                            ids = ids,
-                            seasons = listOf(
-                                SimklHistorySeason(
-                                    number = season,
-                                    episodes = listOf(SimklHistoryEpisode(number = episode))
-                                )
-                            )
-                        )
-                    )
-                )
-            )
-
-            if (!response.isSuccessful) {
-                val errorText = try {
-                    response.errorBody()?.string()
-                } catch (e: Exception) {
-                    "unreadable: ${e.message}"
-                }
-                Log.e("SIMKL_REPO", "pushWatchedEpisode failed code=${response.code()} body=$errorText")
-            } else {
-                // A fresh watched write invalidates the cached show library
-                // and the Continue Watching feed so episode-watched filters
-                // and the rail reflect the new state immediately.
-                cachedAllShowItems = null
-                cachedAllShowItemsFetchedAt = 0L
-                clearContinueWatchingCache()
-
-                // Close the open playback session for this episode so the
-                // just-watched episode can't resurface in Continue Watching
-                // at its pre-completion progress (e.g. "99% watched").
-                runCatching {
-                    deleteOpenPlaybackSessionsForWatched(
-                        parentId = showImdbId,
-                        tmdbId = tmdbId,
-                        season = season,
-                        episode = episode
-                    )
-                }
-
-                Log.d("SIMKL_REPO", "pushWatchedEpisode ok show=$showImdbId s=$season e=$episode")
-            }
-
-            response.isSuccessful
-        } catch (e: Exception) {
-            Log.e("SIMKL_REPO", "pushWatchedEpisode error: ${e.message}", e)
-            false
-        }
-    }
+    ): Boolean = pushWatchedEpisodeImpl(showImdbId, season, episode, title, tmdbId)
 
     /*
      * Outbound "mark a whole season watched": POST /sync/history with one
      * season listing every episode number, so Simkl marks exactly that
      * season instead of auto-filling every season of the show (which is
      * what sending a show with no seasons array does). Used by the
-     * season-chip long-press "Mark as Watched" action. Failures are
-     * logged, never thrown.
+     * season-chip long-press "Mark as Watched" action.
      */
     suspend fun pushWatchedSeason(
         showImdbId: String,
@@ -965,91 +676,13 @@ class SimklRepository(
         episodes: List<Int>,
         title: String? = null,
         tmdbId: Int? = null
-    ): Boolean {
-
-        if (!isConfigured() || !hasToken()) {
-            Log.d("SIMKL_REPO", "pushWatchedSeason skipped: not configured/authenticated")
-            return false
-        }
-
-        val validEpisodes = episodes.filter { it > 0 }.distinct().sorted()
-        if (showImdbId.isBlank() || season <= 0 || validEpisodes.isEmpty()) {
-            Log.d("SIMKL_REPO", "pushWatchedSeason skipped: ids incomplete show=$showImdbId s=$season eps=${validEpisodes.size}")
-            return false
-        }
-
-        val ids = parsePlaybackIds(showImdbId, tmdbId)
-        if (ids == null) {
-            Log.d("SIMKL_REPO", "pushWatchedSeason skipped: unparseable id=$showImdbId")
-            return false
-        }
-
-        return try {
-            val response = api.addToWatchedHistory(
-                authorization = bearer(requireAccessToken()),
-                body = SimklHistoryRequest(
-                    shows = listOf(
-                        SimklHistoryShow(
-                            title = title,
-                            ids = ids,
-                            seasons = listOf(
-                                SimklHistorySeason(
-                                    number = season,
-                                    episodes = validEpisodes.map { number ->
-                                        SimklHistoryEpisode(number = number)
-                                    }
-                                )
-                            )
-                        )
-                    )
-                )
-            )
-
-            if (!response.isSuccessful) {
-                val errorText = try {
-                    response.errorBody()?.string()
-                } catch (e: Exception) {
-                    "unreadable: ${e.message}"
-                }
-                Log.e("SIMKL_REPO", "pushWatchedSeason failed code=${response.code()} body=$errorText")
-            } else {
-                // Drop the in-memory show snapshot so the next detail load
-                // re-fetches fresh per-episode state from Simkl instead of
-                // serving the pre-mark snapshot, and drop the Continue
-                // Watching feed so any stale playback session for the just-
-                // marked episodes gets filtered (and deleted) on the next
-                // rail refresh instead of lingering at its old progress.
-                cachedAllShowItems = null
-                cachedAllShowItemsFetchedAt = 0L
-                clearContinueWatchingCache()
-
-                // Close open playback sessions for the marked episodes so
-                // they can't resurface in Continue Watching at their old
-                // progress.
-                runCatching {
-                    deleteOpenPlaybackSessionsForWatched(
-                        parentId = showImdbId,
-                        tmdbId = tmdbId,
-                        season = season,
-                        episodes = validEpisodes
-                    )
-                }
-
-                Log.d("SIMKL_REPO", "pushWatchedSeason ok show=$showImdbId s=$season eps=${validEpisodes.size}")
-            }
-
-            response.isSuccessful
-        } catch (e: Exception) {
-            Log.e("SIMKL_REPO", "pushWatchedSeason error: ${e.message}", e)
-            false
-        }
-    }
+    ): Boolean = pushWatchedSeasonImpl(showImdbId, season, episodes, title, tmdbId)
 
     /*
      * Outbound "mark a whole season unwatched": POST /sync/history/remove
      * with one season listing every episode number, so Simkl removes
      * exactly that season's episodes from history while other seasons stay.
-     * The mirror of [pushWatchedSeason]. Failures are logged, never thrown.
+     * The mirror of [pushWatchedSeason].
      */
     suspend fun removeWatchedSeason(
         showImdbId: String,
@@ -1057,69 +690,7 @@ class SimklRepository(
         episodes: List<Int>,
         title: String? = null,
         tmdbId: Int? = null
-    ): Boolean {
-
-        if (!isConfigured() || !hasToken()) {
-            Log.d("SIMKL_REPO", "removeWatchedSeason skipped: not configured/authenticated")
-            return false
-        }
-
-        val validEpisodes = episodes.filter { it > 0 }.distinct().sorted()
-        if (showImdbId.isBlank() || season <= 0 || validEpisodes.isEmpty()) {
-            Log.d("SIMKL_REPO", "removeWatchedSeason skipped: ids incomplete show=$showImdbId s=$season eps=${validEpisodes.size}")
-            return false
-        }
-
-        val ids = parsePlaybackIds(showImdbId, tmdbId)
-        if (ids == null) {
-            Log.d("SIMKL_REPO", "removeWatchedSeason skipped: unparseable id=$showImdbId")
-            return false
-        }
-
-        return try {
-            val response = api.removeFromWatchedHistory(
-                authorization = bearer(requireAccessToken()),
-                body = SimklHistoryRequest(
-                    shows = listOf(
-                        SimklHistoryShow(
-                            title = title,
-                            ids = ids,
-                            seasons = listOf(
-                                SimklHistorySeason(
-                                    number = season,
-                                    episodes = validEpisodes.map { number ->
-                                        SimklHistoryEpisode(number = number)
-                                    }
-                                )
-                            )
-                        )
-                    )
-                )
-            )
-
-            if (!response.isSuccessful) {
-                val errorText = try {
-                    response.errorBody()?.string()
-                } catch (e: Exception) {
-                    "unreadable: ${e.message}"
-                }
-                Log.e("SIMKL_REPO", "removeWatchedSeason failed code=${response.code()} body=$errorText")
-            } else {
-                // Drop the in-memory show snapshot so the next detail load
-                // re-fetches fresh per-episode state from Simkl instead of
-                // resurrecting this season from the stale snapshot.
-                cachedAllShowItems = null
-                cachedAllShowItemsFetchedAt = 0L
-
-                Log.d("SIMKL_REPO", "removeWatchedSeason ok show=$showImdbId s=$season eps=${validEpisodes.size}")
-            }
-
-            response.isSuccessful
-        } catch (e: Exception) {
-            Log.e("SIMKL_REPO", "removeWatchedSeason error: ${e.message}", e)
-            false
-        }
-    }
+    ): Boolean = removeWatchedSeasonImpl(showImdbId, season, episodes, title, tmdbId)
 
     /*
      * Outbound "Remove from Continue Watching" for Simkl-backed cards:
@@ -1577,7 +1148,7 @@ class SimklRepository(
      * TMDB id wins over anything derived from the raw string, which is what
      * makes TVDB-sourced titles scrobble correctly.)
      */
-    private fun parsePlaybackIds(
+    internal fun parsePlaybackIds(
         rawId: String,
         resolvedTmdbId: Int? = null
     ): SimklPlaybackIdsRef? {
