@@ -1255,6 +1255,24 @@ private fun HomeHero(
                 }
             }
 
+            // Episode title FIRST, above the "Resume  •  S02 · E05" line and
+            // the progress bar: the name of what is about to play is the
+            // headline, and the resume state is the detail under it.
+            continueWatchingItem
+                ?.episodeTitle
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?.let { episodeTitle ->
+                    Text(
+                        text = episodeTitle,
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 10.dp)
+                    )
+                }
+
             continueEpisodeLabel?.let { label ->
                 Text(
                     text = label,
@@ -1334,22 +1352,6 @@ continueTimeLeft?.let { label ->
             }
 
             if (continueWatchingItem != null) {
-    continueWatchingItem.episodeTitle
-        ?.trim()
-        ?.takeIf {
-            it.isNotBlank()
-        }
-        ?.let { episodeTitle ->
-            Text(
-                text = episodeTitle,
-                color = KBTextHi,
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 10.dp)
-            )
-        }
-
     // Only show the episode description for non-resume items (a finale
     // that is being resumed still has a saved position, so it behaves
     // like a plain resume card here).
