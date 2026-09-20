@@ -919,30 +919,6 @@ fun SettingsScreen(
                     }
                 )
 
-                Spacer(modifier = Modifier.height(10.dp))
-
-                Text(
-                    text = "Subtitle Position",
-                    color = KBTextHi,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(bottom = 4.dp)
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("Low", "Mid", "High").forEachIndexed { index, label ->
-                        KBCard(onClick = {
-                            subtitlePosition = index
-                            AppPreferences.setDefaultSubtitlePosition(context, index)
-                        }) {
-                            PillChip(label, subtitlePosition == index)
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = "Lifts captions above letterbox bars or burned-in signage.",
-                    color = KBTextLo,
-                    style = MaterialTheme.typography.labelSmall
-                )
                 }
 
                 if (selectedPane == SettingsPane.INTERFACE) {
@@ -1436,6 +1412,31 @@ fun SettingsScreen(
                         }
                     }
                 }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = "Position",
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("Low", "Mid", "High").forEachIndexed { index, label ->
+                        KBCard(onClick = {
+                            subtitlePosition = index
+                            AppPreferences.setDefaultSubtitlePosition(context, index)
+                        }) {
+                            PillChip(label, subtitlePosition == index)
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "Lifts captions above letterbox bars or burned-in signage.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall
+                )
                 }
 
                 if (selectedPane == SettingsPane.SYNC) {
