@@ -28,16 +28,72 @@ private fun scopedPrefs(context: Context, baseName: String) =
  */
 private fun legacyStoreName(tail: String) = "kbstream_" + "nu" + "vio" + "_$tail"
 
+// Prefs store + key holding the profile's Simkl session (owned by
+// SimklRepository; spelled out here so the blob and the repository agree).
+private const val SIMKL_AUTH_STORE = "simkl_auth"
+private const val SIMKL_ACCESS_TOKEN_KEY = "access_token"
+
+// Display-prefs store, plus the LOCAL bookkeeping that gives the display blob
+// its per-key edit timestamps. These shadow keys are never published —
+// SYNCED_PREF_KEYS is what actually leaves the device.
+private const val DISPLAY_PREFS_STORE = "kbstream_player_prefs"
+private const val DISPLAY_SNAPSHOT_KEY = "__sync_snapshot__"
+private const val DISPLAY_TS_PREFIX = "__sync_ts__"
+private const val DISPLAY_SYNCED_AT_KEY = "display_prefs_synced_at"
+
+/**
+ * Canonical string for a stored pref value. Matches the JSON primitive the
+ * applier writes back (booleans as "true"/"false", numbers via toString), so
+ * a value that round-trips through the cloud compares equal to itself.
+ */
+private fun prefsValueString(raw: Any?): String? =
+    when (raw) {
+        null -> null
+        is Boolean, is Int, is Long, is Float, is String -> raw.toString()
+        else -> null
+    }
+
+/** Values of the synced keys as of the last build on this device. */
+private fun readDisplaySnapshot(
+    prefs: android.content.SharedPreferences
+): Map<String, String> {
+    val raw = prefs.getString(DISPLAY_SNAPSHOT_KEY, null) ?: return emptyMap()
+    return runCatching {
+        val obj =
+            kotlinx.serialization.json.Json.parseToJsonElement(raw) as?
+                JsonObject ?: return emptyMap()
+        obj.mapNotNull { (key, value) ->
+            ((value as? kotlinx.serialization.json.JsonPrimitive)?.content)?.let { key to it }
+        }.toMap()
+    }.getOrDefault(emptyMap())
+}
+
+/** When each synced key last changed on this device. */
+private fun readDisplayTimestamps(
+    prefs: android.content.SharedPreferences
+): Map<String, Long> {
+    val out = mutableMapOf<String, Long>()
+    prefs.all.forEach { (key, value) ->
+        if (key.startsWith(DISPLAY_TS_PREFIX)) {
+            (value as? Number)?.let { out[key.removePrefix(DISPLAY_TS_PREFIX)] = it.toLong() }
+        }
+    }
+    return out
+}
+
 /**
  * Builds and applies the keyed JSON blobs stored in sync_prefs.
  *
  * Sync scope (user request):
  *  - SYNCED: display prefs, addon install JSON, Simkl auth token,
- *    IPTV playlist/EPG config, watched-override set.
- *  - EXCLUDED: every playback/decoder setting (buffer, subtitle render,
- *    decoder priority, tunneling, Dolby Vision compat, aspect ratio,
- *    audio/subtitle language defaults, PiP) — those are per-device by
- *    nature and differ between e.g. a Fire TV Stick and a projector.
+ *    IPTV playlist/EPG config, watched-override set, and the player's
+ *    subtitle appearance + preferred audio/subtitle language. The language
+ *    setters already called syncDisplayPrefsBlob, but their keys were not in
+ *    the synced set — so the push was a silent no-op ("language didn't
+ *    sync") and the same was true for the subtitle keys.
+ *  - EXCLUDED: decoder/buffer/tunneling/Dolby Vision compat/aspect
+ *    ratio/PiP — genuinely per-device, and they differ between e.g. a Fire
+ *    TV Stick and a projector.
  *
  * Each blob has its own stable pref_key, so devices only merge what the
  * key covers and playback keys simply never exist in the cloud table.
@@ -45,7 +101,9 @@ private fun legacyStoreName(tail: String) = "kbstream_" + "nu" + "vio" + "_$tail
 object PrefsPayloadBuilder {
 
     // Display/UI prefs that DO sync (must match AppPreferences key names).
-    private val SYNCED_PREF_KEYS = setOf(
+    // Internal rather than private so the set itself is unit tested — a key
+    // missing here is a silent no-op push ("it didn't sync").
+    internal val SYNCED_PREF_KEYS = setOf(
         "auto_play_next",                    // convenience behavior, not device-specific
         "use_stream_ranker",
         "hero_trailer_autoplay",
@@ -72,14 +130,16 @@ object PrefsPayloadBuilder {
         "amoled_black",                      // AMOLED theme toggle (pure display pref)
         "pure_black_surface",                // Pure black cards/panels/containers toggle
         "mdblist_api_key",
-        "opensubtitles_api_key"              // player → search subtitles online
+        "opensubtitles_api_key",             // player → search subtitles online
+        "default_subtitle_size",             // subtitle appearance: same on every device
+        "default_subtitle_bg",
+        "preferred_audio_language",          // preferred track languages: same on every device
+        "preferred_subtitle_language"
     )
 
-    // Playback/decoder prefs that NEVER sync (documented for clarity).
+    // Decoder/playback prefs that NEVER sync (documented for clarity).
     private val EXCLUDED_PREF_KEYS = setOf(
         "default_buffer_mode",
-        "default_subtitle_size",
-        "default_subtitle_bg",
         "auto_select_stream",
         "force_software_decoder",
         "enable_tunneling",
@@ -93,9 +153,7 @@ object PrefsPayloadBuilder {
         "dv_convert_p7_to_81",
         "dv_convert_p5_to_81",
         "dv_p5_gles_correction",
-        "default_aspect_ratio",
-        "preferred_audio_language",
-        "preferred_subtitle_language"
+        "default_aspect_ratio"
     )
 
     const val KEY_DISPLAY_PREFS = "display_prefs"
@@ -113,6 +171,9 @@ object PrefsPayloadBuilder {
     fun buildAll(context: Context): List<Pair<String, JsonObject>> = listOf(
         KEY_DISPLAY_PREFS to buildDisplayPrefs(context),
         KEY_ADDONS to buildAddons(context),
+        // The bulk push skips this blob when it carries nothing (see
+        // SupabaseSync.pushPrefsBlobs) — an empty Simkl blob published by a
+        // device that never connected erases the account's session elsewhere.
         KEY_SIMKL_AUTH to buildSimklAuth(context),
         KEY_IPTV to buildIptv(context),
         KEY_WATCHED_OVERRIDES to buildWatchedOverrides(context),
@@ -123,6 +184,20 @@ object PrefsPayloadBuilder {
         KEY_DISMISSALS to buildDismissals(context),
         KEY_PROFILES to com.kennyb1201.kbstream.data.sync.ProfileManager.profilesSyncBlob(context)
     )
+
+    /**
+     * True when this device has something to say about the Simkl session: a
+     * token to share, or a deliberate disconnect to propagate. Everything else
+     * (the common "never connected Simkl here" case) must stay out of the
+     * cloud — see [SimklAuthRules].
+     */
+    fun hasSimklAuthToPublish(context: Context): Boolean {
+        val prefs = scopedPrefs(context, SIMKL_AUTH_STORE)
+        val token = prefs.getString(SIMKL_ACCESS_TOKEN_KEY, null)
+        val signedOut = token.isNullOrBlank() &&
+            prefs.getBoolean(SimklAuthRules.SIGNED_OUT_FIELD, false)
+        return SimklAuthRules.shouldPublish(token, signedOut)
+    }
 
     fun buildBadgePack(context: Context): JsonObject {
         val prefs = scopedPrefs(context, "kbstream_stream_badges")
@@ -193,11 +268,51 @@ object PrefsPayloadBuilder {
         }
     }
 
+    /**
+     * The display blob carries the time every key last CHANGED on this device
+     * (not the time it was pushed — see [DisplayPrefsRules]), so a push that
+     * happens to be newer than another device's edit can no longer revert
+     * that edit for every key at once.
+     */
     fun buildDisplayPrefs(context: Context): JsonObject {
-        val prefs = scopedPrefs(context, "kbstream_player_prefs")
+        val prefs = scopedPrefs(context, DISPLAY_PREFS_STORE)
+        val all = prefs.all
+
+        val current =
+            LinkedHashMap<String, String>()
+        SYNCED_PREF_KEYS.forEach { key ->
+            prefsValueString(all[key])?.let { current[key] = it }
+        }
+
+        val now =
+            System.currentTimeMillis()
+        val timestamps =
+            DisplayPrefsRules.stampChanged(
+                previous = readDisplaySnapshot(prefs),
+                current = current,
+                timestamps = readDisplayTimestamps(prefs),
+                now = now,
+                hadSnapshot = prefs.contains(DISPLAY_SNAPSHOT_KEY)
+            )
+
+        // Remember what was just observed: the next build diffs against this,
+        // so a key only counts as a local edit when its VALUE moved.
+        val editor =
+            prefs.edit()
+                .putString(
+                    DISPLAY_SNAPSHOT_KEY,
+                    buildJsonObject {
+                        current.forEach { (key, value) -> put(key, value) }
+                    }.toString()
+                )
+        timestamps.forEach { (key, ts) -> editor.putLong(DISPLAY_TS_PREFIX + key, ts) }
+        editor.apply()
+
         return buildJsonObject {
-            put("updatedAt", System.currentTimeMillis())
-            val all = prefs.all
+            put(
+                DisplayPrefsRules.UPDATED_AT_FIELD,
+                DisplayPrefsRules.blobUpdatedAt(timestamps, now)
+            )
             SYNCED_PREF_KEYS.forEach { key ->
                 val value = all[key] ?: return@forEach
                 when (value) {
@@ -206,6 +321,11 @@ object PrefsPayloadBuilder {
                     is Long -> put(key, value)
                     is Float -> put(key, value.toDouble())
                     is String -> put(key, value)
+                }
+            }
+            putJsonObject(DisplayPrefsRules.TIMESTAMPS_FIELD) {
+                current.keys.forEach { key ->
+                    timestamps[key]?.let { put(key, it) }
                 }
             }
         }
@@ -221,15 +341,20 @@ object PrefsPayloadBuilder {
             )
         }
 
-    fun buildSimklAuth(context: Context): JsonObject =
-        buildJsonObject {
+    fun buildSimklAuth(context: Context): JsonObject {
+        val prefs = scopedPrefs(context, SIMKL_AUTH_STORE)
+        val token = prefs.getString(SIMKL_ACCESS_TOKEN_KEY, null)
+        // Tombstone: a blank token is a real sign-out ONLY when this profile
+        // deliberately disconnected. It also has to be blank — a stale marker
+        // left over from an earlier disconnect must not tag a live token.
+        val signedOut = token.isNullOrBlank() &&
+            prefs.getBoolean(SimklAuthRules.SIGNED_OUT_FIELD, false)
+        return buildJsonObject {
             put("updatedAt", System.currentTimeMillis())
-            put(
-                "access_token",
-                scopedPrefs(context, "simkl_auth")
-                    .getString("access_token", null).orEmpty()
-            )
+            put(SIMKL_ACCESS_TOKEN_KEY, token.orEmpty())
+            put(SimklAuthRules.SIGNED_OUT_FIELD, signedOut)
         }
+    }
 
     fun buildIptv(context: Context): JsonObject {
         val prefs = scopedPrefs(context, "iptv_prefs")
@@ -425,44 +550,107 @@ object PrefsPayloadApplier {
     }
 
     private fun applyDisplayPrefs(context: Context, payload: JsonObject) {
-        // Last-write-wins: skip applying an older blob over a newer local edit.
-        val prefs = scopedPrefs(context, "kbstream_player_prefs")
+        val prefs = scopedPrefs(context, DISPLAY_PREFS_STORE)
         val remoteUpdated = payloadUpdatedAt(payload)
-        if (remoteUpdated != null && remoteUpdated < prefs.getLong("display_prefs_synced_at", 0L)) {
+        val remoteTimestamps =
+            (payload[DisplayPrefsRules.TIMESTAMPS_FIELD] as? JsonObject)
+                ?.mapNotNull { (key, value) ->
+                    ((value as? kotlinx.serialization.json.JsonPrimitive)
+                        ?.content?.toLongOrNull())?.let { key to it }
+                }
+                ?.toMap()
+                .orEmpty()
+
+        // Blobs from builds that predate per-key timestamps carry no map: they
+        // keep the old whole-blob rule (an older blob must not revert a newer
+        // local edit). Per-key blobs are merged key by key below instead.
+        if (remoteTimestamps.isEmpty() && remoteUpdated != null &&
+            remoteUpdated < prefs.getLong(DISPLAY_SYNCED_AT_KEY, 0L)
+        ) {
             return
         }
 
-        val editor = prefs.edit()
+        val localTimestamps =
+            readDisplayTimestamps(prefs)
+        val fallbackTs =
+            remoteUpdated ?: System.currentTimeMillis()
+        val snapshot =
+            readDisplaySnapshot(prefs).toMutableMap()
+        // Keys this pull actually ADOPTED: canonical value + the timestamp that
+        // won, so both can be mirrored into the local bookkeeping below.
+        val applied =
+            mutableMapOf<String, String>()
+        val appliedAt =
+            mutableMapOf<String, Long>()
+        val editor =
+            prefs.edit()
+
         payload.forEach { (key, value) ->
-            if (key == "updatedAt") return@forEach
+            if (key == DisplayPrefsRules.UPDATED_AT_FIELD ||
+                key == DisplayPrefsRules.TIMESTAMPS_FIELD
+            ) {
+                return@forEach
+            }
             val primitive = value as? kotlinx.serialization.json.JsonPrimitive ?: return@forEach
             val content = primitive.content
-            when {
-                primitive.isString -> editor.putString(key, content)
-                content == "true" || content == "false" -> editor.putBoolean(key, content == "true")
-                else -> content.toLongOrNull()?.let { editor.putLong(key, it) }
+
+            // Merge per key: a key this device edited MORE RECENTLY keeps its
+            // local value, which the next push publishes back.
+            val editsAt =
+                remoteTimestamps[key] ?: fallbackTs
+            if (!DisplayPrefsRules.remoteWins(editsAt, localTimestamps[key] ?: 0L)) {
+                return@forEach
+            }
+
+            val appliedIt =
+                when {
+                    primitive.isString -> {
+                        editor.putString(key, content)
+                        true
+                    }
+                    content == "true" || content == "false" -> {
+                        editor.putBoolean(key, content == "true")
+                        true
+                    }
+                    else -> content.toLongOrNull()?.let {
+                        editor.putLong(key, it)
+                        true
+                    } ?: false
+                }
+            if (appliedIt) {
+                applied[key] = content
+                appliedAt[key] = editsAt
+                snapshot[key] = content
             }
         }
-        editor.putLong("display_prefs_synced_at", remoteUpdated ?: System.currentTimeMillis())
+
+        // Adopting a remote value must not look like a fresh local edit on the
+        // NEXT build: mirror both the value and its timestamp.
+        appliedAt.forEach { (key, ts) ->
+            editor.putLong(DISPLAY_TS_PREFIX + key, ts)
+        }
+        editor.putString(
+            DISPLAY_SNAPSHOT_KEY,
+            buildJsonObject {
+                snapshot.forEach { (key, value) -> put(key, value) }
+            }.toString()
+        )
+        editor.putLong(DISPLAY_SYNCED_AT_KEY, remoteUpdated ?: System.currentTimeMillis())
         editor.apply()
 
         // The AMOLED toggle backs onto a live theme state, not just the prefs
         // file - a remote blob applied here must mirror into it so a synced
         // device repaints immediately (setContent only seeds it at launch).
-        if (payload.containsKey("amoled_black")) {
-            val raw = (payload["amoled_black"] as? kotlinx.serialization.json.JsonPrimitive)?.content
-            if (raw == "true" || raw == "false") {
-                com.kennyb1201.kbstream.ui.theme.kbAmoledBlackState.value = raw == "true"
-            }
+        // Only when this key was actually ADOPTED — a newer local edit keeps
+        // its value and must keep its matching live state too.
+        applied["amoled_black"]?.let { raw ->
+            com.kennyb1201.kbstream.ui.theme.kbAmoledBlackState.value = raw == "true"
         }
 
         // Pure black surface: same live-mirror treatment — a synced device
         // repaints immediately instead of waiting for the next relaunch.
-        if (payload.containsKey("pure_black_surface")) {
-            val raw = (payload["pure_black_surface"] as? kotlinx.serialization.json.JsonPrimitive)?.content
-            if (raw == "true" || raw == "false") {
-                com.kennyb1201.kbstream.ui.theme.kbPureBlackSurfaceState.value = raw == "true"
-            }
+        applied["pure_black_surface"]?.let { raw ->
+            com.kennyb1201.kbstream.ui.theme.kbPureBlackSurfaceState.value = raw == "true"
         }
     }
 
@@ -489,27 +677,59 @@ object PrefsPayloadApplier {
     }
 
     private fun applySimklAuth(context: Context, payload: JsonObject) {
-        val token = (payload["access_token"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return
+        val token = (payload[SIMKL_ACCESS_TOKEN_KEY] as? kotlinx.serialization.json.JsonPrimitive)
+            ?.content.orEmpty()
+        val signedOut =
+            (payload[SimklAuthRules.SIGNED_OUT_FIELD] as? kotlinx.serialization.json.JsonPrimitive)
+                ?.content == "true"
 
-        val prefs = scopedPrefs(context, "simkl_auth")
+        val prefs = scopedPrefs(context, SIMKL_AUTH_STORE)
 
-        // Blank token = the profile SIGNED OUT on some device. Honor it:
-        // dropping the local session here is what makes a sign-out actually
-        // stick across devices (and stops a pull from resurrecting an
-        // account the user explicitly disconnected).
+        // Blank token = the profile SIGNED OUT on some device. Honor it — but
+        // only when the blob says so explicitly. Every device used to publish
+        // this blob, so the blanks coming from devices that had never
+        // connected Simkl erased a live session everywhere; a blank without
+        // the tombstone is now ignored (see [SimklAuthRules]).
         if (token.isBlank()) {
-            if (prefs.contains("access_token")) {
-                prefs.edit().remove("access_token").apply()
+            if (!SimklAuthRules.clearsSession(token, signedOut)) return
+            if (!prefs.contains(SIMKL_ACCESS_TOKEN_KEY)) return
+            prefs.edit().remove(SIMKL_ACCESS_TOKEN_KEY).apply()
+            resetSimklStateAfterTokenChange(context)
+            return
+        }
+
+        if (prefs.getString(SIMKL_ACCESS_TOKEN_KEY, null) == token) {
+            // Same account: just retire a lingering sign-out tombstone so it
+            // cannot be republished over the live token on the next push.
+            if (prefs.getBoolean(SimklAuthRules.SIGNED_OUT_FIELD, false)) {
+                prefs.edit().putBoolean(SimklAuthRules.SIGNED_OUT_FIELD, false).apply()
             }
             return
         }
 
-        if (prefs.getString("access_token", null) == token) return
+        prefs.edit()
+            .putString(SIMKL_ACCESS_TOKEN_KEY, token)
+            .putBoolean(SimklAuthRules.SIGNED_OUT_FIELD, false)
+            .apply()
+        resetSimklStateAfterTokenChange(context)
+    }
 
-        prefs.edit().putString("access_token", token).apply()
-        // No explicit cache clear needed: SimklRepository reads the token on
-        // every request, so the swapped-in session takes effect immediately.
-
+    /**
+     * The Simkl session just changed (adopted a synced token, or dropped one)
+     * so everything derived from the PREVIOUS account has to go: the
+     * in-memory lists (keyed by profile, not by account) and the
+     * watched-activity checkpoint, which otherwise tells the next poll that
+     * nothing changed and serves the old account's Continue Watching. The
+     * token itself needs no cache handling — SimklRepository reads it live.
+     */
+    private fun resetSimklStateAfterTokenChange(context: Context) {
+        runCatching {
+            com.kennyb1201.kbstream.data.simkl.SimklRepository.clearTransientCaches()
+            com.kennyb1201.kbstream.data.simkl.SimklRepository.getInstance(context)
+                .forceClearWatchedActivitySync()
+        }.onFailure {
+            android.util.Log.w(TAG, "simkl reset after synced token change failed: ${it.message}")
+        }
     }
 
     private fun applyIptv(context: Context, payload: JsonObject) {

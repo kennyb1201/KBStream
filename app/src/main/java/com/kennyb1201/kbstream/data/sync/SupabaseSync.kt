@@ -905,13 +905,17 @@ object SupabaseSync {
 
     fun enqueueWatched(entity: WatchedStatusEntity, profileId: String? = currentProfileId()) {
         if (!isSignedIn()) return
-        val payload = buildJsonObject {
-            put("key", entity.key)
-            put("imdbId", entity.imdbId)
-            put("mediaType", entity.mediaType)
-            put("isWatched", entity.isWatched)
-            put("updatedAt", entity.updatedAt)
-        }
+        // Both badge flags travel: a row that only carried isWatched arrived
+        // on the other device looking un-watched, which is how a synced row
+        // could erase that device's eye badge (see [WatchedMarkerRules]).
+        val payload = WatchedMarkerRules.payload(
+            key = entity.key,
+            imdbId = entity.imdbId,
+            mediaType = entity.mediaType,
+            isWatched = entity.isWatched,
+            isPartiallyWatched = entity.isPartiallyWatched,
+            updatedAt = entity.updatedAt
+        )
         val row = OutboxItem(TABLE_WATCHED, "item_key", scopedKey(entity.key, profileId), payload)
         outbox.put(row)
         scheduleFlush()
@@ -1249,12 +1253,17 @@ object SupabaseSync {
                 val localUpdated = localByKey[key]?.updatedAt ?: 0L
 
                 if (remoteWins(remoteUpdated, localUpdated)) {
+                    val markers = WatchedMarkerRules.read(remote)
                     pendingUpdates.add(
                         WatchedStatusEntity(
                             key = key,
                             imdbId = remote.str("imdbId") ?: "",
                             mediaType = remote.str("mediaType") ?: "movie",
-                            isWatched = remote.bool("isWatched"),
+                            isWatched = markers.isWatched,
+                            // Carried through, not dropped: the eye flag used
+                            // to land here as false and then answer for the
+                            // whole cache TTL (see [WatchedMarkerRules]).
+                            isPartiallyWatched = markers.isPartiallyWatched,
                             updatedAt = remoteUpdated
                         )
                     )
@@ -1336,7 +1345,12 @@ object SupabaseSync {
         val all = db.watchedStatusDao().getAll()
         // Same captured-scope rule as pushHistory above.
         val pid = currentProfileId()
-        all.forEach { enqueueWatched(it, pid) }
+        // Only markers, never this device's derived "nothing watched here"
+        // rows: every preloaded rail item gets one, and publishing them makes
+        // a sibling device's correct badge lose the last-write-wins race to a
+        // fresh negative (see [WatchedMarkerRules.shouldPublish]).
+        all.filter { WatchedMarkerRules.shouldPublish(it.isWatched, it.isPartiallyWatched) }
+            .forEach { enqueueWatched(it, pid) }
         flushOutbox()
     }
 
@@ -1356,6 +1370,17 @@ object SupabaseSync {
             ) {
                 return@forEach
             }
+            // Same rule for the Simkl session: this bulk push runs on every
+            // sign-in / Sync now / full resync, and a device that has never
+            // connected Simkl would otherwise publish a blank token — which
+            // the applier reads as "signed out", erasing the session on every
+            // other device ("Simkl sign-in didn't sync"). A deliberate
+            // disconnect publishes through SimklRepository.clearAuth().
+            if (key == PrefsPayloadBuilder.KEY_SIMKL_AUTH &&
+                !PrefsPayloadBuilder.hasSimklAuthToPublish(context)
+            ) {
+                return@forEach
+            }
             enqueuePrefs(context, key, payload, pid)
         }
         flushOutbox()
@@ -1366,8 +1391,14 @@ object SupabaseSync {
         if (!isSignedIn()) return
         scope.launch {
             flushOutbox()
-            pushAll(context)
-            pullAll(context)
+            // PULL first, then push — same awaited contract as signIn() and
+            // forceFullResync(). The old "push, then pull" pair also raced
+            // each other (both were fire-and-forget Jobs): this device
+            // re-seeded the cloud with its own local blobs before it had
+            // ingested the other device's, which is exactly how an unset
+            // Simkl session overwrote a live one.
+            pullAllNow(context)
+            pushAllNow(context)
         }
     }
 

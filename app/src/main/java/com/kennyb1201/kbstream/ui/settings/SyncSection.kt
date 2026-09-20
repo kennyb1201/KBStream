@@ -104,8 +104,9 @@ fun SyncSection() {
 
             Text(
                 text = "Syncs watch history, resume positions, watched status, " +
-                    "add-ons, IPTV sources, Simkl sign-in, and display settings. " +
-                    "Playback/decoder settings stay per-device.",
+                    "add-ons, IPTV sources, Simkl sign-in, display settings, and " +
+                    "your subtitle style + audio/subtitle language choices. " +
+                    "Decoder settings stay per-device.",
                 color = KBTextLo,
                 modifier = Modifier.padding(top = 6.dp)
             )

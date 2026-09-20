@@ -236,6 +236,9 @@ object BackupManager {
         put("imdbId", imdbId)
         put("mediaType", mediaType)
         put("isWatched", isWatched)
+        // The eye flag rides along, or a restore would repaint every
+        // started-but-unfinished show as un-watched until it re-resolves.
+        put("isPartiallyWatched", isPartiallyWatched)
         put("updatedAt", updatedAt)
     }
 
@@ -245,6 +248,9 @@ object BackupManager {
             imdbId = optString("imdbId"),
             mediaType = optString("mediaType"),
             isWatched = optBoolean("isWatched", false),
+            // Absent in backups taken before the eye badge existed: those
+            // restore as not-partial, which is what they meant.
+            isPartiallyWatched = optBoolean("isPartiallyWatched", false),
             updatedAt = optLong("updatedAt")
         )
 

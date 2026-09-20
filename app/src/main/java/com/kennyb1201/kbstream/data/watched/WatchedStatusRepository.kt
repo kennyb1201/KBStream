@@ -115,6 +115,22 @@ class WatchedStatusRepository(
         Set<String> =
         emptySet()
 
+    /*
+     * TMDB forms of the two Simkl show sets above ("tmdb:<n>"), read from
+     * the same cached all-shows response. Plenty of rails carry TMDB ids
+     * rather than IMDb ones — every TMDB-discover rail, and therefore all of
+     * the hardcoded kids rails — and an imdb-only set can never match them,
+     * which is why those posters stayed bare even though Simkl knew the
+     * show. Both forms are checked, so neither rail style misses a badge.
+     */
+    private var completedShowTmdbKeys:
+        Set<String> =
+        emptySet()
+
+    private var partialShowTmdbKeys:
+        Set<String> =
+        emptySet()
+
     private var simklSetsFetchedAt =
         0L
 
@@ -277,6 +293,12 @@ class WatchedStatusRepository(
                 partialShowImdbIds =
                     emptySet()
 
+                completedShowTmdbKeys =
+                    emptySet()
+
+                partialShowTmdbKeys =
+                    emptySet()
+
                 simklSetsFetchedAt =
                     0L
 
@@ -340,7 +362,10 @@ class WatchedStatusRepository(
 
                     cached == null ||
                         now - cached.first >=
-                        CACHE_TTL_MS
+                        ttlMsFor(
+                            cached.second.isWatched,
+                            cached.second.isPartiallyWatched
+                        )
                 }
             }
 
@@ -397,7 +422,10 @@ class WatchedStatusRepository(
 
                 if (
                     now - entry.updatedAt <
-                    CACHE_TTL_MS
+                    ttlMsFor(
+                        entry.isWatched,
+                        entry.isPartiallyWatched
+                    )
                 ) {
                     cache[entry.key] =
                         entry.updatedAt to
@@ -425,7 +453,10 @@ class WatchedStatusRepository(
                     forceRemoteRefresh ||
                         cached == null ||
                         now - cached.first >=
-                        CACHE_TTL_MS
+                        ttlMsFor(
+                            cached.second.isWatched,
+                            cached.second.isPartiallyWatched
+                        )
                 }
             }
 
@@ -592,6 +623,39 @@ class WatchedStatusRepository(
                     emptySet()
                 }
 
+            // TMDB-id twins of the two show sets. Same cached response, so
+            // these add no network round-trip — they only close the gap for
+            // rails whose items carry "tmdb:<n>" ids instead of "tt…".
+            val refreshedShowTmdbKeys =
+                try {
+                    simklRepository
+                        .getCompletedShowTmdbKeys()
+                } catch (e: Exception) {
+                    Log.e(
+                        "WATCHED_REPO",
+                        "getCompletedShowTmdbKeys failed: " +
+                            e.message,
+                        e
+                    )
+
+                    emptySet()
+                }
+
+            val refreshedPartialShowTmdbKeys =
+                try {
+                    simklRepository
+                        .getPartiallyWatchedShowTmdbKeys()
+                } catch (e: Exception) {
+                    Log.e(
+                        "WATCHED_REPO",
+                        "getPartiallyWatchedShowTmdbKeys failed: " +
+                            e.message,
+                        e
+                    )
+
+                    emptySet()
+                }
+
             cacheMutex.withLock {
                 completedMovieKeys =
                     refreshedMovieKeys
@@ -601,6 +665,12 @@ class WatchedStatusRepository(
 
                 partialShowImdbIds =
                     refreshedPartialShowImdbIds
+
+                completedShowTmdbKeys =
+                    refreshedShowTmdbKeys
+
+                partialShowTmdbKeys =
+                    refreshedPartialShowTmdbKeys
 
                 simklSetsFetchedAt =
                     now
@@ -936,6 +1006,12 @@ class WatchedStatusRepository(
                 partialShowImdbIds =
                     emptySet()
 
+                completedShowTmdbKeys =
+                    emptySet()
+
+                partialShowTmdbKeys =
+                    emptySet()
+
                 simklSetsFetchedAt =
                     0L
             }
@@ -1105,6 +1181,34 @@ class WatchedStatusRepository(
     ): String {
         return "${normalizeType(type)}::${id.trim()}"
     }
+
+    /**
+     * How long a resolved row may answer for a key before it is recomputed.
+     *
+     * A POSITIVE row (watched, or started-but-unfinished) is the expensive
+     * answer, the one that draws the badge, and the one that only changes
+     * when the user finishes something — it keeps the long TTL. A NEGATIVE
+     * row is the cheap "no watched state found" answer, and its trusted
+     * source can appear seconds later: the other TV's mark arrives, Simkl
+     * catches up, a history row lands, a synced row is applied (which lands
+     * the flag correctly now, but a row written by an older build still
+     * carries only one of the two flags). Holding a negative for the full
+     * positive TTL is what turned one bad sync into "the badges are wrong on
+     * this TV all evening", so negatives age out on the short TTL and the
+     * badge repaints itself a couple of minutes later.
+     */
+    private fun ttlMsFor(
+        isWatched: Boolean,
+        isPartiallyWatched: Boolean
+    ): Long =
+        if (
+            isWatched ||
+            isPartiallyWatched
+        ) {
+            CACHE_TTL_MS
+        } else {
+            NEGATIVE_CACHE_TTL_MS
+        }
 
     private fun localWatchedOverrideKeys():
         Set<String> =
@@ -1347,6 +1451,14 @@ class WatchedStatusRepository(
 
                     partialShowImdbIds =
                         partialShowImdbIds - normalizedId
+
+                    // Same scrub for the TMDB-keyed twins, or a later remote
+                    // refresh would recompute this show as watched again.
+                    completedShowTmdbKeys =
+                        completedShowTmdbKeys - normalizedId
+
+                    partialShowTmdbKeys =
+                        partialShowTmdbKeys - normalizedId
                 }
             }
         }
@@ -1574,6 +1686,8 @@ class WatchedStatusRepository(
                     completedMovieKeys,
                     completedShowImdbIds,
                     partialShowImdbIds,
+                    completedShowTmdbKeys,
+                    partialShowTmdbKeys,
                     mdbListMovieKeys,
                     mdbListEpisodeKeys,
                     mdbListStartedShowKeys
@@ -1631,7 +1745,8 @@ class WatchedStatusRepository(
                          * below, which is exactly what "started" means.
                          */
                         manuallyWatched ||
-                            id in remoteSnapshot.simklShowKeys
+                            id in remoteSnapshot.simklShowKeys ||
+                            id in remoteSnapshot.simklShowTmdbKeys
                     }
 
                     else ->
@@ -1651,6 +1766,7 @@ class WatchedStatusRepository(
                     !watched &&
                     (
                         id in remoteSnapshot.simklPartialShowKeys ||
+                            id in remoteSnapshot.simklPartialShowTmdbKeys ||
                             id in remoteSnapshot.mdbListStartedShowKeys ||
                             hasLocalInProgressEpisode(id)
                         )
@@ -1735,6 +1851,9 @@ class WatchedStatusRepository(
         val simklMovieKeys: Set<String>,
         val simklShowKeys: Set<String>,
         val simklPartialShowKeys: Set<String>,
+        // "tmdb:<n>" forms of the same two show sets (see the field docs).
+        val simklShowTmdbKeys: Set<String>,
+        val simklPartialShowTmdbKeys: Set<String>,
         val mdbListMovieKeys: Set<String>,
         val mdbListEpisodeKeys: Set<String>,
         val mdbListStartedShowKeys: Set<String>
@@ -1750,6 +1869,17 @@ class WatchedStatusRepository(
 
         private const val REMOTE_SET_TTL_MS =
             15L * 60L * 1000L
+
+        /*
+         * TTL for NEGATIVE results only ("nothing watched here"), the row
+         * every preloaded rail item gets. Re-deriving one is cheap (an
+         * in-memory set lookup plus one indexed local history read), and a
+         * stale negative is exactly what hides a badge that should be there
+         * — so these age out in minutes while positive rows keep [CACHE_TTL_MS].
+         * See [ttlMsFor].
+         */
+        private const val NEGATIVE_CACHE_TTL_MS =
+            2L * 60L * 1000L
 
         private const val MAX_DISK_AGE_MS =
             14L * 24L * 60L * 60L * 1000L

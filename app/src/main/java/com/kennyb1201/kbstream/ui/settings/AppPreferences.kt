@@ -79,19 +79,44 @@ object AppPreferences {
     }
 
     // ── Subtitle size ────────────────────────────────────────────────
+    // These two sync with the rest of the display prefs, so they need the
+    // tolerant dual-type read (same pattern as getPosterSize): this build
+    // stores an Int, the sync applier stores a Long, and a raw getInt on a
+    // Long-stored value throws — mid-recomposition in Settings or at player
+    // start, which is the worst possible place for it.
     fun getDefaultSubtitleSize(context: Context): Int =
-        prefs(context).getInt(KEY_DEFAULT_SUBTITLE_SIZE, 1)
+        readIntPref(context, KEY_DEFAULT_SUBTITLE_SIZE, 1)
 
     fun setDefaultSubtitleSize(context: Context, size: Int) {
         prefs(context).edit().putInt(KEY_DEFAULT_SUBTITLE_SIZE, size).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     // ── Subtitle background ──────────────────────────────────────────
     fun getDefaultSubtitleBackground(context: Context): Int =
-        prefs(context).getInt(KEY_DEFAULT_SUBTITLE_BG, 0)
+        readIntPref(context, KEY_DEFAULT_SUBTITLE_BG, 0)
 
     fun setDefaultSubtitleBackground(context: Context, bg: Int) {
         prefs(context).edit().putInt(KEY_DEFAULT_SUBTITLE_BG, bg).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
+    /**
+     * Reads an Int pref that older builds wrote with putInt and the sync
+     * applier writes with putLong. SharedPreferences type-checks the cast, so
+     * the mismatch is a ClassCastException rather than a wrong default.
+     */
+    private fun readIntPref(context: Context, key: String, fallback: Int): Int {
+        val p = prefs(context)
+        return try {
+            p.getInt(key, fallback)
+        } catch (e: ClassCastException) {
+            try {
+                p.getLong(key, fallback.toLong()).toInt()
+            } catch (_: Exception) {
+                fallback
+            }
+        }
     }
 
     // ── Auto-play next episode

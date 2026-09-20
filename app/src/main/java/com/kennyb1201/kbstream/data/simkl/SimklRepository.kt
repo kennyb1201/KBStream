@@ -9,6 +9,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.library.LibraryItem
 import com.kennyb1201.kbstream.data.library.LibrarySource
+import com.kennyb1201.kbstream.data.sync.SimklAuthRules
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
@@ -367,13 +368,31 @@ class SimklRepository(
             ?.remove(
                 KEY_LAST_WATCHED_ACTIVITY_ALL
             )
+            // Tombstone: this is a DELIBERATE disconnect, which is the only
+            // thing that may clear the session on another device. Without it
+            // the blank token is indistinguishable from "this device never
+            // connected Simkl" and can no longer be published at all.
+            ?.putBoolean(
+                SimklAuthRules.SIGNED_OUT_FIELD,
+                true
+            )
             ?.apply()
 
         // Cross-device sync: propagate the sign-out. Without this the cloud
         // row keeps the old token forever and every pull (app start, Sync
         // now, profile switch) resurrects the signed-out account on this and
         // every other device — the profile could never actually sign out.
-        // The empty access_token tells applySimklAuth to clear too.
+        // The tombstoned empty access_token tells applySimklAuth to clear too.
+        publishSimklAuthToSync()
+    }
+
+    /**
+     * Publishes this profile's Simkl session blob immediately (connect and
+     * disconnect paths). This bypasses the bulk push's "nothing to publish"
+     * skip on purpose: a deliberate disconnect has no token but must still
+     * reach the other devices as a tombstone (see [SimklAuthRules]).
+     */
+    private fun publishSimklAuthToSync() {
         com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
             com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
                 appContext,
@@ -2439,6 +2458,84 @@ class SimklRepository(
                     ?.imdb
                     ?.takeIf {
                         it.isNotBlank()
+                    }
+            }
+            .toSet()
+    }
+
+    /**
+     * TMDB twin of [getCompletedShowImdbIds]: "tmdb:<n>" keys for finished
+     * shows.
+     *
+     * Half the rails carry TMDB ids instead of IMDb ones — every
+     * TMDB-discover rail, and therefore all of the hardcoded kids rails — and
+     * an imdb-only set can never match them, so Simkl knew the show while the
+     * poster stayed bare. Both sets come from the SAME cached all-shows
+     * response, so carrying both costs no extra request.
+     */
+    suspend fun getCompletedShowTmdbKeys(
+        accessToken: String =
+            requireAccessToken()
+    ): Set<String> {
+
+        val body =
+            getAllShowItemsCached(
+                accessToken =
+                    accessToken
+            )
+                ?: return emptySet()
+
+        return body.shows
+            .asSequence()
+            .filter { item ->
+                isShowFullyWatched(
+                    item
+                )
+            }
+            .mapNotNull { item ->
+                item.show
+                    ?.ids
+                    ?.tmdb
+                    ?.takeIf {
+                        it > 0
+                    }
+                    ?.let {
+                        "tmdb:$it"
+                    }
+            }
+            .toSet()
+    }
+
+    /** TMDB twin of [getPartiallyWatchedShowImdbIds]: started-not-finished shows. */
+    suspend fun getPartiallyWatchedShowTmdbKeys(
+        accessToken: String =
+            requireAccessToken()
+    ): Set<String> {
+
+        val body =
+            getAllShowItemsCached(
+                accessToken =
+                    accessToken
+            )
+                ?: return emptySet()
+
+        return body.shows
+            .asSequence()
+            .filter { item ->
+                !isShowFullyWatched(
+                    item
+                ) &&
+                    (item.watchedEpisodesCount ?: 0) > 0
+            }
+            .mapNotNull { item ->
+                item.show
+                    ?.ids
+                    ?.tmdb
+                    ?.takeIf {
+                        it > 0
+                    }
+                    ?.let {
+                        "tmdb:$it"
                     }
             }
             .toSet()

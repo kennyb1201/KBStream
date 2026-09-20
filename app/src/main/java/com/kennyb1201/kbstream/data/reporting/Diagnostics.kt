@@ -4,13 +4,16 @@ import android.app.ActivityManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.database.sqlite.SQLiteDatabase
 import android.os.Build
 import android.util.Log
 import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.sync.ProfileManager
+import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
+import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -53,6 +56,7 @@ object Diagnostics {
         report.appendLine(cleanupLine(app))
         report.appendLine(syncLine())
         report.appendLine(localLine(app))
+        markerLines(app).forEach { report.appendLine(it) }
         report.appendLine(addonLine(app))
         appendRecentErrors(report)
 
@@ -131,6 +135,78 @@ object Diagnostics {
         }.getOrElse { "unavailable (${it.message})" }
         "local: $counts"
     }
+
+    /**
+     * Badge evidence, per profile.
+     *
+     * Watched markers and eye badges are the one surface that depends on four
+     * independent things at once: the profile's OWN stores, that profile's
+     * Simkl session, the MDBList snapshot, and a display pref. "The badges are
+     * wrong on the other TV" is therefore unresolvable from the outside
+     * without seeing all four side by side — so every field here is read
+     * straight from the profile's own store, whether or not it is active.
+     *
+     * cache = watched/eye/total rows; `*` marks the active profile.
+     */
+    private suspend fun markerLines(context: Context): List<String> = withContext(Dispatchers.IO) {
+        val eyeBadge = runCatching {
+            AppPreferences.getPosterPartialWatchBadge(context)
+        }.getOrNull()
+        val activeId = ProfileManager.activeProfile.value?.id
+        val active = ProfileManager.profiles.value.firstOrNull { it.id == activeId }
+        val lines = mutableListOf(
+            "markers: eyeBadge=${eyeBadge ?: "?"} (active=${active?.name ?: "none"})"
+        )
+        ProfileManager.profiles.value.forEach { profile ->
+            val marker = if (profile.id == activeId) "*" else " "
+            lines += "  marker$marker${profile.name}: simkl=${simklConnected(context, profile.id)}" +
+                " overrides=${overridesCount(context, profile.id)}" +
+                " cache=${watchedCacheCounts(context, profile.id)}"
+        }
+        lines
+    }
+
+    /** "watched/eye/total" rows in a profile's own watched-status cache. */
+    private fun watchedCacheCounts(context: Context, profileId: String): String = runCatching {
+        val file = context.getDatabasePath(
+            ProfileStorage.dbName(profileId, "kbstream_watch_history")
+        )
+        if (!file.exists()) return@runCatching "none"
+        // Read-write, not read-only: a read-only open of a WAL database can
+        // fail outright when the -wal/-shm pair needs recovery. The
+        // existence check above is what keeps this from CREATING a database.
+        SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+            db.rawQuery(
+                "SELECT COUNT(*), " +
+                    "SUM(CASE WHEN isWatched THEN 1 ELSE 0 END), " +
+                    "SUM(CASE WHEN isPartiallyWatched THEN 1 ELSE 0 END) " +
+                    "FROM watched_status_cache",
+                null
+            ).use { cursor ->
+                if (!cursor.moveToFirst()) return@use "empty"
+                "${cursor.getInt(1)}/${cursor.getInt(2)}/${cursor.getInt(0)}"
+            }
+        }
+    }.getOrElse { "unreadable" }
+
+    /** Manual "Mark as Watched" keys — they override everything from Simkl. */
+    private fun overridesCount(context: Context, profileId: String): Int = runCatching {
+        context.getSharedPreferences(
+            ProfileStorage.prefsName(profileId, "kbstream_watched_overrides"),
+            Context.MODE_PRIVATE
+        ).getStringSet("watched_overrides", emptySet())?.size ?: 0
+    }.getOrDefault(0)
+
+    /**
+     * Simkl is PER PROFILE (the session lives in the profile's scoped store),
+     * so "Simkl is connected" on one profile says nothing about the next one.
+     */
+    private fun simklConnected(context: Context, profileId: String): Boolean = runCatching {
+        context.getSharedPreferences(
+            ProfileStorage.prefsName(profileId, "simkl_auth"),
+            Context.MODE_PRIVATE
+        ).getString("access_token", null)?.isNotBlank() == true
+    }.getOrDefault(false)
 
     private fun addonLine(context: Context): String {
         val count = runCatching { AddonManager(context).getInstalledAddons().size }
