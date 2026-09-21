@@ -742,7 +742,11 @@ for (metaAddon in metaAddons) {
                             "cast=${detail?.credits?.cast?.size} crew=${detail?.credits?.crew?.size} " +
                             "companies=${detail?.productionCompanies?.size} " +
                             "reviews=${detail?.reviews?.results?.size} " +
-                            "recs=${detail?.recommendations?.results?.size}"
+                            "recs=${detail?.recommendations?.results?.size} " +
+                            // Whether TMDB returned any video at all decides
+                            // whether the trailer button can exist; logging it
+                            // separates "no video on TMDB" from "we hid it".
+                            "videos=${detail?.videos?.results?.size}"
                     )
                     val collectionId = detail?.belongsToCollection?.id
                     if (collectionId != null) {

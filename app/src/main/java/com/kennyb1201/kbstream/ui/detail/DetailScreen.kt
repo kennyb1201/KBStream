@@ -35,6 +35,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.LocalMovies
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -57,6 +61,7 @@ import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
@@ -77,6 +82,7 @@ import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Glow
+import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
@@ -92,6 +98,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbCastMember
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
 import com.kennyb1201.kbstream.data.mdblist.MdbListRatings
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tmdb.TrailerPick
 import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
 import com.kennyb1201.kbstream.data.tmdb.bestReleaseDate
 import com.kennyb1201.kbstream.data.tmdb.certification
@@ -206,6 +213,78 @@ private class TvPivotBringIntoViewSpec(
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 private val LocalTvBringIntoViewSpec = TvPivotBringIntoViewSpec()
+
+/** Icon size for the header row's icon-only buttons (play / random / trailer). */
+private val BUTTON_ICON_SIZE = 18.dp
+
+/** Gap between an icon button's glyph and the progress row reserved under it. */
+private val BUTTON_PROGRESS_GAP = 3.dp
+
+/** Resume progress bar; its height is also the row every icon button reserves. */
+private val BUTTON_PROGRESS_HEIGHT = 2.dp
+private val BUTTON_PROGRESS_WIDTH = 26.dp
+
+/**
+ * Body shared by the header row's icon buttons: the glyph, then a row
+ * underneath that only PLAY paints into when there is progress to resume.
+ *
+ * The row is reserved in EVERY button rather than only in the resume state,
+ * so the three cards stay exactly the same height with their glyphs on one
+ * baseline, and the row does not shift as progress appears or gets finished.
+ */
+@Composable
+private fun IconButtonBody(
+    icon: ImageVector,
+    contentDescription: String,
+    progress: Float? = null
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.padding(
+            horizontal = 9.dp,
+            vertical = 7.dp
+        )
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            modifier = Modifier.size(BUTTON_ICON_SIZE)
+        )
+
+        Spacer(
+            modifier = Modifier.height(BUTTON_PROGRESS_GAP)
+        )
+
+        Box(
+            modifier = Modifier
+                .width(BUTTON_PROGRESS_WIDTH)
+                .height(BUTTON_PROGRESS_HEIGHT),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            if (progress != null) {
+                // Focus-aware: the card's content colour is KBTextHi while
+                // idle and KBAccent while focused, so the bar highlights with
+                // the card it sits in.
+                val barColor = androidx.tv.material3.LocalContentColor.current
+                val barShape = RoundedCornerShape(percent = 50)
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(barShape)
+                        .background(barColor.copy(alpha = 0.3f))
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(progress)
+                        .fillMaxHeight()
+                        .clip(barShape)
+                        .background(barColor)
+                )
+            }
+        }
+    }
+}
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -334,6 +413,12 @@ fun DetailScreen(
     val mdbListRatings by viewModel.mdbListRatings.collectAsState()
     val allReviews by viewModel.allReviews.collectAsState()
     val tmdbDetail by viewModel.tmdbDetail.collectAsState()
+    // The trailer the button offers IS the trailer the button plays: one pick,
+    // one rule. Movies almost always carry a video typed exactly "Trailer", so
+    // this matters for series, which TMDB frequently files as a "Teaser".
+    val trailerVideo = remember(tmdbDetail) {
+        TrailerPick.best(tmdbDetail?.videos?.results)
+    }
     // TMDB clearlogo first (more reliable); add-on logo (fanart.tv etc.) as
     // fallback when TMDB has nothing for this title.
     val clearLogoUrl = tmdbImageOriginal(tmdbDetail?.bestLogoPath())
@@ -725,14 +810,12 @@ fun DetailScreen(
     }
 
     fun playTrailer(context: Context) {
-        val trailer = tmdbDetail?.videos?.results?.firstOrNull {
-            it.site == "YouTube" && it.type == "Trailer"
-        } ?: return
+        val key = trailerVideo?.key?.takeIf { it.isNotBlank() } ?: return
 
         scope.launch {
             com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher.playTrailer(
                 context,
-                "https://www.youtube.com/watch?v=${trailer.key}"
+                "https://www.youtube.com/watch?v=$key"
             )
         }
     }
@@ -963,6 +1046,23 @@ fun DetailScreen(
                 }
             }
 
+            // Resume affordance, read off the target the button will actually
+            // play: anything above 0 means this press picks up where you left
+            // off, so the button shows the play glyph plus how far in you
+            // already are. A "from the beginning" target and a target that is
+            // not the in-progress episode both carry position 0 — which is why
+            // they correctly show no bar rather than a bar at 0%.
+            val resumeProgress: Float? = run {
+                val position = playTarget.resumePositionMs
+                val duration = resumeInfo?.durationMs ?: 0L
+                if (position > 0L && duration > 0L) {
+                    (position.toFloat() / duration.toFloat())
+                        .coerceIn(0.02f, 1f)
+                } else {
+                    null
+                }
+            }
+
             LaunchedEffect(Unit) {
                 runCatching {
                     playButtonFocusRequester.requestFocus()
@@ -1137,13 +1237,13 @@ fun DetailScreen(
                                     playButtonFocusRequester
                                 )
                         ) {
-                            Text(
-                                playLabel,
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.padding(
-                                    horizontal = 9.dp,
-                                    vertical = 7.dp
-                                )
+                            IconButtonBody(
+                                icon = Icons.Filled.PlayArrow,
+                                // Keeps the label the eye no longer sees
+                                // ("PLAY S1 E3" / "RESUME") available to
+                                // TalkBack and to anyone reading the screen.
+                                contentDescription = playLabel,
+                                progress = resumeProgress
                             )
                         }
 
@@ -1211,35 +1311,22 @@ fun DetailScreen(
                                 },
                                 modifier = Modifier.padding(end = 8.dp)
                             ) {
-                                Text(
-                                    "RANDOM",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    modifier = Modifier.padding(
-                                        horizontal = 9.dp,
-                                        vertical = 7.dp
-                                    )
+                                IconButtonBody(
+                                    icon = Icons.Filled.Shuffle,
+                                    contentDescription = "Random episode"
                                 )
                             }
                         }
 
-                        if (
-                            tmdbDetail?.videos?.results?.any {
-                                it.site == "YouTube" &&
-                                    it.type == "Trailer"
-                            } == true
-                        ) {
+                        if (trailerVideo != null) {
                             KBCard(
                                 onClick = {
                                     playTrailer(context)
                                 }
                             ) {
-                                Text(
-                                    "TRAILER",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    modifier = Modifier.padding(
-                                        horizontal = 9.dp,
-                                        vertical = 7.dp
-                                    )
+                                IconButtonBody(
+                                    icon = Icons.Filled.LocalMovies,
+                                    contentDescription = "Trailer"
                                 )
                             }
                         }
