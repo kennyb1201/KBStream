@@ -470,7 +470,25 @@ class MainActivity : ComponentActivity() {
                 firstFrameRecorded = true
                 // Detach from the next message: removing a listener from
                 // inside its own callback mutates the list being dispatched.
-                decor.post { observer.removeOnDrawListener(this) }
+                //
+                // Guarded because the captured observer can DIE before this
+                // posted runnable runs: detaching/re-attaching the decor view
+                // (a configuration change, a window re-add) swaps in a fresh
+                // ViewTreeObserver, and calling removeOnDrawListener on the
+                // old, dead one throws
+                // IllegalStateException("This ViewTreeObserver is not alive,
+                // call getViewTreeObserver() again"). That is fatal and took
+                // the process down on the first frame of launch (Sentry
+                // ANDROID-B, release 0.2.4257). A dead observer's listener
+                // list is gone with it, so there is nothing left to remove
+                // when it is not alive.
+                decor.post {
+                    runCatching {
+                        if (observer.isAlive) {
+                            observer.removeOnDrawListener(this)
+                        }
+                    }
+                }
                 recordStartupPhase("startup.firstFrame", startedMs)
             }
         })
