@@ -51,6 +51,7 @@ import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.sync.KidsMode
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
@@ -537,22 +538,47 @@ fun ProfileEditScreen(
         }
 
         // Remote avatar URL — type or paste a direct link to an image.
-        KBTextField(
-            value = avatarUrlInput,
-            onValueChange = {
-                avatarUrlInput = it
-                if (it.isNotBlank()) {
-                    pendingAvatarUrl = null
-                    useCustomAvatar = true
-                }
-            },
-            placeholder = "Avatar image URL (optional)",
-            openKeyboardOnFocus = false,
-            keyboardType = KeyboardType.Uri,
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth(0.6f)
                 .padding(top = 16.dp)
-        )
+        ) {
+            KBTextField(
+                value = avatarUrlInput,
+                onValueChange = {
+                    avatarUrlInput = it
+                    if (it.isNotBlank()) {
+                        pendingAvatarUrl = null
+                        useCustomAvatar = true
+                    }
+                },
+                placeholder = "Avatar image URL (optional)",
+                // Editable as soon as it takes focus, unlike the rest of this
+                // form. A remote keyboard app (ATV Tools) delivers text through
+                // the TV's IME connection, and a field held read-only until OK
+                // is pressed has no connection at all — so phone-typed or
+                // phone-pasted text went nowhere. This field exists to have a
+                // URL put in it, so it takes one as soon as it is focused.
+                openKeyboardOnFocus = true,
+                keyboardType = KeyboardType.Uri,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            // Second path, independent of the IME: reads THIS device's
+            // clipboard, so a URL copied over from the phone (ATV Tools has a
+            // clipboard sender) can be dropped straight in with one press.
+            KBPasteChip(
+                onPaste = { pasted ->
+                    val clean = pasted.trim()
+                    if (clean.isNotEmpty()) {
+                        avatarUrlInput = clean
+                        pendingAvatarUrl = null
+                        useCustomAvatar = true
+                    }
+                }
+            )
+        }
 
         Row(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
