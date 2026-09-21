@@ -2842,12 +2842,15 @@ class NativePlayerActivity : ComponentActivity() {
         // Per-profile 8.1 conversion: the "P7 → 8.1" mode (Auto) always
         // rewrites declared P7 streams to Profile 8.1 in the bitstream (RPU
         // metadata per dovi_tool convert mode 2, EL dropped, single-layer VPS,
-        // dvhe/dvh1.08); the P5 → 8.1 toggle adds P5 (ICtCp) on top. Both are
-        // ignored in "Strip All" (every profile 4/5/7/8 → HDR10/HEVC for TVs
-        // without Dolby Vision) and "None" (pure pass-through) — see
-        // DolbyVisionCompatExtractorsFactory. The P5 GLES/FFmpeg color path
-        // below is independent of the bitstream rewrite: it engages only via
-        // Strip All (automatic) or the P5 Color Correction toggle (explicit).
+        // dvhe/dvh1.08). Profile 5 (single-layer ICtCp, no HDR10 base) is a
+        // separate case: it is never relabeled, only stripped and color
+        // corrected, and only while a P5 conversion is active ("P5 → HDR10",
+        // or automatically on a device with no Dolby Vision decoder). Both
+        // are ignored in "Strip All" (every profile 4/5/7/8 → HDR10/HEVC for
+        // TVs without Dolby Vision) and "None" (pure pass-through) — see
+        // DolbyVisionCompatExtractorsFactory. The P5 GLES color path below
+        // therefore runs exactly while a P5 conversion does; it has no
+        // switch of its own any more.
         val convertP7To81 = dvCompatMode == AppPreferences.DV_COMPAT_AUTO
         val convertP5To81 = dvCompatMode == AppPreferences.DV_COMPAT_AUTO &&
             AppPreferences.getConvertP5To81(this)
@@ -2863,17 +2866,24 @@ class NativePlayerActivity : ComponentActivity() {
         // instead decodes in MediaCodec buffer mode — raw planes, no
         // conversion — and the GL shader does the ICtCp math on the GPU.
         // Reset each attempt so the setting only applies to the current stream.
-        // Effective state of the P5 GLES path (never engages silently):
+        // Effective state of the P5 GLES path:
         // - Strip All rewrites P5's RPU away and ships raw ICtCp pixels to
         //   the display — the GLES path is REQUIRED there, so it is the one
         //   mode that turns it on automatically.
-        // - Every other mode (native DV, None, P7 → 8.1, P5 → 8.1): strictly
-        //   follows the P5 Color Correction toggle — on if you enable it
-        //   (even alongside P5 → 8.1, if you prefer shader-converted
-        //   colors), off otherwise.
+        // - Every other mode runs it exactly while a P5 conversion does
+        //   (AppPreferences.getConvertP5To81): that conversion is what strips
+        //   the ICtCp track this shader converts. Nothing turns it on
+        //   silently.
+        //
+        // forceTextureViewFallback is deliberately NOT consulted: it only
+        // decides playerView's own surface type, and this path never renders
+        // through playerView (its GLSurfaceView takes the player's surface
+        // view slot instead). Gating on it meant a source that had taken the
+        // black-video watchdog's TextureView fallback — which is immediately
+        // followed by that watchdog forcing a DV strip — played stripped P5
+        // with raw ICtCp planes and no correction: green and purple.
         val useP5GlesView = p5Content &&
-            p5GlesPathWanted() &&
-            !forceTextureViewFallback
+            p5GlesPathWanted()
         if (useP5GlesView && !p5GlesActive) {
             Log.i(
                 "PLAYER_DV",
@@ -3306,7 +3316,6 @@ class NativePlayerActivity : ComponentActivity() {
                         if (declaredDvCodec != null &&
                             DolbyVisionCompat.isP5Profile(declaredDvCodec) &&
                             p5GlesPathWanted() &&
-                            !forceTextureViewFallback &&
                             !p5GlesActive &&
                             !firstFrameRendered && !p5ReroutePending
                         ) {
@@ -3503,9 +3512,10 @@ class NativePlayerActivity : ComponentActivity() {
      *  - Strip All: the one automatic engagement — stripping the RPU is
      *    what leaves ICtCp pixels for the display, so the shader is the
      *    color fix.
-     *  - Every other mode (native DV, None, P7 → 8.1, P5 → 8.1): the
-     *    explicit P5 Color Correction toggle decides. No mode silently
-     *    overrides the user's choice.
+     *  - A P5 conversion is the only other one: the "P5 → HDR10" switch, or
+     *    a device with no Dolby Vision decoder to play Profile 5. There is no
+     *    separate color-path switch any more — as a standalone toggle it had
+     *    nothing stripped to convert whenever P5 was left as Dolby Vision.
      */
     private fun p5GlesPathWanted(): Boolean {
         if (!P5ColorShader.hasGles3()) return false
@@ -6255,6 +6265,15 @@ class NativePlayerActivity : ComponentActivity() {
         currentSourceIndex = sources.indexOfFirst { it.url == newUrl }
         retryAttempt = 0; retryExhausted = false; errorMessageStr = null; forceTextureViewFallback = false; languagesAutoSelected = false
         dvStripRetryDone = false; forceDvStripForSession = false
+        // Per-source Dolby Vision identity. These used to survive into the
+        // next player build, so a P5 title followed by any other title kept
+        // the P5 GL color path "on": the shader then applied ICtCp math to
+        // HDR10 pixels (wrong colors), and for AVC nothing can render into
+        // the buffer output while the player view is hidden (no video at
+        // all). A fresh source starts with no DV identity and its own track
+        // callback re-establishes it.
+        currentCodecs = null
+        streamDeclaredDvCodec = null
         // A manual source switch is a fresh, actively-playing load — drop
         // the actor-return pause semantics so the new source starts
         // playing like any other switch.

@@ -45,7 +45,7 @@ object AppPreferences {
     private const val KEY_STRIP_HDR10_PLUS = "strip_hdr10_plus"             // independent of the DV mode
     private const val KEY_CONVERT_P7_TO_81 = "dv_convert_p7_to_81"          // P7 → Profile 8.1 (independent of the DV mode)
     private const val KEY_CONVERT_P5_TO_81 = "dv_convert_p5_to_81"          // P5 → Profile 8.1 (independent of the DV mode)
-    private const val KEY_P5_GLES_CORRECTION = "dv_p5_gles_correction"      // P5 raw-plane GLES color path (explicit opt-in, default off)
+    private const val KEY_P5_GLES_CORRECTION = "dv_p5_gles_correction"      // legacy: P5 GLES color path is derived now, see getP5GlesCorrection
     private const val KEY_DEFAULT_ASPECT_RATIO = "default_aspect_ratio"     // 0=fit, 1=zoom, 2=fill
     private const val KEY_PREFERRED_AUDIO_LANG = "preferred_audio_language"   // BCP-47 tag or "" for auto
     private const val KEY_PREFERRED_SUBTITLE_LANG = "preferred_subtitle_language" // BCP-47 tag or "" for auto
@@ -449,13 +449,13 @@ object AppPreferences {
 
     // ── Per-profile 8.1 conversion toggles ───────────────────────────────
     // P7 → 8.1 is now the "P7 → 8.1" mode itself (DV_COMPAT_AUTO), not a
-    // separate UI toggle. The P5 → 8.1 toggle below composes with that mode:
-    // when on, declared P5 (ICtCp) streams are converted to Profile 8.1 in the
-    // bitstream instead of passing through as native DV — for Dolby Vision
-    // displays that accept 8.1 but not ICtCp P5. Ignored in "None" and
-    // "Strip All" modes. The stored P7 flag is kept only for legacy-pref
-    // migration (the old combined "8.1" mode); DV_COMPAT_AUTO always implies
-    // P7 → 8.1.
+    // separate UI toggle: it relabels the profile digits, drops the enhancement
+    // layer and re-emits the RPUs as 8.1 metadata, which is a real conversion
+    // because Profile 7's base layer is HDR10. The P5 toggle below composes
+    // with that mode, but P5 is handled differently — see getConvertP5To81.
+    // Ignored in "None" and "Strip All" modes. The stored P7 flag is kept only
+    // for legacy-pref migration (the old combined "8.1" mode); DV_COMPAT_AUTO
+    // always implies P7 → 8.1.
     fun getConvertP7To81(context: Context): Boolean =
         prefs(context).getBoolean(KEY_CONVERT_P7_TO_81, false)
 
@@ -463,22 +463,72 @@ object AppPreferences {
         prefs(context).edit().putBoolean(KEY_CONVERT_P7_TO_81, enabled).apply()
     }
 
-    fun getConvertP5To81(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_CONVERT_P5_TO_81, false)
+    /**
+     * Effective state of the P5 conversion: "this session rewrites Profile 5
+     * tracks".
+     *
+     * Profile 5 is single-layer ICtCp and has no HDR10 base layer, so no
+     * bitstream-level rewrite can change its pixels — showing them as Rec.2020
+     * PQ is what a green and purple picture is. The conversion is therefore only
+     * ever done as a *strip* to plain HEVC with the GPU color path engaged (see
+     * [getP5GlesCorrection] and p5GlesPathWanted in the player), never as the
+     * Profile 8.1 relabel it used to be.
+     *
+     * That conversion is required, not optional, on a device with no Dolby
+     * Vision decoder to play P5 for us: such a box renders ICtCp as Rec.2020 PQ
+     * however the track is advertised, so passing it through cannot produce a
+     * correct picture. On a device that does advertise a Dolby Vision decoder,
+     * only the user's toggle triggers it — P5 otherwise plays natively as Dolby
+     * Vision, which is the best picture that device can show. (Ignored in
+     * "None" — byte-exact playback — and in "Strip All", which converts P5
+     * anyway.)
+     */
+    fun getConvertP5To81(context: Context): Boolean {
+        if (prefs(context).getBoolean(KEY_CONVERT_P5_TO_81, false)) return true
+        return isP5ConversionRequired(context)
+    }
+
+    /**
+     * True when this device cannot play Profile 5 as provided — it advertises no
+     * Dolby Vision decoder, so the ICtCp planes have to be converted on the GPU.
+     * The P5 conversion is implied (and its settings switch locked on) whenever
+     * this holds, because passthrough cannot produce a correct picture here:
+     * ICtCp rendered as Rec.2020 PQ is green and purple.
+     */
+    fun isP5ConversionRequired(context: Context): Boolean =
+        getDvCompatMode(context) == DV_COMPAT_AUTO &&
+            !com.kennyb1201.kbstream.ui.player.DolbyVisionCompat.supportsNativeDolbyVision()
 
     fun setConvertP5To81(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_CONVERT_P5_TO_81, enabled).apply()
     }
 
-    // Toggle for the P5 raw-plane GLES color path. Default OFF: the path is
-    // heavyweight (buffer-mode decode + GPU shader). It engages
-    // automatically only in Strip All — stripping the RPU is what leaves
-    // ICtCp pixels for the shader to fix. In every other mode (including
-    // alongside P5 → 8.1) it runs strictly when this toggle is on: the
-    // user explicitly opts in and no mode overrides their choice.
-    fun getP5GlesCorrection(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_P5_GLES_CORRECTION, false)
+    /**
+     * Effective state of the P5 raw-plane GLES color path. It is no longer a
+     * user choice — there is no settings switch for it any more, because as a
+     * standalone toggle it could only misfire:
+     *
+     *  - with P5 left as Dolby Vision there is no stripped HEVC track for the
+     *    plane renderer to claim (it only takes video/hevc), so the switch did
+     *    nothing; and
+     *  - in "None" it hid the player view with nothing able to feed the GL
+     *    view — a black screen with audio.
+     *
+     * So it runs exactly while a P5 conversion does: Strip All, the P5 → HDR10
+     * toggle, or a device with no Dolby Vision decoder to play Profile 5 (see
+     * [getConvertP5To81]). The stored legacy flag is intentionally ignored; the
+     * key is kept only so an existing install's prefs stay readable.
+     */
+    fun getP5GlesCorrection(context: Context): Boolean {
+        val mode = getDvCompatMode(context)
+        if (mode == DV_COMPAT_OFF) return false
+        return mode == DV_COMPAT_AUTO && getConvertP5To81(context)
+    }
 
+    /**
+     * Legacy writer for the removed P5 color-path switch. Kept so older builds
+     * (and any stored preference) stay compatible; nothing reads it.
+     */
     fun setP5GlesCorrection(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_P5_GLES_CORRECTION, enabled).apply()
     }

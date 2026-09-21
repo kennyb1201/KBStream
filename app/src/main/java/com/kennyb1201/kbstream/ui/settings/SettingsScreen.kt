@@ -170,22 +170,11 @@ fun SettingsScreen(
     var showClearHistoryConfirm by remember { mutableStateOf(false) }
     var dvCompatMode by remember { mutableIntStateOf(AppPreferences.getDvCompatMode(context)) }
     var convertP5To81 by remember { mutableStateOf(AppPreferences.getConvertP5To81(context)) }
-    var p5GlesCorrection by remember { mutableStateOf(AppPreferences.getP5GlesCorrection(context)) }
 
-    // P5 Color Correction: the ONE automatic engagement is Strip All
-    // (stripping the RPU is exactly what leaves ICtCp pixels for the
-    // shader to fix); every other mode follows the explicit toggle.
-    val p5GlesEffective = dvCompatMode == AppPreferences.DV_COMPAT_ALL ||
-        p5GlesCorrection
-    // The toggle is user-controlled everywhere except Strip All, where the
-    // path is automatic.
-    val p5GlesToggleEnabled = dvCompatMode != AppPreferences.DV_COMPAT_ALL
-    val p5GlesDescription = when {
-        dvCompatMode == AppPreferences.DV_COMPAT_ALL ->
-            "Always on in Strip All — stripped P5 needs the GLES color shader"
-        else ->
-            "GPU shader that converts Profile 5 (ICtCp) pixels to Rec.2020 PQ. Only needed when ICtCp reaches a display that cannot decode it — automatic in Strip All, or turn this on for non-DV screens"
-    }
+    // True when this device advertises no Dolby Vision decoder, so Profile 5
+    // must be stripped and color-corrected on the GPU: the conversion (and its
+    // color path) is then not a choice, it is the only correct picture.
+    val p5ConversionRequired = AppPreferences.isP5ConversionRequired(context)
     var stripHdr10Plus by remember { mutableStateOf(AppPreferences.getStripHdr10Plus(context)) }
     var aspectRatio by remember { mutableIntStateOf(AppPreferences.getDefaultAspectRatio(context)) }
     var preferredAudioLang by remember { mutableStateOf(AppPreferences.getPreferredAudioLanguage(context)) }
@@ -735,7 +724,7 @@ fun SettingsScreen(
                     text = when (dvCompatMode) {
                         AppPreferences.DV_COMPAT_AUTO -> "Rewrites Blu-ray Profile 7 remuxes to Profile 8.1 (RPU kept, enhancement layer dropped). P4/P8 play as Dolby Vision; P5 follows its toggle below"
                         AppPreferences.DV_COMPAT_OFF -> "Play files exactly as provided (device must handle DV)"
-                        AppPreferences.DV_COMPAT_ALL -> "Strips every DV profile (P4/P5/P7/P8) \u2192 HDR10/HEVC for non-DV TVs. P5 colors are fixed by the color path below (automatic here)"
+                        AppPreferences.DV_COMPAT_ALL -> "Strips every DV profile (P4/P5/P7/P8) \u2192 HDR10/HEVC for non-DV TVs. P5 colors are corrected on the GPU automatically"
                         else -> ""
                     },
                     color = KBTextLo,
@@ -746,9 +735,9 @@ fun SettingsScreen(
                     Text(
                         text = when (dvCompatMode) {
                             AppPreferences.DV_COMPAT_OFF ->
-                                "None passes everything through — the P5 \u2192 8.1 toggle below is ignored"
+                                "None passes everything through — the P5 \u2192 HDR10 toggle below is ignored"
                             else ->
-                                "Strip All strips every profile — the P5 \u2192 8.1 toggle below is ignored"
+                                "Strip All strips every profile — the P5 \u2192 HDR10 toggle below is ignored"
                         },
                         color = KBTextLo,
                         style = MaterialTheme.typography.labelSmall
@@ -758,10 +747,15 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 ToggleRow(
-                    label = "P5 \u2192 8.1",
-                    description = "Rewrites Profile 5 (ICtCp) streams to Profile 8.1 — the RPU is rewritten too, so a Dolby Vision display converts colors natively. Applies only in P7 \u2192 8.1 mode",
+                    label = "P5 \u2192 HDR10",
+                    description = if (p5ConversionRequired) {
+                        "Always on: this device has no Dolby Vision decoder, so Profile 5 (ICtCp) is stripped to HDR10 and corrected on the GPU. Passing it through would show green and purple"
+                    } else {
+                        "Strips Profile 5 (ICtCp) to HDR10 and converts the colors on the GPU, for displays that cannot show ICtCp P5. Profile 5 has no HDR10 base layer, so relabeling it 8.1 alone shows green and purple. Off = P5 plays as native Dolby Vision. Applies only in P7 \u2192 8.1 mode"
+                    },
                     checked = convertP5To81,
-                    enabled = dvCompatMode == AppPreferences.DV_COMPAT_AUTO,
+                    enabled = dvCompatMode == AppPreferences.DV_COMPAT_AUTO &&
+                        !p5ConversionRequired,
                     onToggle = {
                         convertP5To81 = it
                         AppPreferences.setConvertP5To81(context, it)
@@ -770,22 +764,27 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                ToggleRow(
-                    label = "P5 Color Correction",
-                    description = p5GlesDescription,
-                    checked = p5GlesEffective,
-                    enabled = p5GlesToggleEnabled,
-                    onToggle = {
-                        p5GlesCorrection = it
-                        AppPreferences.setP5GlesCorrection(context, it)
-                    }
+                // No switch for the P5 color path any more: it runs exactly
+                // while a P5 conversion does. As a standalone toggle it could
+                // only misfire — with P5 left as Dolby Vision there is nothing
+                // stripped for the shader to convert, and in "None" it hid the
+                // player view with no renderer able to feed the GL view (a
+                // black screen with audio).
+                Text(
+                    text = "P5 color correction has no separate switch: Profile 5 (ICtCp) is converted on the GPU whenever it is stripped — automatically in Strip All and on a device with no Dolby Vision decoder, or with the P5 → HDR10 toggle above",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
 
                 ToggleRow(
                     label = "Strip HDR10+",
-                    description = "Remove ST 2094-40 metadata (HDR10+ & DV+HDR10+ files) for TVs that black-screen on it",
+                    description = if (dvCompatMode == AppPreferences.DV_COMPAT_OFF) {
+                        "Remove ST 2094-40 (HDR10+) metadata from plain-HDR10+ files for TVs that black-screen on it. Only this mode needs the switch — every DV rewrite below drops it automatically"
+                    } else {
+                        "Remove ST 2094-40 (HDR10+) metadata. Plain-HDR10+ files follow this switch; every DV rewrite (P7 \u2192 8.1, P5 \u2192 HDR10, Strip All) drops HDR10+ automatically, because those output static HDR10"
+                    },
                     checked = stripHdr10Plus,
                     onToggle = {
                         stripHdr10Plus = it

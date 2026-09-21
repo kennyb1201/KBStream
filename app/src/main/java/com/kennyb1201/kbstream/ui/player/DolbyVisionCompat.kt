@@ -103,16 +103,29 @@ internal object DolbyVisionCompat {
      * on any codec-list read failure so callers keep their non-DV fallback
      * behavior.
      */
-    fun supportsNativeDolbyVision(): Boolean {
-        return try {
+    fun supportsNativeDolbyVision(): Boolean = nativeDolbyVisionSupported
+
+    /**
+     * Cached probe result. The callers now include per-stream playback
+     * decisions (whether a Profile 5 track must be converted) and the settings
+     * screen, and walking MediaCodecList is not free — the codec list does not
+     * change while the process lives, so it is evaluated once.
+     */
+    private val nativeDolbyVisionSupported: Boolean by lazy {
+        try {
             val codecList = MediaCodecList(MediaCodecList.REGULAR_CODECS)
+            var found = false
             for (info in codecList.codecInfos) {
                 if (info.isEncoder) continue
                 for (type in info.supportedTypes) {
-                    if (type.equals("video/dolby-vision", ignoreCase = true)) return true
+                    if (type.equals("video/dolby-vision", ignoreCase = true)) {
+                        found = true
+                        break
+                    }
                 }
+                if (found) break
             }
-            false
+            found
         } catch (_: Exception) {
             false
         }
