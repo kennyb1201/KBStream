@@ -2,10 +2,13 @@ package com.kennyb1201.kbstream.data.iptv
 
 import android.content.Context
 import android.util.Log
+import androidx.sqlite.db.SimpleSQLiteQuery
+import androidx.sqlite.db.SupportSQLiteQuery
 import com.kennyb1201.kbstream.data.iptv.db.CachedPlaylistChannelEntity
 import com.kennyb1201.kbstream.data.iptv.db.CachedPlaylistChannelRow
 import com.kennyb1201.kbstream.data.iptv.db.EpgChannelEntity
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
+import com.kennyb1201.kbstream.data.iptv.db.EpgSearchIndex
 import com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
 import com.kennyb1201.kbstream.data.iptv.db.PlaylistEpgMatchEntity
 import java.util.Locale
@@ -783,6 +786,13 @@ class IptvRepository(
      * Guide-wide program search ("what's on with X tonight"): title match
      * across every channel for programs that have not finished yet.
      *
+     * Two stages, cheapest first:
+     * 1. the FTS index, with every query word as a prefix term;
+     * 2. only if that returns nothing, the original `LIKE '%q%'` scan, so
+     *    mid-word fragments still match.
+     * Stage two is what the search used to do for every keystroke, which is
+     * why a leading wildcard could block the query thread on a big guide.
+     *
      * Channel visibility is applied by the caller — the guide owns the
      * hidden-channel rules, and a channel the user hid must not resurface
      * through a program match. Short queries return nothing (a one-letter
@@ -792,14 +802,57 @@ class IptvRepository(
         val q = query.trim()
         if (q.length < MIN_PROGRAM_SEARCH_LENGTH) return emptyList()
         return withContext(Dispatchers.IO) {
+            val fromMillis = System.currentTimeMillis()
+
+            val indexed = runCatching {
+                ftsPrefixExpression(q)?.let { expression ->
+                    Log.d(TAG, "PROGRAM SEARCH indexed terms=\"$expression\"")
+                    dao.searchProgramsByTitleFts(ftsSearchQuery(expression, fromMillis, limit))
+                }
+            }.getOrElse { t ->
+                // Missing or unreadable index (EpgSearchIndex creates it on
+                // open) — the LIKE scan below is the whole fallback path.
+                Log.w(TAG, "indexed program search unavailable: ${t.message}")
+                null
+            }
+            if (!indexed.isNullOrEmpty()) return@withContext indexed
+
             runCatching {
-                dao.searchProgramsByTitle(q, System.currentTimeMillis(), limit)
+                dao.searchProgramsByTitleLike(likeContainsPattern(q), fromMillis, limit)
             }.getOrElse { t ->
                 Log.w(TAG, "program search failed: ${t.message}")
                 emptyList()
             }
         }
     }
+
+    /**
+     * Indexed title search. `MATCH` must name the FTS table itself (an alias
+     * would not resolve), and the join drops index entries whose program row is
+     * gone, which is what makes the standalone index safe to leave stale.
+     */
+    private fun ftsSearchQuery(
+        expression: String,
+        fromMillis: Long,
+        limit: Int
+    ): SupportSQLiteQuery = SimpleSQLiteQuery(
+        """
+        SELECT
+            p.channelId AS channelId,
+            p.title AS title,
+            p.description AS description,
+            p.category AS category,
+            p.startUtcMillis AS startUtcMillis,
+            p.endUtcMillis AS endUtcMillis
+        FROM `${EpgSearchIndex.TABLE}`
+        JOIN epg_programs AS p ON p.id = `${EpgSearchIndex.TABLE}`.rowid
+        WHERE ${EpgSearchIndex.TABLE} MATCH ?
+          AND p.endUtcMillis > ?
+        ORDER BY p.startUtcMillis ASC
+        LIMIT ?
+        """.trimIndent(),
+        arrayOf<Any?>(expression, fromMillis, limit)
+    )
 
     /**
      * Catch-up entries for one channel: the channel's last programs that

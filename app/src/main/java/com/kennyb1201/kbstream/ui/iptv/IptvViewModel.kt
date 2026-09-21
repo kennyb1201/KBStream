@@ -12,6 +12,7 @@ import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.iptv.IptvPlaylist
 import com.kennyb1201.kbstream.data.iptv.IptvRepository
+import com.kennyb1201.kbstream.data.iptv.guideWindowFingerprint
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -21,6 +22,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
@@ -194,6 +196,12 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private val _guideRefreshTick = MutableStateFlow(0)
 
+    // Bumped by the periodic now/next refresh. It is part of the query request
+    // (so a clock refresh can never be conflated away by distinctUntilChanged)
+    // but deliberately NOT part of the guide source key: the loaded programmes
+    // are still valid, only "now" moved.
+    private val _guideClockTick = MutableStateFlow(0)
+
     // Persistent "already requested/cached" set. NEVER fed into combine() below —
     // that was the bug. Only clearGuideMemory() resets this, and it does so without
     // being observed by the flow that reads it, so resetting it can't self-trigger
@@ -209,6 +217,13 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         MutableStateFlow<Map<String, IptvChannelWithEpg>>(emptyMap())
 
     private var loadedGuideSourceKey: String? = null
+
+    /**
+     * [guideWindowFingerprint] of the playlist slice the loaded guide was built
+     * from, so a playlist refresh that changed nothing guide-relevant can keep
+     * what is already on screen instead of re-querying every program batch.
+     */
+    private var loadedGuideFingerprint: String? = null
     private var loadJob: Job? = null
     private var importJob: Job? = null
     private var refreshJob: Job? = null
@@ -241,18 +256,26 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             playlist to guideUrls
         },
         _guideRefreshTick,
-        _isImportingGuide,
-        _pendingGuideChannelIds
-    ) { playlistAndGuides, refreshTick, importingGuide, channelIds ->
+        _pendingGuideChannelIds,
+        _guideClockTick
+    ) { playlistAndGuides, refreshTick, channelIds, clockTick ->
         val (currentPlaylist, guideUrls) = playlistAndGuides
         GuideRequest(
             playlist = currentPlaylist,
             guideUrls = guideUrls,
             refreshTick = refreshTick,
-            isImportingGuide = importingGuide,
+            clockTick = clockTick,
             channelIds = channelIds
         )
-    }.flatMapLatest { request ->
+    }
+        // The request carries more than the query reads: _playlist changes for
+        // reasons that cannot move a single programme row (a logo URL, a
+        // channel outside the guide window), and the import flag used to flip
+        // twice per EPG import — each flip cancelling and re-running the whole
+        // lineup query for identical data. The refresh and clock ticks stay
+        // explicit request inputs, so real refreshes still land.
+        .distinctUntilChanged()
+        .flatMapLatest { request ->
         val currentPlaylist = request.playlist
 
         when {
@@ -414,10 +437,12 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     private fun bumpGuideClock() {
         val queued = _guideChannelIds.value
         if (queued.isEmpty()) return
-        // Re-issue the currently loaded channel set as a fresh batch. Even if
-        // the set is unchanged, this re-runs the lineup query with a new
-        // nowUtcMillis/window; mergeGuideItems() diffs per channel.
+        // Re-issue the currently loaded channel set as a fresh batch. The set
+        // is usually unchanged, so the clock tick is what actually makes the
+        // re-issued request distinct — without it distinctUntilChanged() would
+        // swallow the refresh and NOW/NEXT would go stale.
         _pendingGuideChannelIds.value = queued
+        _guideClockTick.value += 1
     }
 
     fun onPlaylistUrlChanged(value: String) {
@@ -777,8 +802,27 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     private fun applyPlaylist(newPlaylist: IptvPlaylist) {
+        val guideUrls = allEpgUrls()
+        // A background playlist refresh usually returns the same channels, and
+        // resetting the guide for it re-ran the entire lineup query (snapshot
+        // rebuild + every program batch) for rows that could not have differed.
+        // Compare the slice the query actually reads before deciding.
+        val fingerprint = guideWindowFingerprint(
+            sourceUrl = newPlaylist.sourceUrl,
+            guideUrls = guideUrls,
+            channelIds = _guideChannelIds.value,
+            channels = newPlaylist.channels
+        )
+        val guideStillValid = fingerprint != null && fingerprint == loadedGuideFingerprint
+
         _playlist.value = newPlaylist
         removeMissingHiddenChannelIds(newPlaylist)
+
+        if (guideStillValid) {
+            Log.w(TAG, "PLAYLIST APPLIED keeping loaded guide window (channels unchanged)")
+            return
+        }
+
         // Precompute the sourceKey using refreshTick + 1 BEFORE bumping the tick,
         // so loadedGuideSourceKey already matches once lineupSource re-evaluates.
         // This is what stops observeGuideRequest() from seeing a mismatch and
@@ -786,12 +830,18 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         clearGuideMemory(
             buildGuideSourceKey(
                 playlist = newPlaylist,
-                guideUrls = allEpgUrls(),
+                guideUrls = guideUrls,
                 refreshTick = _guideRefreshTick.value + 1
             )
         )
         _guideRefreshTick.value += 1
         requestInitialGuideWindow()
+        loadedGuideFingerprint = guideWindowFingerprint(
+            sourceUrl = newPlaylist.sourceUrl,
+            guideUrls = guideUrls,
+            channelIds = _guideChannelIds.value,
+            channels = newPlaylist.channels
+        )
     }
 
     private fun mergeGuideItems(lineup: List<IptvChannelWithEpg>) {
@@ -812,6 +862,9 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         _guideChannelIds.value = emptySet()
         _pendingGuideChannelIds.value = emptySet()
         loadedGuideSourceKey = sourceKey
+        // Nothing is loaded any more, so there is no fingerprint to compare a
+        // subsequent playlist refresh against (null forces the full reset).
+        loadedGuideFingerprint = null
     }
 
     private fun removeMissingHiddenChannelIds(playlist: IptvPlaylist) {
@@ -903,7 +956,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         val playlist: IptvPlaylist?,
         val guideUrls: List<String>,
         val refreshTick: Int,
-        val isImportingGuide: Boolean,
+        val clockTick: Int,
         val channelIds: Set<String>
     )
 

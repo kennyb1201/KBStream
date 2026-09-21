@@ -4,7 +4,9 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.RawQuery
 import androidx.room.Transaction
+import androidx.sqlite.db.SupportSQLiteQuery
 
 @Dao
 interface IptvDao {
@@ -282,6 +284,14 @@ interface IptvDao {
      * Guide-wide program search: title match on every channel, limited to
      * programs that have not finished yet ("what's on with X tonight").
      *
+     * This is the SUBSTRING half of the search and the slower one: a leading
+     * wildcard cannot use an index, so it scans and sorts every program that
+     * has not finished yet. It runs only when the indexed search (below) found
+     * nothing, and it is what lets a mid-word fragment ("waii" for "Hawaii
+     * Five-0") still match. [pattern] is a `%q%` pattern built by
+     * `likeContainsPattern`, which escapes `%`, `_` and `\` so those are
+     * matched literally; the ESCAPE clause must match that escaping.
+     *
      * Deliberately NOT filtered by sourceUrl or channel: the caller drops
      * hits whose channel is hidden and maps the rest through the guide's own
      * channel list, which is the only place that knows what is visible.
@@ -297,15 +307,26 @@ interface IptvDao {
             startUtcMillis,
             endUtcMillis
         FROM epg_programs
-        WHERE title LIKE '%' || :query || '%'
+        WHERE title LIKE :pattern ESCAPE '\'
           AND endUtcMillis > :fromMillis
         ORDER BY startUtcMillis ASC
         LIMIT :limit
         """
     )
-    suspend fun searchProgramsByTitle(
-        query: String,
+    suspend fun searchProgramsByTitleLike(
+        pattern: String,
         fromMillis: Long,
         limit: Int
     ): List<EpgProgramRow>
+
+    /**
+     * Indexed half of the guide search: [query] carries an FTS4 `MATCH`
+     * expression against `epg_programs_fts`, joined back to `epg_programs` on
+     * the program id so an index entry whose program is gone cannot surface.
+     * Throws when the index is missing, which the caller treats as "use the
+     * LIKE scan". Raw because the FTS table lives outside Room's schema
+     * (see EpgSearchIndex for why it is not a `@Fts4` entity).
+     */
+    @RawQuery
+    suspend fun searchProgramsByTitleFts(query: SupportSQLiteQuery): List<EpgProgramRow>
 }

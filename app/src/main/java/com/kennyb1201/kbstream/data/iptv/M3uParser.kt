@@ -18,6 +18,13 @@ class M3uParser {
         val channels = mutableListOf<IptvChannel>()
         var pendingAttrs: Map<String, String>? = null
         var pendingName: String? = null
+        // Per-entry #EXTVLCOPT lines (the canonical `http-user-agent` /
+        // `http-referrer` headers many providers require). They arrive on their
+        // OWN line, either before or after the #EXTINF, so they accumulate here
+        // and are merged when the stream URL line is reached. Every comment
+        // line used to be dropped, which left those channels playing with the
+        // app's default User-Agent.
+        val pendingVlcOpts = linkedMapOf<String, String>()
         // Tracks every id assigned so far in this parse, mapped to the stream
         // URL it was assigned for -> lets us tell "same channel repeated" (a
         // true duplicate, safe to drop) apart from "different channel that
@@ -33,6 +40,10 @@ class M3uParser {
                     )
                 }
 
+                line.startsWith("#EXTVLCOPT", ignoreCase = true) -> {
+                    pendingVlcOpts.putAll(parseVlcOptions(line))
+                }
+
                 line.startsWith("#EXTINF", ignoreCase = true) -> {
                     val extinfBody = line.substringAfter(":", "")
                     val commaIndex = findExtinfNameDelimiter(extinfBody)
@@ -44,7 +55,13 @@ class M3uParser {
                     val namePart = if (commaIndex >= 0) {
                         extinfBody.substring(commaIndex + 1).trim()
                     } else {
-                        ""
+                        // Sloppy sources omit the comma entirely. Whatever is
+                        // left once the attributes and the duration are gone is
+                        // the name; with no salvage those entries were dropped
+                        // as "Unknown Channel", silently losing live channels.
+                        ANY_ATTR.replace(extinfBody, " ")
+                            .replaceFirst(DURATION_PREFIX, "")
+                            .trim()
                     }
 
                     pendingAttrs = parseAttributes(attrsPart)
@@ -62,6 +79,7 @@ class M3uParser {
                     if (!shouldIncludeEntry(rawName, line, attrs)) {
                         pendingAttrs = null
                         pendingName = null
+                        pendingVlcOpts.clear()
                         return@forEach
                     }
 
@@ -117,6 +135,7 @@ class M3uParser {
                         // instead of assigning it a second, position-based id.
                         pendingAttrs = null
                         pendingName = null
+                        pendingVlcOpts.clear()
                         return@forEach
                     }
 
@@ -134,12 +153,15 @@ class M3uParser {
                         catchupDays = attrs["catchup-days"]?.trim()?.ifBlank { null },
                         catchupSource = attrs["catchup-source"]?.trim()?.ifBlank { null },
                         providerChannelId = providerChannelId,
-                        headers = buildHeaders(attrs)
+                        // #EXTVLCOPT values first so an explicit #EXTINF
+                        // attribute for the same header still wins.
+                        headers = buildHeaders(pendingVlcOpts + attrs)
                     )
 
                     channels += channel
                     pendingAttrs = null
                     pendingName = null
+                    pendingVlcOpts.clear()
                 }
             }
         }
@@ -169,19 +191,44 @@ class M3uParser {
         return -1
     }
 
+    /**
+     * `#EXTVLCOPT:http-user-agent=Mozilla/5.0` -> `http-user-agent` to
+     * `Mozilla/5.0`. Only the header options matter for playback; the player
+     * options (`network-caching`, `http-reconnect`, ...) are ignored.
+     */
+    private fun parseVlcOptions(line: String): Map<String, String> {
+        val body = line.substringAfter(':', "").trim()
+        if (body.isBlank()) return emptyMap()
+
+        // One option per line, and the value runs to end of line: a realistic
+        // User-Agent contains spaces ("Mozilla/5.0 (Linux; Android 11)"), so
+        // splitting the pair on whitespace would truncate it.
+        val key = body.substringBefore('=', "").trim().lowercase(Locale.US)
+        val value = body.substringAfter('=', "").trim()
+        if (key.isBlank() || value.isBlank()) return emptyMap()
+
+        // Normalize to the keys buildHeaders reads, so the alternate spellings
+        // providers use all actually reach the request.
+        return when (key) {
+            "http-user-agent", "user-agent" -> linkedMapOf("user-agent" to value)
+            "http-referrer", "http-referer", "referrer", "referer" ->
+                linkedMapOf("http-referrer" to value)
+            "origin" -> linkedMapOf("origin" to value)
+            else -> emptyMap()
+        }
+    }
+
     private fun parseAttributes(input: String): Map<String, String> {
-        val quotedRegex = Regex("""([\w-]+)=(?:\"([^\"]*)\"|'([^']*)')""")
         val attrs = linkedMapOf<String, String>()
 
-        quotedRegex.findAll(input).forEach { match ->
+        QUOTED_ATTR.findAll(input).forEach { match ->
             val key = match.groupValues[1].lowercase(Locale.US)
             val value = match.groupValues[2].ifBlank { match.groupValues[3] }.trim()
             attrs[key] = value
         }
 
-        val strippedInput = quotedRegex.replace(input, " ")
-        val bareRegex = Regex("""([\w-]+)=([^\s,]+)""")
-        bareRegex.findAll(strippedInput).forEach { match ->
+        val strippedInput = QUOTED_ATTR.replace(input, " ")
+        BARE_ATTR.findAll(strippedInput).forEach { match ->
             attrs.putIfAbsent(
                 match.groupValues[1].lowercase(Locale.US),
                 match.groupValues[2].trim()
@@ -194,9 +241,9 @@ class M3uParser {
     private fun buildHeaders(attrs: Map<String, String>): Map<String, String> {
         val headers = linkedMapOf<String, String>()
 
-        attrs["user-agent"]
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
+        // Both spellings: `user-agent` as an #EXTINF attribute, and the
+        // canonical `http-user-agent` from an #EXTVLCOPT line.
+        firstNonBlank(attrs["user-agent"], attrs["http-user-agent"])
             ?.let { headers["User-Agent"] = it }
 
         attrs["referer"]
@@ -280,6 +327,15 @@ class M3uParser {
         .trim()
 
     private fun normalizeIdentifier(value: String): String = value.trim()
+
+    private companion object {
+        /** `-1` / `1.5` duration prefix of an #EXTINF body. */
+        val DURATION_PREFIX = Regex("""^\s*-?\d+(?:\.\d+)?\s*""")
+
+        val QUOTED_ATTR = Regex("""([\w-]+)=(?:"([^"]*)"|'([^']*)')""")
+        val BARE_ATTR = Regex("""([\w-]+)=([^\s,]+)""")
+        val ANY_ATTR = Regex("""[\w-]+=(?:"[^"]*"|'[^']*'|[^\s,]+)""")
+    }
 
     private fun firstNonBlank(vararg values: String?): String? =
         values.firstOrNull { !it.isNullOrBlank() }

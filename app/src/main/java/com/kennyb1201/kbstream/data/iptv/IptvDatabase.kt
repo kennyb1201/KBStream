@@ -60,6 +60,7 @@ abstract class IptvDatabase : RoomDatabase() {
                     ).fallbackToDestructiveMigration(dropAllTables = true)
                         .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
                         .addCallback(RoomBusyTimeout)
+                        .addCallback(EpgSearchIndexCallback)
                         .build()
                         .also { INSTANCE = it }
                 }
@@ -74,6 +75,7 @@ abstract class IptvDatabase : RoomDatabase() {
                 ).fallbackToDestructiveMigration(dropAllTables = true)
                     .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
                     .addCallback(RoomBusyTimeout)
+                    .addCallback(EpgSearchIndexCallback)
                     .build()
                 scopedName = dbName
                 return scopedInstance!!

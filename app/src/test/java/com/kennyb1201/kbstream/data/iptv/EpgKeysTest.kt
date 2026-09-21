@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.iptv
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -98,5 +99,94 @@ class EpgKeysTest {
         // list "Sky Sports 1" separately from "Sky Sports 2".
         assertEquals("sky sports 1", normalizeEpgChannelKey(" Sky Sports 1 "))
         assertEquals("sky sports 1", normalizeEpgChannelKey("SKY SPORTS 1"))
+    }
+
+    // ── Guide-window fingerprint ─────────────────────────────────────────
+
+    private val loaded = setOf("bbc1", "itv1")
+
+    private fun fingerprint(
+        channels: List<IptvChannel>,
+        ids: Set<String> = loaded,
+        guideUrls: List<String> = listOf("https://guide.example/epg.xml")
+    ) = guideWindowFingerprint(
+        sourceUrl = "https://provider.example/playlist.m3u",
+        guideUrls = guideUrls,
+        channelIds = ids,
+        channels = channels
+    )
+
+    private fun channel(
+        id: String,
+        name: String = "Channel $id",
+        tvgId: String? = id,
+        logoUrl: String? = null,
+        streamUrl: String = "http://host/$id.ts"
+    ) = IptvChannel(
+        id = id,
+        name = name,
+        displayName = name,
+        streamUrl = streamUrl,
+        groupTitle = "General",
+        logoUrl = logoUrl,
+        tvgId = tvgId,
+        tvgName = name,
+        tvgChno = null,
+        catchup = null,
+        catchupDays = null,
+        catchupSource = null,
+        providerChannelId = null
+    )
+
+    @Test
+    fun `an empty guide window has no fingerprint to compare`() {
+        assertNull(fingerprint(listOf(channel("bbc1")), ids = emptySet()))
+    }
+
+    @Test
+    fun `the same channels produce the same fingerprint`() {
+        val channels = listOf(channel("bbc1"), channel("itv1"), channel("other"))
+        assertEquals(fingerprint(channels), fingerprint(channels.toList()))
+    }
+
+    @Test
+    fun `channel details outside the guide window do not change it`() {
+        // A background refresh routinely touches logos and stream URLs; that
+        // must not throw away loaded programmes and re-run every batch.
+        val before = listOf(channel("bbc1"), channel("itv1"))
+        val after = listOf(
+            channel("bbc1", name = "Channel bbc1", logoUrl = "http://logo/new.png"),
+            channel("itv1", name = "Channel itv1", streamUrl = "http://host/moved.ts")
+        )
+        assertEquals(fingerprint(before), fingerprint(after))
+    }
+
+    @Test
+    fun `matcher inputs do change it`() {
+        val before = listOf(channel("bbc1", name = "BBC One"), channel("itv1"))
+        // Rename: the guide is matched by name, so programmes may differ now.
+        assertNotEquals(
+            fingerprint(before),
+            fingerprint(listOf(channel("bbc1", name = "BBC One HD"), channel("itv1")))
+        )
+        // tvg-id is the strongest match key there is.
+        assertNotEquals(
+            fingerprint(before),
+            fingerprint(listOf(channel("bbc1", name = "BBC One", tvgId = "bbc1.uk"), channel("itv1")))
+        )
+    }
+
+    @Test
+    fun `a different guide source or a lost channel does change it`() {
+        val before = listOf(channel("bbc1"), channel("itv1"))
+        assertNotEquals(
+            fingerprint(before),
+            fingerprint(before, guideUrls = listOf("https://other.example/epg.xml"))
+        )
+        // Requested but no longer in the playlist: the window really shrinks.
+        assertNotEquals(
+            fingerprint(before),
+            fingerprint(listOf(channel("bbc1")))
+        )
     }
 }

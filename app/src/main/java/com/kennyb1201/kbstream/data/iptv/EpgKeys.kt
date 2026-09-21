@@ -71,6 +71,54 @@ internal fun simplifyEpgChannelName(value: String): String? {
     return simplified.ifBlank { null }
 }
 
+/**
+ * Fingerprint of everything a guide query reads out of a playlist: the source
+ * URLs plus the identity of the channels currently loaded into the guide
+ * window. A background playlist refresh almost always returns the same
+ * channels, and treating it as a change wiped the loaded guide and re-ran the
+ * whole lineup query (snapshot rebuild + every program batch) for rows that
+ * could not have differed — visible as two identical `LINEUP QUERY` passes a
+ * couple of seconds apart on guide entry.
+ *
+ * Callers compare the fingerprint taken before and after a refresh: equal
+ * means the loaded guide is still valid. Returns null when nothing is loaded,
+ * because then there is nothing to compare against (and the requery is cheap).
+ */
+internal fun guideWindowFingerprint(
+    sourceUrl: String?,
+    guideUrls: List<String>,
+    channelIds: Set<String>,
+    channels: List<IptvChannel>
+): String? {
+    if (channelIds.isEmpty()) return null
+
+    val builder = StringBuilder(64 + channelIds.size * 64)
+    builder.append(sourceUrl.orEmpty()).append(SEP_FIELD)
+        .append(guideUrls.joinToString(",")).append(SEP_FIELD)
+
+    var found = 0
+    for (channel in channels) {
+        if (channel.id !in channelIds) continue
+        found++
+        // Everything the matcher reads, and nothing else: a logo or stream URL
+        // change must not invalidate programmes that are already loaded.
+        builder.append(channel.id).append(SEP_PART)
+            .append(channel.name).append(SEP_PART)
+            .append(channel.displayName).append(SEP_PART)
+            .append(channel.groupTitle.orEmpty()).append(SEP_PART)
+            .append(channel.tvgId.orEmpty()).append(SEP_PART)
+            .append(channel.tvgName.orEmpty()).append(SEP_FIELD)
+    }
+
+    // A requested channel that vanished from the playlist shrinks the window,
+    // which is a real change even when every surviving channel is identical.
+    builder.append(SEP_FIELD).append(found)
+    return builder.toString()
+}
+
+private const val SEP_FIELD = '\u0000'
+private const val SEP_PART = '\u0001'
+
 private val BRACKETED_TEXT = Regex("""\[[^\]]*]""")
 private val PARENTHESIZED_TEXT = Regex("""\([^)]*\)""")
 private val NON_LOOKUP_CHARACTERS = Regex("""[^a-z0-9.]+""")

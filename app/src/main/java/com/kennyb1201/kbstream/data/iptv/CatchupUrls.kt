@@ -16,6 +16,13 @@ package com.kennyb1201.kbstream.data.iptv
  * Returns null when the template carries no recognized token — substituting
  * nothing would produce a URL that does not actually point at the requested
  * broadcast, so the caller must treat the channel as non-catchup instead.
+ *
+ * It also returns null when a placeholder SURVIVES substitution. A template
+ * mixing a supported token with one from a family not listed above (Xtream
+ * panels also use `{lutc}`, `{duration}`, `{Y}`/`{H}` …) would otherwise
+ * produce a plausible-looking URL with the token still embedded, which fails
+ * server-side or silently returns the wrong broadcast. Declining the template
+ * costs the catch-up entry; serving it costs a dead stream.
  */
 object CatchupUrls {
 
@@ -65,8 +72,13 @@ object CatchupUrls {
             .replace("$dollar{MM}", "%02d".format(start.minute))
             .replace("$dollar{ss}", "%02d".format(start.second))
 
-        return if (out != template) out else null
+        if (out == template) return null
+        // Any leftover {placeholder} means a token family we do not speak.
+        if (LEFTOVER_PLACEHOLDER.containsMatchIn(out)) return null
+        return out
     }
+
+    private val LEFTOVER_PLACEHOLDER = Regex("""\{[^{}]+}""")
 
     /** How many days of DVR the channel advertises (0 = unknown/unlimited). */
     fun daysSupported(catchupDays: String?): Int =
