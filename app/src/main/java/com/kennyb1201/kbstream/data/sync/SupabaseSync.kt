@@ -186,6 +186,14 @@ object SupabaseSync {
             supabaseUrl = BuildConfig.SUPABASE_URL,
             supabaseKey = BuildConfig.SUPABASE_ANON_KEY
         ) {
+            // Pin the Ktor engine instead of letting the SDK resolve one off
+            // the classpath. Realtime opens a websocket per channel, so the
+            // engine MUST advertise WebSocketCapability — the old
+            // ktor-client-android (HttpURLConnection) engine does not, and
+            // every join died with "Engine doesn't support WebSocketCapability"
+            // while the SDK retried forever. OkHttp is the websocket-capable
+            // engine here and the project already ships okhttp 4.12.0.
+            httpEngine = io.ktor.client.engine.okhttp.OkHttp.create { }
             install(Auth)
             install(Postgrest)
             install(Realtime)

@@ -213,7 +213,15 @@ dependencies {
     implementation("io.github.jan-tennert.supabase:gotrue-kt")
     implementation("io.github.jan-tennert.supabase:postgrest-kt")
     implementation("io.github.jan-tennert.supabase:realtime-kt")
-    implementation("io.ktor:ktor-client-android:2.3.12")
+    // MUST be the OkHttp engine, not ktor-client-android. Realtime needs a
+    // WebSocket-capable Ktor engine; the Android engine is HttpURLConnection
+    // based and exposes NO WebSocketCapability, so every channel join dies
+    // with "Engine doesn't support WebSocketCapability" and the SDK retries
+    // forever. That left live sync dead AND made the 15s realtime health
+    // watcher rebuild three dead channels + run a full pullAll on every
+    // cycle, i.e. permanent background network/DB churn during playback.
+    // OkHttp is already a dependency here (REST datasource, Coil).
+    implementation("io.ktor:ktor-client-okhttp:2.3.12")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
     implementation("androidx.media3:media3-exoplayer:1.9.0")
