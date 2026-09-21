@@ -135,6 +135,14 @@ private val RETRY_BACKOFF_MS = listOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 3
  * after a decoder error, so that is where a decoder failure jumps to.
  */
 private const val RAW_EXTRACTOR_PROBE_ATTEMPT = 3
+
+/**
+ * Grace period before rebuilding after a Dolby Vision decoder failure: the
+ * vendor decoder on the affected TCL/Realtek boxes needs seconds to release
+ * (ACodec force-releases it), and a rebuild inside that window cannot get a
+ * new decoder at all.
+ */
+private const val DV_STRIP_REBUILD_DELAY_MS = 3_000L
 private val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 
 // Aspect ratio modes. 0-2 map to the Media3 resize modes (see
@@ -477,6 +485,14 @@ class NativePlayerActivity : ComponentActivity() {
     // apps' players do: same file, same URL, just presented to the decoder
     // as plain HDR10/HEVC. Never loop the retry.
     private var dvStripRetryDone = false
+
+    /**
+     * Whether the session currently on screen actually used Dolby Vision
+     * passthrough. Read by the learned-failure clearing in
+     * [markFirstFrameRendered]: a playback that ran with passthrough
+     * *suppressed* says nothing about whether passthrough works.
+     */
+    private var dvPassthroughActive = false
     // The TextureView installed by that fallback (Media3 1.9's PlayerView has
     // no public setSurfaceType, so the internal surface view is swapped via
     // reflection). Kept across player rebuilds so every session routes the
@@ -2943,6 +2959,7 @@ class NativePlayerActivity : ComponentActivity() {
                     nowMillis = System.currentTimeMillis()
                 )
         val nativeDvSupported = deviceNativeDvSupported && !nativeDvSuppressed
+        dvPassthroughActive = nativeDvSupported
         if (nativeDvSuppressed) {
             Log.i(
                 "PLAYER_DV",
@@ -3555,12 +3572,19 @@ class NativePlayerActivity : ComponentActivity() {
                 reconnectingContainer.visibility = View.VISIBLE
                 bufferingSpinner.visibility = View.GONE
                 reconnectingText.text = "This TV can't play Dolby Vision here — switching to HDR10…"
+                // Not the usual 500ms: this box's DV decoder does not stop
+                // inside ACodec's window — the log shows `forcing the release
+                // of codec` landing ~3s after release, so a rebuild at 500ms
+                // asked for a new 4K decoder while the old component was still
+                // holding its resources and got OMX_ErrorInsufficientResources
+                // back. Both attempts that did play in that session started
+                // after several seconds of quiet.
                 handler.postDelayed(
                     {
                         errorMessageStr = null
                         recreatePlayer()
                     },
-                    500L
+                    DV_STRIP_REBUILD_DELAY_MS
                 )
                 return
             }
@@ -3753,7 +3777,16 @@ class NativePlayerActivity : ComponentActivity() {
         // dvhe/dvh1 label arrived as Dolby Vision (the extractor did not strip
         // it); a stripped one arrives as plain hvc1 and correctly proves
         // nothing.
-        if (dvLabelFromCodec(streamCodec) != null) {
+        //
+        // It only counts when passthrough was ENABLED for this session. The
+        // old check cleared the record for any DV-labelled track, including
+        // playbacks that ran with passthrough suppressed — the one case where
+        // that playback proves nothing. The field log has the loop it made:
+        // "suppressed" at 16:49:38 → played fine → record cleared by that very
+        // playback → the next stream attempted passthrough at 16:49:50 →
+        // OMX_ErrorInsufficientResources → strip → play. Every DV title paid a
+        // failed attempt and a rebuild before landing on the path that works.
+        if (dvPassthroughActive && dvLabelFromCodec(streamCodec) != null) {
             AppPreferences.clearDvPassthroughFailure(this)
         }
     }
