@@ -11,6 +11,7 @@ import com.kennyb1201.kbstream.data.kb.KBContentLoader
 import com.kennyb1201.kbstream.data.kb.KBFolder
 import com.kennyb1201.kbstream.data.kb.KBFilters
 import com.kennyb1201.kbstream.data.kb.KBRail
+import com.kennyb1201.kbstream.data.kb.kbMostVotedSort
 import com.kennyb1201.kbstream.data.tmdb.HeroArtwork
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbDiscoverItem
@@ -513,7 +514,7 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
                         kind = TmdbRailPageSource.Kind.DISCOVER,
                         tmdbId = null,
                         mediaType = mediaType,
-                        sortBy = source.sortBy ?: "popularity.desc",
+                        sortBy = kbMostVotedSort(source.sortBy) ?: "popularity.desc",
                         filters = source.filters
                     )
             }

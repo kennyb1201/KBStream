@@ -205,7 +205,7 @@ class KBContentLoader(context: android.content.Context) {
                         .copy(withCompanies = companyId.toString())
                     tmdbRepository.discoverKB(
                         mediaType = mediaType ?: "movie",
-                        sortBy = source.sortBy ?: "popularity.desc",
+                        sortBy = kbMostVotedSort(source.sortBy) ?: "popularity.desc",
                         filters = filters
                     )?.map { it.toContentItem(mediaType) }
                 }
@@ -216,7 +216,7 @@ class KBContentLoader(context: android.content.Context) {
                         .copy(withNetworks = networkId.toString())
                     tmdbRepository.discoverKB(
                         mediaType = "tv",
-                        sortBy = source.sortBy ?: "popularity.desc",
+                        sortBy = kbMostVotedSort(source.sortBy) ?: "popularity.desc",
                         filters = filters
                     )?.map { it.toContentItem("tv") }
                 }
@@ -253,7 +253,7 @@ class KBContentLoader(context: android.content.Context) {
             else ->
                 tmdbRepository.discoverKB(
                     mediaType = mediaType ?: "movie",
-                    sortBy = source.sortBy ?: "popularity.desc",
+                    sortBy = kbMostVotedSort(source.sortBy) ?: "popularity.desc",
                     filters = source.filters
                 )?.map { it.toContentItem(mediaType) }
         } ?: emptyList()

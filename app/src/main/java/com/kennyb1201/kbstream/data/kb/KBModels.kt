@@ -164,6 +164,19 @@ data class KBFilters(
     }
 }
 
+/**
+ * KB exports a "Top Rated" rail as a vote-AVERAGE sort. Averaging surfaces
+ * obscure titles with a handful of 10/10 votes (heavily anime/shorts), which
+ * is not what a "Top Rated" rail should show. Any vote-average sort is served
+ * as "most voted" (vote_count.desc) instead — the rail keeps the collection's
+ * own title, only the filter changes. Every other sort passes through.
+ */
+internal fun kbMostVotedSort(sortBy: String?): String? =
+    when (sortBy?.trim()?.lowercase()) {
+        "vote_average.desc", "top_rated", "top-rated" -> "vote_count.desc"
+        else -> sortBy
+    }
+
 /** A normalized row of items loaded from any source kind (tmdb/trakt/addon). */
 data class KBContentItem(
     val id: String,
