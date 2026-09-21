@@ -2,12 +2,11 @@ package com.kennyb1201.kbstream.ui.library
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,6 +17,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -36,6 +38,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.ClickableSurfaceDefaults
@@ -89,9 +92,14 @@ fun LibraryScreen(
             .background(Color.Black)
             .padding(horizontal = 24.dp, vertical = 18.dp)
     ) {
-        // Header + filter chips
+        // Header. Title on the left, connection health on the right — each on
+        // ONE line. This used to be a single Row holding the title, nine chips,
+        // a weight spacer AND the status text, so with nine chips the status
+        // text was measured into whatever pixels were left over and wrapped one
+        // letter per line ("S I M K L +"), while the leading chips were pushed
+        // off the left edge.
         Row(
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Bottom,
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(
@@ -100,59 +108,63 @@ fun LibraryScreen(
                 fontWeight = FontWeight.Bold,
                 color = KBAccent
             )
+            Spacer(modifier = Modifier.weight(1f))
+            Text(
+                text = buildList {
+                    if (state.simklConnected) add("SIMKL")
+                    if (state.mdbListConfigured) add("MDBLIST")
+                    add("LOCAL")
+                }.joinToString(" + "),
+                style = MaterialTheme.typography.labelMedium,
+                color = KBTextLo,
+                maxLines = 1,
+                softWrap = false
+            )
+        }
 
-            Spacer(modifier = Modifier.width(18.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
-            LibraryFilter.entries.forEach { filter ->
+        // Every control lives in ONE horizontally scrollable strip: focus walks
+        // it left to right and the strip scrolls to follow, so no chip is ever
+        // clipped at an edge and none has to wrap its label ("RATING" was
+        // breaking into "RATI/NG" when the old fixed Row ran out of room). The
+        // sort group is separated by a rule rather than pushed to its own line.
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            items(LibraryFilter.entries, key = { "filter_${it.name}" }) { filter ->
                 LibraryFilterChip(
                     label = filter.label,
                     selected = state.filter == filter,
                     onClick = { viewModel.setFilter(filter) },
-                    modifier = if (
-                        filter == LibraryFilter.entries.first()
-                    ) {
-                        Modifier
-                            .focusRequester(topFocusRequester)
-                            .padding(end = 8.dp)
+                    modifier = if (filter == LibraryFilter.entries.first()) {
+                        Modifier.focusRequester(topFocusRequester)
                     } else {
-                        Modifier.padding(end = 8.dp)
+                        Modifier
                     }
                 )
             }
 
-            Spacer(modifier = Modifier.weight(1f))
-
             // UNWATCHED toggle: hides rows already marked watched.
-            LibraryFilterChip(
-                label = if (state.hideWatched) "WATCHED HIDDEN" else "UNWATCHED",
-                selected = state.hideWatched,
-                onClick = { viewModel.toggleHideWatched() },
-                modifier = Modifier.padding(end = 8.dp)
-            )
-
-            // Sort chips: Added / Title / Date / Rating.
-            LibrarySort.entries.forEach { sort ->
+            item(key = "unwatched") {
                 LibraryFilterChip(
-                    label = sort.label,
-                    selected = state.sort == sort,
-                    onClick = { viewModel.setSort(sort) },
-                    modifier = Modifier.padding(end = 8.dp)
+                    label = if (state.hideWatched) "WATCHED HIDDEN" else "UNWATCHED",
+                    selected = state.hideWatched,
+                    onClick = { viewModel.toggleHideWatched() }
                 )
             }
 
-            Spacer(modifier = Modifier.width(12.dp))
+            item(key = "sort_rule") { ChipDivider() }
 
-            // Connection status line.
-            val connections = buildList {
-                if (state.simklConnected) add("SIMKL")
-                if (state.mdbListConfigured) add("MDBLIST")
-                add("LOCAL")
+            // Sort chips: Added / Title / Date / Rating.
+            items(LibrarySort.entries, key = { "sort_${it.name}" }) { sort ->
+                LibraryFilterChip(
+                    label = sort.label,
+                    selected = state.sort == sort,
+                    onClick = { viewModel.setSort(sort) }
+                )
             }
-            Text(
-                text = connections.joinToString(" + "),
-                style = MaterialTheme.typography.labelMedium,
-                color = KBTextLo
-            )
         }
 
         Spacer(modifier = Modifier.height(14.dp))
@@ -253,6 +265,28 @@ fun LibraryScreen(
     }
 }
 
+/** Thin rule between the filter group and the sort group in the chip strip. */
+@Composable
+private fun ChipDivider() {
+    Box(
+        modifier = Modifier
+            .padding(horizontal = 4.dp)
+            .width(1.dp)
+            .height(24.dp)
+            .background(KBTextLo.copy(alpha = 0.35f))
+    )
+}
+
+/**
+ * One pill in the Library's control strips.
+ *
+ * Built on the TV clickable Surface, NOT a hand-rolled
+ * `.focusable().clickable()` box. Two stacked focus/click modifiers make two
+ * targets: the D-pad press landed focus on the outer one and only the second
+ * press reached the inner clickable — the "you have to double click chips"
+ * behaviour. A Surface carries focus, activation and the focused colours as a
+ * single target, so one press selects, like every other control in the app.
+ */
 @Composable
 private fun LibraryFilterChip(
     label: String,
@@ -261,18 +295,25 @@ private fun LibraryFilterChip(
     modifier: Modifier = Modifier
 ) {
     var focused by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(14.dp)
 
-    Box(
-        contentAlignment = Alignment.Center,
+    Surface(
+        onClick = onClick,
+        shape = ClickableSurfaceDefaults.shape(shape = shape),
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = when {
+                selected -> KBAccent.copy(alpha = 0.28f)
+                focused -> KBSurfaceRaised
+                else -> KBSurface
+            },
+            contentColor = when {
+                selected -> KBAccent
+                focused -> KBTextHi
+                else -> KBTextLo
+            }
+        ),
         modifier = modifier
-            .clip(RoundedCornerShape(14.dp))
-            .background(
-                when {
-                    selected -> KBAccent.copy(alpha = 0.28f)
-                    focused -> KBSurfaceRaised
-                    else -> KBSurface
-                }
-            )
+            .clip(shape)
             .border(
                 1.dp,
                 when {
@@ -280,18 +321,18 @@ private fun LibraryFilterChip(
                     focused -> KBTextHi
                     else -> KBTextLo.copy(alpha = 0.35f)
                 },
-                RoundedCornerShape(14.dp)
+                shape
             )
             .onFocusChanged { focused = it.isFocused }
-            .focusable()
-            .clickable { onClick() }
-            .padding(horizontal = 14.dp, vertical = 8.dp)
     ) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelLarge,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-            color = if (selected) KBAccent else KBTextLo
+            // A pill is one line by definition.
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
         )
     }
 }
@@ -309,47 +350,57 @@ private fun ItemGrid(
     onItemClick: (String, String) -> Unit,
     onItemLongClick: ((LibraryItem) -> Unit)?,
     ratings: Map<String, Double> = emptyMap(),
-    watchedKeys: Set<String> = emptySet()
+    watchedKeys: Set<String> = emptySet(),
+    modifier: Modifier = Modifier.fillMaxSize()
 ) {
     if (items.isEmpty()) {
         Box(
             contentAlignment = Alignment.Center,
-            modifier = Modifier.fillMaxSize()
+            modifier = modifier
         ) {
             Text(
                 text = emptyText,
                 style = MaterialTheme.typography.bodyLarge,
-                color = KBTextLo
+                color = KBTextLo,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 48.dp)
             )
         }
         return
     }
 
-    LazyColumn(
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-        modifier = Modifier.fillMaxSize()
+    val posterSize = rememberPosterSize()
+
+    // A real grid whose cells are sized from the Poster Size setting, instead
+    // of hand-chunked rows of six: with six hard-coded tiles the row could be
+    // wider than the pane (clipping the last poster) and the tile count never
+    // adapted to the screen or the setting. Adaptive cells always fill the
+    // pane, so every poster is fully visible and nothing is left half cut.
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(minSize = posterSize.width),
+        contentPadding = PaddingValues(bottom = 24.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = modifier
     ) {
-        items(items.chunked(6)) { rowItems ->
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                items(rowItems) { item ->
-                    LibraryPosterCard(
-                        item = item,
-                        sourceLabel = sourceLabel(item),
-                        rating = ratings[LocalLibraryStore.dedupeKey(item)],
-                        isWatched = item.watchedKey() in watchedKeys,
-                        onClick = {
-                            item.navigationId?.let { id ->
-                                onItemClick(item.mediaType, id)
-                            }
-                        },
-                        onLongClick = onItemLongClick?.let { handler ->
-                            { handler(item) }
-                        }
-                    )
+        items(
+            items = items,
+            key = { item -> LocalLibraryStore.dedupeKey(item) }
+        ) { item ->
+            LibraryPosterCard(
+                item = item,
+                sourceLabel = sourceLabel(item),
+                rating = ratings[LocalLibraryStore.dedupeKey(item)],
+                isWatched = item.watchedKey() in watchedKeys,
+                onClick = {
+                    item.navigationId?.let { id ->
+                        onItemClick(item.mediaType, id)
+                    }
+                },
+                onLongClick = onItemLongClick?.let { handler ->
+                    { handler(item) }
                 }
-            }
+            )
         }
     }
 }
@@ -477,7 +528,10 @@ private fun ListsPane(
             onItemClick = onItemClick,
             onItemLongClick = onItemLongClick,
             ratings = ratings,
-            watchedKeys = watchedKeys
+            watchedKeys = watchedKeys,
+            // Takes the remaining width beside the list rail; fillMaxSize
+            // inside a Row measured against the whole row.
+            modifier = Modifier.weight(1f)
         )
     }
 }
@@ -494,7 +548,10 @@ private fun LibraryPosterCard(
     val posterSize = rememberPosterSize()
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.width(posterSize.width)
+        // Fills the grid cell (a grid picks the cell width), so the caption and
+        // source line sit under the poster instead of being measured against a
+        // width the cell may not have.
+        modifier = Modifier.fillMaxWidth()
     ) {
         KBCard(
             onClick = onClick,
