@@ -552,6 +552,9 @@ class NativePlayerActivity : ComponentActivity() {
     // after a quiet period recover by seeking just past the buffered edge,
     // forcing a fresh ranged read. Two recoveries, then the retry/error path.
     private var stallWatchdogToken = 0
+
+    /** How often the heap probe logs while playback is moving. */
+    private val HEAP_LOG_INTERVAL_MS = 10_000L
     private var stallRecoveries = 0
     private var stallLastProgressAtMs = 0L
     private var stallLastPositionMs = -1L
@@ -3096,9 +3099,41 @@ class NativePlayerActivity : ComponentActivity() {
         val bufferDurations = if (resolvedBufferMode == 1) intArrayOf(5_000, 10_000, 1_500, 3_000)
         else intArrayOf(10_000, 30_000, 3_000, 6_000)
 
+        // Media3 buffers sample data as JAVA-HEAP byte[] blocks (DefaultAllocator
+        // uses a plain `newarray byte`, never native/direct buffers), so a
+        // duration-only target is a memory bomb on high-bitrate video: 30 s of a
+        // 4K Dolby Vision release at ~40 Mbps is over 150 MB of LIVE heap, more
+        // than the whole Java heap of the TV boxes this runs on (192 MB growth
+        // limit on the TCL/Realtek class of device). With "prioritize time over
+        // size" the player kept buffering the full 30 s regardless of bytes, the
+        // heap pinned at its cap, GC ran flat out (0% free, ~430 ms per
+        // collection, every allocation blocking) and playback died with
+        // OutOfMemoryError. That OOM then surfaced as a fatal "Cannot create an
+        // instance of class <ViewModel>" the moment Back recomposed Home.
+        //
+        // So cap the buffered BYTES to a slice of the heap this process actually
+        // has — maxMemory() honours android:largeHeap, so the budget follows the
+        // device — and stop prioritizing time over size, which is exactly what
+        // made targetBufferBytes ineffective. Low-bitrate streams never reach
+        // the cap (IPTV's 10 s, ordinary HD), so only 4K/high-bitrate changes.
+        // If the budget were ever too small for a stream, media3 logs "Target
+        // buffer size reached with less than 500ms of buffered media data" and
+        // keeps playing; it does not throw.
+        val maxBufferBudgetBytes =
+            (Runtime.getRuntime().maxMemory() / 8)
+                .coerceIn(24L * 1024 * 1024, 96L * 1024 * 1024)
+                .toInt()
+        Log.i(
+            "PLAYER_PERF",
+            "Buffer budget: ${maxBufferBudgetBytes / (1024 * 1024)}MB of " +
+                "${Runtime.getRuntime().maxMemory() / (1024 * 1024)}MB heap, " +
+                "maxBuffer=${bufferDurations[1]}ms"
+        )
+
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(bufferDurations[0], bufferDurations[1], bufferDurations[2], bufferDurations[3])
-            .setPrioritizeTimeOverSizeThresholds(true).build()
+            .setTargetBufferBytes(maxBufferBudgetBytes)
+            .setPrioritizeTimeOverSizeThresholds(false).build()
 
         // Video and audio are independent. Software video only runs when the
         // video decoder says FFmpeg AND its guards permit it; otherwise video
@@ -3526,6 +3561,7 @@ class NativePlayerActivity : ComponentActivity() {
         ) {
             if (droppedFrames > 0) {
                 Log.w("PLAYER_PERF", "Dropped $droppedFrames frames over ${elapsedMs}ms")
+                maybeLogHeap("dropped", force = true)
             }
     }
 
@@ -4004,6 +4040,35 @@ class NativePlayerActivity : ComponentActivity() {
 
     // --- Stall watchdog ---
 
+    /** Last PLAYER_PERF heap line, so the probe stays a curve, not a flood. */
+    private var lastHeapLogAtMs = 0L
+
+    /**
+     * Java-heap probe. The player's own buffering lives on this heap (media3's
+     * DefaultAllocator hands out byte[] blocks and sizes the video target at
+     * 125 MB by default), so when playback runs out of memory this line is what
+     * says whether the footprint flattened out (buffering) or kept climbing
+     * (something retained). GC count comes along because a climbing
+     * gc-count-per-second is thrash: the playhead starves and frames drop even
+     * though the stream is fine.
+     */
+    private fun maybeLogHeap(reason: String, force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!force && now - lastHeapLogAtMs < HEAP_LOG_INTERVAL_MS) return
+        lastHeapLogAtMs = now
+        val rt = Runtime.getRuntime()
+        val usedMb = (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024)
+        val maxMb = rt.maxMemory() / (1024 * 1024)
+        val gcCount = runCatching {
+            android.os.Debug.getRuntimeStat("art.gc.gc-count")?.toLongOrNull()
+        }.getOrNull()
+        Log.i(
+            "PLAYER_PERF",
+            "Heap ($reason): ${usedMb}MB used / ${maxMb}MB max" +
+                (gcCount?.let { " gcCount=$it" } ?: "")
+        )
+    }
+
     private fun armStallWatchdog() {
         // Only once real playback has begun (first frame rendered) — the slow
         // NNTP first-byte wait (up to ~90s) is legitimate and must never trip
@@ -4038,6 +4103,7 @@ class NativePlayerActivity : ComponentActivity() {
             stallLastProgressAtMs = now
             stallLastPositionMs = positionMs
             stallLastBufferedMs = bufferedMs
+            maybeLogHeap("playing")
             handler.postDelayed({ tickStallWatchdog(token) }, stallTickMs)
             return
         }

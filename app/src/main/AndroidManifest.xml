@@ -36,8 +36,16 @@
         android:name="android.hardware.touchscreen"
         android:required="false" />
 
+    <!-- largeHeap: the app buffers video sample data on the Java heap (media3's
+         DefaultAllocator hands out byte[] blocks), and on the TV boxes this
+         ships to the default cap is only ~192 MB. A 4K Dolby Vision release
+         buffered for 30 s needs more than that on its own, so playback OOMed
+         and took the process down. The heap class is what the player's buffer
+         budget is derived from (see the DefaultLoadControl setup), so raising
+         it raises the budget with it. -->
     <application
         android:name=".MainApplication"
+        android:largeHeap="true"
         android:label="KBStream"
         android:banner="@mipmap/ic_launcher"
         android:icon="@mipmap/ic_launcher"
