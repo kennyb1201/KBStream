@@ -472,55 +472,58 @@ private fun PickerRow(
     modifier: Modifier = Modifier
 ) {
     var focused by remember { mutableStateOf(false) }
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
+    val shape = RoundedCornerShape(12.dp)
+
+    // One TV clickable Surface, not `.focusable().clickable()`: that stack is
+    // two focus targets, so the first D-pad press only landed focus and the
+    // row had to be pressed a second time to actually pick the list.
+    androidx.tv.material3.Surface(
+        onClick = onClick,
+        shape = androidx.tv.material3.ClickableSurfaceDefaults.shape(shape = shape),
+        colors = androidx.tv.material3.ClickableSurfaceDefaults.colors(
+            containerColor = if (focused) KBSurfaceRaised else KBSurface,
+            contentColor = KBTextHi
+        ),
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(
-                when {
-                    focused -> KBSurfaceRaised
-                    else -> KBSurface
-                }
-            )
+            .clip(shape)
             .border(
                 1.dp,
-                when {
-                    focused -> KBAccent
-                    else -> KBTextLo.copy(alpha = 0.25f)
-                },
-                RoundedCornerShape(12.dp)
+                if (focused) KBAccent else KBTextLo.copy(alpha = 0.25f),
+                shape
             )
             .onFocusChanged { focused = it.isFocused }
-            .focusable()
-            .clickable { onClick() }
-            .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = if (focused) KBAccent else KBTextHi,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = sublabel,
-                style = MaterialTheme.typography.labelSmall,
-                color = KBTextLo,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-        trailing?.let {
-            Text(
-                text = it,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold,
-                color = if (trailingAccent) KBAccent else KBTextLo,
-                modifier = Modifier.padding(start = 10.dp)
-            )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (focused) KBAccent else KBTextHi,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = sublabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = KBTextLo,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            trailing?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = if (trailingAccent) KBAccent else KBTextLo,
+                    modifier = Modifier.padding(start = 10.dp)
+                )
+            }
         }
     }
 }

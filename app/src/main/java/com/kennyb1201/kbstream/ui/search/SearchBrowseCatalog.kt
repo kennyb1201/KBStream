@@ -8,8 +8,11 @@ package com.kennyb1201.kbstream.ui.search
  *  - Genres / Keywords      -> Screen.Tag (genre / keyword discover)
  *  - Services & Networks    -> Screen.Studio (service entries carry a
  *                             watch-provider id, so their page runs MOVIES
- *                             + SERIES provider rails; plain network
- *                             entries keep the series-only network page)
+ *                             + SERIES provider rails; a plain network
+ *                             entry runs its series rails, plus MOVIES
+ *                             rails when it also carries the brand's
+ *                             company id — TMDB's only route to a
+ *                             network's movie slate)
  *  - Studios                -> Screen.Studio (company discover)
  *  - Collections            -> Screen.Collection
  *  - Decades                -> Screen.Decade (per-decade page, genre-style
@@ -39,6 +42,11 @@ package com.kennyb1201.kbstream.ui.search
  * provider fields (all null for plain network entries) additionally let a
  * service page run watch-provider rails for everything "On Now" in the
  * US region — see [BROWSE_PROVIDER_ENTRIES].
+ *
+ * [originalsCompanyId] means two different things by entry kind: for a
+ * service it adds a company-driven ORIGINALS rail (movies + TV); for a plain
+ * NETWORK it is what lets the page show movies at all, since network
+ * discover is TV-only.
  */
 data class BrowseEntry(
     val id: Int,
@@ -406,7 +414,7 @@ val BROWSE_NETWORKS = listOf(
     BrowseEntry(16, "CBS"),
     BrowseEntry(19, "FOX"),
     BrowseEntry(33, "MTV"),
-    BrowseEntry(43, "National Geographic"),
+    BrowseEntry(43, "National Geographic", originalsCompanyId = 7521),
     BrowseEntry(4, "BBC One"),
     BrowseEntry(47, "Comedy Central"),
     BrowseEntry(13, "Nickelodeon"),
@@ -418,13 +426,13 @@ val BROWSE_NETWORKS = listOf(
     BrowseEntry(80, "Adult Swim"),
     // Rebrand fix: ABC Family (75) has been Freeform since 2016; the old id
     // showed nothing newer than 2015 in Recent.
-    BrowseEntry(1267, "Freeform"),
+    BrowseEntry(1267, "Freeform", originalsCompanyId = 127128),
     // Second wave — every id verified live via /network/{id} (name match):
     // premium cable, basic cable, and classic broadcast networks. HBO (49)
     // is served by the HBO Max service page above — the provider rails
     // carry every HBO series plus the movie library, so a second
     // series-only chip would just duplicate it.
-    BrowseEntry(30, "USA Network"),
+    BrowseEntry(30, "USA Network", originalsCompanyId = 16642),
     BrowseEntry(74, "Bravo"),
     BrowseEntry(88, "FX"),
     BrowseEntry(1035, "FXX"),
@@ -432,7 +440,7 @@ val BROWSE_NETWORKS = listOf(
     BrowseEntry(68, "TBS"),
     BrowseEntry(77, "Syfy"),
     BrowseEntry(129, "A&E"),
-    BrowseEntry(34, "Lifetime"),
+    BrowseEntry(34, "Lifetime", originalsCompanyId = 3431),
     BrowseEntry(76, "E!"),
     BrowseEntry(24, "BET"),
     // Discovery (64) is served by the Discovery+ service page above — one
@@ -446,20 +454,31 @@ val BROWSE_NETWORKS = listOf(
     // RECENT discover replica confirming live slates. Skipped: UP TV (1180,
     // newest is 2015), Hallmark Movies & Mysteries (dead/rebranded pages),
     // NFL/MLB Network (no TMDB network pages).
-    BrowseEntry(65, "History"),
-    BrowseEntry(244, "Investigation Discovery"),
+    // 2026-09: networks that also get MOVIES rails. TMDB has no
+    // movies-by-network discover, so a network's movie slate is reachable
+    // only through the brand's own production company; [originalsCompanyId]
+    // carries that company id and the network page runs MOVIES · RECENT /
+    // POPULAR / TOP RATED through it. Each id was verified live (exact name
+    // match on /search/company + a non-empty movie discover slate), and the
+    // networks NOT listed here have no such company page in TMDB — TLC,
+    // HGTV, Food Network, Discovery, A&E, E!, BET, AMC, FX, MTV, Bravo,
+    // Starz, TNT/TBS (those two names belong to Turkish and Japanese
+    // broadcasters in TMDB's company space), so they stay series-only
+    // rather than pulling in another country's catalog.
+    BrowseEntry(65, "History", originalsCompanyId = 3507),
+    BrowseEntry(244, "Investigation Discovery", originalsCompanyId = 73761),
     BrowseEntry(84, "TLC"),
     BrowseEntry(210, "HGTV"), // Discovery+ service page covers the brand; HGTV stays its own chip (its own page, series rails)
-    BrowseEntry(91, "Animal Planet"),
-    BrowseEntry(226, "Science Channel"),
-    BrowseEntry(54, "Disney Channel"),
+    BrowseEntry(91, "Animal Planet", originalsCompanyId = 110102),
+    BrowseEntry(226, "Science Channel", originalsCompanyId = 8400),
+    BrowseEntry(54, "Disney Channel", originalsCompanyId = 240533),
     BrowseEntry(44, "Disney XD"),
     BrowseEntry(281, "Disney Junior"),
     BrowseEntry(827, "OWN"),
     BrowseEntry(132, "Oxygen"),
     BrowseEntry(448, "WE tv"),
     BrowseEntry(63, "Game Show Network"),
-    BrowseEntry(384, "Hallmark Channel"),
+    BrowseEntry(384, "Hallmark Channel", originalsCompanyId = 53015),
     BrowseEntry(747, "INSP"),
     BrowseEntry(516, "Pop TV"),
     BrowseEntry(1351, "Bounce TV"),

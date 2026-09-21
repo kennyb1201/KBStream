@@ -1291,10 +1291,11 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             "genres" -> onOpenTagScreen?.invoke(entry.id, entry.name, false, "movie")
             "keywords" -> onOpenTagScreen?.invoke(entry.id, entry.name, true, "movie")
             // Services carry their watch-provider id so their screen runs
-            // movies + series rails; plain network entries have none and
-            // keep the old network page. isNetwork follows the id space
-            // (network unless the entry ids a company) so the header's
-            // logo/detail lookups hit the right TMDB endpoint.
+            // movies + series rails; a plain network entry has none, so it
+            // runs the network page — series rails, plus MOVIES rails when
+            // the entry also carries the brand's company id. isNetwork
+            // follows the id space (network unless the entry ids a company)
+            // so the header's logo/detail lookups hit the right endpoint.
             "services" -> onOpenStudioScreen?.invoke(
                 entry.id,
                 entry.name,

@@ -1,11 +1,7 @@
 package com.kennyb1201.kbstream.ui.components
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -15,14 +11,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
+import androidx.tv.material3.ClickableSurfaceDefaults
+import androidx.tv.material3.MaterialTheme
+import androidx.tv.material3.Surface
+import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.tmdb.TmdbGenre
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -69,6 +66,16 @@ fun GenreChipRow(
     }
 }
 
+/**
+ * One genre chip.
+ *
+ * Built on the TV clickable [Surface] rather than a Box with
+ * `.focusable().clickable()`: that stack was TWO focus targets, so a D-pad
+ * press landed on the outer one and only the second press reached the
+ * clickable — the "press twice to filter" behaviour. One Surface means
+ * focus, activation and the focused colours are a single target (the same
+ * pattern the Library filter chips and the Home rail list use).
+ */
 @Composable
 private fun DiscoverFilterChip(
     label: String,
@@ -77,18 +84,25 @@ private fun DiscoverFilterChip(
     onClick: () -> Unit
 ) {
     var focused by remember { mutableStateOf(focusedInitial) }
+    val shape = RoundedCornerShape(14.dp)
 
-    Box(
-        contentAlignment = Alignment.Center,
+    Surface(
+        onClick = onClick,
+        shape = ClickableSurfaceDefaults.shape(shape = shape),
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = when {
+                selected -> KBAccent.copy(alpha = 0.28f)
+                focused -> KBSurfaceRaised
+                else -> KBSurface
+            },
+            contentColor = when {
+                selected -> KBAccent
+                focused -> KBTextHi
+                else -> KBTextLo
+            }
+        ),
         modifier = Modifier
-            .clip(RoundedCornerShape(14.dp))
-            .background(
-                when {
-                    selected -> KBAccent.copy(alpha = 0.28f)
-                    focused -> KBSurfaceRaised
-                    else -> KBSurface
-                }
-            )
+            .clip(shape)
             .border(
                 1.dp,
                 when {
@@ -96,18 +110,19 @@ private fun DiscoverFilterChip(
                     focused -> KBTextHi
                     else -> KBTextLo.copy(alpha = 0.35f)
                 },
-                RoundedCornerShape(14.dp)
+                shape
             )
             .onFocusChanged { focused = it.isFocused }
-            .focusable()
-            .clickable { onClick() }
-            .padding(horizontal = 14.dp, vertical = 8.dp)
     ) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelLarge,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-            color = if (selected) KBAccent else KBTextLo
+            // A pill is one line by definition — a squeezed chip is what
+            // produced the vertical stack of single letters.
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
         )
     }
 }

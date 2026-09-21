@@ -138,16 +138,25 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     /** Genre chips act on the loaded entity's base dimension. */
     fun crossGenreBase(): CrossBase? {
         val id = currentId ?: return null
+        // A network dimension is TV-only in TMDB's discover, so the genre
+        // rails need the brand's company id to keep the MOVIES rails alive
+        // once a genre chip is active.
+        val networkCompanyId = if (currentNetworkIsCompany) null else currentOriginalsCompanyId
         return when {
             // A watch-provider base needs the provider id; entries whose
             // header id is the company itself use the company kind.
             currentProviderId != null -> CrossBase("provider", currentProviderId!!)
             currentNetworkOrCompanyId != null -> CrossBase(
                 if (currentNetworkIsCompany) "company" else "network",
-                currentNetworkOrCompanyId!!
+                currentNetworkOrCompanyId!!,
+                companyId = networkCompanyId
             )
             // Plain network/studio page: header id IS the dimension.
-            else -> CrossBase(if (currentIsNetwork) "network" else "company", id)
+            else -> CrossBase(
+                if (currentIsNetwork) "network" else "company",
+                id,
+                companyId = if (currentIsNetwork) currentOriginalsCompanyId else null
+            )
         }
     }
 
@@ -208,11 +217,15 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 .onFailure { Log.w("STUDIO_VM", "browse genres failed: ${it.message}") }
         }
 
-        // Showtime-style entries have no provider id but DO carry originals
-        // ids - they take the service path so the network ORIGINALS rail and
-        // the company MOVIES originals render (a plain network page would
-        // drop the movie slate entirely).
-        val serviceRoute = providerId != null || originalsCompanyId != null
+        // Anything with a watch provider, or a company-identified brand
+        // (niche streamers whose header id IS the company), runs the service
+        // rails. A plain NETWORK entry keeps the network route even when it
+        // carries a company id: the network page now renders its MOVIES
+        // rails through that company (see TmdbRepository.getByNetwork), so
+        // it no longer has to give up its series rails to see the movie
+        // slate — which is what the old routing did.
+        val serviceRoute = providerId != null ||
+            (originalsCompanyId != null && !isNetwork)
 
         viewModelScope.launch {
             _isLoading.value = true
@@ -258,7 +271,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                             originalsCompanyId = originalsCompanyId
                         )
                     isNetwork ->
-                        tmdbRepository.getByNetwork(id)
+                        tmdbRepository.getByNetwork(id, companyId = originalsCompanyId)
                     else ->
                         tmdbRepository.getByCompany(id)
                 }
@@ -310,7 +323,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                             title = title,
                             page = pageNumber
                         )
-                    currentProviderId != null || currentOriginalsCompanyId != null ->
+                    // Provider rails and company-identified brands first:
+                    // service entries are `isNetwork` too, so the network
+                    // branch below must not swallow them.
+                    currentProviderId != null ||
+                        (currentOriginalsCompanyId != null && !currentIsNetwork) ->
                         tmdbRepository.getServiceRailPage(
                             providerId = currentProviderId,
                             title = title,
@@ -320,7 +337,12 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                             originalsCompanyId = currentOriginalsCompanyId
                         )
                     currentIsNetwork ->
-                        tmdbRepository.getNetworkRailPage(screenId, title, pageNumber)
+                        tmdbRepository.getNetworkRailPage(
+                            screenId,
+                            title,
+                            pageNumber,
+                            companyId = currentOriginalsCompanyId
+                        )
                     else ->
                         tmdbRepository.getCompanyRailPage(screenId, title, pageNumber)
                 }

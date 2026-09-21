@@ -13,6 +13,23 @@ package com.kennyb1201.kbstream.data.tmdb
  */
 internal object TmdbRailPages {
 
+    /**
+     * Rail titles a NETWORK screen loads, in display order. MOVIES rails
+     * exist only when the entry carries the brand's TMDB company id: network
+     * discover is TV-only, and a rail titled "MOVIES · …" against a network
+     * id returns nothing (see [networkPage]).
+     */
+    internal fun networkRailTitles(companyId: Int?): List<String> = buildList {
+        add("SERIES · RECENT")
+        add("SERIES · POPULAR")
+        add("SERIES · TOP RATED")
+        if (companyId != null) {
+            add("MOVIES · RECENT")
+            add("MOVIES · POPULAR")
+            add("MOVIES · TOP RATED")
+        }
+    }
+
     suspend fun genrePage(
         repo: TmdbRepository,
         genreId: Int,
@@ -175,13 +192,30 @@ internal object TmdbRailPages {
         return repo.finishRailPage(results)
     }
 
+    /**
+     * One rail of a TV network's screen.
+     *
+     * TMDB has no movies-by-network discover (a network id simply is not a
+     * company id), so a network's MOVIES rails run through the brand's
+     * production company when [companyId] is known — that is the only
+     * mapping TMDB offers, and it is why a network page used to be
+     * series-only. Without a [companyId] the movie rails are empty, not
+     * wrong: they return nothing rather than pulling in another brand's
+     * catalog.
+     */
     suspend fun networkPage(
         repo: TmdbRepository,
         networkId: Int,
         title: String,
-        page: Int
+        page: Int,
+        companyId: Int? = null
     ): TagRailPage {
         if (repo.apiKey.isBlank()) return TagRailPage(emptyList(), false)
+
+        if (title.startsWith("MOVIES")) {
+            return companyId?.let { companyPage(repo, it, title, page) }
+                ?: TagRailPage(emptyList(), false)
+        }
 
         val results = when (title) {
             "SERIES · RECENT" -> runCatching {

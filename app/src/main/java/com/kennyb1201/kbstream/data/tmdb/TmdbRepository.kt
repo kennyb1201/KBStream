@@ -39,7 +39,16 @@ data class StudioSection(val title: String, val items: List<StudioItem>)
  * every screen can offer "browse this dimension by genre" without new
  * endpoints. kind: provider | company | network | keyword | decade.
  */
-data class CrossBase(val kind: String, val id: Int)
+data class CrossBase(
+    val kind: String,
+    val id: Int,
+    /**
+     * For a `network` base: the brand's TMDB company id. Network discover is
+     * TV-only, so a genre-filtered network screen's MOVIES rails run through
+     * company discover instead (null = no movie rails on that screen).
+     */
+    val companyId: Int? = null
+)
 
 data class TagRailPage(
     val items: List<StudioItem>,
@@ -92,8 +101,16 @@ class TmdbRepository private constructor(context: Context) {
     /** TOP-RATED / "Most Voted" rail floor (sort is vote_count.desc). */
     internal val minTopRatedVoteCount = 10
 
-    /** RECENT-rail floor: newest-first with only junk filtered out. */
-    internal val minRecentVoteCount = 5
+    /**
+     * RECENT-rail floor: none. These rails are strictly newest-first, and a
+     * vote floor can only punch holes in a chronological list — a brand-new
+     * title has almost no votes yet, which is exactly the title a "recent"
+     * rail exists to show. (History's whole 2026 slate sat behind the old
+     * floor of 5.) Junk without artwork is dropped by [finishRailPage]
+     * instead, which is what the floor was really guarding against — see
+     * [dropPosterless].
+     */
+    internal val minRecentVoteCount = 0
     internal val today: String
         get() = LocalDate.now().toString()
 
@@ -828,17 +845,24 @@ class TmdbRepository private constructor(context: Context) {
     }
 
     // Same parallelization as getInitialGenreSections.
-    suspend fun getInitialNetworkSections(networkId: Int): List<StudioSection> = coroutineScope {
-        val pages = listOf(
-            async { getNetworkRailPage(networkId, "SERIES · RECENT", 1) },
-            async { getNetworkRailPage(networkId, "SERIES · POPULAR", 1) },
-            async { getNetworkRailPage(networkId, "SERIES · TOP RATED", 1) }
-        ).awaitAll()
-        listOfNotNull(
-            pages[0].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · RECENT", it) },
-            pages[1].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · POPULAR", it) },
-            pages[2].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · TOP RATED", it) }
-        )
+    /**
+     * A network's rails: its series, plus its movies when the browse entry
+     * also carries the brand's TMDB company id ([companyId]) — network
+     * discover is TV-only, so the movie rails go through company discover
+     * (see [TmdbRailPages.networkPage]). Series stay first: they are what a
+     * network page is for, and the movie rails are the bonus.
+     */
+    suspend fun getInitialNetworkSections(
+        networkId: Int,
+        companyId: Int? = null
+    ): List<StudioSection> = coroutineScope {
+        val titles = TmdbRailPages.networkRailTitles(companyId)
+        val pages = titles.map { title ->
+            async { getNetworkRailPage(networkId, title, 1, companyId) }
+        }.awaitAll()
+        titles.mapIndexed { index, title ->
+            pages[index].items.takeIf { it.isNotEmpty() }?.let { StudioSection(title, it) }
+        }.filterNotNull()
     }
 
     // Same parallelization as getInitialGenreSections.
@@ -915,7 +939,15 @@ class TmdbRepository private constructor(context: Context) {
             "POPULAR" -> minVoteCount
             else -> minTopRatedVoteCount
         }
-        if (base.kind == "network" && !isTv) return TagRailPage(emptyList(), false)
+        // A network base is TV-only in TMDB's discover (a network id is not
+        // a company id), so its MOVIES rails run through the brand's company
+        // id when the screen has one. Without it they stay empty, exactly as
+        // before — never another brand's catalog.
+        val networkMovieCompanyId = when {
+            base.kind != "network" || isTv -> null
+            base.companyId != null -> base.companyId
+            else -> return TagRailPage(emptyList(), false)
+        }
 
         val filters = com.kennyb1201.kbstream.data.kb.KBFilters(
             voteCountGte = voteFloor,
@@ -929,8 +961,12 @@ class TmdbRepository private constructor(context: Context) {
             releaseDateLte = today,
             withWatchProviders = if (base.kind == "provider") base.id.toString() else null,
             watchRegion = if (base.kind == "provider") "US" else null,
-            withCompanies = if (base.kind == "company") base.id.toString() else null,
-            withNetworks = if (base.kind == "network") base.id.toString() else null,
+            withCompanies = when {
+                base.kind == "company" -> base.id.toString()
+                networkMovieCompanyId != null -> networkMovieCompanyId.toString()
+                else -> null
+            },
+            withNetworks = if (base.kind == "network" && isTv) base.id.toString() else null,
             withKeywords = if (base.kind == "keyword") base.id.toString() else null,
             year = if (base.kind == "decade") base.id else null
         )
@@ -966,7 +1002,9 @@ class TmdbRepository private constructor(context: Context) {
     ): List<StudioSection> = coroutineScope {
         val titles = when (base.kind) {
             "decade" -> DECADE_RAIL_TITLES
-            "network" -> listOf("SERIES \u00B7 RECENT", "SERIES \u00B7 POPULAR", "SERIES \u00B7 TOP RATED")
+            // Same rail set when a genre chip is active — the genre filter
+            // must not silently drop the page's movie rails.
+            "network" -> TmdbRailPages.networkRailTitles(base.companyId)
             else -> SERVICE_RAIL_TITLES
         }
         val pages = titles.map { title ->
@@ -1161,13 +1199,23 @@ class TmdbRepository private constructor(context: Context) {
     }
 
     /**
+     * Entries with no artwork. TMDB carries placeholder entries (announced
+     * announcements, festival stubs, merges) that have a title and nothing
+     * else; a poster grid can only render them as an empty card, and the
+     * RECENT rails no longer have a vote floor to keep them out.
+     */
+    private fun dropPosterless(items: List<StudioItem>): List<StudioItem> =
+        items.filter { !it.item.posterPath.isNullOrBlank() }
+
+    /**
      * Shared tail of every rail-page loader (see [TmdbRailPages]): drop
-     * duplicates, apply the digital-release filter when it is on, then the
-     * active profile's kids ceiling. `hasMore` reflects the RAW result set, so
-     * filtering can never stop a rail from paging.
+     * duplicates, drop artwork-less placeholders, apply the digital-release
+     * filter when it is on, then the active profile's kids ceiling. `hasMore`
+     * reflects the RAW result set, so filtering can never stop a rail from
+     * paging.
      */
     internal suspend fun finishRailPage(results: List<StudioItem>): TagRailPage {
-        val distinct = results.distinctBy { it.item.id }
+        val distinct = dropPosterless(results.distinctBy { it.item.id })
 
         val filtered =
             if (isDigitalFilterEnabled()) {
@@ -1192,8 +1240,12 @@ class TmdbRepository private constructor(context: Context) {
     suspend fun getKeywordRailPage(keywordId: Int, title: String, page: Int): TagRailPage =
         TmdbRailPages.keywordPage(this, keywordId, title, page)
 
-    suspend fun getNetworkRailPage(networkId: Int, title: String, page: Int): TagRailPage =
-        TmdbRailPages.networkPage(this, networkId, title, page)
+    suspend fun getNetworkRailPage(
+        networkId: Int,
+        title: String,
+        page: Int,
+        companyId: Int? = null
+    ): TagRailPage = TmdbRailPages.networkPage(this, networkId, title, page, companyId)
 
     suspend fun getCompanyRailPage(companyId: Int, title: String, page: Int): TagRailPage =
         TmdbRailPages.companyPage(this, companyId, title, page)
@@ -1541,8 +1593,11 @@ class TmdbRepository private constructor(context: Context) {
     suspend fun getByKeyword(keywordId: Int): List<StudioSection> =
         getInitialKeywordSections(keywordId)
 
-    suspend fun getByNetwork(networkId: Int): List<StudioSection> =
-        getInitialNetworkSections(networkId)
+    suspend fun getByNetwork(
+        networkId: Int,
+        companyId: Int? = null
+    ): List<StudioSection> =
+        getInitialNetworkSections(networkId, companyId)
 
     /**
      * Best transparent clear-logo for a studio or network, or null when TMDB

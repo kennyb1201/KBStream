@@ -1667,6 +1667,16 @@ fun DetailScreen(
                                 }
                         }
 
+                        // Critic/audience ratings, right under the overview.
+                        // They used to render at the very BOTTOM of the page
+                        // inside the REVIEWS section — under cast, network and
+                        // production — so in practice they were never seen.
+                        mdbListRatings?.takeIf { it.hasAny }?.let { ratings ->
+                            item(key = "ratingsrow") {
+                                MdbListRatingsStrip(ratings = ratings)
+                            }
+                        }
+
                         if (detailFacts.isNotEmpty()) {
                             item(key = "detailfacts") {
                                 LazyRow(
@@ -2555,7 +2565,7 @@ fun DetailScreen(
                         val reviews = allReviews
                             .ifEmpty { tmdbDetail?.reviews?.results.orEmpty() }
 
-                        if (reviews.isNotEmpty() || mdbListRatings?.hasAny == true) {
+                        if (reviews.isNotEmpty()) {
                             item(key = "reviewsheader") {
                                 Text(
                                     "REVIEWS",
@@ -2570,49 +2580,6 @@ fun DetailScreen(
                                 )
                             }
 
-                            if (mdbListRatings?.hasAny == true) {
-                                item(key = "criticratingsrow") {
-                                    Row(
-                                        modifier = Modifier
-                                            .padding(start = 24.dp, top = 10.dp),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        listOf(
-                                            "IMDb" to mdbListRatings?.imdb,
-                                            "RT" to mdbListRatings?.rottenTomatoes,
-                                            "TMDB" to mdbListRatings?.tmdb,
-                                            "Trakt" to mdbListRatings?.trakt,
-                                            "LB" to mdbListRatings?.letterboxd,
-                                            "MAL" to mdbListRatings?.myAnimeList,
-                                            "MC" to mdbListRatings?.metacritic
-                                        ).forEach { (label, value) ->
-                                            if (value != null) {
-                                                // Pure status chip: a Box can never
-                                                // receive focus, so D-pad navigation
-                                                // skips straight past it.
-                                                Column(
-                                                    modifier = Modifier
-                                                        .clip(RoundedCornerShape(10.dp))
-                                                        .background(KBSurfaceRaised)
-                                                        .padding(horizontal = 14.dp, vertical = 10.dp)
-                                                ) {
-                                                    Text(
-                                                        text = label,
-                                                        color = KBTextLo,
-                                                        style = MaterialTheme.typography.labelSmall
-                                                    )
-                                                    Text(
-                                                        text = value,
-                                                        color = KBAccent,
-                                                        style = MaterialTheme.typography.titleMedium,
-                                                        fontWeight = FontWeight.SemiBold
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
 
                             item(key = "reviewsrow") {
                                 LazyRow(
