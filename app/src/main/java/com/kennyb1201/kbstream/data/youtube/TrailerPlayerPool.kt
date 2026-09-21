@@ -1,8 +1,10 @@
 package com.kennyb1201.kbstream.data.youtube
 
 import android.content.Context
+import androidx.media3.common.Player
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
 
 /**
  * Reuses one lightly buffered player for short inline hero trailers.
@@ -28,7 +30,22 @@ object TrailerPlayerPool {
     fun acquire(builder: () -> ExoPlayer): ExoPlayer {
         player?.let { return it }
         return builder()
-            .also { player = it }
+            .also { built ->
+                // The pool is the single point every inline trailer goes
+                // through, so this is where the guide-write gate learns that
+                // the hero is playing: a per-composable listener would be
+                // clobbered by the outgoing instance of a hero crossfade
+                // reporting "stopped" while the incoming one plays on the
+                // same shared player.
+                built.addListener(
+                    object : Player.Listener {
+                        override fun onIsPlayingChanged(isPlaying: Boolean) {
+                            EpgWriteGate.setInlinePlaybackActive(isPlaying)
+                        }
+                    }
+                )
+                player = built
+            }
     }
 
     /**
@@ -42,6 +59,10 @@ object TrailerPlayerPool {
             p.stop()
             p.clearMediaItems()
         }
+        // stop() delivers onIsPlayingChanged, but do not depend on it: the
+        // gate must never be left holding guide writes because a callback was
+        // missed on a released instance.
+        EpgWriteGate.setInlinePlaybackActive(false)
     }
 
     /**
@@ -58,5 +79,6 @@ object TrailerPlayerPool {
     fun release() {
         player?.release()
         player = null
+        EpgWriteGate.setInlinePlaybackActive(false)
     }
 }

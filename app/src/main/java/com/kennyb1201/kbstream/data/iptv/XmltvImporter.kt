@@ -157,6 +157,10 @@ class XmltvImporter(
         // Full document parsed: atomically swap the staged rows into the
         // live guide. @Transaction — the old guide is never briefly absent
         // while reads land between the delete and the re-key.
+        //
+        // This is the single heaviest guide write (re-keying every imported
+        // row), so it is the one most worth deferring past playback.
+        EpgWriteGate.holdWhilePlaying()
         val swapped = try {
             dao.swapStagedGuideIntoLive(
                 sourceUrl = sourceUrl,
@@ -198,6 +202,10 @@ class XmltvImporter(
 
     private suspend fun flushChannels(batch: MutableList<EpgChannelEntity>) {
     if (batch.isEmpty()) return
+    // Holding inside the flush also parks the parse loop above it, so a
+    // running import stops pulling the (possibly 60 MB) guide off the
+    // network while the player is up - not just the row write.
+    EpgWriteGate.holdWhilePlaying()
     dao.insertChannels(batch)
     batch.clear()
     currentCoroutineContext().ensureActive()
@@ -205,6 +213,7 @@ class XmltvImporter(
 
 private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
     if (batch.isEmpty()) return
+    EpgWriteGate.holdWhilePlaying()
     dao.insertPrograms(batch)
     batch.clear()
     currentCoroutineContext().ensureActive()

@@ -20,6 +20,19 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToInt
+
+/**
+ * `progress` for POST /scrobble/{start,pause,stop}, as the whole percentage
+ * MDBList validates: a fractional value is rejected with HTTP 400
+ * ("progress: Ensure that there are no more than 5 digits in total."), and
+ * the player hands in a computed position/length ratio scaled to 0-100, so
+ * its raw Double (6.184509511134195) failed every live scrobble — nothing
+ * ever showed up as now-playing while the separate /sync/watched writes kept
+ * working. Clamped so a position past the reported end can never overflow.
+ */
+internal fun mdblistScrobbleProgress(progress: Double): Int =
+    if (progress.isNaN()) 0 else progress.roundToInt().coerceIn(0, 100)
 
 /**
  * One entry inside an MDBList list or watchlist (GET /lists/{id}/items,
@@ -364,7 +377,7 @@ object MdbListClient {
     //
     // Body (schema: POST /scrobble/{start,pause,stop}):
     //
-    //   { movie: { ids: { imdb, tmdb } }, progress: 15.5 }
+    //   { movie: { ids: { imdb, tmdb } }, progress: 15 }
     //   { show:  { ids: { imdb, tmdb }, season: 1, episode: 2 }, progress: 10 }
     //
     // The episode target — `season`/`episode` OR the nested
@@ -399,9 +412,18 @@ object MdbListClient {
             if (episode != null) target.put("episode", episode)
         }
 
+        // `progress` is a whole percentage here, not a fraction and not a
+        // high-precision double. MDBList validates it strictly — a fractional
+        // value is rejected with HTTP 400 "progress: Ensure that there are no
+        // more than 5 digits in total." — and the player passes a computed
+        // position/length ratio scaled to 0-100, so the raw Double
+        // (6.184509511134195) failed EVERY live scrobble/start|pause|stop.
+        // That is why sessions never appeared in the dashboard while the
+        // separate /sync/watched writes kept working. Round to whole percent;
+        // the API has no sub-percent resolution to preserve.
         return JSONObject()
             .put(if (isMovie) "movie" else "show", target)
-            .put("progress", progress)
+            .put("progress", mdblistScrobbleProgress(progress))
     }
 
     private suspend fun postScrobble(

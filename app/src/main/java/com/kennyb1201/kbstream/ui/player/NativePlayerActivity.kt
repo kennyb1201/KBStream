@@ -68,6 +68,7 @@ import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.addon.StreamBehaviorHints
 import com.kennyb1201.kbstream.data.badges.StreamBadge
+import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
 import com.kennyb1201.kbstream.data.iptv.LiveChannelZapRegistry
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
@@ -1379,6 +1380,12 @@ class NativePlayerActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Bulk guide (EPG) writes wait for playback to end while this activity
+        // is on screen: an XMLTV import re-keying thousands of rows underneath
+        // a starting player is what turned into multi-hundred-millisecond GC
+        // pauses and a multi-second rebuffer stall. Cleared in onStop, with
+        // onDestroy as the safety net.
+        EpgWriteGate.setPlayerActive(true)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         // Hide system bars
@@ -3412,6 +3419,45 @@ class NativePlayerActivity : ComponentActivity() {
                     val dims = if (streamWidth > 0) " ${streamWidth}x$streamHeight" else ""
                     msg += "\nThis file's video ($codec$dims) can't be decoded on this TV."
                 }
+            }
+            // Dolby Vision decoder hard failure. Some DV-capable boxes (TCL /
+            // Realtek: OMX.realtek.video.dvhe.st.decoder) advertise
+            // video/dolby-vision, so Media3 reports format_supported=YES, and
+            // then the DV decoder errors out the moment the first frame is
+            // submitted with OMX_ErrorInsufficientResources (0x80001000).
+            // Falling through to scheduleRetry() rebuilt an identical player,
+            // so all six retries failed the same way - and the black-video
+            // watchdog could never help, because this is a hard ERROR rather
+            // than a silent no-output. Take the watchdog's stage-2.5 recovery
+            // directly: one rebuild with Dolby Vision forced to "Strip All"
+            // for this session, which hands the stream to the ordinary HEVC
+            // decoder as plain HDR10. An explicit "None" (pure pass-through)
+            // is the user's own choice and is left alone.
+            if (!forceDvStripForSession &&
+                isDecoderError(error.errorCode) &&
+                dvLabelFromCodec(streamDeclaredDvCodec ?: streamCodec) != null &&
+                AppPreferences.getDvCompatMode(this@NativePlayerActivity) !=
+                AppPreferences.DV_COMPAT_OFF
+            ) {
+                dvStripRetryDone = true
+                forceDvStripForSession = true
+                errorMessageStr = null
+                Log.w(
+                    "PLAYER_DV",
+                    "Dolby Vision decoder failure (${streamDeclaredDvCodec ?: streamCodec}) — " +
+                        "retrying once with Dolby Vision stripped to HDR10"
+                )
+                reconnectingContainer.visibility = View.VISIBLE
+                bufferingSpinner.visibility = View.GONE
+                reconnectingText.text = "This TV can't play Dolby Vision here — switching to HDR10…"
+                handler.postDelayed(
+                    {
+                        errorMessageStr = null
+                        recreatePlayer()
+                    },
+                    500L
+                )
+                return
             }
             errorMessageStr = msg
             if (isLikelyRetryable(error)) {
@@ -6238,6 +6284,7 @@ class NativePlayerActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
+        EpgWriteGate.setPlayerActive(false)
         // Release session & player early so the next NativePlayerActivity
         // doesn't collide with a stale MediaSession ID.
         handler.removeCallbacksAndMessages(null)
@@ -6264,6 +6311,9 @@ class NativePlayerActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // Safety net for a player that never reached onStop's counterpart:
+        // leaving this set would hold guide writes back forever.
+        EpgWriteGate.setPlayerActive(false)
         p5VideoGlesView.release()
         handler.removeCallbacksAndMessages(null)
         scrubHintHandler.removeCallbacksAndMessages(null)

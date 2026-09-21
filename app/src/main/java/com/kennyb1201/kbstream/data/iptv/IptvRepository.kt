@@ -83,6 +83,10 @@ class IptvRepository(
             "PLAYLIST CACHE WRITE START channels=${playlist.channels.size} source=$normalizedUrl"
         )
 
+        // Same reasoning as the guide writes: this replaces every cached
+        // channel row in one transaction, and a playlist refresh can be
+        // triggered while something is already playing.
+        EpgWriteGate.holdWhilePlaying()
         dao.replaceCachedPlaylistChannels(
             playlistUrl = normalizedUrl,
             channels = playlist.channels.mapIndexed { index, channel ->
@@ -393,6 +397,12 @@ class IptvRepository(
 
         if (recordsToSave.isNotEmpty()) {
             withContext(Dispatchers.IO) {
+                // The lineup flow re-runs behind the player (the guide screen
+                // stays started under it), and each pass writes a row for
+                // every newly-matched channel. Those writes are small but land
+                // exactly while the decoder is configuring, so let them wait
+                // for playback to end instead.
+                EpgWriteGate.holdWhilePlaying()
                 dao.insertPlaylistEpgMatches(recordsToSave)
             }
         }

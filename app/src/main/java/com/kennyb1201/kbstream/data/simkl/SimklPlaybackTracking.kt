@@ -1,6 +1,8 @@
 package com.kennyb1201.kbstream.data.simkl
 
 import android.util.Log
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 /*
  * Playback-side Simkl tracking for [SimklRepository]:
@@ -323,6 +325,14 @@ private fun playbackItemMatchesParent(
 }
 
 /*
+ * Runs [block]'s suspending work on a job the caller cannot cancel, so an
+ * in-flight scrobble request survives the player cancelling the coroutine
+ * that launched it. Matches MdbListClient.postScrobble().
+ */
+private suspend fun <T> uncancellable(block: suspend () -> T): T =
+    withContext(NonCancellable) { block() }
+
+/*
  * Live scrobble (POST /scrobble/start|pause|stop). Called from the
  * player on play/pause/end so Simkl records in-progress playback and
  * extrapolates the watch between events.
@@ -385,34 +395,46 @@ suspend fun SimklRepository.scrobbleImpl(
         )
 
     return try {
+        // The player runs these on a job it cancels the moment the next
+        // playback event arrives (buffering -> playing toggles more than once
+        // on a slow start), and cancellation killed the request mid-flight:
+        // the log showed "scrobble/start error: x0 was cancelled" a fraction
+        // of a second after the start was sent, so Simkl was never told the
+        // session began and the title never showed as now-playing — while the
+        // independently-sent MDBList mirror did get through (its postScrobble
+        // is already uncancellable) and merely failed its own validation.
+        // Let the request finish out of cancellation's reach: /scrobble/start
+        // replaces any existing session, so a late duplicate is harmless.
         val response =
-            when (action) {
-                "pause" ->
-                    api.scrobblePause(
-                        authorization =
-                            trackedAuthHeader(),
+            uncancellable {
+                when (action) {
+                    "pause" ->
+                        api.scrobblePause(
+                            authorization =
+                                trackedAuthHeader(),
 
-                        body =
-                            body
-                    )
+                            body =
+                                body
+                        )
 
-                "stop" ->
-                    api.scrobbleStop(
-                        authorization =
-                            trackedAuthHeader(),
+                    "stop" ->
+                        api.scrobbleStop(
+                            authorization =
+                                trackedAuthHeader(),
 
-                        body =
-                            body
-                    )
+                            body =
+                                body
+                        )
 
-                else ->
-                    api.scrobbleStart(
-                        authorization =
-                            trackedAuthHeader(),
+                    else ->
+                        api.scrobbleStart(
+                            authorization =
+                                trackedAuthHeader(),
 
-                        body =
-                            body
-                    )
+                            body =
+                                body
+                        )
+                }
             }
 
         if (!response.isSuccessful) {
