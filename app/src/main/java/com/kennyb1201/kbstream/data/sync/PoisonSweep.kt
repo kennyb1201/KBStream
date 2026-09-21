@@ -9,6 +9,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 
@@ -75,8 +76,24 @@ internal object PoisonSweep {
     //            Part 1 now compares the profile databases on THIS device
     //            (see [PoisonDetector.localHistoryDuplicates]) and queues the
     //            matched cloud rows for part 2.
-    private const val FLAG_LOCAL = "poison_sweep_v4_local_done"
-    private const val FLAG_CLOUD = "poison_sweep_v4_cloud_done"
+    //   v4 → v5: the FINGERPRINT. v4 matched a copy only by its write stamp
+    //            (or an identical payload), so a copy that was re-stamped on
+    //            its way into the newer profile stayed invisible — and once
+    //            the other device had deleted the poisoned cloud row (see
+    //            v3 → v4), no rule in the sweep could see it at all: the
+    //            badges came back from the re-derived cache every time.
+    //            Rows are now also matched on the PLAYBACK they record
+    //            (episode coordinates, position, duration, completion and
+    //            the source URL), and the cloud pass gained the mirror rule —
+    //            a cloud row under a newer scope witnessed by an older
+    //            profile's LOCAL row is a copy too. The report prefs below
+    //            record what each part actually found, so the cleanup can be
+    //            read off Settings → Sync instead of inferred from logcat.
+    private const val FLAG_LOCAL = "poison_sweep_v5_local_done"
+    private const val FLAG_CLOUD = "poison_sweep_v5_cloud_done"
+    // "history=2 overrides=0" / "rows=4 local=1" — surfaced by [status].
+    private const val REPORT_LOCAL = "poison_sweep_v5_report_local"
+    private const val REPORT_CLOUD = "poison_sweep_v5_report_cloud"
     // Duplicated override sets found locally, kept until their cloud blobs
     // are deleted too — clearing the local set erases the evidence needed to
     // find them.
@@ -85,6 +102,11 @@ internal object PoisonSweep {
     // cloud twin may already be gone (the device-asymmetric case above), so
     // the keys are carried over for the cloud pass to delete directly.
     private const val PENDING_HISTORY_CLEARS = "poison_sweep_pending_history"
+    // Parents whose LAST local history row part 1 deleted as a copy. Their
+    // eye-badge marker under that profile exists only because of the copied
+    // row, so part 2 removes it too — otherwise the very next pull re-applies
+    // the marker from the cloud and re-draws the badge.
+    private const val PENDING_MARKER_PARENTS = "poison_sweep_pending_marker_parents"
     private const val OVERRIDES_PREFS_BASE = "kbstream_watched_overrides"
     private const val OVERRIDES_KEY = "watched_overrides"
     private const val DB_BASE = "kbstream_watch_history"
@@ -105,11 +127,18 @@ internal object PoisonSweep {
         val flags = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val local = flags.getBoolean(FLAG_LOCAL, false)
         val cloud = flags.getBoolean(FLAG_CLOUD, false)
-        return when {
+        val base = when {
             local && cloud -> "completed"
             local -> "local done, cloud pending (sign in)"
             else -> "not run yet"
         }
+        // What the pass found, so a device that still shows phantom markers
+        // can be told apart from one whose rows were never attributable.
+        val detail = listOfNotNull(
+            flags.getString(REPORT_LOCAL, null),
+            flags.getString(REPORT_CLOUD, null)
+        ).joinToString(" · ")
+        return if (detail.isEmpty()) base else "$base — $detail"
     }
 
     /**
@@ -148,6 +177,8 @@ internal object PoisonSweep {
         // ── Part 1: local derived caches (no network needed) ─────────
         if (!flags.getBoolean(FLAG_LOCAL, false)) {
             val activePid = ProfileManager.activeProfile.value?.id
+            var clearedOverrides = 0
+            var clearedHistoryRows = 0
             // Wipe the watched-status CACHE for every profile namespace.
             // It is fully derived (Simkl/MDBList/history/overrides/cloud
             // resolve it back within seconds of first use), so clearing is
@@ -211,6 +242,7 @@ internal object PoisonSweep {
                     flags.edit()
                         .putStringSet(PENDING_OVERRIDE_CLEARS, pending + duplicates)
                         .apply()
+                    clearedOverrides = duplicates.size
                     Log.i(TAG, "poison sweep: cleared ${duplicates.size} duplicated watched-override set(s)")
                 }
             }.onFailure {
@@ -234,15 +266,32 @@ internal object PoisonSweep {
                 if (doomed.isNotEmpty()) {
                     val pending =
                         flags.getStringSet(PENDING_HISTORY_CLEARS, emptySet()).orEmpty()
+                    // The parent each copied row was feeding, for the marker
+                    // cleanup in part 2.
+                    val writesByProfile = perProfile.toMap()
+                    val parents = doomed.mapNotNull { (pid, id) ->
+                        writesByProfile[pid]
+                            ?.firstOrNull { it.id == id }
+                            ?.parentId
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { "$pid|$it" }
+                    }.toSet()
+                    val pendingParents =
+                        flags.getStringSet(PENDING_MARKER_PARENTS, emptySet()).orEmpty()
                     flags.edit()
                         .putStringSet(
                             PENDING_HISTORY_CLEARS,
                             pending + doomed.map { (pid, id) -> SyncKeys.scoped(id, pid) }
                         )
+                        .putStringSet(PENDING_MARKER_PARENTS, pendingParents + parents)
                         .apply()
+                    clearedHistoryRows = doomed.size
+                    // Row-level detail: the fastest way to see WHAT was
+                    // attributed when a device still shows markers.
                     Log.i(
                         TAG,
-                        "poison sweep: cleared ${doomed.size} duplicated local history row(s)"
+                        "poison sweep: cleared ${doomed.size} duplicated local history " +
+                            "row(s): " + doomed.joinToString { "${it.first}/${it.second}" }
                     )
                 }
             }.onFailure {
@@ -252,7 +301,13 @@ internal object PoisonSweep {
             // served from RAM after the disk wipe.
             WatchedStatusRepository.invalidateAllCaches()
             SimklRepository.clearTransientCaches()
-            flags.edit().putBoolean(FLAG_LOCAL, true).apply()
+            flags.edit()
+                .putBoolean(FLAG_LOCAL, true)
+                .putString(
+                    REPORT_LOCAL,
+                    "history=$clearedHistoryRows overrides=$clearedOverrides"
+                )
+                .apply()
             Log.i(TAG, "poison sweep: local watched caches cleared for ${profiles.size} profile(s)")
         }
 
@@ -281,7 +336,20 @@ internal object PoisonSweep {
             for (table in listOf(TABLE_WATCHED, TABLE_HISTORY)) {
                 val rows = readCloudRows(c, table) ?: return
                 if (table == TABLE_HISTORY) cloudHistoryRows = rows
-                val poison = PoisonDetector.crossScopeDuplicates(rows, orderedPids, localPids)
+                // History rows use the playback-aware identity: the two
+                // scopes' payloads may have been re-stamped independently, so
+                // a stamp-only match (all the watched table can use, and all
+                // that is safe there) leaves them behind.
+                val poison = if (table == TABLE_HISTORY) {
+                    PoisonDetector.crossScopeDuplicates(
+                        rows,
+                        orderedPids,
+                        localPids,
+                        PoisonDetector::sameHistoryWrite
+                    )
+                } else {
+                    PoisonDetector.crossScopeDuplicates(rows, orderedPids, localPids)
+                }
                 if (poison.isEmpty()) continue
                 deleted += deleteCloudKeys(c, table, poison)
                 Log.i(TAG, "poison sweep: $table — deleting ${poison.size} duplicated row(s)")
@@ -320,6 +388,15 @@ internal object PoisonSweep {
                 flags.getStringSet(PENDING_HISTORY_CLEARS, emptySet()).orEmpty().toList()
             if (localHistoryKeys.isNotEmpty()) {
                 deleted += deleteCloudKeys(c, TABLE_HISTORY, localHistoryKeys)
+                // ...and make sure the local copy is gone as well: part 1
+                // deleted it, but a pull that ran between the two parts can
+                // have re-downloaded the row from the cloud before this pass
+                // deleted it, which would otherwise leave it in place forever
+                // (part 1 never runs again).
+                for ((pid, keys) in localHistoryKeys.groupBy { SyncKeys.scopeOf(it) ?: "" }) {
+                    if (pid.isEmpty()) continue
+                    deleteLocalHistoryRows(context, pid, keys.map { SyncKeys.unscoped(it) })
+                }
                 Log.i(
                     TAG,
                     "poison sweep: deleting ${localHistoryKeys.size} " +
@@ -334,8 +411,11 @@ internal object PoisonSweep {
             // of the pull) is still there. Matching the local rows against
             // each OTHER profile's cloud scope closes that gap.
             val historyRowsForLocalScan = cloudHistoryRows
+            var localCopiesRemoved = 0
             if (historyRowsForLocalScan != null) {
                 runCatching {
+                    // One read of every profile's local rows, shared by the
+                    // two directions below.
                     val perProfile =
                         orderedPids.map { pid -> pid to localHistoryWrites(context, pid) }
                     val copies = PoisonDetector.localCopiesOfOlderScopes(
@@ -352,10 +432,40 @@ internal object PoisonSweep {
                             TABLE_HISTORY,
                             copies.map { (pid, id) -> SyncKeys.scoped(id, pid) }
                         )
+                        localCopiesRemoved += copies.size
                         Log.i(
                             TAG,
                             "poison sweep: removed ${copies.size} local row(s) " +
-                                "copied from an older profile's cloud scope"
+                                "copied from an older profile's cloud scope: " +
+                                copies.joinToString { "${it.first}/${it.second}" }
+                        )
+                    }
+
+                    // (6) the mirror of (5): CLOUD rows under a newer scope
+                    // that an older profile's LOCAL row witnesses. Here the
+                    // owner's copy is the local one, so nothing in the cloud
+                    // pairs with it and the row re-downloads on every pull —
+                    // this is the case that survives every other rule.
+                    val witnessed = PoisonDetector.cloudCopiesOfOlderLocalWitnesses(
+                        historyRowsForLocalScan,
+                        perProfile,
+                        orderedPids
+                    )
+                    if (witnessed.isNotEmpty()) {
+                        for ((pid, ids) in witnessed.groupBy({ it.first }, { it.second })) {
+                            deleteLocalHistoryRows(context, pid, ids)
+                        }
+                        deleted += deleteCloudKeys(
+                            c,
+                            TABLE_HISTORY,
+                            witnessed.map { (pid, id) -> SyncKeys.scoped(id, pid) }
+                        )
+                        localCopiesRemoved += witnessed.size
+                        Log.i(
+                            TAG,
+                            "poison sweep: removed ${witnessed.size} cloud row(s) " +
+                                "copied from an older profile's local history: " +
+                                witnessed.joinToString { "${it.first}/${it.second}" }
                         )
                     }
                 }.onFailure {
@@ -363,11 +473,78 @@ internal object PoisonSweep {
                 }
             }
 
-            flags.edit()
+            // (7) the eye-badge markers left behind by those history rows.
+            // A marker row is what the badge renders from, and the pull
+            // re-applies it on every start, so removing the copied history
+            // row alone is not enough — the badge reappears seconds later
+            // and the cleanup looks like it did nothing.
+            val pendingParents =
+                flags.getStringSet(PENDING_MARKER_PARENTS, emptySet()).orEmpty()
+            var markersChecked = pendingParents.isEmpty()
+            var markersRemoved = 0
+            if (pendingParents.isNotEmpty()) {
+                runCatching {
+                    val wanted = pendingParents
+                        .mapNotNull { entry ->
+                            val pid = entry.substringBefore('|')
+                            val parent = entry.substringAfter('|', "")
+                            if (pid.isEmpty() || parent.isEmpty()) null else pid to parent
+                        }
+                        .groupBy({ it.first }, { it.second })
+                    // Only the parents with NO local evidence left: a profile
+                    // still holding its own in-progress row keeps its badge.
+                    val orphaned = wanted.mapValues { (pid, parents) ->
+                        val remaining = localHistoryWrites(context, pid)
+                            .mapNotNull { it.parentId }
+                            .toSet()
+                        parents.filterNot { it in remaining }.toSet()
+                    }.filterValues { it.isNotEmpty() }
+
+                    val watchedRows = readCloudRows(c, TABLE_WATCHED)
+                    if (watchedRows == null) return@runCatching
+                    val keys = PoisonDetector.orphanedPartialMarkers(
+                        watchedRows,
+                        orphaned,
+                        localPids
+                    )
+                    markersChecked = true
+                    if (keys.isNotEmpty()) {
+                        deleted += deleteCloudKeys(c, TABLE_WATCHED, keys)
+                        markersRemoved = keys.size
+                        // Drop the local cache rows too: they carry the very
+                        // partial flag the badge reads, and without this they
+                        // sit out their full TTL and keep the badge wrong.
+                        for ((pid, scopedKeys) in keys.groupBy { SyncKeys.scopeOf(it) ?: "" }) {
+                            if (pid.isEmpty()) continue
+                            deleteLocalWatchedKeys(
+                                context,
+                                pid,
+                                scopedKeys.map { SyncKeys.unscoped(it) }
+                            )
+                        }
+                        Log.i(
+                            TAG,
+                            "poison sweep: removed ${keys.size} orphaned eye-badge " +
+                                "marker row(s): " + keys.joinToString()
+                        )
+                    }
+                }.onFailure {
+                    Log.w(TAG, "poison sweep: orphaned marker check failed: ${it.message}")
+                }
+            }
+
+            val editor = flags.edit()
                 .putBoolean(FLAG_CLOUD, true)
+                .putString(
+                    REPORT_CLOUD,
+                    "rows=$deleted local=$localCopiesRemoved markers=$markersRemoved"
+                )
                 .remove(PENDING_OVERRIDE_CLEARS)
                 .remove(PENDING_HISTORY_CLEARS)
-                .apply()
+            // Keep the marker work queued while it has not actually run (the
+            // cloud read failed), so a later attempt still cleans it up.
+            if (markersChecked) editor.remove(PENDING_MARKER_PARENTS)
+            editor.apply()
             Log.i(TAG, "poison sweep: deleted $deleted cross-profile cloud row(s)")
             // Converge local state with the now-clean cloud tables.
             WatchedStatusRepository.invalidateAllCaches()
@@ -468,7 +645,7 @@ internal object PoisonSweep {
                 WatchHistoryDatabase.getInstanceScoped(context)
                     .watchHistoryDao()
                     .getAll()
-                    .map { PoisonDetector.LocalWrite(it.id, it.updatedAt) }
+                    .map { it.toPoisonWrite() }
             }.onFailure {
                 Log.w(TAG, "poison sweep: active-history read failed: ${it.message}")
             }.getOrDefault(emptyList())
@@ -476,7 +653,11 @@ internal object PoisonSweep {
         return rawReadHistoryWrites(context, ProfileStorage.dbName(pid, DB_BASE))
     }
 
-    /** Only the two columns the fingerprint needs; ids are item-based. */
+    /**
+     * The columns the fingerprint needs; ids are item-based. The playback
+     * fields travel too — a copy that was re-stamped on the way in can only
+     * be attributed by what it PLAYS (see [PoisonDetector.samePlayback]).
+     */
     private fun rawReadHistoryWrites(
         context: Context,
         dbName: String
@@ -491,9 +672,38 @@ internal object PoisonSweep {
             )
             try {
                 val out = mutableListOf<PoisonDetector.LocalWrite>()
-                db.rawQuery("SELECT id, updatedAt FROM watch_history", null).use { c ->
+                db.rawQuery(
+                    "SELECT id, updatedAt, parentId, season, episode, " +
+                        "positionMs, durationMs, isCompleted, streamUrl " +
+                        "FROM watch_history",
+                    null
+                ).use { c ->
                     while (c.moveToNext()) {
-                        out.add(PoisonDetector.LocalWrite(c.getString(0), c.getLong(1)))
+                        fun longOrNull(name: String): Long? =
+                            c.getColumnIndex(name).takeIf { it >= 0 && !c.isNull(it) }
+                                ?.let { c.getLong(it) }
+                        fun intOrNull(name: String): Int? =
+                            c.getColumnIndex(name).takeIf { it >= 0 && !c.isNull(it) }
+                                ?.let { c.getInt(it) }
+                        fun boolOrNull(name: String): Boolean? =
+                            c.getColumnIndex(name).takeIf { it >= 0 && !c.isNull(it) }
+                                ?.let { c.getInt(it) != 0 }
+                        fun strOrNull(name: String): String? =
+                            c.getColumnIndex(name).takeIf { it >= 0 && !c.isNull(it) }
+                                ?.let { c.getString(it) }
+                        out.add(
+                            PoisonDetector.LocalWrite(
+                                id = c.getString(c.getColumnIndexOrThrow("id")),
+                                updatedAt = c.getLong(c.getColumnIndexOrThrow("updatedAt")),
+                                parentId = strOrNull("parentId"),
+                                season = intOrNull("season"),
+                                episode = intOrNull("episode"),
+                                positionMs = longOrNull("positionMs"),
+                                durationMs = longOrNull("durationMs"),
+                                isCompleted = boolOrNull("isCompleted"),
+                                streamUrl = strOrNull("streamUrl")
+                            )
+                        )
                     }
                 }
                 out
@@ -509,6 +719,66 @@ internal object PoisonSweep {
      * The active profile goes through Room (its DB may be open); every other
      * profile's DB is closed, so a raw delete is safe there.
      */
+    /**
+     * Removes specific watched-marker rows from a profile's local cache.
+     * Active profile through Room, every other profile's closed DB raw —
+     * same split as the history helpers above.
+     */
+    private suspend fun deleteLocalWatchedKeys(
+        context: Context,
+        pid: String,
+        keys: List<String>
+    ) {
+        if (keys.isEmpty()) return
+        if (pid == ProfileManager.activeProfile.value?.id) {
+            runCatching {
+                val dao = WatchHistoryDatabase.getInstanceScoped(context).watchedStatusDao()
+                keys.forEach { dao.deleteByKey(it) }
+            }.onFailure {
+                Log.w(TAG, "poison sweep: active watched-cache delete failed: ${it.message}")
+            }
+            return
+        }
+        runCatching {
+            val file = context.getDatabasePath(ProfileStorage.dbName(pid, DB_BASE))
+            if (!file.exists()) return
+            val db = android.database.sqlite.SQLiteDatabase.openDatabase(
+                file.absolutePath,
+                null,
+                android.database.sqlite.SQLiteDatabase.OPEN_READWRITE
+            )
+            try {
+                db.beginTransaction()
+                try {
+                    for (key in keys) {
+                        db.execSQL("DELETE FROM watched_status_cache WHERE key = ?", arrayOf(key))
+                    }
+                    db.setTransactionSuccessful()
+                } finally {
+                    db.endTransaction()
+                }
+            } finally {
+                db.close()
+            }
+        }.onFailure {
+            Log.w(TAG, "poison sweep: raw watched-cache delete in $pid failed: ${it.message}")
+        }
+    }
+
+    /** One local history row as the poison detector compares it. */
+    private fun WatchHistoryEntity.toPoisonWrite() =
+        PoisonDetector.LocalWrite(
+            id = id,
+            updatedAt = updatedAt,
+            parentId = parentId,
+            season = season,
+            episode = episode,
+            positionMs = positionMs,
+            durationMs = durationMs,
+            isCompleted = isCompleted,
+            streamUrl = streamUrl
+        )
+
     private suspend fun deleteLocalHistoryRows(
         context: Context,
         pid: String,

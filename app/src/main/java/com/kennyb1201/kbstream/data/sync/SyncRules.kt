@@ -301,6 +301,18 @@ internal object PoisonDetector {
     /** Minimal view of a cloud row: its stored key plus the raw payload. */
     data class Row(val storedKey: String, val payload: JsonObject)
 
+    private fun fieldStr(payload: JsonObject, key: String): String? =
+        (payload[key] as? JsonPrimitive)?.content
+
+    private fun fieldLng(payload: JsonObject, key: String): Long? =
+        fieldStr(payload, key)?.toLongOrNull()
+
+    private fun fieldInt(payload: JsonObject, key: String): Int? =
+        fieldStr(payload, key)?.toIntOrNull()
+
+    private fun fieldBool(payload: JsonObject, key: String): Boolean? =
+        fieldStr(payload, key)?.toBooleanStrictOrNull()
+
     /**
      * @param rows every row of the table for this account
      * @param profileOrder profile ids, oldest first (earliest createdAt)
@@ -313,6 +325,19 @@ internal object PoisonDetector {
         rows: List<Row>,
         profileOrder: List<String>,
         localPids: Set<String>
+    ): List<String> = crossScopeDuplicates(rows, profileOrder, localPids, ::sameWrite)
+
+    /**
+     * Same scan with a caller-supplied identity rule. History rows pass
+     * [sameHistoryWrite], which also pairs two payloads that describe the
+     * SAME playback but carry different write stamps — the drift that left
+     * those rows unpairable and kept resurrecting the phantom markers.
+     */
+    fun crossScopeDuplicates(
+        rows: List<Row>,
+        profileOrder: List<String>,
+        localPids: Set<String>,
+        matches: (JsonObject, JsonObject) -> Boolean
     ): List<String> {
         val byItem = LinkedHashMap<String, MutableList<Row>>()
         for (row in rows) {
@@ -330,7 +355,7 @@ internal object PoisonDetector {
                 } ?: continue
             for (row in group) {
                 if (row === owner || row.storedKey == owner.storedKey) continue
-                if (sameWrite(owner.payload, row.payload)) doomed.add(row.storedKey)
+                if (matches(owner.payload, row.payload)) doomed.add(row.storedKey)
             }
         }
         return doomed
@@ -351,11 +376,88 @@ internal object PoisonDetector {
         (payload["updatedAt"] as? JsonPrimitive)?.content?.toLongOrNull()
 
     /**
-     * One profile's LOCAL watch-history row, as stored in its own scoped
-     * database: the row id (which is item-based, so the same title/episode
-     * has the same id in every profile) plus the write stamp.
+     * Identity rule for HISTORY rows: the strict [sameWrite] plus the case
+     * that matters here — two rows describing the same playback (same
+     * episode, same position, same duration, same completion) from the SAME
+     * source. A copy carries its original's stream URL verbatim however many
+     * times it has been re-stamped on the way, whereas two profiles watching
+     * the same episode resolved their own stream and stopped at their own
+     * position.
      */
-    data class LocalWrite(val id: String, val updatedAt: Long)
+    fun sameHistoryWrite(a: JsonObject, b: JsonObject): Boolean {
+        if (sameWrite(a, b)) return true
+        // Both sides are handed the same placeholder key: the item is already
+        // equal by construction here, so only the playback is being compared.
+        val wa = writeOf(ITEM_PLACEHOLDER, a) ?: return false
+        val wb = writeOf(ITEM_PLACEHOLDER, b) ?: return false
+        return samePlayback(wa, wb)
+    }
+
+    /** An item id that cannot collide with a real scoped key. */
+    private const val ITEM_PLACEHOLDER = "item"
+
+    /**
+     * One watch-history write: the row id (item-based, so the same
+     * title/episode has the same id in every profile), its write stamp, and
+     * the playback it records.
+     *
+     * The playback fields are nullable so a payload written by an older app
+     * version (or a legacy row) simply cannot content-match instead of
+     * matching by accidental default.
+     */
+    data class LocalWrite(
+        val id: String,
+        val updatedAt: Long,
+        val parentId: String? = null,
+        val season: Int? = null,
+        val episode: Int? = null,
+        val positionMs: Long? = null,
+        val durationMs: Long? = null,
+        val isCompleted: Boolean? = null,
+        val streamUrl: String? = null
+    )
+
+    /** A cloud history row's payload as a comparable write. */
+    fun writeOf(storedKey: String, payload: JsonObject): LocalWrite? =
+        LocalWrite(
+            id = SyncKeys.unscoped(storedKey),
+            updatedAt = timestampOf(payload) ?: 0L,
+            parentId = fieldStr(payload, "parentId"),
+            season = fieldInt(payload, "season"),
+            episode = fieldInt(payload, "episode"),
+            positionMs = fieldLng(payload, "positionMs"),
+            durationMs = fieldLng(payload, "durationMs"),
+            isCompleted = fieldBool(payload, "isCompleted"),
+            streamUrl = fieldStr(payload, "streamUrl")
+        )
+
+    /**
+     * True when two rows are the same playback:
+     *
+     *  - the full playback content matches and both name the same source
+     *    (stream URL), which no second viewing can reproduce by accident; or
+     *  - the write stamps match — the original, stamp-only fingerprint.
+     *
+     * Deliberately NOT enough on its own: identical content with two
+     * DIFFERENT sources, which is what two profiles genuinely playing the
+     * same episode looks like.
+     */
+    fun samePlayback(a: LocalWrite, b: LocalWrite): Boolean {
+        if (a.id != b.id) return false
+        val contentMatches =
+            a.parentId != null && a.parentId == b.parentId &&
+                a.season != null && a.season == b.season &&
+                a.episode != null && a.episode == b.episode &&
+                a.positionMs != null && a.positionMs == b.positionMs &&
+                a.durationMs != null && a.durationMs == b.durationMs &&
+                a.isCompleted != null && a.isCompleted == b.isCompleted
+        if (contentMatches) {
+            val sa = a.streamUrl?.trim().orEmpty()
+            val sb = b.streamUrl?.trim().orEmpty()
+            if (sa.isNotEmpty() && sa == sb) return true
+        }
+        return a.updatedAt > 0L && a.updatedAt == b.updatedAt
+    }
 
     /**
      * Local counterpart of [crossScopeDuplicates].
@@ -380,23 +482,30 @@ internal object PoisonDetector {
     fun localHistoryDuplicates(
         perProfile: List<Pair<String, List<LocalWrite>>>
     ): List<Pair<String, String>> {
-        // Keyed by the exact write (row id + stamp), so two profiles only
-        // group together when the SAME write was copied between them.
-        val holders = LinkedHashMap<Pair<String, Long>, MutableList<String>>()
+        // Grouped by ITEM, not by the exact write: the copy may have been
+        // re-stamped on its way into the newer profile, which is precisely
+        // why the stamp-only fingerprint missed it. [samePlayback] does the
+        // deciding, so a re-stamped copy is still attributed while a genuine
+        // second viewing (own position, own source) never is.
+        val byId = LinkedHashMap<String, MutableList<Pair<String, LocalWrite>>>()
         for ((pid, rows) in perProfile) {
             for (row in rows) {
-                // An unstamped row can't be attributed; leave it alone.
-                if (row.updatedAt <= 0L) continue
-                holders.getOrPut(row.id to row.updatedAt) { mutableListOf() }.add(pid)
+                byId.getOrPut(row.id) { mutableListOf() }.add(pid to row)
             }
         }
 
         val doomed = mutableListOf<Pair<String, String>>()
-        for ((write, pids) in holders) {
-            if (pids.size < 2) continue
-            // pids follow the caller's oldest-first order: the first holder
-            // owns the write, every later one is a copy of it.
-            for (pid in pids.drop(1)) doomed.add(pid to write.first)
+        for ((id, holders) in byId) {
+            if (holders.size < 2) continue
+            for (index in 1 until holders.size) {
+                val (pid, row) = holders[index]
+                // holders follow the caller's oldest-first order, so only an
+                // EARLIER profile can own the write this row copied.
+                val copied = holders.subList(0, index).any { (_, other) ->
+                    samePlayback(other, row)
+                }
+                if (copied) doomed.add(pid to id)
+            }
         }
         return doomed
     }
@@ -426,30 +535,74 @@ internal object PoisonDetector {
     ): List<Pair<String, String>> {
         val rank = profileOrder.withIndex().associate { (index, pid) -> pid to index }
 
-        // unscoped key -> write stamp -> scopes holding that write in the cloud
-        val cloud = HashMap<String, MutableMap<Long, MutableList<String>>>()
+        val cloudById = HashMap<String, MutableList<Pair<Int, LocalWrite>>>()
         for (row in cloudRows) {
             val pid = SyncKeys.scopeOf(row.storedKey) ?: continue
-            val stamp = timestampOf(row.payload) ?: continue
-            cloud.getOrPut(SyncKeys.unscoped(row.storedKey)) { HashMap() }
-                .getOrPut(stamp) { mutableListOf() }
-                .add(pid)
+            val write = writeOf(row.storedKey, row.payload) ?: continue
+            cloudById.getOrPut(write.id) { mutableListOf() }
+                .add((rank[pid] ?: Int.MAX_VALUE) to write)
         }
 
         val doomed = mutableListOf<Pair<String, String>>()
         for ((pid, rows) in perProfile) {
             val myRank = rank[pid] ?: continue
             for (row in rows) {
-                if (row.updatedAt <= 0L) continue
-                val holders = cloud[row.id]?.get(row.updatedAt) ?: continue
+                val holders = cloudById[row.id] ?: continue
                 // This profile's own cloud row is just this row, synced —
-                // only a strictly OLDER profile owning the same write makes
-                // the local row a copy of it.
-                val copied = holders.any { held ->
-                    (rank[held] ?: Int.MAX_VALUE) < myRank
+                // only a strictly OLDER profile owning the same playback
+                // makes the local row a copy of it.
+                val copied = holders.any { (heldRank, held) ->
+                    heldRank < myRank && samePlayback(row, held)
                 }
                 if (copied) doomed.add(pid to row.id)
             }
+        }
+        return doomed
+    }
+
+    /**
+     * The exact mirror of [localCopiesOfOlderScopes]: CLOUD rows that record
+     * an OLDER profile's LOCAL row.
+     *
+     * This is the gap that survives every other rule. On the device that runs
+     * the sweep second the poisoned cloud row is already gone (the first
+     * device deleted it) AND the poisoned local row may be gone too, so the
+     * newer profile is left holding nothing but a cloud row whose only
+     * witness — the older profile's own row — is local. Without this, that
+     * row re-downloads on the next pull and re-draws the phantom markers no
+     * matter how many times the derived caches are wiped.
+     *
+     * @param cloudRows every history row for this account (scoped keys)
+     * @param perProfile profile id to its local rows, oldest profile first
+     * @param profileOrder profile ids, oldest first (earliest createdAt)
+     * @return (profileId, rowId) pairs to delete — the cloud row under that
+     *         profile's scope, and its local copy if one exists
+     */
+    fun cloudCopiesOfOlderLocalWitnesses(
+        cloudRows: List<Row>,
+        perProfile: List<Pair<String, List<LocalWrite>>>,
+        profileOrder: List<String>
+    ): List<Pair<String, String>> {
+        val rank = profileOrder.withIndex().associate { (index, pid) -> pid to index }
+
+        val localById = HashMap<String, MutableList<Pair<Int, LocalWrite>>>()
+        for ((pid, rows) in perProfile) {
+            val myRank = rank[pid] ?: continue
+            for (row in rows) {
+                localById.getOrPut(row.id) { mutableListOf() }.add(myRank to row)
+            }
+        }
+
+        val doomed = mutableListOf<Pair<String, String>>()
+        for (row in cloudRows) {
+            val pid = SyncKeys.scopeOf(row.storedKey) ?: continue
+            val myRank = rank[pid] ?: continue
+            val write = writeOf(row.storedKey, row.payload) ?: continue
+            val witnesses = localById[write.id] ?: continue
+            val copied = witnesses.any { (heldRank, held) ->
+                heldRank < myRank && samePlayback(held, write)
+            }
+            if (copied) doomed.add(pid to write.id)
         }
         return doomed
     }
@@ -464,6 +617,62 @@ internal object PoisonDetector {
      * @param sets profile id to its override keys, oldest profile first
      * @return profile ids whose local set (and cloud blob) should be cleared
      */
+    /**
+     * Watched-marker rows that only existed because of a history row the
+     * sweep just PROVED was a cross-profile copy, and that have no local
+     * viewing evidence left under that profile.
+     *
+     * The eye badge renders from this marker row, and the marker row comes
+     * back on every pull — so removing the copied history row is not enough
+     * on its own: the marker that was derived from it has to go too, or the
+     * phantom badge is re-drawn moments later and the cleanup looks like it
+     * did nothing.
+     *
+     * Only ever a PARTIAL-ONLY marker (eye badge, no checkmark): a watched
+     * marker is never touched, and a marker a tracker genuinely backs is
+     * re-derived from that tracker and re-published, so this cannot take a
+     * badge away from a profile that really started the show.
+     *
+     * @param watchedRows every watched-marker row for this account
+     * @param orphanedParents profile id to the parent item ids whose last
+     *        local evidence was just deleted
+     * @param localPids profiles that exist on THIS device
+     * @return stored keys to delete
+     */
+    fun orphanedPartialMarkers(
+        watchedRows: List<Row>,
+        orphanedParents: Map<String, Set<String>>,
+        localPids: Set<String>
+    ): List<String> {
+        if (orphanedParents.isEmpty()) return emptyList()
+        return watchedRows.mapNotNull { row ->
+            val pid = SyncKeys.scopeOf(row.storedKey) ?: return@mapNotNull null
+            if (pid !in localPids) return@mapNotNull null
+            val parents = orphanedParents[pid] ?: return@mapNotNull null
+            val imdb = fieldStr(row.payload, "imdbId")?.trim().orEmpty()
+            if (imdb.isEmpty()) return@mapNotNull null
+            if (parents.none { parentMatches(it, imdb) }) return@mapNotNull null
+            val watched = fieldBool(row.payload, "isWatched") ?: false
+            val partial = fieldBool(row.payload, "isPartiallyWatched") ?: false
+            if (watched || !partial) return@mapNotNull null
+            row.storedKey
+        }
+    }
+
+    /**
+     * True when a history row's parent id names the same title as a marker
+     * row's imdb id. Tolerant on purpose: history rows store the parent as it
+     * was resolved (often the bare IMDb id, sometimes prefixed), a mismatch
+     * merely means the marker is left alone.
+     */
+    private fun parentMatches(parentId: String, imdb: String): Boolean {
+        val parent = parentId.trim()
+        if (parent.equals(imdb, ignoreCase = true)) return true
+        if (parent.substringAfter("::", "").equals(imdb, ignoreCase = true)) return true
+        if (parent.substringAfterLast(":").equals(imdb, ignoreCase = true)) return true
+        return false
+    }
+
     fun duplicateOverrideOwners(sets: List<Pair<String, Set<String>>>): List<String> {
         val duplicates = mutableListOf<String>()
         for (index in sets.indices) {
