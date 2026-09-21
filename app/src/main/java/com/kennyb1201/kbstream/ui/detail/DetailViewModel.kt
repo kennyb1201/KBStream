@@ -20,6 +20,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbPersonDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
+import com.kennyb1201.kbstream.data.tmdb.UNSCRIPTED_TV_GENRES
 import com.kennyb1201.kbstream.data.reddit.RedditDiscussionsClient
 import com.kennyb1201.kbstream.data.trakt.TraktCommentsClient
 import com.kennyb1201.kbstream.data.library.LibraryMirror
@@ -33,6 +34,7 @@ import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.async
 import com.kennyb1201.kbstream.data.tmdb.displayRuntimeMinutes
+import com.kennyb1201.kbstream.data.tmdb.keepRecommendedGenre
 import com.kennyb1201.kbstream.data.tmdb.list
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -688,48 +690,54 @@ for (metaAddon in metaAddons) {
                         return@onSuccess
                     }
 
-                    // "More Like This" trimming, two filters composed:
-                    // Kids Mode drops recs rated above the active profile's
-                    // ceiling (no-op otherwise), then the app-wide digital-
-                    // release filter trims movies not yet available at home
-                    // when the Settings toggle is on. Recs inherit this
-                    // screen's media type.
+                    // "More Like This" trimming, three filters composed.
+                    // Unscripted formats (talk / news / reality / soap) are
+                    // always dropped — a nightly talk show is not "more like
+                    // this" for a scripted series — unless this title is
+                    // itself unscripted. Then Kids Mode drops recs rated
+                    // above the active profile's ceiling (no-op otherwise),
+                    // then the app-wide digital-release filter trims movies
+                    // not yet available at home when the Settings toggle is
+                    // on. Recs inherit this screen's media type.
                     val shownDetail =
                         if (
                             detail != null &&
-                            (tmdbRepository.isDigitalFilterEnabled() ||
-                                tmdbRepository.kidsMaxAge() != null)
+                            detail.recommendations?.results.orEmpty().isNotEmpty()
                         ) {
-                            val recs =
-                                detail.recommendations?.results.orEmpty()
+                            val parentIsUnscripted =
+                                detail.genres.any { it.id in UNSCRIPTED_TV_GENRES }
 
-                            if (recs.isEmpty()) {
-                                detail
-                            } else {
-                                // Kids Mode first (cached certification
-                                // lookups); kidsFilter no-ops when the
-                                // active profile has no ceiling.
-                                val kidsFiltered =
+                            var recs =
+                                detail.recommendations?.results.orEmpty()
+                                    .filter {
+                                        keepRecommendedGenre(
+                                            it.genreIds,
+                                            parentIsUnscripted
+                                        )
+                                    }
+
+                            // Kids Mode first (cached certification
+                            // lookups); kidsFilter no-ops when the active
+                            // profile has no ceiling.
+                            if (tmdbRepository.kidsMaxAge() != null) {
+                                recs =
                                     tmdbRepository.kidsFilter(
                                         recs
                                     ) { it.id to normalizedType }
-
-                                if (tmdbRepository.isDigitalFilterEnabled()) {
-                                    detail.copy(
-                                        recommendations = detail.recommendations?.copy(
-                                            results = tmdbRepository.filterByHomeAvailability(
-                                                kidsFiltered
-                                            ) { it.id to normalizedType }
-                                        )
-                                    )
-                                } else {
-                                    detail.copy(
-                                        recommendations = detail.recommendations?.copy(
-                                            results = kidsFiltered
-                                        )
-                                    )
-                                }
                             }
+
+                            if (tmdbRepository.isDigitalFilterEnabled()) {
+                                recs =
+                                    tmdbRepository.filterByHomeAvailability(
+                                        recs
+                                    ) { it.id to normalizedType }
+                            }
+
+                            detail.copy(
+                                recommendations = detail.recommendations?.copy(
+                                    results = recs
+                                )
+                            )
                         } else {
                             detail
                         }
@@ -743,6 +751,7 @@ for (metaAddon in metaAddons) {
                             "companies=${detail?.productionCompanies?.size} " +
                             "reviews=${detail?.reviews?.results?.size} " +
                             "recs=${detail?.recommendations?.results?.size} " +
+                            "recsShown=${shownDetail?.recommendations?.results?.size} " +
                             // Whether TMDB returned any video at all decides
                             // whether the trailer button can exist; logging it
                             // separates "no video on TMDB" from "we hid it".

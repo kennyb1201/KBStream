@@ -82,11 +82,14 @@ import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.player.PlayerTitlePrefs
 import com.kennyb1201.kbstream.data.player.PlayerTrackMemory
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
+import com.kennyb1201.kbstream.data.tmdb.TmdbPersonCredit
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tmdb.UNSCRIPTED_TV_GENRES
 import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
 import com.kennyb1201.kbstream.data.tmdb.displayCardMeta
 import com.kennyb1201.kbstream.data.tmdb.displayDescription
 import com.kennyb1201.kbstream.data.tmdb.displayMetaLine
+import com.kennyb1201.kbstream.data.tmdb.keepRecommendedGenre
 import com.kennyb1201.kbstream.data.tmdb.list
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.streams.StreamsViewModel
@@ -143,6 +146,39 @@ private const val RAW_EXTRACTOR_PROBE_ATTEMPT = 3
  * new decoder at all.
  */
 private const val DV_STRIP_REBUILD_DELAY_MS = 3_000L
+
+/**
+ * Weighted-rating rank (IMDB-style) for one credit of a person: the rating
+ * blended toward a 6.5 prior worth 200 votes. The because-you-watched cast
+ * tier used to sort by `popularity`, which is why "Because you watched Ted
+ * Lasso" filled up with talk shows — a guest spot on a nightly show is very
+ * popular but rates ~5-6, so it outranked the scripted work the actor is
+ * actually known for. This ranks a well-reviewed credit of theirs first and
+ * makes a single 9.5 from a dozen voters unable to jump the queue.
+ */
+private fun personCreditRank(credit: TmdbPersonCredit): Double {
+    val votes = (credit.voteCount ?: 0).coerceAtLeast(0).toDouble()
+    val average = credit.voteAverage ?: 0.0
+    return (average * votes + 6.5 * 200.0) / (votes + 200.0)
+}
+
+/**
+ * True when a credit is the person appearing as themselves rather than
+ * playing a role: talk and award shows, documentaries, archive-footage
+ * cameos. TMDB credits these as "Himself" / "Herself" / "Self - Guest" /
+ * "(1998) (archive footage)". Without this the cast tier spends one of its
+ * four slots per person on a guest appearance — a suggestion for a show
+ * rather than for the actor's work.
+ */
+private fun isSelfAppearance(character: String?): Boolean {
+    val role = character?.lowercase()?.trim().orEmpty()
+    if (role.isEmpty()) return false
+    if (role.contains("archive footage")) return true
+    return role.startsWith("self") ||
+        role.startsWith("himself") ||
+        role.startsWith("herself") ||
+        role.startsWith("themselves")
+}
 private val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 
 // Aspect ratio modes. 0-2 map to the Media3 resize modes (see
@@ -5398,7 +5434,8 @@ class NativePlayerActivity : ComponentActivity() {
      *     title belongs to, minus its own entry. "You finished Fast Five ->
      *     here's Fast & Furious 6" is the single most-wanted next watch.
      *  2. SAME KEY CREATIVES (weight 60) — other works by the director(s)
-     *     and top-billed cast via combined credits. People are the
+     *     and top-billed cast via combined credits, ranked by rating
+     *     weight (personCreditRank) rather than popularity. People are the
      *     strongest taste signal in the data.
      *  3. TMDB RECOMMENDATIONS (weight 30) — the content engine; good
      *     genre-adjacent fill but generic on its own.
@@ -5419,6 +5456,17 @@ class NativePlayerActivity : ComponentActivity() {
         val detail = runCatching {
             repo.getDetailByTmdbId(tmdbId, mediaType)
         }.getOrNull() ?: return emptyList()
+
+        // "Because you watched Ted Lasso" came back all talk shows: the cast
+        // tier takes each person's top works by popularity, and a guest spot
+        // on a nightly talk show out-popularises every scripted credit they
+        // have. Same for TMDB's own recommendation blob now and then. Drop
+        // the unscripted formats — unless the title being watched IS one, in
+        // which case they are exactly the right suggestion.
+        val parentIsUnscripted = detail.genres.any { it.id in UNSCRIPTED_TV_GENRES }
+        val keepScripted: (List<Int>?) -> Boolean = { genreIds ->
+            keepRecommendedGenre(genreIds, parentIsUnscripted)
+        }
 
         // What this profile has already watched (any parent id, completed or
         // started): the ids come back as imdb ids / raw stream ids, so the
@@ -5527,9 +5575,14 @@ class NativePlayerActivity : ComponentActivity() {
                     .filter { credit ->
                         val type = credit.mediaType.orEmpty()
                         (type == "movie" || type == "tv") &&
-                            !credit.posterPath.isNullOrBlank()
+                            !credit.posterPath.isNullOrBlank() &&
+                            !isSelfAppearance(credit.character) &&
+                            keepScripted(credit.genreIds)
                     }
-                    .sortedByDescending { it.popularity ?: 0.0 }
+                    // Rank by rating weight, not popularity: a talk-show
+                    // guest spot is popular but rated ~5-6, so popularity
+                    // handed the row to The Tonight Show.
+                    .sortedByDescending { personCreditRank(it) }
                     .take(4)
                     .forEach { credit ->
                         addCandidate(
@@ -5547,7 +5600,7 @@ class NativePlayerActivity : ComponentActivity() {
 
         // T3: TMDB's own recommendation engine.
         detail.recommendations?.results.orEmpty()
-            .filter { !it.posterPath.isNullOrBlank() }
+            .filter { !it.posterPath.isNullOrBlank() && keepScripted(it.genreIds) }
             .take(10)
             .forEach { rec ->
                 addCandidate(

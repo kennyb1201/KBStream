@@ -108,7 +108,10 @@ data class TmdbRecommendationItem(
     // Year + rating for Detail screen poster captions (TMDB sends both).
     @Json(name = "release_date") val releaseDate: String? = null,
     @Json(name = "first_air_date") val firstAirDate: String? = null,
-    @Json(name = "vote_average") val voteAverage: Double? = null
+    @Json(name = "vote_average") val voteAverage: Double? = null,
+    // Formats have to be separable: a recommendation row for a scripted
+    // series should not surface talk shows (see UNSCRIPTED_TV_GENRES).
+    @Json(name = "genre_ids") val genreIds: List<Int>? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -201,6 +204,27 @@ data class TmdbKeywords(
     val keywords: List<TmdbKeyword> = emptyList(),
     val results: List<TmdbKeyword> = emptyList()
 )
+
+/**
+ * TMDB TV genre ids for unscripted / variety formats: news, reality, soap,
+ * talk. Cast members of a scripted show guest on these constantly and they
+ * are perpetually airing, so they out-popularise — and get recommended
+ * above — everything an actor is actually known for.
+ */
+val UNSCRIPTED_TV_GENRES = setOf(10763, 10764, 10766, 10767)
+
+/**
+ * Whether a suggestion is the same kind of show as the title it was
+ * generated for. A nightly talk show is not "more like this" for a scripted
+ * series, so unscripted formats are dropped — unless the title being
+ * suggested from IS itself unscripted, where they are exactly the right
+ * answer. Used by the Detail screen's "More Like This" row and the player's
+ * because-you-watched blend.
+ */
+fun keepRecommendedGenre(
+    genreIds: List<Int>?,
+    parentIsUnscripted: Boolean
+): Boolean = parentIsUnscripted || genreIds.orEmpty().none { it in UNSCRIPTED_TV_GENRES }
 
 fun TmdbKeywords?.list(): List<TmdbKeyword> =
     this?.keywords?.takeIf { it.isNotEmpty() } ?: this?.results.orEmpty()
@@ -346,7 +370,12 @@ data class TmdbPersonCredit(
     @Json(name = "first_air_date") val firstAirDate: String? = null,
     val popularity: Double? = null,
     @Json(name = "vote_average") val voteAverage: Double? = null,
-    @Json(name = "vote_count") val voteCount: Int? = null
+    @Json(name = "vote_count") val voteCount: Int? = null,
+    // Talk / news / reality / soap. "Because you watched Ted Lasso" filled up
+    // with talk shows before this was parsed: cast members guest on them, and
+    // nothing on TMDB out-popularises a nightly talk show, so the cast tier's
+    // "top works by popularity" returned The Tonight Show.
+    @Json(name = "genre_ids") val genreIds: List<Int>? = null
 )
 
 @JsonClass(generateAdapter = true)
