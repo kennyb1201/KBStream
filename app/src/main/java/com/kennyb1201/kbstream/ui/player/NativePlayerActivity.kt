@@ -865,6 +865,14 @@ class NativePlayerActivity : ComponentActivity() {
     private var autoSourceSwitchCount = 0
     private val MAX_AUTO_SOURCE_SWITCHES = 2
     private var castMembers: List<PlayerCastMember> = emptyList()
+    /*
+     * Episode count of the season being played — the season's FULL list, not
+     * just the aired ones, so `nextEpisodeTarget()` (below, past the tooling's
+     * edit window) can tell an end-of-season episode apart from a mid-season
+     * one. It carries no air dates, which is why the end-of-playback chain
+     * needs the air-date gate in [airedNextEpisodeTarget] instead of trusting
+     * the next episode number on its own.
+     */
     private var totalEpisodesInSeason: Int? = null
     private var streamHeaders = emptyMap<String, String>()
     private var drmLicenseUrl: String? = null
@@ -2437,15 +2445,33 @@ class NativePlayerActivity : ComponentActivity() {
 
     /** Shared "jump to the next episode" path for the overlay button and media NEXT. */
     private fun advanceToNextEpisode() {
-        val target = nextEpisodeTarget() ?: return
-        // Manual skip: user is actively watching - restart the watchdog.
-        AppPreferences.resetConsecutiveAutoplays(this)
-        launchNextEpisode(
-            target.first,
-            target.second,
-            pendingNextEpisodeName,
-            pendingNextEpisodeRuntime
-        )
+        val rawTarget = nextEpisodeTarget() ?: return
+        scope?.launch {
+            // Same air-date gate as the end-of-playback panel: pressing Next
+            // on an episode that has not aired yet must not resolve a stream
+            // that does not exist.
+            val target = airedNextEpisodeTarget(
+                this@NativePlayerActivity, rawTarget, resolveParentTmdbId(), parentId
+            )
+            if (target == null) {
+                // The next episode exists but is not out: say so rather than
+                // leaving the Next button looking broken.
+                Toast.makeText(
+                    this@NativePlayerActivity,
+                    "Next episode hasn't aired yet",
+                    Toast.LENGTH_SHORT
+                ).show()
+                return@launch
+            }
+            // Manual skip: user is actively watching - restart the watchdog.
+            AppPreferences.resetConsecutiveAutoplays(this@NativePlayerActivity)
+            launchNextEpisode(
+                target.first,
+                target.second,
+                pendingNextEpisodeName,
+                pendingNextEpisodeRuntime
+            )
+        }
     }
 
     /** Media PREVIOUS at the very start of an episode restarts it instead of seeking to 0. */
@@ -4724,7 +4750,12 @@ class NativePlayerActivity : ComponentActivity() {
             // Series episodes show the "Up next" popup; anything without a
             // next episode (movies, finished finales) gets the
             // because-you-watched credits recommendations instead.
-            val target = nextEpisodeTarget()
+            // An episode that has not aired yet counts as "no next episode":
+            // offering it here meant autoplay/PREV resolved streams for an
+            // episode that does not exist, instead of recommending something.
+            val target = airedNextEpisodeTarget(
+                this@NativePlayerActivity, nextEpisodeTarget(), resolveParentTmdbId(), parentId
+            )
             if (target != null) {
                 showNextUpPanel(target.first, target.second)
             } else {
@@ -4754,7 +4785,12 @@ class NativePlayerActivity : ComponentActivity() {
                 }.getOrNull()
                 episodes?.firstOrNull { it.episodeNumber == target.second }
             }
-            if (nextEp != null && overlayNextPrefetchKey == key) {
+            // An unaired next episode is not advertised on the overlay: a
+            // name/runtime there describes an episode the Next button cannot
+            // play (the air-date gate refuses it anyway).
+            if (nextEp != null && !isUnaired(nextEp.airDate) &&
+                overlayNextPrefetchKey == key
+            ) {
                 nextEp.name?.takeIf { it.isNotBlank() }?.let { pendingNextEpisodeName = it }
                 nextEp.runtimeMinutes?.takeIf { it > 0 }?.let { pendingNextEpisodeRuntime = it }
             }
@@ -5796,7 +5832,12 @@ class NativePlayerActivity : ComponentActivity() {
     private fun scrobbleSimkl(action: String, progressOverride: Double? = null) {
         if (isLiveChannel || parentId.isBlank()) return
         if (action == "start" && simklScrobbleActive && !simklScrobblePaused) return
-        if (action == "pause" && !simklScrobbleActive) return
+        // The mirror below updates MDBList as well, so a pause is only
+        // skippable when there is no tracker to tell: bailing out here left an
+        // MDBList session open ("live" on the dashboard) for the rest of a
+        // paused playback whenever Simkl had no session - Simkl not
+        // configured, or a start that failed.
+        if (action == "pause" && !simklScrobbleActive && !MdbListClient.isConfigured(this)) return
         val player = exoPlayer ?: return
         val pos = player.currentPosition.coerceAtLeast(0L)
         val dur = player.duration
