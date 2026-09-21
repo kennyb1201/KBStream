@@ -114,9 +114,10 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
  * move we scroll to the row's new index and re-focus the SAME button there.
  */
 private class CatalogRowFocus {
-    enum class Slot { TOGGLE, TOP, UP, DOWN, BOTTOM }
+    enum class Slot { TOGGLE, PIN, TOP, UP, DOWN, BOTTOM }
 
     val toggle = FocusRequester()
+    val pin = FocusRequester()
     val top = FocusRequester()
     val up = FocusRequester()
     val down = FocusRequester()
@@ -124,6 +125,7 @@ private class CatalogRowFocus {
 
     fun of(slot: Slot): FocusRequester? = when (slot) {
         Slot.TOGGLE -> toggle
+        Slot.PIN -> pin
         Slot.TOP -> top
         Slot.UP -> up
         Slot.DOWN -> down
@@ -952,6 +954,17 @@ private fun CatalogManagerDialog(
     // retry on the next state change instead of dropping focus to the top.
     var pendingFocusAttempts by remember { mutableStateOf(0) }
 
+    // The import block starts open ONLY on a first run (nothing imported yet)
+    // so a new user is not hunting for it. Once a profile is imported it
+    // collapses to one button and the arrangement — the reason this dialog
+    // exists — owns the space.
+    var importExpanded by remember {
+        mutableStateOf(
+            collectionsState.profileUrls.isEmpty() &&
+                collectionsState.collections.isEmpty()
+        )
+    }
+
     // One flat list: addon catalog rows first-class alongside collection
     // rows, arranged by the merged home order the ViewModel owns.
     val rows: List<CatalogManagerDialogRow> =
@@ -1162,10 +1175,17 @@ private fun CatalogManagerDialog(
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "Arrange collections and catalogs. Changes are instant.",
+                        text = "Arrange the rails on Home. Changes are instant.",
                         color = KBTextLo,
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(top = 3.dp)
+                    )
+                    Text(
+                        text = "Collections can pin above everything · a catalog " +
+                            "moves to the top of the list · ⏬ unpins and drops it last",
+                        color = KBTextLo.copy(alpha = 0.7f),
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(top = 5.dp)
                     )
                 }
                 if (configurations.isNotEmpty()) {
@@ -1180,33 +1200,80 @@ private fun CatalogManagerDialog(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Import section
-            Text(
-                text = "IMPORT COLLECTIONS",
-                color = KBTextLo,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold
-            )
+            // Import section: one button plus how many sources are in play.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .padding(top = 6.dp)
-                    .fillMaxWidth()
+                modifier = Modifier.fillMaxWidth()
             ) {
-                KBTextField(
-                    value = collectionUrlInput,
-                    onValueChange = onCollectionUrlChange,
-                    placeholder = "https://…/kb-collections.json",
-                    modifier = Modifier.weight(1f),
-                    onDone = onImportCollectionUrl
+                ActionButton(
+                    label = if (importExpanded) "CLOSE IMPORT" else "IMPORT COLLECTIONS",
+                    onClick = { importExpanded = !importExpanded }
                 )
-                Spacer(modifier = Modifier.width(6.dp))
-                KBPasteChip(onPaste = onCollectionUrlChange)
-                Spacer(modifier = Modifier.width(6.dp))
-                ActionButton(label = "ADD", onClick = onImportCollectionUrl)
-                Spacer(modifier = Modifier.width(6.dp))
-                ActionButton(label = "FILE", onClick = onPickCollectionFile)
+                if (collectionsState.profileUrls.isNotEmpty()) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = when (collectionsState.profileUrls.size) {
+                            1 -> "1 profile source"
+                            else -> "${collectionsState.profileUrls.size} profile sources"
+                        },
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
             }
+
+            if (importExpanded) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .padding(top = 6.dp)
+                        .fillMaxWidth()
+                ) {
+                    KBTextField(
+                        value = collectionUrlInput,
+                        onValueChange = onCollectionUrlChange,
+                        placeholder = "https://…/kb-collections.json",
+                        modifier = Modifier.weight(1f),
+                        onDone = onImportCollectionUrl
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    KBPasteChip(onPaste = onCollectionUrlChange)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    ActionButton(label = "ADD", onClick = onImportCollectionUrl)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    ActionButton(label = "FILE", onClick = onPickCollectionFile)
+                }
+
+                // Imported profile sources (removable)
+                if (collectionsState.profileUrls.isNotEmpty()) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier
+                            .padding(top = 6.dp)
+                            .fillMaxWidth()
+                    ) {
+                        collectionsState.profileUrls.forEach { url ->
+                            val isFile = url.startsWith("local:")
+                            ActionButton(
+                                // The paperclip emoji rendered differently on
+                                // every device; a word does not.
+                                label = (if (isFile) "FILE · " else "") +
+                                    url.substringAfterLast('/').ifBlank { url },
+                                onClick = { onRemoveCollectionProfile(url) }
+                            )
+                        }
+                    }
+                    Text(
+                        text = "Press OK on a source, then confirm, to remove it",
+                        color = KBTextLo.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(top = 3.dp)
+                    )
+                }
+            }
+
+            // Kept outside the collapse: import feedback must never be hidden
+            // behind the section that produced it.
             collectionsState.statusMessage?.let { message ->
                 Text(
                     text = message,
@@ -1216,35 +1283,15 @@ private fun CatalogManagerDialog(
                 )
             }
 
-            // Imported profile sources (removable)
-            if (collectionsState.profileUrls.isNotEmpty()) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier
-                        .padding(top = 6.dp)
-                        .fillMaxWidth()
-                ) {
-                    collectionsState.profileUrls.forEach { url ->
-                        val isFile = url.startsWith("local:")
-                        ActionButton(
-                            label = (if (isFile) "📎 " else "") +
-                                url.substringAfterLast('/').ifBlank { url },
-                            onClick = { onRemoveCollectionProfile(url) }
-                        )
-                    }
-                }
-                Text(
-                    text = "Press OK on a source, then confirm, to remove it",
-                    color = KBTextLo.copy(alpha = 0.6f),
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.padding(top = 3.dp)
-                )
-            }
-
             Spacer(modifier = Modifier.height(10.dp))
 
             Text(
-                text = "HOME RAILS (${visibleRows.size} shown)",
+                text = buildString {
+                    append("ON HOME — ${visibleRows.size} rails")
+                    if (hiddenRows.isNotEmpty()) {
+                        append(" · ${hiddenRows.size} hidden")
+                    }
+                },
                 color = KBTextLo,
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold
@@ -1269,11 +1316,25 @@ private fun CatalogManagerDialog(
                         position = index,
                         total = visibleRows.size,
                         rowFocus = rowFocus,
+                        // A catalog's TOP means "head of the list", and pinned
+                        // collections render above that — so with one pinned
+                        // and no catalog before it, the press would do
+                        // nothing. Show it as unavailable instead.
+                        topEnabled = if (row.isCollection) {
+                            index > 0
+                        } else {
+                            visibleRows.take(index).any { !it.isCollection }
+                        },
                         // Hide keeps focus in the list (next row's toggle)
                         // instead of dumping it on the dialog header.
                         onToggle = { hideRowKeepFocus(row) },
                         onPin = {
                             if (row.isCollection) {
+                                // A pin/unpin moves the row to (or out of) the
+                                // top of the list, so it is rebuilt at a new
+                                // index — restore focus onto its own pin button
+                                // there, the same way a move does.
+                                pendingFocus = row.key to CatalogRowFocus.Slot.PIN
                                 onCollectionPin(row.collectionKey.orEmpty())
                             }
                         },
@@ -1287,7 +1348,7 @@ private fun CatalogManagerDialog(
                 if (hiddenRows.isNotEmpty()) {
                     item(key = "hidden_header") {
                         Text(
-                            text = "HIDDEN — press SHOW to bring back",
+                            text = "HIDDEN FROM HOME — press SHOW to bring one back",
                             color = KBTextLo,
                             style = MaterialTheme.typography.labelMedium,
                             modifier = Modifier.padding(top = 10.dp, bottom = 2.dp)
@@ -1304,6 +1365,10 @@ private fun CatalogManagerDialog(
                             position = -1,
                             total = -1,
                             rowFocus = rowFocus,
+                            // A hidden rail has no Home slot to reorder, rename
+                            // or pin, so it shows none of those controls instead
+                            // of a row of buttons that do nothing.
+                            isHiddenSection = true,
                             onToggle = { showRowKeepFocus(row) },
                             onPin = {},
                             onMove = { _, _ -> },
@@ -1378,6 +1443,8 @@ private fun UnifiedManagerRow(
     position: Int,
     total: Int,
     rowFocus: CatalogRowFocus,
+    isHiddenSection: Boolean = false,
+    topEnabled: Boolean = true,
     onToggle: () -> Unit,
     onPin: () -> Unit,
     onMove: (CatalogRowFocus.Slot, Int) -> Unit,
@@ -1390,7 +1457,7 @@ private fun UnifiedManagerRow(
             .background(KBSurface)
             .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
-        // Line 1: position + pin indicator + name + show/hide switch
+        // Line 1: position + kind + name + pin state + show/hide
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth()
@@ -1401,14 +1468,14 @@ private fun UnifiedManagerRow(
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.width(24.dp)
             )
+            RailKindChip(isCollection = row.isCollection)
             if (row.isPinned) {
-                Text(
-                    text = "📌",
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.width(22.dp)
+                Icon(
+                    imageVector = Icons.Filled.PushPin,
+                    contentDescription = "Pinned above everything",
+                    tint = KBAccent,
+                    modifier = Modifier.padding(start = 6.dp).size(13.dp)
                 )
-            } else {
-                Spacer(modifier = Modifier.width(22.dp))
             }
             Text(
                 text = row.title,
@@ -1417,13 +1484,30 @@ private fun UnifiedManagerRow(
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f).padding(end = 6.dp)
+                modifier = Modifier.weight(1f).padding(start = 8.dp, end = 6.dp)
             )
-            CatalogToggle(
-                checked = !row.isHidden,
-                onClick = onToggle,
-                modifier = Modifier.focusRequester(rowFocus.toggle)
-            )
+            if (isHiddenSection) {
+                // A toggle reading "off" on a rail that is absent from Home
+                // says nothing about it; SHOW says what the press will do.
+                KBCard(
+                    onClick = onToggle,
+                    modifier = Modifier.focusRequester(rowFocus.toggle)
+                ) {
+                    Text(
+                        text = "SHOW",
+                        color = KBAccent,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
+                }
+            } else {
+                CatalogToggle(
+                    checked = !row.isHidden,
+                    onClick = onToggle,
+                    modifier = Modifier.focusRequester(rowFocus.toggle)
+                )
+            }
         }
 
         // Line 2: subtitle + actions
@@ -1444,52 +1528,85 @@ private fun UnifiedManagerRow(
                     .padding(end = 8.dp)
             )
 
-            if (!row.isCollection) {
+            // A rail that is not on Home has no slot to reorder, no name in
+            // the rails list to rename and no placement to pin, so it shows
+            // none of these. Dimmed buttons that do nothing were most of the
+            // clutter — the only live control is the SHOW beside the title.
+            if (!isHiddenSection) {
+                // Rename is catalogs-only, pin is collections-only and the
+                // OTHER kind's slot is reserved, so each row's arrow cluster
+                // starts in the same column instead of shifting by a button.
+                if (row.isCollection) {
+                    Spacer(modifier = Modifier.width(38.dp))
+                } else {
+                    CatalogIconButton(
+                        icon = Icons.Filled.Edit,
+                        contentDescription = "Rename catalog",
+                        onClick = onRename,
+                        modifier = Modifier.size(38.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(4.dp))
+                if (row.isCollection) {
+                    CatalogIconButton(
+                        icon = Icons.Filled.PushPin,
+                        contentDescription = if (row.isPinned) {
+                            "Unpin — back into the list"
+                        } else {
+                            "Pin above everything"
+                        },
+                        tint = if (row.isPinned) KBAccent else KBTextHi,
+                        onClick = onPin,
+                        modifier = Modifier.size(38.dp).focusRequester(rowFocus.pin)
+                    )
+                } else {
+                    Spacer(modifier = Modifier.width(38.dp))
+                }
+                Spacer(modifier = Modifier.width(10.dp))
                 CatalogIconButton(
-                    icon = Icons.Filled.Edit,
-                    onClick = onRename,
-                    modifier = Modifier.size(38.dp)
+                    icon = Icons.Filled.KeyboardDoubleArrowUp,
+                    contentDescription = if (row.isCollection) {
+                        "Pin to the very top"
+                    } else {
+                        "Move to the top of the list"
+                    },
+                    tint = KBTextHi,
+                    enabled = topEnabled,
+                    onClick = { onMove(CatalogRowFocus.Slot.TOP, Int.MIN_VALUE) },
+                    modifier = Modifier.size(38.dp).focusRequester(rowFocus.top)
                 )
                 Spacer(modifier = Modifier.width(4.dp))
+                CatalogIconButton(
+                    icon = Icons.Filled.ArrowUpward,
+                    contentDescription = "Move up one",
+                    tint = KBTextHi,
+                    enabled = position > 0,
+                    onClick = { onMove(CatalogRowFocus.Slot.UP, -1) },
+                    modifier = Modifier.size(38.dp).focusRequester(rowFocus.up)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                CatalogIconButton(
+                    icon = Icons.Filled.ArrowDownward,
+                    contentDescription = "Move down one",
+                    tint = KBTextHi,
+                    enabled = position in 0 until (total - 1),
+                    onClick = { onMove(CatalogRowFocus.Slot.DOWN, +1) },
+                    modifier = Modifier.size(38.dp).focusRequester(rowFocus.down)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                CatalogIconButton(
+                    icon = Icons.Filled.KeyboardDoubleArrowDown,
+                    contentDescription = if (row.isCollection) {
+                        "Unpin and move to the bottom"
+                    } else {
+                        "Move to the bottom of the list"
+                    },
+                    tint = KBTextHi,
+                    enabled = position in 0 until (total - 1),
+                    onClick = { onMove(CatalogRowFocus.Slot.BOTTOM, Int.MAX_VALUE) },
+                    modifier = Modifier.size(38.dp).focusRequester(rowFocus.bottom)
+                )
             }
-            CatalogIconButton(
-                icon = Icons.Filled.PushPin,
-                enabled = row.isCollection && position >= 0,
-                onClick = onPin,
-                modifier = Modifier.size(38.dp)
-            )
-            Spacer(modifier = Modifier.width(4.dp))
-            CatalogIconButton(
-                icon = Icons.Filled.KeyboardDoubleArrowUp,
-                tint = KBTextHi,
-                enabled = position > 0,
-                onClick = { onMove(CatalogRowFocus.Slot.TOP, Int.MIN_VALUE) },
-                modifier = Modifier.size(38.dp).focusRequester(rowFocus.top)
-            )
-            Spacer(modifier = Modifier.width(4.dp))
-            CatalogIconButton(
-                icon = Icons.Filled.ArrowUpward,
-                tint = KBTextHi,
-                enabled = position > 0,
-                onClick = { onMove(CatalogRowFocus.Slot.UP, -1) },
-                modifier = Modifier.size(38.dp).focusRequester(rowFocus.up)
-            )
-            Spacer(modifier = Modifier.width(4.dp))
-            CatalogIconButton(
-                icon = Icons.Filled.ArrowDownward,
-                tint = KBTextHi,
-                enabled = position in 0 until (total - 1),
-                onClick = { onMove(CatalogRowFocus.Slot.DOWN, +1) },
-                modifier = Modifier.size(38.dp).focusRequester(rowFocus.down)
-            )
-            Spacer(modifier = Modifier.width(4.dp))
-            CatalogIconButton(
-                icon = Icons.Filled.KeyboardDoubleArrowDown,
-                tint = KBTextHi,
-                enabled = position in 0 until (total - 1),
-                onClick = { onMove(CatalogRowFocus.Slot.BOTTOM, Int.MAX_VALUE) },
-                modifier = Modifier.size(38.dp).focusRequester(rowFocus.bottom)
-            )
         }
     }
 }
@@ -1506,11 +1623,35 @@ private data class CatalogManagerDialogRow(
     val isHidden: Boolean
 )
 
+/** Tiny kind tag: collections and catalogs live in one list now. */
+@Composable
+private fun RailKindChip(isCollection: Boolean) {
+    Surface(
+        shape = RoundedCornerShape(6.dp),
+        colors = SurfaceDefaults.colors(
+            containerColor = if (isCollection) {
+                KBAccent.copy(alpha = 0.22f)
+            } else {
+                KBSurface.copy(alpha = 0.60f)
+            },
+            contentColor = if (isCollection) KBAccent else KBTextLo
+        )
+    ) {
+        Text(
+            text = if (isCollection) "COLLECTION" else "CATALOG",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+        )
+    }
+}
+
 @Composable
 private fun CatalogIconButton(
     icon: ImageVector,
     enabled: Boolean = true,
     tint: Color = Color.Unspecified,
+    contentDescription: String? = null,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1522,7 +1663,7 @@ private fun CatalogIconButton(
             ) {
                 Icon(
                     imageVector = icon,
-                    contentDescription = null,
+                    contentDescription = contentDescription,
                     // Icons render in the app text color, not the dark
                     // default - black glyphs on the raised card were
                     // nearly invisible.
@@ -1546,7 +1687,7 @@ private fun CatalogIconButton(
             ) {
                 Icon(
                     imageVector = icon,
-                    contentDescription = null,
+                    contentDescription = contentDescription,
                     tint = KBTextLo.copy(alpha = 0.55f),
                     modifier = Modifier.size(16.dp)
                 )

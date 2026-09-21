@@ -27,6 +27,84 @@ data class KBHomeOrder(
     val hiddenSet: Set<String> get() = hidden.toSet()
 }
 
+/**
+ * Pinned is COLLECTIONS-ONLY, so "is this key a collection" is decided in one
+ * place. Catalog rails ("addon:...") get their position from [KBHomeOrder.order]
+ * alone; the highest one can sit is the head of that block, below any pinned
+ * collections.
+ */
+internal const val KB_COLLECTION_KEY_PREFIX = "kb:"
+
+/**
+ * Top/bottom moves on the merged arrangement.
+ *
+ * TOP pins a COLLECTION to the head of the pinned block (the absolute first
+ * rail), but only moves a CATALOG to the head of the order block — a catalog
+ * parked in the pinned list could never be unpinned, because the manager has
+ * no pin control on a catalog row, so it stayed above every pinned collection
+ * forever. Any catalog found in the pinned list here is lifted out on the way.
+ *
+ * BOTTOM unpins either kind and appends it after everything else.
+ */
+internal fun moveRailToEnd(
+    value: KBHomeOrder,
+    key: String,
+    toTop: Boolean
+): KBHomeOrder {
+    // Start from a repaired arrangement so the result can never carry a stray
+    // catalog in pinned (see [normalizeHomeOrder]) — whatever the caller read.
+    val prefs = normalizeHomeOrder(value)
+    val hidden = prefs.hidden - key
+    return when {
+        !toTop ->
+            prefs.copy(
+                pinned = prefs.pinned - key,
+                order = (prefs.order - key) + key,
+                hidden = hidden
+            )
+
+        KBHomeOrderPrefs.isCollectionKey(key) ->
+            prefs.copy(
+                pinned = listOf(key) + prefs.pinned.filter { it != key },
+                order = prefs.order - key,
+                hidden = hidden
+            )
+
+        else ->
+            prefs.copy(
+                pinned = prefs.pinned - key,
+                order = listOf(key) + prefs.order.filter { it != key },
+                hidden = hidden
+            )
+    }
+}
+
+/**
+ * Read-time repair for arrangements written before pinned was
+ * collections-only: catalog keys sitting in [KBHomeOrder.pinned] are moved to
+ * the head of the order block, in the sequence they were pinned in.
+ *
+ * This is what makes an already-stuck catalog movable again without the user
+ * having to reset their whole arrangement — and the catalog keeps the high
+ * position it was given, just below pinned collections instead of above them.
+ * Duplicates within either list are dropped (first occurrence wins).
+ */
+internal fun normalizeHomeOrder(value: KBHomeOrder): KBHomeOrder {
+    val pinned = value.pinned
+        .filter { KBHomeOrderPrefs.isCollectionKey(it) }
+        .distinct()
+    val strays = value.pinned
+        .filterNot { KBHomeOrderPrefs.isCollectionKey(it) }
+        .distinct()
+    val order = value.order
+        .filterNot { it in pinned }
+        .distinct()
+    val healedOrder = strays + order.filterNot { it in strays }
+
+    if (pinned == value.pinned && healedOrder == value.order) return value
+    return value.copy(pinned = pinned, order = healedOrder)
+}
+
 object KBHomeOrderPrefs {
 
     private const val PREFS_NAME = "kbstream_kb_home_order"
@@ -39,11 +117,16 @@ object KBHomeOrderPrefs {
 
     /** Stable key for one KB collection rail on Home. */
     fun collectionKey(collectionId: String?, title: String?): String =
-        "kb:" + (collectionId?.takeIf { it.isNotBlank() } ?: title.orEmpty())
+        KB_COLLECTION_KEY_PREFIX +
+            (collectionId?.takeIf { it.isNotBlank() } ?: title.orEmpty())
 
     /** Title-only alias key, used to detect id changes on re-uploaded profiles. */
     fun collectionTitleAliasKey(title: String?): String =
-        "kb:" + title.orEmpty()
+        KB_COLLECTION_KEY_PREFIX + title.orEmpty()
+
+    /** True for a collection arrangement key (catalog keys are "addon:..."). */
+    fun isCollectionKey(key: String): Boolean =
+        key.startsWith(KB_COLLECTION_KEY_PREFIX)
 
     /**
      * Resolves the arrangement key for a collection, honoring history: when
@@ -104,7 +187,12 @@ object KBHomeOrderPrefs {
     fun get(context: Context): KBHomeOrder {
         lastContext = context.applicationContext
         val raw = prefs(context).getString(KEY_BLOB, null) ?: return KBHomeOrder()
-        return runCatching { adapter.fromJson(raw) }.getOrNull() ?: KBHomeOrder()
+        val parsed = runCatching { adapter.fromJson(raw) }.getOrNull()
+            ?: KBHomeOrder()
+        // Repairs the catalogs an older build pinned, on every read path
+        // (manager dialog, Home's merged order, the cloud blob): they come
+        // back out of pinned and take the top of the order block instead.
+        return normalizeHomeOrder(parsed)
     }
 
     fun save(context: Context, value: KBHomeOrder) {

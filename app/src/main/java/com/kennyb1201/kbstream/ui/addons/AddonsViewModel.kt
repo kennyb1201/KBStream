@@ -14,6 +14,7 @@ import com.kennyb1201.kbstream.data.kb.KBHomeOrder
 import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
 import com.kennyb1201.kbstream.data.kb.KBProfilePrefs
 import com.kennyb1201.kbstream.data.kb.KBRepository
+import com.kennyb1201.kbstream.data.kb.moveRailToEnd
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -325,6 +326,10 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun toggleCollectionPinned(key: String) {
+        // Pin is COLLECTIONS-ONLY. A catalog that reached the pinned list kept
+        // its place above every collection with no control able to take it
+        // back out, so never write one in the first place.
+        if (!KBHomeOrderPrefs.isCollectionKey(key)) return
         persistHomeOrder { prefs ->
             if (prefs.pinned.contains(key)) {
                 prefs.copy(pinned = prefs.pinned - key)
@@ -407,26 +412,19 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
      * Shared reorder core. Works on the merged VISIBLE rail keys (the exact
      * list the manager dialog shows and Home renders):
      *  - ±1 steps one slot; pinned keys stay pinned inside the pinned block.
-     *  - Int.MIN_VALUE (VERY TOP) puts the key at the HEAD of the pinned
-     *    list, so it renders as the absolute first rail — ABOVE everything,
-     *    including previously pinned collections.
+     *  - Int.MIN_VALUE (VERY TOP) pins a COLLECTION to the absolute first
+     *    rail; a CATALOG goes to the head of the order block instead, which is
+     *    the highest a catalog can sit (pinned collections render above it).
+     *    Catalogs are never pinned — see [moveRailToEnd].
      *  - Int.MAX_VALUE (VERY BOTTOM) unpins the key and appends it after
      *    everything else.
      */
     private fun moveRailInArrangement(key: String, delta: Int) {
         persistHomeOrder { prefs ->
             when (delta) {
-                Int.MIN_VALUE -> prefs.copy(
-                    pinned = listOf(key) + prefs.pinned.filter { it != key },
-                    order = prefs.order - key,
-                    hidden = prefs.hidden - key
-                )
+                Int.MIN_VALUE -> moveRailToEnd(prefs, key, toTop = true)
 
-                Int.MAX_VALUE -> prefs.copy(
-                    pinned = prefs.pinned - key,
-                    order = (prefs.order - key) + key,
-                    hidden = prefs.hidden - key
-                )
+                Int.MAX_VALUE -> moveRailToEnd(prefs, key, toTop = false)
 
                 else -> {
                     val visible =
