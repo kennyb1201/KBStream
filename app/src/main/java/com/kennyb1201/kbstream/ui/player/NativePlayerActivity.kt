@@ -269,7 +269,6 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var itemNameView: TextView
     private lateinit var episodeLabel: TextView
     private lateinit var episodeTitleView: TextView
-    private lateinit var sourceLabel: TextView
     private lateinit var badgeRow: LinearLayout
     private lateinit var overviewText: TextView
     private lateinit var seekbarRow: LinearLayout
@@ -1764,7 +1763,6 @@ class NativePlayerActivity : ComponentActivity() {
         itemNameView = findViewById(R.id.item_name)
         episodeLabel = findViewById(R.id.episode_label)
         episodeTitleView = findViewById(R.id.episode_title)
-        sourceLabel = findViewById(R.id.source_label)
         badgeRow = findViewById(R.id.badge_row)
         overviewText = findViewById(R.id.overview_text)
         seekbarRow = findViewById(R.id.seekbar_row)
@@ -1895,7 +1893,6 @@ class NativePlayerActivity : ComponentActivity() {
         // Static UI
         liveBadge.visibility = if (isLiveChannel) View.VISIBLE else View.GONE
         btnSource.visibility = View.VISIBLE
-        sourceLabel.text = "Source: $currentSourceLabel"
         renderSourceBadges()
 
         // Populate header info
@@ -3855,8 +3852,6 @@ class NativePlayerActivity : ComponentActivity() {
             overviewText.text = it
             overviewText.visibility = View.VISIBLE
         }
-        sourceLabel.visibility = View.VISIBLE
-        sourceLabel.text = "Source: $currentSourceLabel"
         renderSourceBadges()
     }
 
@@ -4097,13 +4092,12 @@ class NativePlayerActivity : ComponentActivity() {
         endsAtClock.text = "Ends at $endsAt"
     }
 
-    /** Renders the current source's badge chips under the source label. */
+    /** Renders the current source's badge chips. */
     private fun renderSourceBadges() {
         PickerAdapter.bindBadgeRow(badgeRow, currentBadges)
     }
 
     private fun updateControlsInfo() {
-        sourceLabel.text = "Source: $currentSourceLabel"
         renderSourceBadges()
         btnPlayPause.setImageResource(
             if (exoPlayer?.isPlaying == true) R.drawable.ic_player_pause else R.drawable.ic_player_play
