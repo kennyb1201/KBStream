@@ -18,6 +18,14 @@ import kotlinx.coroutines.withContext
  * throwing, so playback is never blocked by tracking failures.
  */
 
+/**
+ * HTTP codes that mean "there is no such playback session", i.e. the stop
+ * succeeded in effect: Simkl returns 409 when the session was already ended
+ * (the body repeats the session it dropped) and 404 when it never had one.
+ * Anything else — 400 in particular — is a real failure and is left to log.
+ */
+private val TERMINAL_STOP_CODES = setOf(404, 409)
+
 /*
  * Outbound "Remove from Continue Watching" for Simkl-backed cards:
  * deletes the paused playback session (the progress record behind the
@@ -436,6 +444,23 @@ suspend fun SimklRepository.scrobbleImpl(
                         )
                 }
             }
+
+        // A stop for a session Simkl has ALREADY ended answers 409 Conflict,
+        // with the session it dropped in the body (and 404 when it never saw
+        // one). That is the ordinary end of a finished episode, not a failure:
+        // logging it as an error put a red line in the log per playback, and
+        // reporting it as a failure told the caller to retry a stop that can
+        // never succeed. Success here means "the session is over", which is
+        // exactly what this call is for.
+        if (action == "stop" && response.code() in TERMINAL_STOP_CODES) {
+            Log.d(
+                "SIMKL_REPO",
+                "scrobble/stop already ended " +
+                    "code=${response.code()}"
+            )
+
+            return true
+        }
 
         if (!response.isSuccessful) {
             val errorText =

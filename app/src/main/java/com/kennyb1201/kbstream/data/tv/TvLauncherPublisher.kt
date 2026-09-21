@@ -29,9 +29,16 @@ import org.json.JSONObject
  * of historyId -> launcher row id is cached in SharedPreferences so updates
  * and removals can target the exact row without re-querying the provider.
  *
- * The Watch Next table lives on the system side, so no manifest provider or
- * runtime permission is required. Every write is a no-op below API 26,
- * where the Watch Next table does not exist.
+ * Every write is a no-op below API 26, where the Watch Next table does not
+ * exist.
+ *
+ * Not every TV provider lets a third-party app write here. The TCL/Realtek
+ * box this was debugged on refuses the insert outright — "requires
+ * com.android.providers.tv.permission.WRITE_EPG_DATA, or grantUriPermission()"
+ * — which the manifest now declares (see AndroidManifest), but a provider that
+ * treats it as privileged will never grant it. Since the answer cannot change
+ * within a session, the first denial disables publishing for the process
+ * instead of failing the same write on every sync.
  */
 object TvLauncherPublisher {
 
@@ -53,6 +60,34 @@ object TvLauncherPublisher {
     private val mutex = Mutex()
 
     /**
+     * Set when the platform refuses a Watch Next write. Process-wide and
+     * never cleared: a permission denial is a property of the device, so
+     * every later sync in this session would repeat the identical failing
+     * call (and its error log) for nothing.
+     */
+    @Volatile
+    private var writesDenied = false
+
+    /**
+     * Whether the platform reports a permission/provider denial. The provider
+     * throws SecurityException with the permission name; some TV providers
+     * instead wrap it, so the message is checked too.
+     *
+     * Internal so the rule can be tested: a false positive here silently
+     * disables the launcher's Continue watching rail for the whole session,
+     * and a false negative re-attempts a write the device will always refuse.
+     */
+    internal fun isWriteDenial(e: Throwable): Boolean {
+        var cause: Throwable? = e
+        while (cause != null) {
+            if (cause is SecurityException) return true
+            if (cause.message?.contains("Permission Denial") == true) return true
+            cause = cause.cause
+        }
+        return false
+    }
+
+    /**
      * Full reconciliation: reads every resume row and rebuilds the launcher
      * Watch Next rows to match (one program per parent, most recently active
      * one). Cheap (a handful of rows) and self-healing — finished or removed
@@ -63,15 +98,37 @@ object TvLauncherPublisher {
         entries: List<WatchHistoryEntity>
     ) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        if (writesDenied) return
         scope.launch {
             mutex.withLock {
+                if (writesDenied) return@withLock
                 runCatching {
                     syncLocked(context, entries)
                 }.onFailure { e ->
-                    Log.e(TAG, "Watch Next sync failed: ${e.message}")
+                    if (isWriteDenial(e)) {
+                        noteWriteDenied(e)
+                    } else {
+                        Log.e(TAG, "Watch Next sync failed: ${e.message}")
+                    }
                 }
             }
         }
+    }
+
+    /**
+     * Records the first refusal and says exactly why nothing else will be
+     * published this session. Without this the log carried four identical
+     * permission failures per sync and no hint that the TV, not the app, was
+     * refusing.
+     */
+    private fun noteWriteDenied(e: Throwable) {
+        if (writesDenied) return
+        writesDenied = true
+        Log.w(
+            TAG,
+            "Watch Next writes denied by this TV's provider " +
+                "(${e.message}) — launcher Continue watching disabled"
+        )
     }
 
     /** Removes every Watch Next row this app published. */
@@ -122,7 +179,11 @@ object TvLauncherPublisher {
                     next.put(entry.id, uri.lastPathSegment)
                 }
             }.onFailure { e ->
-                Log.e(TAG, "Watch Next insert failed for ${entry.id}: ${e.message}")
+                if (isWriteDenial(e)) {
+                    noteWriteDenied(e)
+                } else {
+                    Log.e(TAG, "Watch Next insert failed for ${entry.id}: ${e.message}")
+                }
             }
         }
 

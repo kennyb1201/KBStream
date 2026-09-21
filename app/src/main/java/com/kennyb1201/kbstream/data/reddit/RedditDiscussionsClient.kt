@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.reddit
 
 import android.util.Log
+import com.kennyb1201.kbstream.data.network.RejectionGate
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -46,6 +47,18 @@ object RedditDiscussionsClient {
     /** Hard cap so the reviews row can never balloon. */
     private const val MAX_REVIEWS = 12
 
+    private const val HTTP_FORBIDDEN = 403
+
+    /**
+     * How long a 403 pauses this source. Reddit blocks by client identity, so
+     * the same request from the next title is rejected identically; a quarter
+     * of an hour bounds the wasted requests without permanently writing the
+     * source off on a device that may simply have had a bad IP for a while.
+     */
+    private const val BLOCK_MAX_MS = 15 * 60 * 1000L
+
+    private val rejections = RejectionGate(BLOCK_MAX_MS)
+
     /** Selftext floor: a real write-up, not a one-liner. */
     private const val MIN_BODY_LENGTH = 120
 
@@ -61,6 +74,9 @@ object RedditDiscussionsClient {
     ): List<TmdbReview> = withContext(Dispatchers.IO) {
         val cleanTitle = title.trim()
         if (cleanTitle.isBlank()) return@withContext emptyList()
+        // Already told no by this source: the next title would ask the same
+        // question and get the same answer.
+        if (rejections.isBlocked()) return@withContext emptyList()
 
         // AND-groups: quoted title + year + review-ish intent word. A post
         // must plausibly be about THIS title, not a namesake.
@@ -86,9 +102,22 @@ object RedditDiscussionsClient {
                     .build()
             ).execute().use { response ->
                 if (response.isSuccessful) {
+                    rejections.reset()
                     response.body?.string()
                 } else {
-                    Log.w(TAG, "search HTTP ${response.code} for \"$cleanTitle\"")
+                    if (response.code == HTTP_FORBIDDEN) {
+                        // Logged once per block: Reddit is turning the app
+                        // away, so every later title hits the same wall.
+                        if (rejections.recordRejection()) {
+                            Log.w(
+                                TAG,
+                                "search 403 (client blocked) — pausing Reddit " +
+                                    "discussions for ${BLOCK_MAX_MS / 60_000} min"
+                            )
+                        }
+                    } else {
+                        Log.w(TAG, "search HTTP ${response.code} for \"$cleanTitle\"")
+                    }
                     null
                 }
             }

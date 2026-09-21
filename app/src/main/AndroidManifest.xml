@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.PICTURE_IN_PICTURE" />
     <!-- In-app self-update: lets the system offer the install prompt for a
@@ -7,6 +8,18 @@
     <!-- New-episode alerts. Runtime-requested on Android 13+ (requested when
          the toggle is switched on); a no-op grant on older releases. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Android TV launcher "Watch Next" rows: the launcher's Continue
+         watching rail, published by TvLauncherPublisher.
+
+         Some TV providers enforce this permission on the Watch Next table
+         (the TCL/Realtek box this was debugged on denies the insert with
+         "requires com.android.providers.tv.permission.WRITE_EPG_DATA" without
+         it). On a box where the permission is privileged it is simply never
+         granted, and the publisher stops after the first denial instead of
+         retrying on every sync. -->
+    <uses-permission
+        android:name="com.android.providers.tv.permission.WRITE_EPG_DATA"
+        tools:ignore="ProtectedPermissions" />
 
     <!-- Voice search: let the system speech RecognizerIntent resolve on
          Android 11+ (package visibility filtering). -->

@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -350,6 +351,9 @@ class MainActivity : ComponentActivity() {
         exitGuardLatched = true
     }
 
+    /** Latched by [observeFirstFrame]: the draw listener records once. */
+    private var firstFrameRecorded = false
+
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         if (exitGuardLatched) {
             // Consume everything: both DOWN and UP of any in-flight press.
@@ -388,6 +392,7 @@ class MainActivity : ComponentActivity() {
         // a guaranteed no-launch (black screen → launcher). With the guard
         // the app still starts (profiles may be empty → runs unsigned-in as
         // the legacy global store) instead of dying.
+        val preCompositionStartedMs = android.os.SystemClock.elapsedRealtime()
         runCatching {
             com.kennyb1201.kbstream.data.sync.ProfileManager.init(applicationContext)
         }.onFailure {
@@ -406,6 +411,14 @@ class MainActivity : ComponentActivity() {
             )
         }
 
+        // The synchronous disk work that has to finish before anything can be
+        // composed: the profile store plus the kids-time guard. Timed as one
+        // phase because both sit between this activity's create and the first
+        // composition, which is exactly the window a "the app is slow to come
+        // back from the player" report cannot attribute.
+        recordStartupPhase("startup.preComposition", preCompositionStartedMs)
+
+        val composeStartedMs = android.os.SystemClock.elapsedRealtime()
         setContent {
             // Sync the AMOLED toggle into the theme's live state BEFORE the
             // first composition so launch already paints the right palette.
@@ -430,8 +443,58 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+        recordStartupPhase("startup.setContent", composeStartedMs)
+        observeFirstFrame()
     }
-}
+
+    /**
+     * The first frame is when the launch is over for the user — and it is the
+     * one number the frame-timing warnings in logcat ("Skipped 39 frames!",
+     * "Davey! duration=923ms") cannot attribute to anything. Recorded once,
+     * from the decor view's first draw, so a single capture reads:
+     *
+     *   STARTUP preComposition=… setContent=… firstFrame=… sinceAppStart=…
+     *
+     * A slow preComposition means prefs/store work (make it lazy), a slow
+     * setContent means the tree being built on the main thread, and a slow
+     * firstFrame with a fast setContent means layout/draw.
+     */
+    private fun observeFirstFrame() {
+        val decor = window.decorView
+        val startedMs = android.os.SystemClock.elapsedRealtime()
+        val observer = decor.viewTreeObserver
+        observer.addOnDrawListener(object : android.view.ViewTreeObserver.OnDrawListener {
+            override fun onDraw() {
+                if (firstFrameRecorded) return
+                firstFrameRecorded = true
+                // Detach from the next message: removing a listener from
+                // inside its own callback mutates the list being dispatched.
+                decor.post { observer.removeOnDrawListener(this) }
+                recordStartupPhase("startup.firstFrame", startedMs)
+            }
+        })
+    }
+
+    /**
+     * One startup phase, into both the diagnostics perf ring and a logcat
+     * line, so a plain `adb logcat --pid=$(pidof …)` capture is enough to see
+     * where a launch spends its time.
+     */
+    private fun recordStartupPhase(label: String, startedMs: Long) {
+        val tookMs = android.os.SystemClock.elapsedRealtime() - startedMs
+        com.kennyb1201.kbstream.data.reporting.PerfTrace.record(label, tookMs)
+        Log.w(
+            TAG_STARTUP,
+            "$label=${tookMs}ms sinceAppStart=" +
+                "${com.kennyb1201.kbstream.data.reporting.PerfTrace.sinceAppStartMs()}ms"
+        )
+    }
+
+    /** Startup phase lines, deliberately separate from the screen tags. */
+    private companion object {
+        const val TAG_STARTUP = "STARTUP"
+    }
 
 @Composable
 fun AppRoot() {
@@ -490,8 +553,6 @@ fun AppRoot() {
     val tmdbRepository = remember {
         TmdbRepository.getInstance(context)
     }
-
-    val iptvViewModel: IptvViewModel = viewModel()
 
     val streamsViewModel: StreamsViewModel = viewModel()
 
@@ -1087,6 +1148,16 @@ fun AppRoot() {
         }
 
         is Screen.Guide -> {
+
+            // Created on demand, like the streams picker below: the IPTV
+            // ViewModel's init resolves the cached playlist (a paged read of
+            // every cached channel, then fingerprint passes over the whole
+            // list) and starts the guide clock. Constructing it at the app
+            // root paid all of that on every launch — including every return
+            // from the player — for a screen most sessions never open. The
+            // activity-scoped store still hands back the same instance once
+            // it exists, so Guide -> Player -> Guide keeps its state.
+            val iptvViewModel: IptvViewModel = viewModel()
 
             GuideScreen(
                 viewModel = iptvViewModel,

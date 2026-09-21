@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.trakt
 
 import android.util.Log
+import com.kennyb1201.kbstream.data.network.RejectionGate
 import com.kennyb1201.kbstream.data.tmdb.TmdbAuthorDetails
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
 import kotlinx.coroutines.Dispatchers
@@ -47,6 +48,18 @@ object TraktCommentsClient {
     /** Trakt comments page size is 10; five pages = 50 top-liked comments. */
     private const val MAX_PAGES = 5
 
+    private const val HTTP_FORBIDDEN = 403
+
+    /**
+     * How long a 403 pauses this source. Trakt's rejection is of the app's
+     * client id, not of one title, so it holds for every detail screen in a
+     * browsing session — long enough to stop the repeat requests, short
+     * enough that a block lifted mid-session is picked up again.
+     */
+    private const val BLOCK_MAX_MS = 15 * 60 * 1000L
+
+    private val rejections = RejectionGate(BLOCK_MAX_MS)
+
     /**
      * Top-liked user comments/reviews for a movie or series, looked up by
      * IMDb id (e.g. tt0111161). Returned as TmdbReview so the existing
@@ -56,6 +69,9 @@ object TraktCommentsClient {
     suspend fun fetchReviews(imdbId: String, type: String): List<TmdbReview> =
         withContext(Dispatchers.IO) {
             if (!imdbId.startsWith("tt")) return@withContext emptyList()
+            // Already told no by this source: the next title would ask the
+            // same question and get the same answer.
+            if (rejections.isBlocked()) return@withContext emptyList()
             val kind = if (type == "series") "shows" else "movies"
             val results = mutableListOf<TmdbReview>()
 
@@ -83,13 +99,28 @@ object TraktCommentsClient {
                             .build()
                     ).execute().use { response ->
                         if (response.isSuccessful) {
+                            rejections.reset()
                             response.body?.string()
                         } else {
-                            Log.w(
-                                TAG,
-                                "comments HTTP ${response.code} " +
-                                    "for $kind/$imdbId page=$page"
-                            )
+                            if (response.code == HTTP_FORBIDDEN) {
+                                // Logged once per block: this is Trakt turning
+                                // the app away, so every later title hits the
+                                // same wall until the block expires.
+                                if (rejections.recordRejection()) {
+                                    Log.w(
+                                        TAG,
+                                        "comments 403 (client id rejected) — " +
+                                            "pausing Trakt comments for " +
+                                            "${BLOCK_MAX_MS / 60_000} min"
+                                    )
+                                }
+                            } else {
+                                Log.w(
+                                    TAG,
+                                    "comments HTTP ${response.code} " +
+                                        "for $kind/$imdbId page=$page"
+                                )
+                            }
                             null
                         }
                     }

@@ -25,6 +25,10 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
 
     private companion object {
         const val TAG = "KBStream"
+
+        /** Keeps the log line readable when a title is a full release name. */
+        const val DESCRIBE_MAX_LABEL = 90
+        const val DESCRIBE_MAX_HASH = 12
     }
 
     private val _streams = MutableStateFlow<List<Stream>>(emptyList())
@@ -171,7 +175,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         // the list reaches the UI.
         val withBadges = StreamBadgeEngine.apply(preppedStreams, getApplication())
         val rankedMsg = if (useRanker) "ranked total = ${withBadges.size}" else "unranked total = ${withBadges.size}"
-        val topMsg = "top stream = ${withBadges.firstOrNull()?.name ?: "none"}"
+        val topMsg = "top stream = ${withBadges.firstOrNull()?.let(::describeStream) ?: "none"}"
 
         Log.e(TAG, rankedMsg)
         Log.e(TAG, topMsg)
@@ -179,5 +183,39 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         debugLines.add(topMsg)
 
         return withBadges
+    }
+
+    /**
+     * One-line identity for the stream that was picked, for both the log and
+     * the on-screen debug lines.
+     *
+     * The line used to print `name` alone, which most Stremio addons leave
+     * blank — so `top stream = ` with nothing after it was the normal output,
+     * and a bad playback could not be traced back to the result it came from.
+     * The fallbacks are ordered by how reliably they identify the stream: the
+     * declared name, the display title, the server's filename hint, then the
+     * URL's own filename — which is the same string the player logs as
+     * `uri=...`, so the two log lines can be lined up. The host and the
+     * info-hash cover the cases where the addon sends no name at all.
+     */
+    private fun describeStream(stream: Stream): String {
+        val label = stream.name?.takeIf { it.isNotBlank() }
+            ?: stream.title?.takeIf { it.isNotBlank() }
+            ?: stream.behaviorHints?.filename?.takeIf { it.isNotBlank() }
+            ?: stream.url?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+            ?: "(unnamed)"
+
+        val host = stream.url
+            ?.takeIf { it.startsWith("http") }
+            ?.let { android.net.Uri.parse(it).host }
+
+        return listOfNotNull(
+            label.take(DESCRIBE_MAX_LABEL),
+            host,
+            stream.infoHash?.take(DESCRIBE_MAX_HASH)?.let { "hash=$it" },
+            stream.badges
+                .takeIf { it.isNotEmpty() }
+                ?.joinToString("/") { it.name.take(20) }
+        ).joinToString(" | ")
     }
 }

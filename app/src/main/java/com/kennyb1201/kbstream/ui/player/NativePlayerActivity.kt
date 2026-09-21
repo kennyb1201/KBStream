@@ -3632,7 +3632,13 @@ class NativePlayerActivity : ComponentActivity() {
     private fun isDecoderError(errorCode: Int): Boolean =
         errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
             errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
-            errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES
+            errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES ||
+            // A box whose DV decoder refuses the profile can report this one.
+            // Missing it here sends a declared-DV stream down the plain retry
+            // ladder, which rebuilds the identical decoder — the loop this set
+            // exists to prevent. Widening is safe: the DV-strip branch still
+            // requires a DV codec AND a DV mode other than None.
+            errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED
 
     /**
      * Single source of truth for "video output works". Called from Media3's

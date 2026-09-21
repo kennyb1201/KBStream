@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
 
@@ -604,8 +605,8 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                 if (cachedPlaylist != null) {
                     // Extras must survive app restarts too — otherwise the
                     // cached restore shows only the primary playlist until
-                    // the user manually reloads.
-                    applyPlaylist(mergeWithExtraPlaylists(cachedPlaylist))
+                    // the user manually reloads (applyPlaylist merges them).
+                    applyPlaylist(cachedPlaylist)
                     Log.w(TAG, "CACHE RESTORE HIT channels=${cachedPlaylist.channels.size} source=$url")
                     refreshIfNeeded()
                 } else {
@@ -648,7 +649,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             _error.value = null
             try {
                 val loadedPlaylist = repository.loadPlaylist(url, name)
-                applyPlaylist(mergeWithExtraPlaylists(loadedPlaylist))
+                applyPlaylist(loadedPlaylist)
                 markUpdated(KEY_PLAYLIST_UPDATED_AT)
                 Log.d(TAG, "PLAYLIST LOAD SUCCESS channels=${loadedPlaylist.channels.size} source=$url")
             } catch (t: Throwable) {
@@ -748,10 +749,15 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         val url = _playlistUrl.value.trim()
         val name = _playlistName.value.trim().ifBlank { null }
         if (url.isBlank() || _isImportingGuide.value) return
-        val refreshedPlaylist = mergeWithExtraPlaylists(repository.loadPlaylist(url, name))
+        val refreshedPlaylist = repository.loadPlaylist(url, name)
         applyPlaylist(refreshedPlaylist)
         markUpdated(KEY_PLAYLIST_UPDATED_AT)
-        Log.d(TAG, "BACKGROUND PLAYLIST REFRESH END channels=${refreshedPlaylist.channels.size}")
+        // applyPlaylist merged the extras in, so report what was applied.
+        Log.d(
+            TAG,
+            "BACKGROUND PLAYLIST REFRESH END channels=" +
+                "${_playlist.value?.channels?.size ?: refreshedPlaylist.channels.size}"
+        )
     }
 
     private suspend fun importGuideInternal(epgUrl: String) {
@@ -801,48 +807,62 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun applyPlaylist(newPlaylist: IptvPlaylist) {
-        val guideUrls = allEpgUrls()
-        // A background playlist refresh usually returns the same channels, and
-        // resetting the guide for it re-ran the entire lineup query (snapshot
-        // rebuild + every program batch) for rows that could not have differed.
-        // Compare the slice the query actually reads before deciding.
-        val fingerprint = guideWindowFingerprint(
-            sourceUrl = newPlaylist.sourceUrl,
-            guideUrls = guideUrls,
-            channelIds = _guideChannelIds.value,
-            channels = newPlaylist.channels
-        )
-        val guideStillValid = fingerprint != null && fingerprint == loadedGuideFingerprint
-
-        _playlist.value = newPlaylist
-        removeMissingHiddenChannelIds(newPlaylist)
-
-        if (guideStillValid) {
-            Log.w(TAG, "PLAYLIST APPLIED keeping loaded guide window (channels unchanged)")
-            return
-        }
-
-        // Precompute the sourceKey using refreshTick + 1 BEFORE bumping the tick,
-        // so loadedGuideSourceKey already matches once lineupSource re-evaluates.
-        // This is what stops observeGuideRequest() from seeing a mismatch and
-        // wiping guide state again right after we just populated it.
-        clearGuideMemory(
-            buildGuideSourceKey(
-                playlist = newPlaylist,
+    /**
+     * Applies a freshly obtained playlist to the guide.
+     *
+     * Runs on [Dispatchers.Default] deliberately. The extra-playlist merge is
+     * a network load plus a list concat, and the two fingerprint comparisons
+     * below walk the whole channel list — a provider playlist is a 10k+ channel
+     * corpus of strings. This used to run on the caller's dispatcher, which
+     * through viewModelScope means the MAIN thread, so a cached restore during
+     * app startup blocked frames for the duration of both passes.
+     */
+    private suspend fun applyPlaylist(newPlaylist: IptvPlaylist) =
+        withContext(Dispatchers.Default) {
+            // Merged here rather than at the call sites so the concat (and the
+            // extra playlists' own loads) happen off the main thread too.
+            val merged = mergeWithExtraPlaylists(newPlaylist)
+            val guideUrls = allEpgUrls()
+            // A background playlist refresh usually returns the same channels, and
+            // resetting the guide for it re-ran the entire lineup query (snapshot
+            // rebuild + every program batch) for rows that could not have differed.
+            // Compare the slice the query actually reads before deciding.
+            val fingerprint = guideWindowFingerprint(
+                sourceUrl = merged.sourceUrl,
                 guideUrls = guideUrls,
-                refreshTick = _guideRefreshTick.value + 1
+                channelIds = _guideChannelIds.value,
+                channels = merged.channels
             )
-        )
-        _guideRefreshTick.value += 1
-        requestInitialGuideWindow()
-        loadedGuideFingerprint = guideWindowFingerprint(
-            sourceUrl = newPlaylist.sourceUrl,
-            guideUrls = guideUrls,
-            channelIds = _guideChannelIds.value,
-            channels = newPlaylist.channels
-        )
-    }
+            val guideStillValid = fingerprint != null && fingerprint == loadedGuideFingerprint
+
+            _playlist.value = merged
+            removeMissingHiddenChannelIds(merged)
+
+            if (guideStillValid) {
+                Log.w(TAG, "PLAYLIST APPLIED keeping loaded guide window (channels unchanged)")
+                return@withContext
+            }
+
+            // Precompute the sourceKey using refreshTick + 1 BEFORE bumping the tick,
+            // so loadedGuideSourceKey already matches once lineupSource re-evaluates.
+            // This is what stops observeGuideRequest() from seeing a mismatch and
+            // wiping guide state again right after we just populated it.
+            clearGuideMemory(
+                buildGuideSourceKey(
+                    playlist = merged,
+                    guideUrls = guideUrls,
+                    refreshTick = _guideRefreshTick.value + 1
+                )
+            )
+            _guideRefreshTick.value += 1
+            requestInitialGuideWindow()
+            loadedGuideFingerprint = guideWindowFingerprint(
+                sourceUrl = merged.sourceUrl,
+                guideUrls = guideUrls,
+                channelIds = _guideChannelIds.value,
+                channels = merged.channels
+            )
+        }
 
     private fun mergeGuideItems(lineup: List<IptvChannelWithEpg>) {
         val existing = _guideItemsByChannelId.value
