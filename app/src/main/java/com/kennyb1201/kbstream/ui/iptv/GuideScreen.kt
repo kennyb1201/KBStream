@@ -125,6 +125,12 @@ private val programTimeFormatter = SimpleDateFormat("h:mm a", Locale.US)
 fun GuideScreen(
     viewModel: IptvViewModel = viewModel(),
     modifier: Modifier = Modifier,
+    /**
+     * Leaves the guide. Back uses it for the two states that have nothing of
+     * their own to close: the setup form with no playlist yet (where the form
+     * IS the screen) and the plain guide. Wired by MainActivity to Home.
+     */
+    onBack: () -> Unit = {},
     defaultPlaylistUrl: String = "",
     defaultEpgUrl: String = "",
     defaultPlaylistName: String = "",
@@ -414,18 +420,33 @@ fun GuideScreen(
     var showHiddenManager by remember { mutableStateOf(false) }
     val groupRowState = rememberLazyListState()
 
-    // The setup overlay lives on top of the guide, so Back must close the
-    // overlay and stay here. Without this handler Back falls through to
-    // MainActivity, which exits the guide to Home entirely.
     val dismissSetup = {
         showSetup = false
     }
-    BackHandler(enabled = showSetup && playlist != null, onBack = dismissSetup)
     val dismissSearch = {
         showSearch = false
         searchQuery = ""
     }
-    BackHandler(enabled = showSearch, onBack = dismissSearch)
+
+    // Back contract for the guide, in priority order:
+    //  1. an open search overlay closes;
+    //  2. with no playlist loaded the setup form IS the screen — there is
+    //     nothing behind it to reveal, so Back must LEAVE the guide. It used
+    //     to be handled by falling through to MainActivity, which only worked
+    //     while nothing else consumed the press; that made this screen a
+    //     one-way door whenever a focused field ate Back.
+    //  3. the setup overlay over a loaded guide closes, staying put;
+    //  4. anything else leaves the guide.
+    // Registered on the screen that owns the state, so the outcome never
+    // depends on which other handler happens to be enabled.
+    BackHandler(enabled = showSearch || showSetup || playlist == null) {
+        when {
+            showSearch -> dismissSearch()
+            playlist == null -> onBack()
+            showSetup -> dismissSetup()
+            else -> onBack()
+        }
+    }
 
     // Live-filtered channel list for the search overlay: case-insensitive
     // contains on display name and channel number.
@@ -1490,6 +1511,7 @@ private fun SetupPanel(
                 onValueChange = onExtraEpgUrlsChanged,
                 placeholder = "http://host/second-guide.xml",
                 keepFocusOnDone = true,
+                openKeyboardOnFocus = false,
                 keyboardType = KeyboardType.Uri,
                 modifier = Modifier.weight(1f)
             )
@@ -1519,6 +1541,7 @@ private fun SetupPanel(
                 onValueChange = onExtraPlaylistUrlsChanged,
                 placeholder = "http://host/other.m3u|Name",
                 keepFocusOnDone = true,
+                openKeyboardOnFocus = false,
                 modifier = Modifier.weight(1f)
             )
             Spacer(modifier = Modifier.width(8.dp))
@@ -1538,6 +1561,7 @@ private fun SetupPanel(
                 onValueChange = onPlaylistNameChanged,
                 placeholder = "Playlist name",
                 keepFocusOnDone = true,
+                openKeyboardOnFocus = false,
                 modifier = Modifier.weight(1f)
             )
             Spacer(modifier = Modifier.width(8.dp))
@@ -1645,6 +1669,15 @@ private fun NativeUrlField(
 ) {
     // One shared KB field everywhere: same look, IME behavior, D-pad
     // escape, and Enter handling (see KBTextField).
+    //
+    // Manual IME mode (focus alone never opens the keyboard), like the
+    // profile editor's long TV forms. This screen is auto-focused onto this
+    // field, and an editable field that takes focus makes the leanback IME
+    // open by itself — a full-screen window that answers Back by closing
+    // itself and then reopening, because the field is still focused and
+    // still editable. The form looked impossible to leave. Now focus lands
+    // on it silently, OK starts editing, and Back/Done ends editing for
+    // good (readOnly again), so the next Back reaches the screen.
     KBTextField(
         value = value,
         onValueChange = onValueChange,
@@ -1652,6 +1685,7 @@ private fun NativeUrlField(
         modifier = modifier,
         focusRequester = focusRequester,
         keepFocusOnDone = keepFocusOnDone,
+        openKeyboardOnFocus = false,
         keyboardType = KeyboardType.Uri
     )
 }

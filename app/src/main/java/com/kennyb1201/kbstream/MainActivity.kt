@@ -1179,6 +1179,11 @@ fun AppRoot() {
 
             GuideScreen(
                 viewModel = iptvViewModel,
+                // Back on the guide (including its playlist-setup form, which
+                // is the whole screen before a playlist exists) returns Home.
+                // The guide handles its own Back so this is reached even while
+                // a field's IME has been open.
+                onBack = { screen = Screen.Home },
                 defaultPlaylistUrl = "",
                 defaultEpgUrl = "",
                 defaultPlaylistName = "Live TV",
