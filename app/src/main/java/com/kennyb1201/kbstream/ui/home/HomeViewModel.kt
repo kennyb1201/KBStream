@@ -976,6 +976,7 @@ Log.d(
                     railInfo.clear()
                     loadingRails.clear()
                     exhaustedRails.clear()
+                    railSourceOffset.clear()
 
                     _heroMeta.value = null
                     _heroTmdbDetail.value = null
@@ -1543,12 +1544,25 @@ Log.d(
     // from the UI thread (HomeScreen scroll sentinel) and mutates the maps
     // before launching the coroutine that fetches the page.
     //  - loadingRails: in-flight page fetches (prevents duplicate requests)
-    //  - exhaustedRails: catalogs that returned a short/empty page (no more)
+    //  - exhaustedRails: catalogs that returned an empty page (no more items)
     //  - railInfo: identity needed to build the next page URL (baseUrl, type,
     //    filter toggles active when the rail was built)
     private val loadingRails = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private val exhaustedRails = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private val railInfo = java.util.concurrent.ConcurrentHashMap<String, RailInfo>()
+
+    // Next raw source offset per rail: how many catalog items have already
+    // been consumed, i.e. the `skip` for the following page.
+    //
+    // Addon catalogs page in whatever batch size they choose — Stremio has no
+    // `limit` parameter, so the app can only ask for a `skip` and read
+    // whatever comes back (20 for some addons, 50/100 for others, and some
+    // dump their whole catalog at once). Advancing the offset by the number of
+    // items the addon ACTUALLY returned — rather than rounding up to a fixed
+    // 100 — is what lets a 20-per-page addon page all the way through a
+    // 96-item catalog, and what stops a short final page from being mistaken
+    // for "end of catalog" (which left Home rails stuck at the first 20).
+    private val railSourceOffset = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
     private data class RailInfo(
         val addonName: String,
@@ -1655,8 +1669,22 @@ Log.d(
             return
         }
 
+        // Resume exactly where the rail left off in the source catalog. Falls
+        // back to the displayed count only if the offset was never recorded
+        // (e.g. a rail restored from cache), which is correct for the common
+        // contiguous case.
         gridNextSkip =
-            ((rail.items.size / PAGE_SIZE) + 1) * PAGE_SIZE
+            railSourceOffset[railKeyOf(rail)] ?: rail.items.size
+
+        // A rail already known to be exhausted has nothing left to page.
+        if (railKeyOf(rail) in exhaustedRails) {
+            _catalogGrid.value =
+                seeded.copy(
+                    isLoading = false,
+                    hasMore = false
+                )
+            return
+        }
 
         gridLoadJob =
             fetchGridPage(info)
@@ -1716,12 +1744,14 @@ Log.d(
                     )
 
                 if (
-                    metas.size < PAGE_SIZE
+                    metas.isEmpty()
                 ) {
                     _catalogGrid.value =
                         _catalogGrid.value?.copy(
-                            hasMore = false
+                            hasMore = false,
+                            isLoadingMore = false
                         )
+                    return@launch
                 }
 
                 val filtered =
@@ -1764,7 +1794,7 @@ Log.d(
                         isLoadingMore = false
                     )
 
-                gridNextSkip += PAGE_SIZE
+                gridNextSkip += metas.size
             } catch (
                 e: kotlinx.coroutines.CancellationException
             ) {
@@ -1822,23 +1852,22 @@ Log.d(
 
             try {
 
-                val currentPageSize =
-                    _rails.value
-                        .firstOrNull { rail ->
-                            railKeyOf(rail) == railKey
-                        }
-                        ?.items
-                        ?.size
-                        ?: 0
+                val currentRail =
+                    _rails.value.firstOrNull { rail ->
+                        railKeyOf(rail) == railKey
+                    }
+                        ?: return@launch
 
                 if (
-                    currentPageSize == 0
+                    currentRail.items.isEmpty()
                 ) {
                     return@launch
                 }
 
+                // Resume from the exact source offset the addon last left
+                // off at, not a rounded-up multiple of 100.
                 val skip =
-                    ((currentPageSize / PAGE_SIZE) + 1) * PAGE_SIZE
+                    railSourceOffset[railKey] ?: currentRail.items.size
 
                 val metas =
                     fetchCatalogThrottled(
@@ -1849,16 +1878,17 @@ Log.d(
                     )
 
                 if (
-                    metas.size < PAGE_SIZE
-                ) {
-                    exhaustedRails.add(railKey)
-                }
-
-                if (
                     metas.isEmpty()
                 ) {
+                    // Empty page = the addon has no more items.
+                    exhaustedRails.add(railKey)
                     return@launch
                 }
+
+                // Advance by what the addon actually returned, so the next
+                // skip lands exactly where this page ended regardless of the
+                // addon's own page size.
+                railSourceOffset[railKey] = skip + metas.size
 
                 val filtered =
                     if (
@@ -5172,6 +5202,7 @@ private suspend fun calculateEpisodesRemaining(
                 railInfo.clear()
                 loadingRails.clear()
                 exhaustedRails.clear()
+                railSourceOffset.clear()
                 closeCatalogGrid()
 
                 val pinned =
@@ -5456,16 +5487,17 @@ private suspend fun calculateEpisodesRemaining(
         landscapeCards: Boolean
     ): Rail? {
 
-        // First page is capped so Home paints every rail fast; the rest of
-        // the catalog streams in via loadMoreForRail as the user scrolls.
+        // First page: whatever the addon returns for skip=0 (its own page
+        // size - 20, 50, 100, ...). The rest of the catalog streams in via
+        // loadMoreForRail as the user scrolls, so a 1000-item catalog is
+        // never fetched up front but is still fully reachable.
         val metas =
             try {
                 fetchCatalogThrottled(
                     baseUrl = pending.baseUrl,
                     type = pending.catalogType,
                     catalogId = pending.catalogId,
-                    skip = 0,
-                    maxItems = INITIAL_RAIL_PAGE_SIZE
+                    skip = 0
                 )
             } catch (e: Exception) {
 
@@ -5533,11 +5565,12 @@ private suspend fun calculateEpisodesRemaining(
                 pinned = false
             )
 
-        if (
-            metas.size < INITIAL_RAIL_PAGE_SIZE
-        ) {
-            exhaustedRails.add(railKeyOf(rail))
-        }
+        // Record where this page ended so the next scroll asks for exactly
+        // the following items. A short page is NOT treated as exhausted -
+        // that assumption is what capped small-page addons at their first
+        // batch. The catalog is only considered done when a page comes back
+        // empty (see loadMoreForRail).
+        railSourceOffset[railKeyOf(rail)] = metas.size
 
         return rail
     }
@@ -5718,8 +5751,7 @@ private suspend fun calculateEpisodesRemaining(
                                     baseUrl = baseUrl,
                                     type = type,
                                     catalogId = catalogId,
-                                    skip = 0,
-                                    maxItems = INITIAL_RAIL_PAGE_SIZE
+                                    skip = 0
                                 )
 
                             if (
@@ -5776,11 +5808,7 @@ private suspend fun calculateEpisodesRemaining(
                                     pinned = true
                                 )
 
-                            if (
-                                metas.size < INITIAL_RAIL_PAGE_SIZE
-                            ) {
-                                exhaustedRails.add(railKeyOf(rail))
-                            }
+                            railSourceOffset[railKeyOf(rail)] = metas.size
 
                             rail
                         } catch (e: Exception) {
@@ -6108,15 +6136,12 @@ private suspend fun calculateEpisodesRemaining(
         private const val MAX_CONCURRENT_CATALOG_REQUESTS =
             6
 
-        // Items fetched per catalog page: a short first page keeps the home
-        // load snappy; infinite scroll pulls the rest rail-by-rail.
+        // How many items a TMDB-sourced rail (the kids picks) keeps from its
+        // single discover page. Addon catalogs no longer cap the first page:
+        // they page by the addon's own batch size via railSourceOffset, so a
+        // small-page addon still reaches its whole catalog.
         private const val INITIAL_RAIL_PAGE_SIZE =
             30
-
-        // Addon catalogs page in fixed 100-item batches (Stremio contract),
-        // so every skip must be a multiple of this.
-        private const val PAGE_SIZE =
-            100
 
         private const val UP_NEXT_DEBOUNCE_MS =
             100L
