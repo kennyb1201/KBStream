@@ -1786,12 +1786,17 @@ Log.d(
                     return@launch
                 }
 
+                val newGridCount =
+                    (_catalogGrid.value?.items?.size ?: 0) + deduped.size
+
                 _catalogGrid.value =
                     _catalogGrid.value?.copy(
                         items = _catalogGrid.value?.items
                             .orEmpty() + deduped,
                         isLoading = false,
-                        isLoadingMore = false
+                        isLoadingMore = false,
+                        // Same runaway ceiling as the rails.
+                        hasMore = newGridCount < MAX_RAIL_ITEMS
                     )
 
                 gridNextSkip += metas.size
@@ -1961,6 +1966,18 @@ Log.d(
                             rail
                         }
                     }
+
+                // Runaway guard: an addon that ignores `skip` is already
+                // stopped by the identical-page check above (its repeat page
+                // dedupes to nothing). This is the second net - an addon that
+                // keeps emitting brand-new items forever must not grow a rail
+                // without bound either. Past the cap the rail stops paging;
+                // the catalog grid stays openable from what loaded.
+                if (
+                    currentRail.items.size + deduped.size >= MAX_RAIL_ITEMS
+                ) {
+                    exhaustedRails.add(railKey)
+                }
 
                 refreshWatchedStatus(_rails.value)
             } catch (
@@ -6142,6 +6159,14 @@ private suspend fun calculateEpisodesRemaining(
         // small-page addon still reaches its whole catalog.
         private const val INITIAL_RAIL_PAGE_SIZE =
             30
+
+        // Hard ceiling on how many items one rail / grid accumulates. Real
+        // addons page far below this; it exists only so a misbehaving addon
+        // that never reports the end cannot exhaust memory. The identical-
+        // page check in loadMoreForRail still ends a skip-ignoring addon at
+        // its second page, long before this.
+        private const val MAX_RAIL_ITEMS =
+            4000
 
         private const val UP_NEXT_DEBOUNCE_MS =
             100L
