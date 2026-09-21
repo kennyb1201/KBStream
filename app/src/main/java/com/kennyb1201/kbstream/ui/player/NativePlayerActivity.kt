@@ -109,6 +109,14 @@ import java.util.concurrent.TimeUnit
 private const val TAG = "NativePlayer"
 private const val PERIODIC_SAVE_INTERVAL_MS = 5_000L
 private const val MIN_RESUME_POSITION_MS = 10_000L
+
+/**
+ * Saved-state key for the live playhead. When the system recreates this
+ * activity (app backgrounded, process killed) it hands back the ORIGINAL
+ * launch intent, whose start position says where playback *started* — not
+ * where it got to. See [NativePlayerActivity.onSaveInstanceState].
+ */
+private const val STATE_PLAYER_POSITION_MS = "player_position_ms"
 private const val COMPLETION_THRESHOLD_RATIO = 0.95f
 private const val EXTRA_HEADERS = "stream_headers"
 private const val EXTRA_DRM_LICENSE_URL = "drm_license_url"
@@ -1337,6 +1345,14 @@ class NativePlayerActivity : ComponentActivity() {
         overview = intent.getStringExtra("item_overview")
         episodeTitle = intent.getStringExtra("episode_title")
         startPositionMs = intent.getLongExtra("start_position_ms", 0L)
+        // A system-recreated activity comes back with its original launch
+        // intent, and that intent's start position only says where playback
+        // STARTED (0 when the title was started from the beginning). The
+        // activity's own saved state carries the playhead, so a restored
+        // playback picks up mid-episode instead of restarting the title.
+        val restoredPositionMs =
+            savedInstanceState?.getLong(STATE_PLAYER_POSITION_MS, 0L) ?: 0L
+        if (restoredPositionMs > startPositionMs) startPositionMs = restoredPositionMs
         fromActorReturn = intent.getBooleanExtra("from_actor_return", false)
         carryPositionMs = startPositionMs
         streamHeaders = parseHeaders(intent.getStringExtra(EXTRA_HEADERS).orEmpty())
@@ -5983,12 +5999,31 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     // --- Lifecycle ---
+    /**
+     * Carries the playhead across a system recreate (backgrounded app, killed
+     * process). The intent the activity is restored with is the one it was
+     * launched with, so without this a restored playback restarts the title
+     * from the beginning. A position of 0 is deliberately not stored: a title
+     * legitimately started "from the beginning" must not become a resume.
+     */
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        if (isLiveChannel) return
+        val pos = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs
+        if (pos > 0L) outState.putLong(STATE_PLAYER_POSITION_MS, pos)
+    }
+
     override fun onStop() {
         super.onStop()
         // Release session & player early so the next NativePlayerActivity
         // doesn't collide with a stale MediaSession ID.
         handler.removeCallbacksAndMessages(null)
         nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
+        // Remember where playback actually was: onSaveInstanceState() can run
+        // after this method (API 28+) and the player is released by then.
+        if (!isLiveChannel) {
+            carryPositionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs
+        }
         // Save progress BEFORE cancelling scope: saveProgress writes via
         // lifecycleScope, which is independent of `scope`, but ordering it
         // ahead of teardown keeps intent clear and avoids racing any
