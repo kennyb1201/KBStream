@@ -89,7 +89,17 @@ class XmltvImporter(
             isNamespaceAware = false
         }
         val parser = factory.newPullParser().apply {
-            setInput(InputStreamReader(xmlInput, Charsets.UTF_8))
+            // XmlPullParser throws on an unescaped '&' anywhere in the document
+            // (routine in real description text), and that one exception fails
+            // the whole import — the provider's guide then never updates, with
+            // nothing on screen explaining why. Escape invalid entity
+            // references as the stream is consumed instead; well-formed ones
+            // pass through byte-for-byte.
+            setInput(
+                XmltvEntitySanitizingReader(
+                    InputStreamReader(xmlInput, Charsets.UTF_8)
+                )
+            )
         }
 
         val channelBatch = ArrayList<EpgChannelEntity>(CHANNEL_BATCH_SIZE)

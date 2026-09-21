@@ -37,12 +37,6 @@ data class IptvChannel(
         }
 }
 
-data class XmltvGuide(
-    val sourceUrl: String? = null,
-    val channels: List<XmltvChannel> = emptyList(),
-    val programs: List<XmltvProgram> = emptyList()
-)
-
 data class XmltvChannel(
     val id: String,
     val displayNames: List<String> = emptyList(),
@@ -68,21 +62,3 @@ data class IptvChannelWithEpg(
     val next: XmltvProgram?,
     val upcoming: List<XmltvProgram> = emptyList()
 )
-
-data class IptvLineup(
-    val playlist: IptvPlaylist,
-    val guide: XmltvGuide?,
-    val channels: List<IptvChannelWithEpg>
-) {
-    val favoriteChannels: List<IptvChannelWithEpg>
-        get() = channels.filter { it.isFavorite }
-
-    val recentChannels: List<IptvChannelWithEpg>
-        get() = channels.filter { it.isRecent }
-
-    val matchedChannels: List<IptvChannelWithEpg>
-        get() = channels.filter { it.epgMatchType != EpgMatchType.NO_MATCH }
-
-    val unmatchedChannels: List<IptvChannelWithEpg>
-        get() = channels.filter { it.epgMatchType == EpgMatchType.NO_MATCH }
-}
