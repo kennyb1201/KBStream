@@ -1969,7 +1969,13 @@ fun HomeScreen(
     val landscapeCards by remember(activeProfileId) {
         mutableStateOf(AppPreferences.getHomeLandscapeCards(context))
     }
-    val rails by viewModel.rails.collectAsStateWithLifecycle()
+    // Profile-gated: rows render only while they belong to the ACTIVE
+    // profile. The ViewModel clears them on a switch, but that clear is
+    // dispatched, so without this gate the profile the user just left could
+    // paint for a frame before the empty list landed.
+    val railsBuiltForProfile by viewModel.railsProfileId.collectAsStateWithLifecycle()
+    val railsRaw by viewModel.rails.collectAsStateWithLifecycle()
+    val rails = if (railsBuiltForProfile == activeProfileId) railsRaw else emptyList()
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
     val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
     val upNext by viewModel.upNext.collectAsStateWithLifecycle()

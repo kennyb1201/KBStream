@@ -298,6 +298,15 @@ class HomeViewModel(
     private val railsRefreshMutex =
         Mutex()
 
+    /**
+     * Bumped on every profile switch. A rail build (or a pagination page)
+     * captures it at the start and refuses to publish once it changed, so a
+     * load started for the profile the user just left cannot repaint that
+     * profile's rows over the new profile's Home.
+     */
+    @Volatile
+    private var railBuildEpoch = 0L
+
     private val catalogRequestSemaphore =
         Semaphore(
             MAX_CONCURRENT_CATALOG_REQUESTS
@@ -354,6 +363,21 @@ class HomeViewModel(
 
     val rails: StateFlow<List<Rail>> =
         _rails.asStateFlow()
+
+    /**
+     * Profile id the current [rails] content was built for. Home renders the
+     * list only while this matches the active profile: clearing the rails on
+     * a switch is dispatched, so without this gate the previous profile's
+     * rows could paint for a frame (or until the clear landed) after the
+     * user picked a different profile. Null = no profile yet (legacy scope).
+     */
+    private val _railsProfileId =
+        MutableStateFlow<String?>(
+            com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id
+        )
+
+    val railsProfileId: StateFlow<String?> =
+        _railsProfileId.asStateFlow()
 
     private val _watchedKeys =
         MutableStateFlow<Set<String>>(
@@ -916,6 +940,15 @@ Log.d(
                     // resolve to the legacy namespace, which is the correct
                     // post-switch target.
                     Log.d("HOME_VM", "profile switched -> ${profile?.id ?: "legacy"}")
+
+                    // Bump the rail-build epoch FIRST: any rail build still
+                    // streaming from the profile we just left is now stale
+                    // and must not republish its rows (loadRailsInternal).
+                    railBuildEpoch += 1
+
+                    // A previous profile's error message must not sit under
+                    // the new profile's rails while its build is in flight.
+                    _error.value = null
 
                     dismissedContinueWatching.clear()
                     dismissedContinueWatching.putAll(loadDismissedContinueWatching())
@@ -1768,6 +1801,10 @@ Log.d(
             railInfo[railKey]
                 ?: return
 
+        // Profile guard for this page: it belongs to the profile that was
+        // active when the scroll asked for it, so a switch cancels it.
+        val buildEpochAtStart = railBuildEpoch
+
         if (
             !loadingRails.add(railKey)
         ) {
@@ -1870,6 +1907,13 @@ Log.d(
                     // treat as exhausted so the scroll trigger stops
                     // re-requesting the same skip offset.
                     exhaustedRails.add(railKey)
+                    return@launch
+                }
+
+                // Stale-profile guard: the profile changed while this page
+                // was in flight — appending it would mix the old profile's
+                // rows into the new profile's rail of the same key.
+                if (buildEpochAtStart != railBuildEpoch) {
                     return@launch
                 }
 
@@ -5101,6 +5145,15 @@ private suspend fun calculateEpisodesRemaining(
         _isLoading.value =
             _rails.value.isEmpty()
 
+        // Profile guard for this build: a profile switch bumps
+        // [railBuildEpoch] and empties the rail list, so a build that
+        // started for the profile the user just left must not publish — it
+        // would repaint the old rows over the new profile's Home for as
+        // long as the load keeps streaming.
+        val buildEpochAtStart = railBuildEpoch
+        val profileIdAtStart =
+            com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id
+
         // Keep any previous error on screen until THIS attempt succeeds or
         // fails - the old code nulled it up front, so any automatic reload
         // (launch refresh, addon change, resume) instantly erased the
@@ -5207,6 +5260,12 @@ private suspend fun calculateEpisodesRemaining(
                                     hideUpcoming,
                                     landscapeCards
                                 )?.let { rail ->
+                                    // Stale-profile guard (see the final
+                                    // publish below): never stream a
+                                    // previous profile's rows back in.
+                                    if (buildEpochAtStart != railBuildEpoch) {
+                                        return@let
+                                    }
                                     collected.add(rail)
                                     // Append just this rail right after the
                                     // last catalog rail currently shown, so
@@ -5248,6 +5307,20 @@ private suspend fun calculateEpisodesRemaining(
 
                 val finalRails =
                     pinned + collected
+
+                // Stale-profile guard: the profile changed while this build
+                // was in flight, so these rows belong to the profile the user
+                // just left. Drop the build instead of repainting them — the
+                // new profile's own build owns the rail list now.
+                if (buildEpochAtStart != railBuildEpoch) {
+                    Log.d(
+                        "HOME_RAILS",
+                        "dropping stale rail build (profile switched mid-load)"
+                    )
+                    return
+                }
+
+                _railsProfileId.value = profileIdAtStart
 
                 _rails.value =
                     finalRails.distinctBy { railKeyOf(it) }
@@ -5366,8 +5439,14 @@ private suspend fun calculateEpisodesRemaining(
 
         } finally {
 
-            _isLoading.value =
-                false
+            // Only the build that still owns the active profile may lower the
+            // spinner; a build that lost the profile must leave the flag to
+            // the newer build, so Home can't flash its "no catalogs" card
+            // while the new profile's rails stream in.
+            if (buildEpochAtStart == railBuildEpoch) {
+                _isLoading.value =
+                    false
+            }
         }
     }
 
