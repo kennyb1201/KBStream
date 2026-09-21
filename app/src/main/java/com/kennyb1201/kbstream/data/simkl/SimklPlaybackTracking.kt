@@ -43,7 +43,7 @@ suspend fun SimklRepository.deletePlaybackSessionImpl(
         playbackId == null ||
         playbackId <= 0
     ) {
-        Log.d(
+        Log.i(
             "SIMKL_REPO",
             "deletePlaybackSession skipped: " +
                 "no valid playback id=$playbackId"
@@ -80,7 +80,7 @@ suspend fun SimklRepository.deletePlaybackSessionImpl(
             // can't keep a ghost card around until its disk TTL ends.
             clearContinueWatchingCache()
 
-            Log.d(
+            Log.i(
                 "SIMKL_REPO",
                 "deletePlaybackSession ok id=$playbackId" +
                     if (alreadyGone) " (already gone)" else ""
@@ -117,7 +117,7 @@ suspend fun SimklRepository.deletePlaybackSessionsForParentImpl(
         !isConfigured() ||
         !hasToken()
     ) {
-        Log.d(
+        Log.i(
             "SIMKL_REPO",
             "deletePlaybackSessionsForParent skipped: " +
                 "not configured/authenticated"
@@ -145,7 +145,7 @@ suspend fun SimklRepository.deletePlaybackSessionsForParentImpl(
                 }
 
         if (matchingSessions.isEmpty()) {
-            Log.d(
+            Log.i(
                 "SIMKL_REPO",
                 "deletePlaybackSessionsForParent: no open session " +
                     "for parent=$parentId"
@@ -166,7 +166,7 @@ suspend fun SimklRepository.deletePlaybackSessionsForParentImpl(
             }
         }
 
-        Log.d(
+        Log.i(
             "SIMKL_REPO",
             "deletePlaybackSessionsForParent parent=$parentId " +
                 "matched=${matchingSessions.size} removed=$removed"
@@ -257,7 +257,7 @@ suspend fun SimklRepository.deleteOpenPlaybackSessionsForWatchedImpl(
         }
 
         if (removed > 0) {
-            Log.d(
+            Log.i(
                 "SIMKL_REPO",
                 "deleteOpenPlaybackSessionsForWatched " +
                     "parent=$parentId s=$season e=$episode removed=$removed"
@@ -357,13 +357,13 @@ suspend fun SimklRepository.scrobbleImpl(
 ): Boolean {
 
     if (!isConfigured() || !hasToken()) {
-        Log.d("SIMKL_REPO", "scrobble/$action skipped: not configured/authenticated")
+        Log.i("SIMKL_REPO", "scrobble/$action skipped: not configured/authenticated")
         return false
     }
 
     val ids = parsePlaybackIds(parentId, tmdbId)
     if (ids == null) {
-        Log.d("SIMKL_REPO", "scrobble/$action skipped: unparseable id=$parentId")
+        Log.i("SIMKL_REPO", "scrobble/$action skipped: unparseable id=$parentId")
         return false
     }
 
@@ -453,7 +453,7 @@ suspend fun SimklRepository.scrobbleImpl(
         // never succeed. Success here means "the session is over", which is
         // exactly what this call is for.
         if (action == "stop" && response.code() in TERMINAL_STOP_CODES) {
-            Log.d(
+            Log.i(
                 "SIMKL_REPO",
                 "scrobble/stop already ended " +
                     "code=${response.code()}"
@@ -480,7 +480,7 @@ suspend fun SimklRepository.scrobbleImpl(
                     "body=$errorText"
             )
         } else {
-            Log.d(
+            Log.i(
                 "SIMKL_REPO",
                 "scrobble/$action ok " +
                     "id=$parentId tmdb=$tmdbId progress=$progress"

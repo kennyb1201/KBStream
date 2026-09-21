@@ -13,10 +13,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
@@ -231,8 +235,146 @@ data class MdbListWatchedSnapshot(
  * query parameter on every request.
  */
 object MdbListClient {
+
+    // ------------------------------------------------------------------
+    // Daily request budget
+    //
+    // A free MDBList key allows 1,000 requests per day (docs.mdblist.com →
+    // API limits; paid tiers start at 10k). The app could spend that on its own
+    // refetchable reads: /sync/watched downloads the whole history page by
+    // page, and every scrobble event used to invalidate it, so one playback
+    // re-downloaded the history repeatedly. When the day is gone the API
+    // answers 429 for EVERYTHING — the scrobbles that actually matter
+    // included — so requests are now spent in priority order: history writes
+    // always go, refetchable reads stop at [READ_BUDGET] and wait for the
+    // UTC-day reset. A 429 also stops the calls outright until the allowance
+    // is really back, instead of the retry storm the field log showed
+    // (scrobble/start 429ing every few seconds).
+    // ------------------------------------------------------------------
+    private const val REQUEST_PREFS = "mdblist_request_budget"
+    private const val KEY_REQUEST_DAY = "day"
+    private const val KEY_REQUEST_COUNT = "count"
+
+    /** Refetchable reads stop here, keeping the rest of the day for writes. */
+    private const val READ_BUDGET = 850
+
+    /** Writes stop here — short of the API's own limit, so a 429 is never
+     * what stops us. */
+    private const val TOTAL_CEILING = 980
+
+    /** Tags a request that must go out (a write) rather than a refetch. */
+    private val WRITE_TAG = Any()
+
+    @Volatile private var requestsDay = ""
+    private val requestsToday = java.util.concurrent.atomic.AtomicInteger(0)
+    @Volatile private var limitedUntilMs = 0L
+
+    private fun budgetPrefs(context: Context) =
+        context.getSharedPreferences(REQUEST_PREFS, Context.MODE_PRIVATE)
+
+    private fun utcDay(nowMs: Long): String =
+        java.time.Instant.ofEpochMilli(nowMs)
+            .atOffset(java.time.ZoneOffset.UTC)
+            .toLocalDate()
+            .toString()
+
+    private fun nextUtcMidnight(nowMs: Long): Long =
+        java.time.Instant.ofEpochMilli(nowMs)
+            .atOffset(java.time.ZoneOffset.UTC)
+            .toLocalDate()
+            .plusDays(1)
+            .atStartOfDay(java.time.ZoneOffset.UTC)
+            .toInstant()
+            .toEpochMilli()
+
+    /** Rolls the persisted counter over when the UTC day changes. */
+    private fun ensureBudget() {
+        val now = System.currentTimeMillis()
+        val today = utcDay(now)
+        if (requestsDay == today) return
+        val context = com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext
+        val stored = if (context != null) {
+            val prefs = budgetPrefs(context)
+            if (prefs.getString(KEY_REQUEST_DAY, "") == today) {
+                prefs.getInt(KEY_REQUEST_COUNT, 0)
+            } else 0
+        } else 0
+        requestsDay = today
+        requestsToday.set(stored)
+        // A new UTC day is a new allowance: yesterday's reset no longer
+        // applies.
+        if (limitedUntilMs < now) limitedUntilMs = 0L
+    }
+
+    private fun maySpend(essential: Boolean): Boolean {
+        ensureBudget()
+        if (limitedUntilMs > System.currentTimeMillis()) return false
+        return requestsToday.get() < (if (essential) TOTAL_CEILING else READ_BUDGET)
+    }
+
+    private fun countRequest() {
+        ensureBudget()
+        requestsToday.incrementAndGet()
+        val context = com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext
+        context?.let {
+            budgetPrefs(it).edit()
+                .putString(KEY_REQUEST_DAY, requestsDay)
+                .putInt(KEY_REQUEST_COUNT, requestsToday.get())
+                .apply()
+        }
+    }
+
+    /** 429 → stop calling until the allowance actually returns. */
+    private fun noteRateLimited(response: Response) {
+        val body = runCatching { response.peekBody(200).string() }.getOrDefault("")
+        val daily = body.contains("Daily API limit", ignoreCase = true)
+        val now = System.currentTimeMillis()
+        val until = if (daily) nextUtcMidnight(now) else now + 60_000L
+        if (until <= limitedUntilMs) return
+        limitedUntilMs = until
+        Log.w(
+            TAG,
+            "MDBList rate limited (HTTP ${response.code}" +
+                (if (daily) ", daily limit exceeded" else "") +
+                ") — pausing MDBList calls for ${(until - now) / 1000}s"
+        )
+        // A pending scrobble/start retry would only spend more of a budget
+        // that is already gone.
+        cancelStartRetry()
+    }
+
+    private val budgetInterceptor = Interceptor { chain ->
+        val request = chain.request()
+        val essential = request.tag() === WRITE_TAG
+        if (maySpend(essential)) {
+            countRequest()
+            val response = chain.proceed(request)
+            if (response.code == 429) noteRateLimited(response)
+            response
+        } else {
+            val limited = limitedUntilMs > System.currentTimeMillis()
+            Log.i(
+                TAG,
+                "skipped ${request.url.encodedPath} — MDBList daily budget " +
+                    "(${requestsToday.get()} sent" +
+                    (if (limited) ", rate limited" else "") +
+                    ")"
+            )
+            // Callers already fail soft on any non-2xx, and the status says
+            // plainly that the budget, not the API, was the limit.
+            Response.Builder()
+                .request(request)
+                .protocol(Protocol.HTTP_1_1)
+                .code(429)
+                .message("KBStream local MDBList budget")
+                .body("".toResponseBody(null))
+                .build()
+        }
+    }
+
     private val client = OkHttpClient.Builder()
         .callTimeout(6, TimeUnit.SECONDS)
+        .addInterceptor(budgetInterceptor)
         .build()
 
     private const val BASE = "https://api.mdblist.com"
@@ -246,9 +388,18 @@ object MdbListClient {
     // latency the moment an API key was configured. The snapshot is now
     // cached in-process for a short TTL; scrobble/mark actions invalidate
     // it so badges never go stale within a session.
-    private const val SNAPSHOT_TTL_MS = 5 * 60 * 1000L
+    // Was 5 minutes. The snapshot is a paginated download of the whole watch
+    // history and the app re-read it on every detail/home load, so a shorter
+    // TTL spends the free key's 1,000 requests/day on re-fetching data that
+    // has not changed. A mark/unmark still invalidates it outright.
+    private const val SNAPSHOT_TTL_MS = 20 * 60 * 1000L
     @Volatile private var cachedSnapshot: MdbListWatchedSnapshot? = null
     @Volatile private var cachedSnapshotAt = 0L
+
+    /** Cached GET /sync/playback — asked for on every detail-screen open. */
+    private const val PLAYBACK_TTL_MS = 5 * 60 * 1000L
+    @Volatile private var cachedPlayback: List<MdbListPlaybackItem>? = null
+    @Volatile private var cachedPlaybackAt = 0L
 
     /*
      * The API key that produced [cachedSnapshot]. This object is
@@ -283,7 +434,13 @@ object MdbListClient {
         return withContext(Dispatchers.IO) {
             runCatching {
                 client.newCall(
-                    Request.Builder().url("$BASE/user?apikey=$key").get().build()
+                    Request.Builder()
+                        .url("$BASE/user?apikey=$key")
+                        .get()
+                        // Settings' connection check is user-initiated: it
+                        // answers even when the day's reads are spent.
+                        .tag(WRITE_TAG)
+                        .build()
                 ).execute().use { response ->
                     when {
                         response.isSuccessful -> {
@@ -567,6 +724,9 @@ object MdbListClient {
                 val request = Request.Builder()
                     .url("$BASE/scrobble/$action?apikey=$apiKey")
                     .post(body.toString().toRequestBody("application/json".toMediaType()))
+                    // A scrobble is a write: it goes out even when the day's
+                    // refetchable reads are spent.
+                    .tag(WRITE_TAG)
                     .build()
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
@@ -580,10 +740,18 @@ object MdbListClient {
                         // The body is logged too: "did the request even get
                         // sent, and with which ids" is the first question
                         // every "scrobbling doesn't show up" report needs.
-                        Log.d(TAG, "scrobble/$action ok body=$body")
-                        // Watch state just changed: force the next snapshot
-                        // read to re-download instead of serving the cache.
-                        invalidateWatchedSnapshot()
+                        // Log.i, not Log.d: -assumenosideeffects strips Log.d
+                        // from release builds — exactly the build a
+                        // "scrobbling doesn't show up" report comes from.
+                        Log.i(TAG, "scrobble/$action ok body=$body")
+                        // Only "stop"/"clear" can change the watched state;
+                        // start/pause just move the playhead. Invalidating the
+                        // snapshot on every one of them re-downloaded the
+                        // ENTIRE paginated history per playback event, which
+                        // was the biggest spender of the daily key.
+                        if (action == "stop" || action == "clear") {
+                            invalidateWatchedSnapshot()
+                        }
                     }
                     response.isSuccessful
                 }
@@ -837,6 +1005,10 @@ object MdbListClient {
             val request = Request.Builder()
                 .url(url)
                 .post(payload.toString().toRequestBody("application/json".toMediaType()))
+                // Every /sync/watched, list and watchlist write lands here, and
+                // every one of them is a state change the user asked for:
+                // writes are never budget-skipped.
+                .tag(WRITE_TAG)
                 .build()
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
@@ -982,6 +1154,11 @@ object MdbListClient {
     suspend fun getPlaybackSessions(context: Context): List<MdbListPlaybackItem> {
         val apiKey = apiKey(context)
         if (apiKey.isBlank()) return emptyList()
+        cachedPlayback?.let { fresh ->
+            if (System.currentTimeMillis() - cachedPlaybackAt < PLAYBACK_TTL_MS) {
+                return fresh
+            }
+        }
         return withContext(Dispatchers.IO) {
             runCatching {
                 val request = Request.Builder()
@@ -1037,7 +1214,12 @@ object MdbListClient {
                     }
                     out
                 }
-            }.getOrDefault(emptyList())
+            }.getOrDefault(emptyList()).also { result ->
+                if (result.isNotEmpty()) {
+                    cachedPlayback = result
+                    cachedPlaybackAt = System.currentTimeMillis()
+                }
+            }
         }
     }
 

@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream
 import android.app.ActivityManager
 import android.app.Application
 import android.content.ComponentCallbacks2
+import android.util.Log
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
@@ -30,6 +31,16 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
         // Start the clock the diagnostics perf block measures startup against.
         // Must stay first: everything below is part of the launch cost.
         com.kennyb1201.kbstream.data.reporting.PerfTrace.markAppStart()
+        // Build fingerprint, logged before anything that can fail. The question
+        // every device test turns on is "which build is this?": a logcat full of
+        // behaviour from a stale APK wastes the whole session, and a suppression
+        // record written by an older build reads as a live bug. Log.i survives
+        // release minification — -assumenosideeffects strips only Log.v/Log.d.
+        Log.i(
+            "APP_BUILD",
+            "KBStream ${BuildConfig.VERSION_NAME} (code ${BuildConfig.VERSION_CODE})" +
+                " sha=${BuildConfig.GIT_SHA}"
+        )
         com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext =
             applicationContext
         com.kennyb1201.kbstream.data.sync.SupabaseSync.appContextRef =

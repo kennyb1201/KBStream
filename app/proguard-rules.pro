@@ -15,6 +15,15 @@
 -keep class com.kennyb1201.kbstream.data.** { *; }
 -keep class com.kennyb1201.kbstream.domain.** { *; }
 
+# --- Player diagnostics: class names are printed into PLAYER_DV / PLAYER_VIDEO ---
+# The Dolby Vision compat layer narrates itself through javaClass.simpleName
+# ("Compat extractor configured=...", "Wrapping extractor=..."). R8 renames
+# every one of those in a release build, so a field log reads
+# "configured=x progressiveSource=W" exactly when the diagnosis depends on it.
+# Names only — shrinking and optimization stay on, so the per-sample DV strip
+# path keeps its inlining.
+-keepnames class com.kennyb1201.kbstream.ui.player.**
+
 # --- Moshi custom adapter methods ---
 -keepclasseswithmembers class * {
     @com.squareup.moshi.FromJson <methods>;
@@ -66,6 +75,11 @@
 # R8 removes Log.v/Log.d call sites entirely in minified builds: zero
 # logcat noise and no viewing-behavior breadcrumbs in shipped APKs.
 # Log.i/w/e stay — they carry genuine runtime diagnostics.
+# Convention: anything that explains a user-visible watch-state outcome
+# ("scrobble/start ok", "pushWatchedEpisode skipped: ...", "SIMKL marker sets
+# refreshed: ...") logs at Log.i, so it survives into the release build a bug
+# report actually comes from; Log.d is for tracing that only helps while
+# developing.
 -assumenosideeffects class android.util.Log {
     public static int v(java.lang.String, java.lang.String);
     public static int d(java.lang.String, java.lang.String);

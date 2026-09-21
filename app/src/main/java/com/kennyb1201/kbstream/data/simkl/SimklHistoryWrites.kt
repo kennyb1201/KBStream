@@ -30,13 +30,13 @@ suspend fun SimklRepository.pushWatchedMovieImpl(
 ): Boolean {
 
     if (!isConfigured() || !hasToken()) {
-        Log.d("SIMKL_REPO", "pushWatchedMovie skipped: not configured/authenticated")
+        Log.i("SIMKL_REPO", "pushWatchedMovie skipped: not configured/authenticated")
         return false
     }
 
     val ids = parsePlaybackIds(imdbId, tmdbId)
     if (ids == null) {
-        Log.d("SIMKL_REPO", "pushWatchedMovie skipped: unparseable id=$imdbId")
+        Log.i("SIMKL_REPO", "pushWatchedMovie skipped: unparseable id=$imdbId")
         return false
     }
 
@@ -78,7 +78,7 @@ suspend fun SimklRepository.pushWatchedMovieImpl(
                 )
             }
 
-            Log.d("SIMKL_REPO", "pushWatchedMovie ok imdb=$imdbId")
+            Log.i("SIMKL_REPO", "pushWatchedMovie ok imdb=$imdbId")
         }
 
         response.isSuccessful
@@ -101,13 +101,13 @@ suspend fun SimklRepository.pushWatchedShowImpl(
 ): Boolean {
 
     if (!isConfigured() || !hasToken()) {
-        Log.d("SIMKL_REPO", "pushWatchedShow skipped: not configured/authenticated")
+        Log.i("SIMKL_REPO", "pushWatchedShow skipped: not configured/authenticated")
         return false
     }
 
     val ids = parsePlaybackIds(showImdbId, tmdbId)
     if (ids == null) {
-        Log.d("SIMKL_REPO", "pushWatchedShow skipped: unparseable id=$showImdbId")
+        Log.i("SIMKL_REPO", "pushWatchedShow skipped: unparseable id=$showImdbId")
         return false
     }
 
@@ -150,7 +150,7 @@ suspend fun SimklRepository.pushWatchedShowImpl(
                 )
             }
 
-            Log.d("SIMKL_REPO", "pushWatchedShow ok show=$showImdbId")
+            Log.i("SIMKL_REPO", "pushWatchedShow ok show=$showImdbId")
         }
 
         response.isSuccessful
@@ -172,13 +172,13 @@ suspend fun SimklRepository.removeWatchedMovieImpl(
 ): Boolean {
 
     if (!isConfigured() || !hasToken()) {
-        Log.d("SIMKL_REPO", "removeWatchedMovie skipped: not configured/authenticated")
+        Log.i("SIMKL_REPO", "removeWatchedMovie skipped: not configured/authenticated")
         return false
     }
 
     val ids = parsePlaybackIds(imdbId, tmdbId)
     if (ids == null) {
-        Log.d("SIMKL_REPO", "removeWatchedMovie skipped: unparseable id=$imdbId")
+        Log.i("SIMKL_REPO", "removeWatchedMovie skipped: unparseable id=$imdbId")
         return false
     }
 
@@ -216,7 +216,7 @@ suspend fun SimklRepository.removeWatchedMovieImpl(
             // the stale snapshot on the next rail refresh.
             clearContinueWatchingCache()
 
-            Log.d("SIMKL_REPO", "removeWatchedMovie ok imdb=$imdbId")
+            Log.i("SIMKL_REPO", "removeWatchedMovie ok imdb=$imdbId")
         }
 
         response.isSuccessful
@@ -238,13 +238,13 @@ suspend fun SimklRepository.removeWatchedShowImpl(
 ): Boolean {
 
     if (!isConfigured() || !hasToken()) {
-        Log.d("SIMKL_REPO", "removeWatchedShow skipped: not configured/authenticated")
+        Log.i("SIMKL_REPO", "removeWatchedShow skipped: not configured/authenticated")
         return false
     }
 
     val ids = parsePlaybackIds(showImdbId, tmdbId)
     if (ids == null) {
-        Log.d("SIMKL_REPO", "removeWatchedShow skipped: unparseable id=$showImdbId")
+        Log.i("SIMKL_REPO", "removeWatchedShow skipped: unparseable id=$showImdbId")
         return false
     }
 
@@ -280,7 +280,7 @@ suspend fun SimklRepository.removeWatchedShowImpl(
             // the stale snapshot on the next rail refresh.
             clearContinueWatchingCache()
 
-            Log.d("SIMKL_REPO", "removeWatchedShow ok show=$showImdbId")
+            Log.i("SIMKL_REPO", "removeWatchedShow ok show=$showImdbId")
         }
 
         response.isSuccessful
@@ -300,18 +300,18 @@ suspend fun SimklRepository.pushWatchedEpisodeImpl(
 ): Boolean {
 
     if (!isConfigured() || !hasToken()) {
-        Log.d("SIMKL_REPO", "pushWatchedEpisode skipped: not configured/authenticated")
+        Log.i("SIMKL_REPO", "pushWatchedEpisode skipped: not configured/authenticated")
         return false
     }
 
     if (showImdbId.isBlank() || season <= 0 || episode <= 0) {
-        Log.d("SIMKL_REPO", "pushWatchedEpisode skipped: ids incomplete show=$showImdbId s=$season e=$episode")
+        Log.i("SIMKL_REPO", "pushWatchedEpisode skipped: ids incomplete show=$showImdbId s=$season e=$episode")
         return false
     }
 
     val ids = parsePlaybackIds(showImdbId, tmdbId)
     if (ids == null) {
-        Log.d("SIMKL_REPO", "pushWatchedEpisode skipped: unparseable id=$showImdbId")
+        Log.i("SIMKL_REPO", "pushWatchedEpisode skipped: unparseable id=$showImdbId")
         return false
     }
 
@@ -361,7 +361,7 @@ suspend fun SimklRepository.pushWatchedEpisodeImpl(
                 )
             }
 
-            Log.d("SIMKL_REPO", "pushWatchedEpisode ok show=$showImdbId s=$season e=$episode")
+            Log.i("SIMKL_REPO", "pushWatchedEpisode ok show=$showImdbId s=$season e=$episode")
         }
 
         response.isSuccessful
@@ -387,19 +387,19 @@ suspend fun SimklRepository.pushWatchedSeasonImpl(
 ): Boolean {
 
     if (!isConfigured() || !hasToken()) {
-        Log.d("SIMKL_REPO", "pushWatchedSeason skipped: not configured/authenticated")
+        Log.i("SIMKL_REPO", "pushWatchedSeason skipped: not configured/authenticated")
         return false
     }
 
     val validEpisodes = episodes.filter { it > 0 }.distinct().sorted()
     if (showImdbId.isBlank() || season <= 0 || validEpisodes.isEmpty()) {
-        Log.d("SIMKL_REPO", "pushWatchedSeason skipped: ids incomplete show=$showImdbId s=$season eps=${validEpisodes.size}")
+        Log.i("SIMKL_REPO", "pushWatchedSeason skipped: ids incomplete show=$showImdbId s=$season eps=${validEpisodes.size}")
         return false
     }
 
     val ids = parsePlaybackIds(showImdbId, tmdbId)
     if (ids == null) {
-        Log.d("SIMKL_REPO", "pushWatchedSeason skipped: unparseable id=$showImdbId")
+        Log.i("SIMKL_REPO", "pushWatchedSeason skipped: unparseable id=$showImdbId")
         return false
     }
 
@@ -454,7 +454,7 @@ suspend fun SimklRepository.pushWatchedSeasonImpl(
                 )
             }
 
-            Log.d("SIMKL_REPO", "pushWatchedSeason ok show=$showImdbId s=$season eps=${validEpisodes.size}")
+            Log.i("SIMKL_REPO", "pushWatchedSeason ok show=$showImdbId s=$season eps=${validEpisodes.size}")
         }
 
         response.isSuccessful
@@ -479,19 +479,19 @@ suspend fun SimklRepository.removeWatchedSeasonImpl(
 ): Boolean {
 
     if (!isConfigured() || !hasToken()) {
-        Log.d("SIMKL_REPO", "removeWatchedSeason skipped: not configured/authenticated")
+        Log.i("SIMKL_REPO", "removeWatchedSeason skipped: not configured/authenticated")
         return false
     }
 
     val validEpisodes = episodes.filter { it > 0 }.distinct().sorted()
     if (showImdbId.isBlank() || season <= 0 || validEpisodes.isEmpty()) {
-        Log.d("SIMKL_REPO", "removeWatchedSeason skipped: ids incomplete show=$showImdbId s=$season eps=${validEpisodes.size}")
+        Log.i("SIMKL_REPO", "removeWatchedSeason skipped: ids incomplete show=$showImdbId s=$season eps=${validEpisodes.size}")
         return false
     }
 
     val ids = parsePlaybackIds(showImdbId, tmdbId)
     if (ids == null) {
-        Log.d("SIMKL_REPO", "removeWatchedSeason skipped: unparseable id=$showImdbId")
+        Log.i("SIMKL_REPO", "removeWatchedSeason skipped: unparseable id=$showImdbId")
         return false
     }
 
@@ -530,7 +530,7 @@ suspend fun SimklRepository.removeWatchedSeasonImpl(
             cachedAllShowItems = null
             cachedAllShowItemsFetchedAt = 0L
 
-            Log.d("SIMKL_REPO", "removeWatchedSeason ok show=$showImdbId s=$season eps=${validEpisodes.size}")
+            Log.i("SIMKL_REPO", "removeWatchedSeason ok show=$showImdbId s=$season eps=${validEpisodes.size}")
         }
 
         response.isSuccessful

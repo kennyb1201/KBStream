@@ -373,7 +373,7 @@ class WatchedStatusRepository(
             missingFromMemory.isEmpty() &&
             !forceRemoteRefresh
         ) {
-            Log.d(
+            Log.i(
                 "WATCHED_REPO",
                 "all watched statuses " +
                     "served from memory cache"
@@ -460,7 +460,7 @@ class WatchedStatusRepository(
                 }
             }
 
-        Log.d(
+        Log.i(
             "WATCHED_REPO",
             "preload items=${items.size}, " +
                 "needsLookup=${needsLookup.size}, " +
@@ -491,7 +491,7 @@ class WatchedStatusRepository(
         if (
             !simklConfigured
         ) {
-            Log.d(
+            Log.i(
                 "WATCHED_REPO",
                 "Skipping SIMKL watched preload: " +
                     "not authenticated"
@@ -500,7 +500,7 @@ class WatchedStatusRepository(
             // Still resolve + persist: with only an MDBList key set (no
             // Simkl auth) this is the ONLY remote badge source.
             if (profileChanged()) {
-                Log.d(
+                Log.i(
                     "WATCHED_REPO",
                     "preload aborted: profile switched mid-flight"
                 )
@@ -676,7 +676,7 @@ class WatchedStatusRepository(
                     now
             }
 
-            Log.d(
+            Log.i(
                 "WATCHED_REPO",
                 "SIMKL marker sets refreshed: " +
                     "movies=${refreshedMovieKeys.size}, " +
@@ -686,7 +686,7 @@ class WatchedStatusRepository(
 
         val resolvedEntities =
             if (profileChanged()) {
-                Log.d(
+                Log.i(
                     "WATCHED_REPO",
                     "preload aborted before persist: profile switched mid-flight"
                 )
@@ -724,7 +724,7 @@ class WatchedStatusRepository(
         _watchedStateVersion.value =
             System.currentTimeMillis()
 
-        Log.d(
+        Log.i(
             "WATCHED_REPO",
             "cache updated for " +
                 "${resolvedEntities.size} items"
@@ -1035,7 +1035,7 @@ class WatchedStatusRepository(
                 System.currentTimeMillis()
         }
 
-        Log.d(
+        Log.i(
             "WATCHED_REPO",
             "Cleared local watch state (simklAuthCleared=$clearSimklAuth)"
         )
@@ -1304,7 +1304,7 @@ class WatchedStatusRepository(
             )
         }
 
-        Log.d(
+        Log.i(
             "WATCHED_REPO",
             "Local watched override added: $key"
         )
@@ -1513,7 +1513,7 @@ class WatchedStatusRepository(
             )
         }
 
-        Log.d(
+        Log.i(
             "WATCHED_REPO",
             "Local watched override removed: $key"
         )
@@ -1655,7 +1655,7 @@ class WatchedStatusRepository(
         if (com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id !=
             profileAtStart
         ) {
-            Log.d(
+            Log.i(
                 "WATCHED_REPO",
                 "MDBList snapshot dropped: profile switched mid-fetch"
             )
@@ -1669,7 +1669,7 @@ class WatchedStatusRepository(
             mdbListFetchedAt = now
         }
 
-        Log.d(
+        Log.i(
             "WATCHED_REPO",
             "MDBList marker sets refreshed: " +
                 "movies=${snapshot.movieKeys.size}, " +
