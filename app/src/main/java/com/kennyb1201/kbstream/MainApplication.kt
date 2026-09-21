@@ -1,6 +1,8 @@
 package com.kennyb1201.kbstream
 
+import android.app.ActivityManager
 import android.app.Application
+import android.content.ComponentCallbacks2
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
@@ -11,6 +13,8 @@ import coil3.SingletonImageLoader
 import coil3.disk.directory
 import coil3.svg.SvgDecoder
 import coil3.request.crossfade
+import com.kennyb1201.kbstream.data.memory.MemoryPressure
+import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.work.AddonManifestRefreshWorker
 import com.kennyb1201.kbstream.work.NewEpisodeWorker
@@ -125,7 +129,7 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             // re-decodes (the default is a small fraction of free RAM).
             .memoryCache(
                 coil3.memory.MemoryCache.Builder()
-                    .maxSizePercent(context, 0.30)
+                    .maxSizeBytes(imageMemoryCacheBytes(context))
                     .build()
             )
             // Coil 3 ships NO default disk cache — without this every app
@@ -158,6 +162,59 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
         val usable = context.cacheDir.usableSpace
         val twoPercent = usable * 2 / 100
         return twoPercent.coerceIn(32L * 1024 * 1024, 256L * 1024 * 1024)
+    }
+
+    /**
+     * Coil image memory-cache budget: 15% of the reported heap class, floored
+     * at 24 MB and capped at 64 MB.
+     *
+     * A plain percentage is not safe here. `android:largeHeap="true"` raises
+     * the memory class the system reports (512 MB on the field TV), and the
+     * previous 30% of that was ~150 MB of decoded bitmaps on a device whose
+     * Java heap growth limit is 192 MB — the same heap the player's buffers
+     * have to fit inside. The cap is what makes the budget survivable; the
+     * floor keeps rails from re-decoding on every scroll on small boxes.
+     */
+    private fun imageMemoryCacheBytes(context: android.content.Context): Long {
+        val activityManager =
+            context.getSystemService(android.content.Context.ACTIVITY_SERVICE)
+                as? ActivityManager
+                ?: return 48L * 1024 * 1024
+        val heapBytes = activityManager.memoryClass.toLong() * 1024 * 1024
+        return (heapBytes * 15 / 100).coerceIn(24L * 1024 * 1024, 64L * 1024 * 1024)
+    }
+
+    /**
+     * The system is out of memory right now: hand back everything that can be
+     * rebuilt. Called on the main thread and may be called at any time, so it
+     * must not block, allocate, or throw.
+     */
+    override fun onLowMemory() {
+        super.onLowMemory()
+        runCatching {
+            releaseImageMemoryCache(this)
+            MemoryPressure.releaseBrowsingCaches()
+        }
+    }
+
+    /**
+     * Memory-pressure response, ordered by what it costs to rebuild.
+     *
+     * Bitmaps are the biggest reclaimable block and cost only a decode from
+     * Coil's disk cache to get back, so they go first. The guide caches cost a
+     * database read to rebuild, so they wait for real pressure or for the app
+     * going away — by then the user is not looking at the guide anyway.
+     */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        runCatching {
+            if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+                releaseImageMemoryCache(this)
+            }
+            if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
+                MemoryPressure.releaseBrowsingCaches()
+            }
+        }
     }
 
     private fun scheduleSimklPeriodicSync() {

@@ -11,6 +11,7 @@ import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.iptv.db.EpgSearchIndex
 import com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
 import com.kennyb1201.kbstream.data.iptv.db.PlaylistEpgMatchEntity
+import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CompletableDeferred
@@ -47,7 +48,7 @@ class IptvRepository(
     context: Context,
     private val client: OkHttpClient = IptvHttpClient.create(),
     private val m3uParser: M3uParser = M3uParser()
-) {
+) : MemoryPressure.Releasable {
     // Capture the app context: constructor params are not in scope inside
     // custom getter accessors.
     private val appContext: Context = context.applicationContext
@@ -76,6 +77,26 @@ class IptvRepository(
             ): Boolean = size > MAX_CACHED_GUIDE_QUERIES
         }
     )
+
+    init {
+        // These two caches are the largest Java-heap structures the app builds
+        // and they are owned by an Activity-scoped ViewModel, so nothing would
+        // otherwise release them for the whole session — including while a 4K
+        // player is holding the rest of the heap. Registered here so
+        // MemoryPressure can drop them under pressure or before playback.
+        MemoryPressure.register(this)
+    }
+
+    /**
+     * Drops the memoized guide state: the per-EPG-source channel snapshot
+     * (every channel plus its two lookup maps) and the recent lineup windows.
+     * Both are rebuilt from the database on the next guide query, so the only
+     * cost is that query.
+     */
+    override fun releaseCaches() {
+        guideSnapshots.clear()
+        guideQueryCache.clear()
+    }
 
     suspend fun loadPlaylist(
         playlistUrl: String,

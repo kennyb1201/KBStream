@@ -67,6 +67,17 @@ internal class P5PlaneDecoder(
         private const val MAX_INPUT_SIZE = 8 * 1024 * 1024
         private const val MAX_OUTPUT_BUFFERS = 8
         private const val MAX_OUTPUT_DRAIN_PER_CALL = 64
+
+        /** Oversized-input drops logged before the rest are counted silently. */
+        private const val MAX_REPORTED_OVERSIZED_SAMPLES = 4
+
+        /**
+         * Consecutive oversized drops tolerated before the session is failed.
+         * Dropping a sample is survivable (the decoder resyncs on the next
+         * keyframe); dropping everything is a black screen with a spinner
+         * forever, which is worse for the user than an error they can act on.
+         */
+        private const val MAX_OVERSIZED_SAMPLES_BEFORE_FAILURE = 8
     }
 
     private val codec: MediaCodec
@@ -90,6 +101,10 @@ internal class P5PlaneDecoder(
     private var endOfStreamDequeued = false
     private var colorRangeLimited = true
     private var released = false
+    private var oversizedSamples = 0
+
+    /** Capacity the codec actually gave us — see the constructor's log line. */
+    private var inputBufferCapacity = 0
 
     init {
         val mime = format.sampleMimeType ?: MimeTypes.VIDEO_H265
@@ -110,7 +125,19 @@ internal class P5PlaneDecoder(
             codec = MediaCodec.createDecoderByType(mime)
             codec.configure(mediaFormat, /* surface = */ null, /* crypto = */ null, /* flags = */ 0)
             codec.start()
-            Log.i(TAG, "Buffer-mode MediaCodec started: $mime ${width}x$height")
+            // KEY_MAX_INPUT_SIZE is a request, not a contract: the codec sizes
+            // its input buffers however it likes. The field failure this guard
+            // exists for is a codec handing back less than we asked for and an
+            // access unit that then did not fit, so record what we actually
+            // got — the mismatch is invisible otherwise.
+            inputBufferCapacity = runCatching {
+                codec.getInputBuffer(0)?.capacity() ?: 0
+            }.getOrDefault(0)
+            Log.i(
+                TAG,
+                "Buffer-mode MediaCodec started: $mime ${width}x$height " +
+                    "inputBuffer=${inputBufferCapacity}B requested=$maxInputSize"
+            )
         } catch (e: Exception) {
             throw DecoderException("P5PlaneDecoder: failed to start MediaCodec for $mime", e)
         }
@@ -311,6 +338,19 @@ internal class P5PlaneDecoder(
             } else {
                 val data = checkNotNull(input.data)
                 buffer.clear()
+                if (data.remaining() > buffer.capacity()) {
+                    // Unguarded, this put() throws BufferOverflowException,
+                    // which media3 reports as "Unexpected runtime error" and
+                    // takes the whole session down with it — the bug behind
+                    // the 4K Profile 5 crash in the field log. Hand the codec
+                    // input index back unqueued and drop the sample instead:
+                    // a dropped frame is a glitch until the next keyframe, a
+                    // thrown exception is a dead player.
+                    oversize(input, data.remaining(), buffer.capacity())
+                    freeInputBuffers.addLast(input)
+                    continue
+                }
+                oversizedSamples = 0
                 buffer.put(data)
                 var flags = 0
                 if (input.isKeyFrame()) flags = flags or MediaCodec.BUFFER_FLAG_SYNC_FRAME
@@ -321,6 +361,29 @@ internal class P5PlaneDecoder(
                 }
             }
             freeInputBuffers.addLast(input)
+        }
+    }
+
+    /**
+     * Records an input sample that did not fit the codec's buffer, failing the
+     * decoder once the stream is clearly undecodable rather than dropping it
+     * frame by frame into a black screen.
+     */
+    private fun oversize(input: DecoderInputBuffer, sampleSize: Int, capacity: Int) {
+        oversizedSamples++
+        if (oversizedSamples <= MAX_REPORTED_OVERSIZED_SAMPLES) {
+            Log.w(
+                TAG,
+                "Dropping ${sampleSize}B input sample: codec input buffer is " +
+                    "${capacity}B (requested $maxInputSize, " +
+                    "measured $inputBufferCapacity, keyframe=${input.isKeyFrame()})"
+            )
+        }
+        if (oversizedSamples > MAX_OVERSIZED_SAMPLES_BEFORE_FAILURE) {
+            throw DecoderException(
+                "P5PlaneDecoder: ${oversizedSamples} consecutive input samples " +
+                    "exceed the codec input buffer (${capacity}B < ${sampleSize}B)"
+            )
         }
     }
 

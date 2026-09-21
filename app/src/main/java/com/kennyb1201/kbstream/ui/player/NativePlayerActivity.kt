@@ -69,6 +69,8 @@ import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.addon.StreamBehaviorHints
 import com.kennyb1201.kbstream.data.badges.StreamBadge
 import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
+import com.kennyb1201.kbstream.data.memory.MemoryPressure
+import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache
 import com.kennyb1201.kbstream.data.iptv.LiveChannelZapRegistry
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
@@ -125,6 +127,14 @@ private const val EXTRA_DRM_LICENSE_URL = "drm_license_url"
 private const val EXTRA_DRM_HEADERS = "drm_headers"
 private const val MAX_RETRY_ATTEMPTS = 6
 private val RETRY_BACKOFF_MS = listOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 30_000L)
+
+/**
+ * Attempt index at which the retry ladder stops trusting the inferred MIME
+ * type and lets the extractor sniff the container itself (see [createPlayer]).
+ * Attempts before it rebuild an otherwise identical player, which is pointless
+ * after a decoder error, so that is where a decoder failure jumps to.
+ */
+private const val RAW_EXTRACTOR_PROBE_ATTEMPT = 3
 private val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 
 // Aspect ratio modes. 0-2 map to the Media3 resize modes (see
@@ -1396,6 +1406,17 @@ class NativePlayerActivity : ComponentActivity() {
         // pauses and a multi-second rebuffer stall. Cleared in onStop, with
         // onDestroy as the safety net.
         EpgWriteGate.setPlayerActive(true)
+
+        // Playback is the memory peak of the whole app: media3's sample buffer
+        // and the codec's native allocations land on top of whatever browsing
+        // left resident. Free that headroom up front instead of hoping the
+        // system asks in time — decoded artwork and the EPG snapshot are both
+        // rebuildable, and the player loads whatever art it needs itself.
+        runCatching {
+            releaseImageMemoryCache(this)
+            MemoryPressure.releaseBrowsingCaches()
+        }
+
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         // Hide system bars
@@ -3051,7 +3072,8 @@ class NativePlayerActivity : ComponentActivity() {
                 "progressiveSource=${progressiveMediaSourceFactory.javaClass.simpleName}"
         )
 
-        val mimeType = if (retryAttempt < 3) resolveMimeType(currentUrl) else null
+        val mimeType =
+            if (retryAttempt < RAW_EXTRACTOR_PROBE_ATTEMPT) resolveMimeType(currentUrl) else null
         val mediaItemBuilder = MediaItem.Builder().setUri(currentUrl)
         if (mimeType != null) mediaItemBuilder.setMimeType(mimeType)
 
@@ -3541,6 +3563,19 @@ class NativePlayerActivity : ComponentActivity() {
                     500L
                 )
                 return
+            }
+            // A decoder error is not an IO error. Rebuilding here produced an
+            // identical decoder on an identical device, and the field log shows
+            // the cost: after the vendor DV decoder failed, each retry started a
+            // new OMX component ~1s later while the previous one was still
+            // tearing down (`forcing the release of codec`, ~3s on this box), and
+            // every attempt came back OMX_ErrorInsufficientResources (0x80001000).
+            // The ladder's later attempts do different work — they drop the MIME
+            // hint so the extractor sniffs the container itself — so skip straight
+            // to those, which also gives the vendor codec time to finish releasing
+            // before it is asked for a component again.
+            if (isDecoderError(error.errorCode) && retryAttempt < RAW_EXTRACTOR_PROBE_ATTEMPT) {
+                retryAttempt = RAW_EXTRACTOR_PROBE_ATTEMPT
             }
             errorMessageStr = msg
             if (isLikelyRetryable(error)) {
@@ -5162,7 +5197,7 @@ class NativePlayerActivity : ComponentActivity() {
         bufferingSpinner.visibility = View.GONE
         reconnectingText.text = "Reconnecting... (${retryAttempt + 1}/$MAX_RETRY_ATTEMPTS)"
 
-        if (retryAttempt >= 3) {
+        if (retryAttempt >= RAW_EXTRACTOR_PROBE_ATTEMPT) {
             Log.i("PLAYER_RETRY", "Attempt ${retryAttempt + 1}: probing with raw extractor")
         }
 
