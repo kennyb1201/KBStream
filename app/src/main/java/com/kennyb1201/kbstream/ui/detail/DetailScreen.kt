@@ -109,6 +109,7 @@ import com.kennyb1201.kbstream.data.tmdb.list
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.tmdb.tmdbImageOriginal
 import com.kennyb1201.kbstream.data.tmdb.writers
+import com.kennyb1201.kbstream.ui.components.AutoPlayLoadSplash
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.player.randomAiredEpisode
 import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
@@ -821,6 +822,27 @@ fun DetailScreen(
     }
 
     when {
+        // A Continue Watching / Up Next deep link opens this screen only to
+        // hand the player the title's backdrop/overview/cast - it auto-plays
+        // the moment metadata lands, so the detail page itself is never
+        // actually seen. A centered spinner on black for that whole load
+        // reads as a stalled playback, and the spinner means "the video is
+        // buffering" everywhere else in the app, so this open shows the same
+        // loading splash the player uses instead (backdrop + pulsing
+        // clearlogo, or the name when there is no logo art). An ordinary
+        // detail open keeps the plain spinner.
+        isLoading && initialTarget != null -> {
+            // The poster is deliberately NOT used as a backdrop fallback: a
+            // portrait stretched full-screen reads as a zoomed, wrong
+            // backdrop. No widescreen art keeps the dark splash + pulsing
+            // logo, exactly like the player's own first load.
+            AutoPlayLoadSplash(
+                backdropUrl = initialBackdrop,
+                clearLogoUrl = initialClearLogo,
+                title = initialTarget.displayName.ifBlank { id }
+            )
+        }
+
         isLoading -> {
             Box(
                 Modifier

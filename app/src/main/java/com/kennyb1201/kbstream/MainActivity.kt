@@ -4,17 +4,11 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
@@ -36,11 +30,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.core.view.WindowCompat
@@ -48,9 +39,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
-import coil3.compose.AsyncImage
-import coil3.request.ImageRequest
-import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.domain.streamengine.BingeGroupResolver
@@ -62,6 +50,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.actor.ActorScreen
 import com.kennyb1201.kbstream.ui.addons.AddonsScreen
 import com.kennyb1201.kbstream.ui.collection.CollectionScreen
+import com.kennyb1201.kbstream.ui.components.AutoPlayLoadSplash
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
@@ -333,50 +322,6 @@ private data class PendingPlay(
             cast = cast
         )
     }
-}
-
-// Mirrors the player's clearlogo_pulse animation (1.0 -> 1.08 scale, 0.7 -> 1.0
-// alpha, 1200 ms, reverse, infinite) applied to the clear logo.
-@Composable
-private fun PulsingClearLogo(
-    url: String,
-    contentDescription: String
-) {
-    val pulse = rememberInfiniteTransition(label = "clearLogoPulse")
-    val scale by pulse.animateFloat(
-        initialValue = 1f,
-        targetValue = 1.08f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1200),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "clearLogoScale"
-    )
-    val alpha by pulse.animateFloat(
-        initialValue = 0.7f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1200),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "clearLogoAlpha"
-    )
-    AsyncImage(
-        model = ImageRequest.Builder(LocalContext.current)
-            .data(url)
-            .crossfade(true)
-            .build(),
-        contentDescription = contentDescription,
-        contentScale = ContentScale.Fit,
-        modifier = Modifier
-            .width(240.dp)
-            .height(80.dp)
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-                this.alpha = alpha
-            }
-    )
 }
 
 class MainActivity : ComponentActivity() {
@@ -1882,55 +1827,12 @@ fun AppRoot() {
     // mirrors the player's first-load splash (backdrop + pulsing clearlogo) —
     // so the streams picker is never shown before playback.
     pendingAutoPlay?.let { pending ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(KBVoid)
-        ) {
-            if (!pending.backdropUrl.isNullOrBlank()) {
-                AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(pending.backdropUrl)
-                        .crossfade(true)
-                        .build(),
-                    contentDescription = pending.target.displayName,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-
-            Column(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                if (!pending.clearLogoUrl.isNullOrBlank()) {
-                    PulsingClearLogo(
-                        url = pending.clearLogoUrl,
-                        contentDescription = pending.target.displayName
-                    )
-                } else {
-                    Text(
-                        text = pending.target.displayName,
-                        color = KBTextHi,
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-
-                Spacer(
-                    modifier = Modifier.height(14.dp)
-                )
-
-                Text(
-                    text = "Finding sources…",
-                    color = KBTextLo,
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            }
-        }
+        AutoPlayLoadSplash(
+            backdropUrl = pending.backdropUrl,
+            clearLogoUrl = pending.clearLogoUrl,
+            title = pending.target.displayName,
+            subtitle = "Finding sources…"
+        )
     }
     }
 }

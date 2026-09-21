@@ -6,6 +6,7 @@ import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -294,6 +295,15 @@ object MdbListClient {
 
     private val sessionMutex = Mutex()
 
+    /**
+     * Serializes the scrobble POSTs themselves. A cancelled action can wake
+     * up (see [postScrobble]) while the action that cancelled it is already
+     * on the wire, and interleaving the two lets the OLDER state reach the
+     * server last — a late "start" landing after the "stop" that ended
+     * playback re-opens a session nobody ever closes.
+     */
+    private val scrobbleSendMutex = Mutex()
+
     @Volatile
     private var startRetryJob: Job? = null
 
@@ -317,23 +327,30 @@ object MdbListClient {
         progress: Double
     ) {
         val appContext = context.applicationContext
-        sessionMutex.withLock {
-            startRetryJob?.cancel()
-            startRetryJob = sessionScope.launch {
-                for (delayMs in START_RETRY_DELAYS_MS) {
-                    delay(delayMs)
-                    val apiKey = apiKey(appContext)
-                    if (apiKey.isBlank()) return@launch
-                    val body = scrobbleBody(
-                        target.isMovie, target.imdbId, target.tmdbId,
-                        target.season, target.episode, progress
-                    ) ?: return@launch
-                    if (postScrobble(apiKey, "start", body)) {
-                        Log.i(TAG, "scrobble/start retry succeeded")
-                        return@launch
+        // NonCancellable: this runs on the FAILURE path, which is reached
+        // exactly when the caller's job is on its way out (the player cancels
+        // the whole Simkl+MDBList job on the next playback event). The lock
+        // below is a suspension point, so without this the retry that exists
+        // to recover a lost start was itself skipped whenever it was needed.
+        withContext(NonCancellable) {
+            sessionMutex.withLock {
+                startRetryJob?.cancel()
+                startRetryJob = sessionScope.launch {
+                    for (delayMs in START_RETRY_DELAYS_MS) {
+                        delay(delayMs)
+                        val apiKey = apiKey(appContext)
+                        if (apiKey.isBlank()) return@launch
+                        val body = scrobbleBody(
+                            target.isMovie, target.imdbId, target.tmdbId,
+                            target.season, target.episode, progress
+                        ) ?: return@launch
+                        if (postScrobble(apiKey, "start", body)) {
+                            Log.i(TAG, "scrobble/start retry succeeded")
+                            return@launch
+                        }
                     }
+                    Log.w(TAG, "scrobble/start gave up after retries")
                 }
-                Log.w(TAG, "scrobble/start gave up after retries")
             }
         }
     }
@@ -391,28 +408,44 @@ object MdbListClient {
         apiKey: String,
         action: String,
         body: JSONObject
-    ): Boolean = withContext(Dispatchers.IO) {
-        runCatching {
-            val request = Request.Builder()
-                .url("$BASE/scrobble/$action?apikey=$apiKey")
-                .post(body.toString().toRequestBody("application/json".toMediaType()))
-                .build()
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    Log.w(
-                        TAG,
-                        "scrobble/$action failed code=${response.code} " +
-                            response.body?.string().orEmpty().take(200)
-                    )
-                } else {
-                    Log.d(TAG, "scrobble/$action ok")
-                    // Watch state just changed: force the next snapshot
-                    // read to re-download instead of serving the cache.
-                    invalidateWatchedSnapshot()
+    ): Boolean = withContext(NonCancellable + Dispatchers.IO) {
+        // NonCancellable is the whole point of this function's shape. The
+        // player mirrors scrobbles from the same job it scrobbles Simkl with,
+        // and the very next playback event (the buffering -> playing toggle
+        // on a slow start, a pause, the stop on exit) cancels that job. Simkl
+        // is the first await in it and this is the second, so the mirror was
+        // cancelled before its request was ever sent — and because the
+        // cancellation surfaced from INSIDE here, it also unwound straight
+        // past the caller's own start-retry: no session on the MDBList
+        // dashboard for the whole playback. A one-shot progress write must
+        // not be droppable by whoever happens to cancel its parent.
+        scrobbleSendMutex.withLock {
+            runCatching {
+                val request = Request.Builder()
+                    .url("$BASE/scrobble/$action?apikey=$apiKey")
+                    .post(body.toString().toRequestBody("application/json".toMediaType()))
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        Log.w(
+                            TAG,
+                            "scrobble/$action failed code=${response.code} " +
+                                "body=$body resp=" +
+                                response.body?.string().orEmpty().take(200)
+                        )
+                    } else {
+                        // The body is logged too: "did the request even get
+                        // sent, and with which ids" is the first question
+                        // every "scrobbling doesn't show up" report needs.
+                        Log.d(TAG, "scrobble/$action ok body=$body")
+                        // Watch state just changed: force the next snapshot
+                        // read to re-download instead of serving the cache.
+                        invalidateWatchedSnapshot()
+                    }
+                    response.isSuccessful
                 }
-                response.isSuccessful
-            }
-        }.getOrDefault(false)
+            }.getOrDefault(false)
+        }
     }
 
     /**
