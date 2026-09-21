@@ -148,6 +148,25 @@ private const val RAW_EXTRACTOR_PROBE_ATTEMPT = 3
 private const val DV_STRIP_REBUILD_DELAY_MS = 3_000L
 
 /**
+ * The platform's own "no decoder resources available" code
+ * (OMX_ErrorInsufficientResources, 0x80001000). Realtek/TCL boxes surface it
+ * as a MediaCodec.CodecException when the video decoder cannot be given its
+ * buffers. It is not a bad-bitstream error: once one video decoder on the
+ * process has failed this way, the box returns it for EVERY later decoder —
+ * Dolby Vision and plain HEVC alike — until the process restarts.
+ */
+private val OMX_ERROR_INSUFFICIENT_RESOURCES = 0x80001000.toInt()
+
+/**
+ * Grace period before asking for a decoder again after resource exhaustion.
+ * The vendor codec's release lands ~3s after ExoPlayer lets it go on this box
+ * (`ACodec: forcing the release of codec`), so a rebuild inside that window
+ * asks for a 4K decoder while the previous component still holds its
+ * resources and fails identically.
+ */
+private const val DECODER_RESOURCE_RETRY_DELAY_MS = 6_000L
+
+/**
  * Weighted-rating rank (IMDB-style) for one credit of a person: the rating
  * blended toward a 6.5 prior worth 200 votes. The because-you-watched cast
  * tier used to sort by `popularity`, which is why "Because you watched Ted
@@ -549,6 +568,7 @@ class NativePlayerActivity : ComponentActivity() {
 
     // Retry
     private var retryAttempt = 0
+    private var decoderResourceFallbackDone = false
     private var retryExhausted = false
     private var errorMessageStr: String? = null
     private var manualRetryToken = 0
@@ -3565,6 +3585,10 @@ class NativePlayerActivity : ComponentActivity() {
 
         override fun onPlayerError(error: PlaybackException) {
             var msg = friendlyErrorMessage(error)
+            // Resource exhaustion is a different animal from "this box can't
+            // decode Dolby Vision", and both the recovery and the persisted
+            // verdict below depend on telling them apart.
+            val resourceExhausted = isDecoderResourceExhausted(error)
             if (isDecoderError(error.errorCode)) {
                 val codec = streamCodec
                 if (!codec.isNullOrBlank()) {
@@ -3594,11 +3618,27 @@ class NativePlayerActivity : ComponentActivity() {
                 dvStripRetryDone = true
                 forceDvStripForSession = true
                 // Remember it for this device so the next DV title starts
-                // stripped instead of paying this failure and rebuild again.
-                AppPreferences.setDvPassthroughFailedAt(
-                    this@NativePlayerActivity,
-                    System.currentTimeMillis()
-                )
+                // stripped instead of paying this failure and rebuild again —
+                // but only when the decoder genuinely cannot play Dolby
+                // Vision. Resource exhaustion is the box being out of
+                // decoders: it hits the second 4K decode in a process, and the
+                // plain HEVC decoder too, and one field session shows a DV
+                // decode succeeding ~25s later with no setting changed.
+                // Recording that as a capability verdict stripped Dolby Vision
+                // off every title for the next 14 days on a TV that had just
+                // played it — which is the "DV is struggling" state.
+                if (resourceExhausted) {
+                    Log.w(
+                        "PLAYER_DV",
+                        "Not recording a Dolby Vision capability failure — the decoder " +
+                            "was out of resources (0x80001000), not unable to play DV"
+                    )
+                } else {
+                    AppPreferences.setDvPassthroughFailedAt(
+                        this@NativePlayerActivity,
+                        System.currentTimeMillis()
+                    )
+                }
                 errorMessageStr = null
                 Log.w(
                     "PLAYER_DV",
@@ -3622,6 +3662,35 @@ class NativePlayerActivity : ComponentActivity() {
                     },
                     DV_STRIP_REBUILD_DELAY_MS
                 )
+                return
+            }
+            // Resource exhaustion: the box has no video decoder to hand us
+            // right now. Retrying this file cannot fix that — the DV-strip
+            // path above asks for the same component, and the raw-extractor
+            // probes below do too. The field log shows all of them coming back
+            // OMX_ErrorInsufficientResources (0x80001000), four rebuilds and
+            // ~30s of black screen ending exactly where the first attempt did.
+            // Do the one thing that can help instead: the next ranked source,
+            // which is normally the smaller one this box can still decode.
+            if (resourceExhausted && !decoderResourceFallbackDone) {
+                decoderResourceFallbackDone = true
+                errorMessageStr = null
+                val switching = tryNextSource(
+                    delayMs = DECODER_RESOURCE_RETRY_DELAY_MS,
+                    statusText = "This TV is out of video decoder resources — " +
+                        "trying a smaller source…"
+                )
+                if (switching) return
+                Log.w(
+                    "PLAYER_RETRY",
+                    "Decoder resources exhausted with no source left to try — failing fast " +
+                        "instead of the six-attempt rebuild ladder, which cannot get a decoder back"
+                )
+                retryExhausted = true
+                errorMessageStr =
+                    "This TV has run out of video decoder resources.\n" +
+                        "Restart the app, or pick a 1080p source for this title."
+                updateUIError()
                 return
             }
             // A decoder error is not an IO error. Rebuilding here produced an
@@ -3770,6 +3839,37 @@ class NativePlayerActivity : ComponentActivity() {
             // exists to prevent. Widening is safe: the DV-strip branch still
             // requires a DV codec AND a DV mode other than None.
             errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED
+
+    /**
+     * True when the decoder failed because the box could not give it
+     * resources, rather than because the bitstream was bad. The distinction
+     * matters: a bad bitstream is worth retrying differently, while
+     * OMX_ErrorInsufficientResources means no decoder on this process will
+     * succeed, so the only useful move is a different (smaller) source.
+     */
+    private fun isDecoderResourceExhausted(error: Throwable?): Boolean {
+        var cause = error
+        while (cause != null) {
+            if (cause is android.media.MediaCodec.CodecException &&
+                cause.errorCode == OMX_ERROR_INSUFFICIENT_RESOURCES
+            ) {
+                Log.w(
+                    "PLAYER_RETRY",
+                    "Decoder resource exhaustion (0x80001000, recoverable=" +
+                        "${cause.isRecoverable} transient=${cause.isTransient})"
+                )
+                return true
+            }
+            // Media3 wraps the platform error and minified builds can bury the
+            // concrete type, so the platform's own code in the message chain
+            // is the reliable fallback.
+            if (cause.message?.contains("0x80001000", ignoreCase = true) == true) {
+                return true
+            }
+            cause = cause.cause
+        }
+        return false
+    }
 
     /**
      * Single source of truth for "video output works". Called from Media3's
@@ -6616,6 +6716,7 @@ class NativePlayerActivity : ComponentActivity() {
         currentSourceIndex = sources.indexOfFirst { it.url == newUrl }
         retryAttempt = 0; retryExhausted = false; errorMessageStr = null; forceTextureViewFallback = false; languagesAutoSelected = false
         dvStripRetryDone = false; forceDvStripForSession = false
+        decoderResourceFallbackDone = false
         // Per-source Dolby Vision identity. These used to survive into the
         // next player build, so a P5 title followed by any other title kept
         // the P5 GL color path "on": the shader then applied ICtCp math to
@@ -6642,7 +6743,14 @@ class NativePlayerActivity : ComponentActivity() {
         recreatePlayer()
     }
 
-    private fun tryNextSource(): Boolean {
+    /**
+     * Moves to the next ranked source. [delayMs] lets a caller leave the
+     * platform time to tear its video decoder down first (checking the
+     * decoder pool showed the box returning no codec at all for ~15s after a
+     * failure), and [statusText] replaces the generic "Trying next source"
+     * line when the reason is worth naming.
+     */
+    private fun tryNextSource(delayMs: Long = 0L, statusText: String? = null): Boolean {
         if (autoSourceSwitchCount >= MAX_AUTO_SOURCE_SWITCHES) return false
         val nextIndex = currentSourceIndex + 1
         if (nextIndex >= sources.size) return false
@@ -6654,8 +6762,15 @@ class NativePlayerActivity : ComponentActivity() {
         )
         reconnectingContainer.visibility = View.VISIBLE
         bufferingSpinner.visibility = View.GONE
-        reconnectingText.text = "Trying next source: ${nextStream.displayLabel()}…"
-        switchToSource(nextStream)
+        reconnectingText.text = statusText ?: "Trying next source: ${nextStream.displayLabel()}…"
+        if (delayMs > 0L) {
+            handler.postDelayed({
+                errorMessageStr = null
+                switchToSource(nextStream)
+            }, delayMs)
+        } else {
+            switchToSource(nextStream)
+        }
         return true
     }
 

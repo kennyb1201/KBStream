@@ -356,7 +356,25 @@ private class VideoCompatTrackOutput(
         // re-advertise as plain HEVC, rewrite the VPS to a clean single-layer
         // parameter set, and strip the metadata NALs (62/63 + layerId>0 +
         // HDR10+ SEI per toggle) — every other byte bit-exact.
-        if (dvRewrite != null && DolbyVisionCompat.isHdr10BaseLayerProfile(format.codecs)) {
+        // Passthrough suppression is the player telling us this box's Dolby
+        // Vision decoder has already hard-failed (OMX_ErrorInsufficientResources,
+        // 0x80001000), so handing it Dolby Vision again cannot work — it has to
+        // become HDR10, exactly as Strip All forces. dvRewrite is null for
+        // declared P4/P8 (they are already HDR10-base, so Auto's "P7 → 8.1"
+        // rewrite does not target them), which is why suppression used to change
+        // nothing at all for those profiles: the stream went to the vendor DV
+        // decoder anyway and failed the same way on every title. P8 is the
+        // profile these 4K web-DL remuxes carry, so this was the whole
+        // suppression not working.
+        val hdr10BaseLayerProfile = DolbyVisionCompat.isHdr10BaseLayerProfile(format.codecs)
+        val rewriteCodec =
+            dvRewrite ?: if (
+                dvRewriteEnabled && !nativeDvSupported && !convertAllProfiles &&
+                hdr10BaseLayerProfile
+            ) {
+                DolbyVisionCompat.hdr10Codec(format.codecs, true)
+            } else null
+        if (rewriteCodec != null && hdr10BaseLayerProfile) {
             if (nativeDvSupported && !convertAllProfiles) {
                 Log.i(
                     "PLAYER_DV",
@@ -375,7 +393,7 @@ private class VideoCompatTrackOutput(
                     "stripping DV RPU/EL + HDR10+ metadata NALs " +
                     "(nativeDv=$nativeDvSupported stripAll=$convertAllProfiles)"
             )
-            var builder = format.buildUpon().setCodecs(dvRewrite)
+            var builder = format.buildUpon().setCodecs(rewriteCodec)
             // Keep the original declared DV codec (e.g. "dvhe.08.06") on the
             // label so the player UI can badge the profile playing as HDR10.
             if (!format.codecs.isNullOrBlank()) {
