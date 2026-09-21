@@ -23,6 +23,7 @@ import android.widget.TextView
 import android.widget.Toast
 import android.widget.ImageView
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
@@ -270,6 +271,9 @@ class NativePlayerActivity : ComponentActivity() {
     // Resolved lazily rather than in bindViews(): the splash's own binding sits
     // past the tooling's edit window.
     private var splashItemName: TextView? = null
+    /** Set while showSplash() has a pending "wait for the clear logo" hook, so
+     *  repeated source loads do not stack layout listeners on splashClearLogo. */
+    private var splashPulseWaitAttached = false
     /** See enforceTitleGraphicPolicy: the follow-up passes are posted once. */
     private var titleGraphicRechecksPosted = false
     /** See resolveClearLogoFromTmdb: one lookup per player session. */
@@ -1408,10 +1412,19 @@ class NativePlayerActivity : ComponentActivity() {
             // tracks are skipped there (embedded subs still work).
             !currentAudioUrl.isNullOrBlank()
         }
+        // Fire TV workaround: the native window can be lost during activity
+        // startup before ExoPlayer initializes, so the decoder configures its
+        // output surface against a dead window and never produces a frame.
+        // Flipping the video SurfaceView's visibility destroys and recreates
+        // its native surface with the correct window ID before the player is
+        // built. playerView is a PlayerView (FrameLayout) — the real
+        // SurfaceView is a CHILD, so the original `playerView is SurfaceView`
+        // test was never true and this bounce never actually ran.
         playerView.post {
-            if (playerView is android.view.SurfaceView) {
-                playerView.visibility = android.view.View.INVISIBLE
-                playerView.post { playerView.visibility = android.view.View.VISIBLE }
+            val surfaceView = findVideoSurfaceView(playerView)
+            if (surfaceView != null) {
+                surfaceView.visibility = android.view.View.INVISIBLE
+                surfaceView.post { surfaceView.visibility = android.view.View.VISIBLE }
             }
         }
         findViewById<View>(R.id.player_root).setOnClickListener {
@@ -1424,6 +1437,37 @@ class NativePlayerActivity : ComponentActivity() {
             true
         }
         playerView.setOnClickListener { if (controlsVisible) hideControls() else showControls() }
+        // Back handling. The deprecated onBackPressed() override is replaced by
+        // this OnBackPressedDispatcher callback (same behavior): it runs first,
+        // and disabling it before re-dispatching lets Back fall through to the
+        // Activity's default (finish).
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                // If the loading splash (pulsing clearlogo) is still up, the
+                // stream hasn't started playing yet. Treat Back as an immediate
+                // exit request instead of routing it through the controls/panel
+                // handling - a user stuck on the splash must always be able to
+                // leave with one press.
+                if (::splashContainer.isInitialized &&
+                    splashContainer.visibility == View.VISIBLE
+                ) {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                    return
+                }
+                when {
+                    // A typed number is a pending action, so Back cancels it
+                    // before Back means "leave the channel".
+                    channelNumberEntry.isNotEmpty() -> { clearChannelNumberEntry(); return }
+                    isPickerShowing -> { dismissPicker(); showControls(); return }
+                    showSettingsPanel -> { dismissSettingsPanel(); showControls(); return }
+                    infoPanel.visibility == View.VISIBLE -> { hideInfoPanel(); showControls(); return }
+                    controlsVisible -> { hideControls(); return }
+                }
+                isEnabled = false
+                onBackPressedDispatcher.onBackPressed()
+            }
+        })
         controlsOverlay.isFocusable = true
         controlsOverlay.isFocusableInTouchMode = true
         controlsOverlay.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
@@ -1593,15 +1637,19 @@ class NativePlayerActivity : ComponentActivity() {
                 sources = (0 until arr.length()).mapNotNull { i ->
                     val obj = arr.optJSONObject(i) ?: return@mapNotNull null
                     Stream(
-                        name = obj.optString("name", null),
-                        title = obj.optString("title", null),
-                        description = obj.optString("description", null),
-                        url = obj.optString("url", null),
-                        audioUrl = obj.optString("audioUrl", null),
-                        infoHash = obj.optString("infoHash", null),
+                        // optString(key, "").ifBlank { null }: JSONObject's
+                        // fallback parameter is @NonNull, so a null fallback
+                        // makes Kotlin infer a non-null result while a missing
+                        // key / JSON null actually yields null.
+                        name = obj.optString("name", "").ifBlank { null },
+                        title = obj.optString("title", "").ifBlank { null },
+                        description = obj.optString("description", "").ifBlank { null },
+                        url = obj.optString("url", "").ifBlank { null },
+                        audioUrl = obj.optString("audioUrl", "").ifBlank { null },
+                        infoHash = obj.optString("infoHash", "").ifBlank { null },
                         fileIdx = obj.optInt("fileIdx", -1).takeIf { it >= 0 },
                         behaviorHints = StreamBehaviorHints(
-                            bingeGroup = obj.optString("bingeGroup", null)
+                            bingeGroup = obj.optString("bingeGroup", "").ifBlank { null }
                         ),
                         badges = parseStreamBadges(obj.optJSONArray("badges"))
                     )
@@ -1624,8 +1672,8 @@ class NativePlayerActivity : ComponentActivity() {
                     PlayerCastMember(
                         id = obj.optInt("id", 0),
                         name = obj.optString("name", ""),
-                        character = obj.optString("character", null),
-                        profilePath = obj.optString("profilePath", null)
+                        character = obj.optString("character", "").ifBlank { null },
+                        profilePath = obj.optString("profilePath", "").ifBlank { null }
                     )
                 }.filter { it.name.isNotBlank() }
             } catch (e: Exception) {
@@ -2898,6 +2946,16 @@ class NativePlayerActivity : ComponentActivity() {
             p5VideoGlesView.visibility = View.GONE
             playerView.visibility = View.VISIBLE
             p5GlesActive = false
+        } else if (p5Content) {
+            // P5 present with no conversion active: the stream plays through
+            // the device's own Dolby Vision decoder (passthrough). Logged for a
+            // device test — a green/purple picture in this branch means the
+            // platform DV pipeline mangled the ICtCp frames.
+            Log.i(
+                "PLAYER_DV",
+                "P5 content present — playing natively as Dolby Vision " +
+                    "(no conversion active: mode=$dvCompatMode nativeDv=$nativeDvSupported)"
+            )
         }
         // Audio extension mode follows the independent audio decoder priority
         // (KB-style): 0 = device only (no FFmpeg at all), 1 = FFmpeg
@@ -3397,12 +3455,14 @@ class NativePlayerActivity : ComponentActivity() {
         // Otherwise, start it once Coil finishes loading.
         if (splashClearLogo.drawable != null) {
             startPulseAnimation()
-        } else {
+        } else if (!splashPulseWaitAttached) {
+            splashPulseWaitAttached = true
             splashClearLogo.viewTreeObserver.addOnGlobalLayoutListener(
                 object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
                     override fun onGlobalLayout() {
                         if (splashClearLogo.drawable != null) {
                             splashClearLogo.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                            splashPulseWaitAttached = false
                             startPulseAnimation()
                         }
                     }
@@ -6144,27 +6204,6 @@ class NativePlayerActivity : ComponentActivity() {
 
 }
 
-    @Suppress("DEPRECATION")
-    override fun onBackPressed() {
-        // If the loading splash (pulsing clearlogo) is still up, the stream
-        // hasn't started playing yet. Treat Back as an immediate exit request
-        // instead of routing it through the controls/panel handling - a user
-        // stuck on the splash must always be able to leave with one press.
-        if (::splashContainer.isInitialized && splashContainer.visibility == View.VISIBLE) {
-            super.onBackPressed()
-            return
-        }
-        when {
-            // A typed number is a pending action, so Back cancels it before
-            // Back means "leave the channel".
-            channelNumberEntry.isNotEmpty() -> { clearChannelNumberEntry(); return }
-            isPickerShowing -> { dismissPicker(); showControls(); return }
-            showSettingsPanel -> { dismissSettingsPanel(); showControls(); return }
-            infoPanel.visibility == View.VISIBLE -> { hideInfoPanel(); showControls(); return }
-            controlsVisible -> { hideControls(); return }
-        }
-        super.onBackPressed()
-    }
 
     override fun onUserLeaveHint() { super.onUserLeaveHint(); enterPipIfEnabled() }
 

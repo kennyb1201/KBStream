@@ -434,15 +434,19 @@ internal class P5PlaneDecoder(
     private fun copyChroma16(src: Image.Plane, dst: ByteBuffer, cw: Int, ch: Int) {
         val rowStride = src.rowStride
         val pixelStride = src.pixelStride
+        // Strides are in BYTES (Image.Plane contract), so index the source in
+        // bytes exactly like copyChroma8 does. Reading through a ShortBuffer and
+        // stepping by the byte pixelStride (2 for planar P010, 4 for interleaved)
+        // advanced twice as far as one 16-bit sample — every other chroma sample
+        // was skipped. This matters now that the P5 GL path actually engages.
         val buf = src.buffer.duplicate()
         buf.order(ByteOrder.LITTLE_ENDIAN)
-        val shorts = buf.asShortBuffer()
         dst.order(ByteOrder.LITTLE_ENDIAN)
         dst.position(0)
         for (r in 0 until ch) {
-            val base = r * rowStride / 2
+            val rowBase = r * rowStride
             for (c in 0 until cw) {
-                dst.putShort(shorts.get(base + c * pixelStride))
+                dst.putShort(buf.getShort(rowBase + c * pixelStride))
             }
         }
         dst.clear()
