@@ -891,6 +891,13 @@ class NativePlayerActivity : ComponentActivity() {
     private var onlineSubResults: List<SubtitleSearchResult> = emptyList()
     private var onlineSubLoading = false
     private var startPositionMs = 0L
+
+    /**
+     * The launch explicitly asked for the beginning (Home's long-press "Play
+     * from Beginning"). Position 0 is otherwise read as "this launch carries no
+     * resume information", which is answered from the watch history.
+     */
+    private var startFromBeginning = false
     private var fromActorReturn = false
 
     /// Set when the paused-overlay for an actor-return session has been
@@ -1354,6 +1361,7 @@ class NativePlayerActivity : ComponentActivity() {
             savedInstanceState?.getLong(STATE_PLAYER_POSITION_MS, 0L) ?: 0L
         if (restoredPositionMs > startPositionMs) startPositionMs = restoredPositionMs
         fromActorReturn = intent.getBooleanExtra("from_actor_return", false)
+        startFromBeginning = intent.getBooleanExtra("from_beginning", false)
         carryPositionMs = startPositionMs
         streamHeaders = parseHeaders(intent.getStringExtra(EXTRA_HEADERS).orEmpty())
         drmLicenseUrl = intent.getStringExtra(EXTRA_DRM_LICENSE_URL)
@@ -1602,8 +1610,42 @@ class NativePlayerActivity : ComponentActivity() {
         setupKeyboardHandler()
         // Before setupIntroDb(): the fetch waits briefly for this hint.
         startIntroDbImdbHint()
-        setupIntroDb()
-        createPlayer()
+        // Nothing in this launch asked to resume, so ask the watch history: a
+        // launch carrying no position of its own (a source picked from the
+        // picker, a rebuilt or restored player) would otherwise replay a
+        // partially watched title from the beginning. An explicit "from the
+        // beginning" is honoured as-is, and the player is only created after
+        // the read so the load-time seek already carries the position - nothing
+        // starts at 0 and jumps. A failed or empty read leaves the launch as it
+        // was.
+        if (!isLiveChannel && startPositionMs <= 0L && !startFromBeginning &&
+            historyId.isNotBlank()
+        ) {
+            lifecycleScope.launch {
+                val savedPositionMs = runCatching {
+                    withContext(Dispatchers.IO) {
+                        WatchHistoryDatabase.getInstanceScoped(this@NativePlayerActivity)
+                            .watchHistoryDao()
+                            .getById(historyId)
+                            ?.takeIf { !it.isCompleted && it.positionMs > 0L }
+                            ?.positionMs
+                    }
+                }.getOrNull()
+                if (savedPositionMs != null) {
+                    Log.i(
+                        TAG,
+                        "resume: launch had no position, using saved " + savedPositionMs + "ms"
+                    )
+                    startPositionMs = savedPositionMs
+                    carryPositionMs = savedPositionMs
+                }
+                setupIntroDb()
+                createPlayer()
+            }
+        } else {
+            setupIntroDb()
+            createPlayer()
+        }
     }
 
     /**

@@ -134,7 +134,13 @@ data class StreamsTarget(
     val episode: Int?,
     val resumePositionMs: Long,
     val totalEpisodesInSeason: Int? = null,
-    val runtimeMinutes: Int? = null
+    val runtimeMinutes: Int? = null,
+    /**
+     * The user explicitly asked for the beginning (Home's long-press "Play
+     * from Beginning"). [resumePositionMs] is 0 either way, so this is what
+     * tells the player not to fall back to the saved watch-history position.
+     */
+    val startFromBeginning: Boolean = false
 )
 
 private sealed interface PeopleRowItem {
@@ -786,6 +792,11 @@ fun DetailScreen(
             val playLabel: String
             val playTarget: StreamsTarget
 
+            // Home's long-press "Play from Beginning" arrives as this target: the
+            // user asked to start over, so it wins over the saved progress the
+            // target would otherwise resume from.
+            val wantsBeginning = initialTarget?.startFromBeginning == true
+
             if (type == "movie") {
                 val hasResume =
                     resumeInfo != null &&
@@ -798,7 +809,8 @@ fun DetailScreen(
                     resumeInfo,
                     id,
                     displayName,
-                    tmdbDetail?.runtime
+                    tmdbDetail?.runtime,
+                    wantsBeginning
                 ) {
                     // Prefer the actual recorded duration (accurate for the
                     // file that was watched); fall back to TMDB's runtime.
@@ -815,7 +827,8 @@ fun DetailScreen(
                         season = null,
                         episode = null,
                         resumePositionMs =
-                            resumeInfo?.positionMs ?: 0L,
+                            if (wantsBeginning) 0L else (resumeInfo?.positionMs ?: 0L),
+                        startFromBeginning = wantsBeginning,
                         runtimeMinutes =
                             recordedMinutes
                                 ?: tmdbDetail?.runtime
@@ -914,7 +927,8 @@ fun DetailScreen(
                     resumeInfo?.positionMs,
                     resumeInfo?.episodeTitle,
                     playTargetEpisodeName,
-                    playTargetRuntimeMinutes
+                    playTargetRuntimeMinutes,
+                    wantsBeginning
                 ) {
                     val episodeSuffix =
                         playTargetEpisodeName?.let {
@@ -929,11 +943,14 @@ fun DetailScreen(
                         season = targetSeason,
                         episode = targetEpisode,
                         resumePositionMs =
-                            if (isResumingHere) {
+                            if (wantsBeginning) {
+                                0L
+                            } else if (isResumingHere) {
                                 resumeInfo?.positionMs ?: 0L
                             } else {
                                 0L
                             },
+                        startFromBeginning = wantsBeginning,
                         totalEpisodesInSeason = episodes.size,
                         runtimeMinutes = playTargetRuntimeMinutes
                     )

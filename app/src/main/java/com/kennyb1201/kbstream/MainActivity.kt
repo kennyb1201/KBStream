@@ -230,6 +230,13 @@ sealed class Screen {
         val overview: String? = null,
         val cast: List<PlayerCastMember> = emptyList(),
         val startPositionMs: Long,
+        /**
+         * The launch explicitly asked for the beginning (Home's long-press
+         * "Play from Beginning"). [startPositionMs] is 0 either way, so this
+         * is what stops the player falling back to the saved history
+         * position.
+         */
+        val startFromBeginning: Boolean = false,
         val fromActorReturn: Boolean = false,
         val returnTo: Screen = Home,
         val sources: List<Stream> = emptyList(),
@@ -297,6 +304,7 @@ private data class PendingPlay(
                 )
             },
             startPositionMs = target.resumePositionMs,
+            startFromBeginning = target.startFromBeginning,
             returnTo = returnTo,
             sources = allSources,
             totalEpisodesInSeason = totalEpisodesInSeason,
@@ -1517,6 +1525,7 @@ fun AppRoot() {
                             },
                             startPositionMs =
                                 current.target.resumePositionMs,
+                            startFromBeginning = current.target.startFromBeginning,
                             returnTo = stableBackDestination(current.returnTo),
                             sources = allSources,
                             totalEpisodesInSeason =
@@ -1796,6 +1805,7 @@ fun AppRoot() {
                     current.backdropUrl?.let { putExtra("backdrop_url", it) }
                     current.overview?.let { putExtra("item_overview", it) }
                     putExtra("start_position_ms", current.startPositionMs)
+                    putExtra("from_beginning", current.startFromBeginning)
                     putExtra("from_actor_return", current.fromActorReturn)
                     if (current.streamHeaders.isNotEmpty()) {
                         putExtra("stream_headers", current.streamHeaders.entries.joinToString("\n") { "${it.key}: ${it.value}" })

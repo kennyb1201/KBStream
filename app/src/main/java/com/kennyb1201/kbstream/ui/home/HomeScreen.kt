@@ -2361,7 +2361,11 @@ fun HomeScreen(
                 },
             runtimeMinutes =
                 item.runtimeMinutes
-                    ?.takeIf { it > 0 }
+                    ?.takeIf { it > 0 },
+            // "Play from Beginning" is the one path that wants position 0
+            // applied as-is: a launch carrying no position of its own resumes
+            // the saved watch-history progress instead.
+            startFromBeginning = startAtBeginning
         )
 
         if (openDetailsOnly) {
