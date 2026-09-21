@@ -269,6 +269,7 @@ internal fun encodeTarget(target: StreamsTarget): JSONObject = JSONObject().appl
     target.totalEpisodesInSeason?.let { put("totalEpisodesInSeason", it) }
     target.runtimeMinutes?.let { put("runtimeMinutes", it) }
     if (target.startFromBeginning) put("startFromBeginning", true)
+    if (target.randomEpisodes) put("randomEpisodes", true)
 }
 
 internal fun decodeTarget(json: JSONObject): StreamsTarget? = try {
@@ -282,7 +283,8 @@ internal fun decodeTarget(json: JSONObject): StreamsTarget? = try {
         resumePositionMs = json.optLong("resumePositionMs", 0L),
         totalEpisodesInSeason = json.optNullableInt("totalEpisodesInSeason"),
         runtimeMinutes = json.optNullableInt("runtimeMinutes"),
-        startFromBeginning = json.optBoolean("startFromBeginning", false)
+        startFromBeginning = json.optBoolean("startFromBeginning", false),
+        randomEpisodes = json.optBoolean("randomEpisodes", false)
     )
 } catch (t: Throwable) {
     null

@@ -898,6 +898,13 @@ class NativePlayerActivity : ComponentActivity() {
      * resume information", which is answered from the watch history.
      */
     private var startFromBeginning = false
+
+    /**
+     * Opened by the detail page's Random button: the player chains into random
+     * aired episodes of the show instead of the arithmetic next one, for as
+     * long as this playback - and the handoffs it spawns - continues.
+     */
+    private var randomEpisodes = false
     private var fromActorReturn = false
 
     /// Set when the paused-overlay for an actor-return session has been
@@ -1362,6 +1369,7 @@ class NativePlayerActivity : ComponentActivity() {
         if (restoredPositionMs > startPositionMs) startPositionMs = restoredPositionMs
         fromActorReturn = intent.getBooleanExtra("from_actor_return", false)
         startFromBeginning = intent.getBooleanExtra("from_beginning", false)
+        randomEpisodes = intent.getBooleanExtra("random_episodes", false)
         carryPositionMs = startPositionMs
         streamHeaders = parseHeaders(intent.getStringExtra(EXTRA_HEADERS).orEmpty())
         drmLicenseUrl = intent.getStringExtra(EXTRA_DRM_LICENSE_URL)
@@ -2503,8 +2511,13 @@ class NativePlayerActivity : ComponentActivity() {
 
     /** Shared "jump to the next episode" path for the overlay button and media NEXT. */
     private fun advanceToNextEpisode() {
-        val rawTarget = nextEpisodeTarget() ?: return
         scope?.launch {
+            // Random mode picks its own target (see resolveRandomChainTarget),
+            // so the arithmetic next episode only applies outside it.
+            val rawTarget = resolveRandomChainTarget(
+                this@NativePlayerActivity, randomEpisodes, nextEpisodeTarget(),
+                parentId, parentType, season, episode
+            ) ?: return@launch
             // Same air-date gate as the end-of-playback panel: pressing Next
             // on an episode that has not aired yet must not resolve a stream
             // that does not exist.
@@ -4811,9 +4824,16 @@ class NativePlayerActivity : ComponentActivity() {
             // An episode that has not aired yet counts as "no next episode":
             // offering it here meant autoplay/PREV resolved streams for an
             // episode that does not exist, instead of recommending something.
-            val target = airedNextEpisodeTarget(
-                this@NativePlayerActivity, nextEpisodeTarget(), resolveParentTmdbId(), parentId
-            )
+            // Random mode answers with another random aired episode - which is
+            // also why the air-date gate below is a formality there.
+            val target = resolveRandomChainTarget(
+                this@NativePlayerActivity, randomEpisodes, nextEpisodeTarget(),
+                parentId, parentType, season, episode
+            )?.let {
+                airedNextEpisodeTarget(
+                    this@NativePlayerActivity, it, resolveParentTmdbId(), parentId
+                )
+            }
             if (target != null) {
                 showNextUpPanel(target.first, target.second)
             } else {
@@ -4830,11 +4850,16 @@ class NativePlayerActivity : ComponentActivity() {
      */
     private fun prefetchNextEpisodeName() {
         if (season == null) return // movies have no next episode
-        val target = nextEpisodeTarget() ?: return
-        val key = "${target.first}:${target.second}"
-        if (overlayNextPrefetchKey == key) return
-        overlayNextPrefetchKey = key
         scope?.launch {
+            // Resolved inside the coroutine: in random mode the target comes
+            // from a TMDB lookup, not from arithmetic.
+            val target = resolveRandomChainTarget(
+                this@NativePlayerActivity, randomEpisodes, nextEpisodeTarget(),
+                parentId, parentType, season, episode
+            ) ?: return@launch
+            val key = "${target.first}:${target.second}"
+            if (overlayNextPrefetchKey == key) return@launch
+            overlayNextPrefetchKey = key
             val nextEp: com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode? = withContext(Dispatchers.IO) {
                 val repo = TmdbRepository.getInstance(this@NativePlayerActivity)
                 val tmdbId = resolveParentTmdbId() ?: return@withContext null
@@ -5620,7 +5645,10 @@ class NativePlayerActivity : ComponentActivity() {
             streamId = nextStreamId(targetSeason, targetEpisode),
             runtimeMinutes = runtimeMinutes,
             bingeGroup = currentBingeGroup,
-            addonName = currentAddonName
+            addonName = currentAddonName,
+            // Random mode rides along: the handoff starts a NEW player, which
+            // would otherwise read its intent as a normal (arithmetic) chain.
+            randomEpisodes = randomEpisodes
         )
         // Persist FIRST: on Fire TV the OS frequently kills the backgrounded
         // MainActivity during 4K playback, so the result callback later runs
@@ -5640,6 +5668,7 @@ class NativePlayerActivity : ComponentActivity() {
                 putExtra("next_stream_id", pendingNext.streamId)
                 putExtra("next_binge_group", pendingNext.bingeGroup)
                 putExtra("next_addon_name", pendingNext.addonName)
+                putExtra("next_random", pendingNext.randomEpisodes)
             }
         )
         // Release the media session synchronously so it is unregistered from the

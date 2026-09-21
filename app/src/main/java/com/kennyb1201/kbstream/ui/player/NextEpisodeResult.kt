@@ -22,6 +22,14 @@ object NextEpisodeResult {
     private const val PREFS_NAME = "kbstream_next_episode"
     private const val KEY_PENDING = "pending_next_episode_json"
 
+    /**
+     * Trailing marker on the encoded handoff while random mode is on. A
+     * non-numeric tail keeps the format backward compatible: the decoder reads
+     * the fixed fields from the END, so it drops this marker first and the
+     * older five/six/seven-field layout still parses.
+     */
+    private const val RANDOM_MARKER = "#rnd"
+
     @Volatile var pendingNextEpisode: PendingNext? = null
 
     data class PendingNext(
@@ -43,7 +51,13 @@ object NextEpisodeResult {
          * Group" tier when the next episode's streams no longer carry the
          * previous group tag.
          */
-        val addonName: String? = null
+        val addonName: String? = null,
+        /**
+         * The episode that just finished was started from the Random button:
+         * the chain keeps picking random aired episodes instead of the
+         * arithmetic next one.
+         */
+        val randomEpisodes: Boolean = false
     )
 
     // -- In-memory handoff (same process) -----------------------------------
@@ -109,7 +123,8 @@ object NextEpisodeResult {
     private fun encode(p: PendingNext): String =
         "${p.season}|${p.episode}|${p.title}|${p.streamId}|${p.runtimeMinutes ?: -1}" +
             "|${p.bingeGroup?.replace("|", "") ?: ""}" +
-            "|${p.addonName?.replace("|", "") ?: ""}"
+            "|${p.addonName?.replace("|", "") ?: ""}" +
+            if (p.randomEpisodes) "|$RANDOM_MARKER" else ""
 
     private fun decode(raw: String?): PendingNext? {
         if (raw.isNullOrBlank()) return null
@@ -118,7 +133,9 @@ object NextEpisodeResult {
         // everything in between is the title. Seven fields = current format;
         // six = pre-addon-name format (addonName stays null); five =
         // pre-binge-group format (both stay null).
-        val parts = raw.split("|")
+        val rawParts = raw.split("|")
+        val randomEpisodes = rawParts.lastOrNull() == RANDOM_MARKER
+        val parts = if (randomEpisodes) rawParts.dropLast(1) else rawParts
         if (parts.size < 5) return null
         val season = parts[0].toIntOrNull() ?: return null
         val episode = parts[1].toIntOrNull() ?: return null
@@ -135,7 +152,8 @@ object NextEpisodeResult {
                 streamId = streamId,
                 runtimeMinutes = runtime,
                 bingeGroup = bingeGroup,
-                addonName = addonName
+                addonName = addonName,
+                randomEpisodes = randomEpisodes
             )
         }
         if (parts.size >= 6) {
@@ -149,7 +167,8 @@ object NextEpisodeResult {
                 title = title,
                 streamId = streamId,
                 runtimeMinutes = runtime,
-                bingeGroup = bingeGroup
+                bingeGroup = bingeGroup,
+                randomEpisodes = randomEpisodes
             )
         }
         val runtime = parts.last().toIntOrNull()?.takeIf { it >= 0 }
@@ -160,7 +179,8 @@ object NextEpisodeResult {
             episode = episode,
             title = title,
             streamId = streamId,
-            runtimeMinutes = runtime
+            runtimeMinutes = runtime,
+            randomEpisodes = randomEpisodes
         )
     }
 }

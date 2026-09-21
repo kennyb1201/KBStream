@@ -237,6 +237,11 @@ sealed class Screen {
          * position.
          */
         val startFromBeginning: Boolean = false,
+        /**
+         * Opened by the Random button: the player chains into random aired
+         * episodes instead of the arithmetic next one.
+         */
+        val randomEpisodes: Boolean = false,
         val fromActorReturn: Boolean = false,
         val returnTo: Screen = Home,
         val sources: List<Stream> = emptyList(),
@@ -305,6 +310,7 @@ private data class PendingPlay(
             },
             startPositionMs = target.resumePositionMs,
             startFromBeginning = target.startFromBeginning,
+            randomEpisodes = target.randomEpisodes,
             returnTo = returnTo,
             sources = allSources,
             totalEpisodesInSeason = totalEpisodesInSeason,
@@ -662,7 +668,8 @@ fun AppRoot() {
                         displayName = showId,
                         season = pending.season,
                         episode = pending.episode,
-                        resumePositionMs = 0L
+                        resumePositionMs = 0L,
+                        randomEpisodes = pending.randomEpisodes
                     ),
                     returnTo = Screen.Home
                 )
@@ -1526,6 +1533,7 @@ fun AppRoot() {
                             startPositionMs =
                                 current.target.resumePositionMs,
                             startFromBeginning = current.target.startFromBeginning,
+                            randomEpisodes = current.target.randomEpisodes,
                             returnTo = stableBackDestination(current.returnTo),
                             sources = allSources,
                             totalEpisodesInSeason =
@@ -1567,7 +1575,8 @@ fun AppRoot() {
                         episode = next.episode,
                         resumePositionMs = 0L,
                         totalEpisodesInSeason = current.totalEpisodesInSeason,
-                        runtimeMinutes = next.runtimeMinutes
+                        runtimeMinutes = next.runtimeMinutes,
+                        randomEpisodes = next.randomEpisodes
                     )
                     val nextCast = current.cast.map { member ->
                         TmdbCastMember(
@@ -1624,7 +1633,8 @@ fun AppRoot() {
                                 season = nextSeason,
                                 episode = nextEpisode,
                                 resumePositionMs = 0L,
-                                totalEpisodesInSeason = current.totalEpisodesInSeason
+                                totalEpisodesInSeason = current.totalEpisodesInSeason,
+                                randomEpisodes = data.getBooleanExtra("next_random", false)
                             )
                             val nextCast = current.cast.map { member ->
                                 TmdbCastMember(
@@ -1806,6 +1816,7 @@ fun AppRoot() {
                     current.overview?.let { putExtra("item_overview", it) }
                     putExtra("start_position_ms", current.startPositionMs)
                     putExtra("from_beginning", current.startFromBeginning)
+                    putExtra("random_episodes", current.randomEpisodes)
                     putExtra("from_actor_return", current.fromActorReturn)
                     if (current.streamHeaders.isNotEmpty()) {
                         putExtra("stream_headers", current.streamHeaders.entries.joinToString("\n") { "${it.key}: ${it.value}" })

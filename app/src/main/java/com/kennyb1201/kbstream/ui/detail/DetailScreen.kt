@@ -103,6 +103,7 @@ import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.tmdb.tmdbImageOriginal
 import com.kennyb1201.kbstream.data.tmdb.writers
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.player.randomAiredEpisode
 import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
@@ -140,7 +141,12 @@ data class StreamsTarget(
      * from Beginning"). [resumePositionMs] is 0 either way, so this is what
      * tells the player not to fall back to the saved watch-history position.
      */
-    val startFromBeginning: Boolean = false
+    val startFromBeginning: Boolean = false,
+    /**
+     * Opened by the Random button: the player keeps chaining into random aired
+     * episodes instead of the arithmetic next one.
+     */
+    val randomEpisodes: Boolean = false
 )
 
 private sealed interface PeopleRowItem {
@@ -1139,6 +1145,81 @@ fun DetailScreen(
                                     vertical = 7.dp
                                 )
                             )
+                        }
+
+                        if (normalizedType == "series") {
+                            val randomScope = scope
+                            KBCard(
+                                onClick = {
+                                    // A random episode needs an aired pick, which
+                                    // takes a TMDB lookup — so the button resolves it
+                                    // first and then opens the same way Play does.
+                                    randomScope.launch {
+                                        val pick = randomAiredEpisode(
+                                            context = context,
+                                            showId = id,
+                                            showType = type,
+                                            excludeSeason = effectiveSeason,
+                                            excludeEpisode =
+                                                resolvedTargetEpisode?.episodeNumber
+                                        )
+                                        if (pick == null) {
+                                            // Nothing aired to choose from: play the
+                                            // target the Play button would have.
+                                            onNavigateStreams(
+                                                playTarget,
+                                                id,
+                                                type,
+                                                m.poster,
+                                                backdropUrl,
+                                                clearLogoUrl,
+                                                m.description,
+                                                tmdbDetail?.credits?.cast.orEmpty()
+                                            )
+                                            return@launch
+                                        }
+                                        val randomName = pick.name
+                                            ?.takeIf { it.isNotBlank() }
+                                        onNavigateStreams(
+                                            StreamsTarget(
+                                                contentType = "series",
+                                                streamId = pick.streamId,
+                                                title = buildString {
+                                                    append("$displayName S${pick.season}")
+                                                    append(" E${pick.episode}")
+                                                    if (randomName != null) append(" • $randomName")
+                                                },
+                                                displayName = displayName,
+                                                season = pick.season,
+                                                episode = pick.episode,
+                                                // The player resumes this episode's own
+                                                // saved progress when it has any.
+                                                resumePositionMs = 0L,
+                                                totalEpisodesInSeason = pick.episodeCount,
+                                                runtimeMinutes = pick.runtimeMinutes,
+                                                randomEpisodes = true
+                                            ),
+                                            id,
+                                            type,
+                                            m.poster,
+                                            backdropUrl,
+                                            clearLogoUrl,
+                                            m.description,
+                                            tmdbDetail?.credits?.cast.orEmpty()
+                                        )
+                                    }
+                                },
+                                modifier = Modifier.padding(end = 8.dp)
+                            ) {
+                                Text(
+                                    "RANDOM",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.padding(
+                                        horizontal = 9.dp,
+                                        vertical = 7.dp
+                                    )
+                                )
+                            }
                         }
 
                         if (
