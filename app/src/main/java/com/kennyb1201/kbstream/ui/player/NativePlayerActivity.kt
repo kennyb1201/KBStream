@@ -3610,6 +3610,7 @@ class NativePlayerActivity : ComponentActivity() {
             // decoder as plain HDR10. An explicit "None" (pure pass-through)
             // is the user's own choice and is left alone.
             if (!forceDvStripForSession &&
+                !resourceExhausted &&
                 isDecoderError(error.errorCode) &&
                 dvLabelFromCodec(streamDeclaredDvCodec ?: streamCodec) != null &&
                 AppPreferences.getDvCompatMode(this@NativePlayerActivity) !=
@@ -3627,18 +3628,10 @@ class NativePlayerActivity : ComponentActivity() {
                 // Recording that as a capability verdict stripped Dolby Vision
                 // off every title for the next 14 days on a TV that had just
                 // played it — which is the "DV is struggling" state.
-                if (resourceExhausted) {
-                    Log.w(
-                        "PLAYER_DV",
-                        "Not recording a Dolby Vision capability failure — the decoder " +
-                            "was out of resources (0x80001000), not unable to play DV"
-                    )
-                } else {
-                    AppPreferences.setDvPassthroughFailedAt(
-                        this@NativePlayerActivity,
-                        System.currentTimeMillis()
-                    )
-                }
+                AppPreferences.setDvPassthroughFailedAt(
+                    this@NativePlayerActivity,
+                    System.currentTimeMillis()
+                )
                 errorMessageStr = null
                 Log.w(
                     "PLAYER_DV",
@@ -3674,6 +3667,14 @@ class NativePlayerActivity : ComponentActivity() {
             // which is normally the smaller one this box can still decode.
             if (resourceExhausted && !decoderResourceFallbackDone) {
                 decoderResourceFallbackDone = true
+                // A 0x80001000 is the box being out of decoders, not a verdict on
+                // Dolby Vision: the field log has the vendor DV decoder AND the
+                // plain HEVC decoder returning it for the same 4K source. A
+                // resource-starved session must not leave a learned DV failure
+                // behind to suppress Dolby Vision for 14 days on a TV that plays it.
+                if (dvLabelFromCodec(streamDeclaredDvCodec ?: streamCodec) != null) {
+                    AppPreferences.clearDvPassthroughFailure(this@NativePlayerActivity)
+                }
                 errorMessageStr = null
                 val switching = tryNextSource(
                     delayMs = DECODER_RESOURCE_RETRY_DELAY_MS,
