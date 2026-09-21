@@ -123,6 +123,176 @@ class PoisonDetectorTest {
         assertTrue(PoisonDetector.crossScopeDuplicates(rows, order, remoteOnly).isEmpty())
     }
 
+    // ── local cross-profile history duplicates ──────────────────────
+
+    private fun write(id: String, updatedAt: Long) =
+        PoisonDetector.LocalWrite(id, updatedAt)
+
+    @Test
+    fun `a local history row copied into a newer profile is deleted`() {
+        val doomed = PoisonDetector.localHistoryDuplicates(
+            listOf(
+                pidA to listOf(write("show::tt1:s1e2", 1000L)),
+                pidB to listOf(write("show::tt1:s1e2", 1000L))
+            )
+        )
+        assertEquals(listOf(pidB to "show::tt1:s1e2"), doomed)
+    }
+
+    @Test
+    fun `a real second watch on another profile is kept`() {
+        val doomed = PoisonDetector.localHistoryDuplicates(
+            listOf(
+                pidA to listOf(write("show::tt1:s1e2", 1000L)),
+                pidB to listOf(write("show::tt1:s1e2", 9_000_000L))
+            )
+        )
+        assertTrue(doomed.isEmpty())
+    }
+
+    @Test
+    fun `the same local write in three profiles keeps only the oldest`() {
+        val doomed = PoisonDetector.localHistoryDuplicates(
+            listOf(
+                pidA to listOf(write("movie::tt9", 500L)),
+                pidB to listOf(write("movie::tt9", 500L)),
+                pidC to listOf(write("movie::tt9", 500L))
+            )
+        )
+        assertEquals(
+            setOf(pidB to "movie::tt9", pidC to "movie::tt9"),
+            doomed.toSet()
+        )
+    }
+
+    @Test
+    fun `unstamped local rows are never attributed`() {
+        val doomed = PoisonDetector.localHistoryDuplicates(
+            listOf(
+                pidA to listOf(write("movie::tt9", 0L)),
+                pidB to listOf(write("movie::tt9", 0L))
+            )
+        )
+        assertTrue(doomed.isEmpty())
+    }
+
+    @Test
+    fun `different titles on different profiles are left alone`() {
+        val doomed = PoisonDetector.localHistoryDuplicates(
+            listOf(
+                pidA to listOf(write("movie::tt1", 1000L), write("show::tt2:s1e1", 1000L)),
+                pidB to listOf(write("movie::tt3", 1000L))
+            )
+        )
+        assertTrue(doomed.isEmpty())
+    }
+
+    @Test
+    fun `a profile with no local rows contributes nothing`() {
+        val doomed = PoisonDetector.localHistoryDuplicates(
+            listOf(
+                pidA to emptyList(),
+                pidB to listOf(write("movie::tt1", 1000L))
+            )
+        )
+        assertTrue(doomed.isEmpty())
+    }
+
+    @Test
+    fun `only the copied row of a mixed database is deleted`() {
+        val doomed = PoisonDetector.localHistoryDuplicates(
+            listOf(
+                pidA to listOf(write("movie::tt1", 1000L)),
+                pidB to listOf(
+                    write("movie::tt1", 1000L),          // copied
+                    write("show::tt7:s2e4", 4200L)        // genuinely profile B's
+                )
+            )
+        )
+        assertEquals(listOf(pidB to "movie::tt1"), doomed)
+    }
+
+    // ── local rows witnessed only by another scope's cloud row ──────
+
+    @Test
+    fun `a local row copied from an older profile's cloud row is deleted`() {
+        val doomed = PoisonDetector.localCopiesOfOlderScopes(
+            cloudRows = listOf(row("show::tt1:s1e2", pidA, payload(1000L))),
+            perProfile = listOf(
+                pidA to emptyList(),
+                pidB to listOf(write("show::tt1:s1e2", 1000L))
+            ),
+            profileOrder = order
+        )
+        assertEquals(listOf(pidB to "show::tt1:s1e2"), doomed)
+    }
+
+    @Test
+    fun `a local row matching its own cloud row is not a copy`() {
+        val doomed = PoisonDetector.localCopiesOfOlderScopes(
+            cloudRows = listOf(row("movie::tt1", pidB, payload(1000L))),
+            perProfile = listOf(
+                pidA to emptyList(),
+                pidB to listOf(write("movie::tt1", 1000L))
+            ),
+            profileOrder = order
+        )
+        assertTrue(doomed.isEmpty())
+    }
+
+    @Test
+    fun `a local row on the OLDEST profile is never attributed to a newer one`() {
+        val doomed = PoisonDetector.localCopiesOfOlderScopes(
+            cloudRows = listOf(row("movie::tt1", pidB, payload(1000L))),
+            perProfile = listOf(
+                pidA to listOf(write("movie::tt1", 1000L)),
+                pidB to emptyList()
+            ),
+            profileOrder = order
+        )
+        assertTrue(doomed.isEmpty())
+    }
+
+    @Test
+    fun `a different session under the older scope is not a copy`() {
+        val doomed = PoisonDetector.localCopiesOfOlderScopes(
+            cloudRows = listOf(row("movie::tt1", pidA, payload(1000L))),
+            perProfile = listOf(
+                pidA to emptyList(),
+                pidB to listOf(write("movie::tt1", 5_000_000L))
+            ),
+            profileOrder = order
+        )
+        assertTrue(doomed.isEmpty())
+    }
+
+    @Test
+    fun `an unstamped cloud row is never a witness`() {
+        val noStamp = buildJsonObject { put("name", "x") }
+        val doomed = PoisonDetector.localCopiesOfOlderScopes(
+            cloudRows = listOf(row("movie::tt1", pidA, noStamp)),
+            perProfile = listOf(
+                pidA to emptyList(),
+                pidB to listOf(write("movie::tt1", 1000L))
+            ),
+            profileOrder = order
+        )
+        assertTrue(doomed.isEmpty())
+    }
+
+    @Test
+    fun `a legacy unscoped cloud row never witnesses anything`() {
+        val doomed = PoisonDetector.localCopiesOfOlderScopes(
+            cloudRows = listOf(PoisonDetector.Row("movie::tt1", payload(1000L))),
+            perProfile = listOf(
+                pidA to emptyList(),
+                pidB to listOf(write("movie::tt1", 1000L))
+            ),
+            profileOrder = order
+        )
+        assertTrue(doomed.isEmpty())
+    }
+
     // ── watched-override sets ───────────────────────────────────────
 
     @Test

@@ -351,6 +351,110 @@ internal object PoisonDetector {
         (payload["updatedAt"] as? JsonPrimitive)?.content?.toLongOrNull()
 
     /**
+     * One profile's LOCAL watch-history row, as stored in its own scoped
+     * database: the row id (which is item-based, so the same title/episode
+     * has the same id in every profile) plus the write stamp.
+     */
+    data class LocalWrite(val id: String, val updatedAt: Long)
+
+    /**
+     * Local counterpart of [crossScopeDuplicates].
+     *
+     * The cloud pass can only pair scopes it can still SEE. The earlier sweep
+     * deletes the poisoned CLOUD row on whichever device runs it first, so on
+     * the other device the surviving local copy has no cloud twin left and is
+     * never cleaned — and because the eye badge is re-derived from that local
+     * resume row, clearing the derived caches doesn't help either: the phantom
+     * markers come straight back. Comparing the profile databases ON THIS
+     * DEVICE catches exactly that leftover.
+     *
+     * A row is doomed when a NEWER profile holds the same write as an OLDER
+     * one: same row id AND same `updatedAt` (the same playback cannot land in
+     * two profiles in the same millisecond). The oldest profile keeps its row,
+     * and a genuinely separate watch of the same title on another profile
+     * carries its own timestamp, so it is never touched.
+     *
+     * @param perProfile profile id to its local rows, oldest profile first
+     * @return (profileId, rowId) pairs to delete
+     */
+    fun localHistoryDuplicates(
+        perProfile: List<Pair<String, List<LocalWrite>>>
+    ): List<Pair<String, String>> {
+        // Keyed by the exact write (row id + stamp), so two profiles only
+        // group together when the SAME write was copied between them.
+        val holders = LinkedHashMap<Pair<String, Long>, MutableList<String>>()
+        for ((pid, rows) in perProfile) {
+            for (row in rows) {
+                // An unstamped row can't be attributed; leave it alone.
+                if (row.updatedAt <= 0L) continue
+                holders.getOrPut(row.id to row.updatedAt) { mutableListOf() }.add(pid)
+            }
+        }
+
+        val doomed = mutableListOf<Pair<String, String>>()
+        for ((write, pids) in holders) {
+            if (pids.size < 2) continue
+            // pids follow the caller's oldest-first order: the first holder
+            // owns the write, every later one is a copy of it.
+            for (pid in pids.drop(1)) doomed.add(pid to write.first)
+        }
+        return doomed
+    }
+
+    /**
+     * Local rows that are copies of an OLDER profile's CLOUD row — the same
+     * write witnessed on one side by a local database row and on the other by
+     * a cloud row.
+     *
+     * This is the [localHistoryDuplicates] blind spot. The race applied a bulk
+     * pull's rows to whichever database the captured Room instance resolved to
+     * after a switch, so profile A's pulled rows could land in profile B's
+     * database without ever being written to A's — there is then no local row
+     * to pair with, but A's copy is still in the cloud, because that is where
+     * the pull read it from.
+     *
+     * @param cloudRows every history row for this account (scoped keys)
+     * @param perProfile profile id to its local rows, oldest profile first
+     * @param profileOrder profile ids, oldest first (earliest createdAt)
+     * @return (profileId, rowId) pairs to delete — locally, and under that
+     *         profile's scope in the cloud
+     */
+    fun localCopiesOfOlderScopes(
+        cloudRows: List<Row>,
+        perProfile: List<Pair<String, List<LocalWrite>>>,
+        profileOrder: List<String>
+    ): List<Pair<String, String>> {
+        val rank = profileOrder.withIndex().associate { (index, pid) -> pid to index }
+
+        // unscoped key -> write stamp -> scopes holding that write in the cloud
+        val cloud = HashMap<String, MutableMap<Long, MutableList<String>>>()
+        for (row in cloudRows) {
+            val pid = SyncKeys.scopeOf(row.storedKey) ?: continue
+            val stamp = timestampOf(row.payload) ?: continue
+            cloud.getOrPut(SyncKeys.unscoped(row.storedKey)) { HashMap() }
+                .getOrPut(stamp) { mutableListOf() }
+                .add(pid)
+        }
+
+        val doomed = mutableListOf<Pair<String, String>>()
+        for ((pid, rows) in perProfile) {
+            val myRank = rank[pid] ?: continue
+            for (row in rows) {
+                if (row.updatedAt <= 0L) continue
+                val holders = cloud[row.id]?.get(row.updatedAt) ?: continue
+                // This profile's own cloud row is just this row, synced —
+                // only a strictly OLDER profile owning the same write makes
+                // the local row a copy of it.
+                val copied = holders.any { held ->
+                    (rank[held] ?: Int.MAX_VALUE) < myRank
+                }
+                if (copied) doomed.add(pid to row.id)
+            }
+        }
+        return doomed
+    }
+
+    /**
      * Watched-override sets that are an exact copy of an EARLIER profile's
      * set. Overrides sync as a full-replace blob, so the same race that
      * duplicated rows also copied one profile's whole set onto another. Only

@@ -51,7 +51,7 @@ internal object PoisonSweep {
     private const val TAG = "SUPABASE_SYNC"
 
     private const val PREFS = "kbstream_sync_meta"
-    // "v3" flags: the sweep was extended again, so a device that ran either
+    // "v4" flags: the sweep was extended again, so a device that ran any
     // earlier version still gets the wider one.
     //
     //   v1 → v2: history rows + watched-override blobs.
@@ -65,12 +65,26 @@ internal object PoisonSweep {
     //            snapshot with the key that produced it); this re-run clears
     //            the rows it already wrote, which would otherwise sit out
     //            their full 6h TTL and keep the badges wrong.
-    private const val FLAG_LOCAL = "poison_sweep_v3_local_done"
-    private const val FLAG_CLOUD = "poison_sweep_v3_cloud_done"
+    //   v3 → v4: the sweep was DEVICE-ASYMMETRIC. The cloud pass deletes the
+    //            poisoned cloud row (and this device's own local copy) on
+    //            whichever device runs first; on another device the surviving
+    //            local history row then has no cloud twin left, so
+    //            [PoisonDetector.crossScopeDuplicates] can never attribute it
+    //            and clearing the derived caches doesn't stick — the eye
+    //            badge is re-derived from that local resume row every time.
+    //            Part 1 now compares the profile databases on THIS device
+    //            (see [PoisonDetector.localHistoryDuplicates]) and queues the
+    //            matched cloud rows for part 2.
+    private const val FLAG_LOCAL = "poison_sweep_v4_local_done"
+    private const val FLAG_CLOUD = "poison_sweep_v4_cloud_done"
     // Duplicated override sets found locally, kept until their cloud blobs
     // are deleted too — clearing the local set erases the evidence needed to
     // find them.
     private const val PENDING_OVERRIDE_CLEARS = "poison_sweep_pending_overrides"
+    // Same idea for local history rows the part-1 scan identified: their
+    // cloud twin may already be gone (the device-asymmetric case above), so
+    // the keys are carried over for the cloud pass to delete directly.
+    private const val PENDING_HISTORY_CLEARS = "poison_sweep_pending_history"
     private const val OVERRIDES_PREFS_BASE = "kbstream_watched_overrides"
     private const val OVERRIDES_KEY = "watched_overrides"
     private const val DB_BASE = "kbstream_watch_history"
@@ -202,6 +216,38 @@ internal object PoisonSweep {
             }.onFailure {
                 Log.w(TAG, "poison sweep: override duplicate check failed: ${it.message}")
             }
+            // History rows duplicated into a NEWER profile LOCAL database.
+            // The cloud pass can only pair scopes it can still see, so once
+            // the poisoned cloud row was deleted on another device the local
+            // copy left here had no twin to pair with and survived every
+            // cache wipe — re-drawing the phantom eye badge and re-pushing
+            // itself to the cloud. Comparing the profile DBs on this device
+            // is the only way to attribute it.
+            runCatching {
+                val perProfile =
+                    orderedPids.map { pid -> pid to localHistoryWrites(context, pid) }
+                val doomed =
+                    PoisonDetector.localHistoryDuplicates(perProfile)
+                for ((pid, ids) in doomed.groupBy({ it.first }, { it.second })) {
+                    deleteLocalHistoryRows(context, pid, ids)
+                }
+                if (doomed.isNotEmpty()) {
+                    val pending =
+                        flags.getStringSet(PENDING_HISTORY_CLEARS, emptySet()).orEmpty()
+                    flags.edit()
+                        .putStringSet(
+                            PENDING_HISTORY_CLEARS,
+                            pending + doomed.map { (pid, id) -> SyncKeys.scoped(id, pid) }
+                        )
+                        .apply()
+                    Log.i(
+                        TAG,
+                        "poison sweep: cleared ${doomed.size} duplicated local history row(s)"
+                    )
+                }
+            }.onFailure {
+                Log.w(TAG, "poison sweep: local history duplicate check failed: ${it.message}")
+            }
             // Drop the matching in-memory caches so nothing stale is
             // served from RAM after the disk wipe.
             WatchedStatusRepository.invalidateAllCaches()
@@ -225,10 +271,16 @@ internal object PoisonSweep {
 
             var deleted = 0
 
+            // Kept for step (5): the local-witness pass needs the history
+            // rows this loop already read, and reading them twice would just
+            // be another full-table fetch.
+            var cloudHistoryRows: List<PoisonDetector.Row>? = null
+
             // (1) watched rows, (2) history rows — same fingerprint in both
             // tables: one local write present under two profile scopes.
             for (table in listOf(TABLE_WATCHED, TABLE_HISTORY)) {
                 val rows = readCloudRows(c, table) ?: return
+                if (table == TABLE_HISTORY) cloudHistoryRows = rows
                 val poison = PoisonDetector.crossScopeDuplicates(rows, orderedPids, localPids)
                 if (poison.isEmpty()) continue
                 deleted += deleteCloudKeys(c, table, poison)
@@ -258,9 +310,63 @@ internal object PoisonSweep {
                 Log.i(TAG, "poison sweep: deleting ${blobKeys.size} duplicated override blob(s)")
             }
 
+            // (4) history rows the part-1 LOCAL scan identified. Their cloud
+            // twin may already have been deleted on another device (which is
+            // why the duplicate scan above can't see them), but the row still
+            // exists in the cloud under the newer profile and would re-
+            // download and re-poison this device on the next pull. Delete by
+            // the key part 1 recorded.
+            val localHistoryKeys =
+                flags.getStringSet(PENDING_HISTORY_CLEARS, emptySet()).orEmpty().toList()
+            if (localHistoryKeys.isNotEmpty()) {
+                deleted += deleteCloudKeys(c, TABLE_HISTORY, localHistoryKeys)
+                Log.i(
+                    TAG,
+                    "poison sweep: deleting ${localHistoryKeys.size} " +
+                        "local-identified history row(s) from the cloud"
+                )
+            }
+
+            // (5) local rows whose owner copy is only in the CLOUD. The race
+            // could apply a pull's rows to the wrong database outright, so
+            // profile A's copy was never written locally at all — part 1 then
+            // has nothing to pair with, while A's cloud row (the very source
+            // of the pull) is still there. Matching the local rows against
+            // each OTHER profile's cloud scope closes that gap.
+            val historyRowsForLocalScan = cloudHistoryRows
+            if (historyRowsForLocalScan != null) {
+                runCatching {
+                    val perProfile =
+                        orderedPids.map { pid -> pid to localHistoryWrites(context, pid) }
+                    val copies = PoisonDetector.localCopiesOfOlderScopes(
+                        historyRowsForLocalScan,
+                        perProfile,
+                        orderedPids
+                    )
+                    if (copies.isNotEmpty()) {
+                        for ((pid, ids) in copies.groupBy({ it.first }, { it.second })) {
+                            deleteLocalHistoryRows(context, pid, ids)
+                        }
+                        deleted += deleteCloudKeys(
+                            c,
+                            TABLE_HISTORY,
+                            copies.map { (pid, id) -> SyncKeys.scoped(id, pid) }
+                        )
+                        Log.i(
+                            TAG,
+                            "poison sweep: removed ${copies.size} local row(s) " +
+                                "copied from an older profile's cloud scope"
+                        )
+                    }
+                }.onFailure {
+                    Log.w(TAG, "poison sweep: local-vs-cloud history check failed: ${it.message}")
+                }
+            }
+
             flags.edit()
                 .putBoolean(FLAG_CLOUD, true)
                 .remove(PENDING_OVERRIDE_CLEARS)
+                .remove(PENDING_HISTORY_CLEARS)
                 .apply()
             Log.i(TAG, "poison sweep: deleted $deleted cross-profile cloud row(s)")
             // Converge local state with the now-clean cloud tables.
@@ -347,6 +453,56 @@ internal object PoisonSweep {
         }
         return deleted
     }
+
+    /**
+     * This profile's LOCAL watch-history rows as poison-detector writes. The
+     * active profile may have its DB open (Room), so it goes through the DAO;
+     * every other profile's DB is closed, so it is read raw.
+     */
+    private suspend fun localHistoryWrites(
+        context: Context,
+        pid: String
+    ): List<PoisonDetector.LocalWrite> {
+        if (pid == ProfileManager.activeProfile.value?.id) {
+            return runCatching {
+                WatchHistoryDatabase.getInstanceScoped(context)
+                    .watchHistoryDao()
+                    .getAll()
+                    .map { PoisonDetector.LocalWrite(it.id, it.updatedAt) }
+            }.onFailure {
+                Log.w(TAG, "poison sweep: active-history read failed: ${it.message}")
+            }.getOrDefault(emptyList())
+        }
+        return rawReadHistoryWrites(context, ProfileStorage.dbName(pid, DB_BASE))
+    }
+
+    /** Only the two columns the fingerprint needs; ids are item-based. */
+    private fun rawReadHistoryWrites(
+        context: Context,
+        dbName: String
+    ): List<PoisonDetector.LocalWrite> =
+        runCatching {
+            val file = context.getDatabasePath(dbName)
+            if (!file.exists()) return emptyList()
+            val db = android.database.sqlite.SQLiteDatabase.openDatabase(
+                file.absolutePath,
+                null,
+                android.database.sqlite.SQLiteDatabase.OPEN_READONLY
+            )
+            try {
+                val out = mutableListOf<PoisonDetector.LocalWrite>()
+                db.rawQuery("SELECT id, updatedAt FROM watch_history", null).use { c ->
+                    while (c.moveToNext()) {
+                        out.add(PoisonDetector.LocalWrite(c.getString(0), c.getLong(1)))
+                    }
+                }
+                out
+            } finally {
+                db.close()
+            }
+        }.onFailure {
+            Log.w(TAG, "poison sweep: raw history read of $dbName failed: ${it.message}")
+        }.getOrDefault(emptyList())
 
     /**
      * Removes poisoned history rows from the profile they were copied INTO.

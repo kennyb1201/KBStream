@@ -64,8 +64,14 @@ object KBHomeSlots {
             HomeEntry.AddonRail(rail, index)
         }
         val collections = state.collections
-        if (collections.isEmpty()) return addonEntries
-
+        // NOTE: no early return when there are no collections. The home
+        // manager arranges ADDON rails through this same order, so bailing
+        // out here made every reorder a no-op on Home for anyone without an
+        // imported collection profile — the dialog (which reads the order
+        // prefs directly) showed the new arrangement while Home kept the
+        // loader's default order. The walk below is already collection-
+        // agnostic: with none loaded it simply places the addon rails by the
+        // stored arrangement, falling back to loader order for the rest.
         val arrangement = state.arrangement
         // Never-arranged collections are HIDDEN by default: they only
         // appear on Home after the user enables them in the home manager
