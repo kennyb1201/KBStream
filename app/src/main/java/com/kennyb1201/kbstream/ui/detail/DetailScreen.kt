@@ -114,6 +114,7 @@ import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.player.randomAiredEpisode
 import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
+import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
@@ -1095,9 +1096,25 @@ fun DetailScreen(
             // once the metadata (and episodes, for series) are ready, so the
             // streams screen gets the rich backdrop/clearlogo/overview/cast
             // without the user having to press Play again.
+            // A poster menu's "Play Manually" on any other screen can only get
+            // here: the play target (a series' next episode in particular) is
+            // resolved on this screen. Read once, as this title's screen
+            // appears, and cleared - the request belongs to whatever title was
+            // asked for, so one left behind by a poster whose navigation never
+            // happened cannot turn a later, unrelated Play press into a
+            // picker. Declared before the auto-play effect below so it has
+            // landed by the time that effect reads it.
+            var manualPick by remember(type, id) {
+                mutableStateOf(false)
+            }
+            LaunchedEffect(type, id) {
+                manualPick = ManualSourceSelection.consume()
+            }
+
             var autoPlayed by remember { mutableStateOf(false) }
             LaunchedEffect(
                 initialTarget,
+                manualPick,
                 isLoading,
                 meta,
                 tmdbDetail,
@@ -1107,20 +1124,33 @@ fun DetailScreen(
             ) {
                 if (
                     autoPlayed ||
-                    initialTarget == null ||
                     isLoading ||
                     meta == null
+                ) return@LaunchedEffect
+                if (
+                    !manualPick &&
+                    initialTarget == null
                 ) return@LaunchedEffect
                 if (
                     normalizedType == "series" &&
                     (episodesLoading || episodes.isEmpty())
                 ) return@LaunchedEffect
+                // A manual pick is a fresh start: unlike the Continue Watching
+                // deep link it has no progress to wait for, so a movie does
+                // not need resume info to be ready before opening.
                 if (
+                    !manualPick &&
                     normalizedType != "series" &&
                     resumeInfo == null
                 ) return@LaunchedEffect
 
                 autoPlayed = true
+                if (manualPick) {
+                    // Handed on rather than consumed here: MainActivity is what
+                    // reads this, to open the picker for the target instead of
+                    // auto-selecting a source.
+                    ManualSourceSelection.request()
+                }
                 onNavigateStreams(
                     playTarget,
                     id,
@@ -1240,18 +1270,29 @@ fun DetailScreen(
                             .focusRestorer()
                             .scrollToTopOnFocus(detailListState, scope)
                     ) {
+                        val openStreams = {
+                            onNavigateStreams(
+                                playTarget,
+                                id,
+                                type,
+                                m.poster,
+                                backdropUrl,
+                                clearLogoUrl,
+                                m.description,
+                                tmdbDetail?.credits?.cast.orEmpty()
+                            )
+                        }
+
                         KBCard(
-                            onClick = {
-                                onNavigateStreams(
-                                    playTarget,
-                                    id,
-                                    type,
-                                    m.poster,
-                                    backdropUrl,
-                                    clearLogoUrl,
-                                    m.description,
-                                    tmdbDetail?.credits?.cast.orEmpty()
-                                )
+                            onClick = openStreams,
+                            // Long press = Play Manually: the same episode the
+                            // button would play, but the streams picker opens
+                            // instead of a source being auto-selected for it.
+                            // The marker below is what MainActivity reads to
+                            // skip auto-select; it consumes it on the way in.
+                            onLongClick = {
+                                ManualSourceSelection.request()
+                                openStreams()
                             },
                             modifier = Modifier
                                 .padding(end = 8.dp)

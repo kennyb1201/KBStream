@@ -66,7 +66,46 @@ data class PosterContextAction(
  * that intent available to MainActivity without changing every menu callback.
  */
 object ManualSourceSelection {
+    /**
+     * A short-lived "open the streams picker rather than auto-selecting a
+     * source" request. Raised by a "Play Manually" row in this menu and read
+     * by whoever takes the user where the picking happens:
+     *
+     *  - screens that open the streams screen themselves (Continue Watching
+     *    on Home) leave it for MainActivity's `onNavigateStreams`, which
+     *    consumes it as it builds the screen;
+     *  - the other poster menus can only navigate into the detail screen, so
+     *    it sits there and the detail screen consumes it when it appears and
+     *    hands it on to MainActivity the moment it opens the picker.
+     *
+     * Either way it is read once and cleared, and it ages out on its own, so
+     * a request whose navigation never happened cannot turn a later, ordinary
+     * Play press into a picker.
+     */
     var requested: Boolean = false
+        private set
+
+    private var requestedAtMs: Long = 0L
+
+    /** How long a request stays valid - long enough for a navigation to
+     *  happen (including a TMDB id lookup), short enough that a stray one
+     *  cannot outlive the press that made it. */
+    private const val VALID_FOR_MS = 12_000L
+
+    fun request() {
+        requested = true
+        requestedAtMs = System.currentTimeMillis()
+    }
+
+    /** Reads the request once and clears it, whether or not it was still fresh. */
+    fun consume(): Boolean {
+        val wanted =
+            requested &&
+                System.currentTimeMillis() - requestedAtMs <= VALID_FOR_MS
+        requested = false
+        requestedAtMs = 0L
+        return wanted
+    }
 }
 
 /**
@@ -133,6 +172,38 @@ fun PosterContextMenu(
         mutableIntStateOf(-1)
     }
 
+    // Every title poster menu offers "Play Manually", derived from the
+    // caller's own "Go to Details" row - same navigation, just without
+    // auto-selecting a source - and dropped in right after it. Deriving it
+    // here rather than at each of the ~15 call sites means a long press on a
+    // poster means the same thing on every screen (Home rails, actor credits,
+    // studio/network and genre rails, decade rails, KB folders, the catalog
+    // grid, search results and the detail screen's own rails). Callers that
+    // already list their own row - Continue Watching and the episode menus,
+    // which open the picker for one specific episode - keep their wording and
+    // their position; menus with no "Go to Details" at all, such as the
+    // browse chips, get no row.
+    val rows = buildList {
+        val alreadyOffered =
+            actions.any { it.label == "Play Manually" }
+        actions.forEach { action ->
+            add(action)
+            if (
+                !alreadyOffered &&
+                action.label == "Go to Details"
+            ) {
+                add(
+                    PosterContextAction(
+                        label = "Play Manually",
+                        description = "Pick a source instead of auto-selecting"
+                    ) {
+                        action.onClick()
+                    }
+                )
+            }
+        }
+    }
+
     val dialogShape = RoundedCornerShape(20.dp)
 
     // Dismiss on system Back. BackHandler is used instead of key-event
@@ -143,7 +214,7 @@ fun PosterContextMenu(
     }
 
     LaunchedEffect(Unit) {
-        if (actions.isEmpty()) {
+        if (rows.isEmpty()) {
             return@LaunchedEffect
         }
 
@@ -208,7 +279,7 @@ fun PosterContextMenu(
                         // an edge press; Down is still free to reach row 0.)
                         Key.DirectionUp -> focusedActionIndex <= 0
                         Key.DirectionDown ->
-                            focusedActionIndex >= actions.lastIndex
+                            focusedActionIndex >= rows.lastIndex
 
                         Key.Back -> {
                             // Some TV platforms deliver BACK straight to the
@@ -320,7 +391,7 @@ fun PosterContextMenu(
                     modifier = Modifier.height(16.dp)
                 )
 
-                actions.forEachIndexed { index, action ->
+                rows.forEachIndexed { index, action ->
                     if (index > 0) {
                         Spacer(modifier = Modifier.height(8.dp))
                     }
@@ -341,7 +412,7 @@ fun PosterContextMenu(
                         },
                         onClick = {
                             if (action.label == "Play Manually") {
-                                ManualSourceSelection.requested = true
+                                ManualSourceSelection.request()
                             }
                             action.onClick()
                         }

@@ -876,7 +876,7 @@ fun AppRoot() {
                     // Home's manual action already opens the picker directly;
                     // consume any shared marker so it cannot affect a later
                     // detail-screen Play request.
-                    ManualSourceSelection.requested = false
+                    ManualSourceSelection.consume()
 
                     screen = Screen.Streams(
                         target = target,
@@ -1256,9 +1256,7 @@ fun AppRoot() {
                         cast ->
 
                     val manualSourceSelection =
-                        ManualSourceSelection.requested.also {
-                            ManualSourceSelection.requested = false
-                        }
+                        ManualSourceSelection.consume()
                     // A pending target is a one-shot Continue Watching/up-next
                     // request. Do not keep it in the back destination: returning
                     // to that Detail screen would fire its LaunchedEffect again,
