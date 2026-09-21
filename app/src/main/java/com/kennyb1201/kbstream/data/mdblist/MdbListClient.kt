@@ -35,6 +35,108 @@ internal fun mdblistScrobbleProgress(progress: Double): Int =
     if (progress.isNaN()) 0 else progress.roundToInt().coerceIn(0, 100)
 
 /**
+ * One entry of a media response's `ratings` array: `{source, value, score}`.
+ *
+ * `value` is the provider's own number (IMDb/TMDB/MAL are out of 10,
+ * Letterboxd is stars, RT/Metacritic are out of 100) while `score` is
+ * MDBList's normalized 0-100 figure — the API documentation calls it the
+ * "best field to use consistently", so it is preferred and the native value
+ * is only a fallback for older/partial payloads.
+ */
+data class MdbListRatingEntry(
+    val source: String,
+    val value: Double? = null,
+    val score: Double? = null
+)
+
+/**
+ * Native scale of each source's `value`, used only when `score` is absent so
+ * a fallback is never an order of magnitude off (an IMDb 8.8 must not render
+ * as "9%", nor a TMDB 81 as "81.0").
+ */
+private val MDBLIST_NATIVE_MAX: Map<String, Double> = mapOf(
+    "imdb" to 10.0,
+    "tmdb" to 10.0,
+    "trakt" to 10.0,
+    "mal" to 10.0,
+    "myanimelist" to 10.0,
+    "letterboxd" to 5.0,
+    "tomatoes" to 100.0,
+    "metacritic" to 100.0,
+    "rogerebert" to 100.0,
+    "audience" to 100.0
+)
+
+/**
+ * Canonical 0-100 figure for one rating entry, or null when the source sent
+ * nothing usable. A zero is treated as "no rating": MDBList omits absent
+ * sources rather than zeroing them, and "0.0" / "0%" on a chip is noise.
+ */
+internal fun mdbListPercentOf(entry: MdbListRatingEntry): Double? {
+    entry.score
+        ?.takeIf { it.isFinite() && it > 0.0 }
+        ?.let { return it.coerceAtMost(100.0) }
+
+    val native = entry.value?.takeIf { it.isFinite() && it > 0.0 } ?: return null
+    val nativeMax = MDBLIST_NATIVE_MAX[entry.source.lowercase()] ?: 100.0
+    // Some payloads already hand back a normalized number for a source whose
+    // native scale is smaller: a value that cannot fit the native range is
+    // read as a percentage instead of being scaled a second time.
+    if (nativeMax >= 100.0 || native > nativeMax * 2.0) return native.coerceAtMost(100.0)
+    return (native / nativeMax * 100.0).coerceAtMost(100.0)
+}
+
+private fun formatOutOfTen(percent: Double?): String? = percent
+    ?.let { String.format(java.util.Locale.US, "%.1f", it / 10.0) }
+
+private fun formatPercent(percent: Double?): String? =
+    percent?.let { "${it.roundToInt()}%" }
+
+private fun formatMetacritic(percent: Double?): String? =
+    percent?.let { "${it.roundToInt()}/100" }
+
+/**
+ * Maps a media response's `ratings` array onto the display model.
+ *
+ * IMDb/TMDB/MyAnimeList read as x/10 (their own convention), Rotten
+ * Tomatoes/Trakt/Letterboxd as percent, Metacritic as x/100. Returns null
+ * when no source produced a usable figure, which is the UI's signal to omit
+ * the row entirely.
+ */
+internal fun buildMdbListRatings(entries: List<MdbListRatingEntry>): MdbListRatings? {
+    if (entries.isEmpty()) return null
+
+    // First entry per source wins: a payload that repeats a source (critics
+    // and audience both under "tomatoes") must not flip the chip value
+    // between refreshes.
+    val bySource = LinkedHashMap<String, MdbListRatingEntry>(entries.size)
+    entries.forEach { entry ->
+        val key = entry.source.lowercase()
+        if (!bySource.containsKey(key)) bySource[key] = entry
+    }
+
+    fun percentOf(vararg sources: String): Double? {
+        sources.forEach { source ->
+            bySource[source]?.let { entry ->
+                mdbListPercentOf(entry)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    val ratings = MdbListRatings(
+        imdb = formatOutOfTen(percentOf("imdb")),
+        tmdb = formatOutOfTen(percentOf("tmdb")),
+        rottenTomatoes = formatPercent(percentOf("tomatoes", "rotten_tomatoes")),
+        metacritic = formatMetacritic(percentOf("metacritic")),
+        trakt = formatPercent(percentOf("trakt")),
+        letterboxd = formatPercent(percentOf("letterboxd")),
+        myAnimeList = formatOutOfTen(percentOf("mal", "myanimelist"))
+    )
+    return ratings.takeIf { it.hasAny }
+}
+
+/**
  * One entry inside an MDBList list or watchlist (GET /lists/{id}/items,
  * GET /watchlist/items). Only the fields the Library tab needs.
  */
@@ -123,7 +225,7 @@ data class MdbListWatchedSnapshot(
 /**
  * Minimal MDBList client (plain OkHttp + org.json, matching the OMDb helper
  * pattern it replaces). API docs: https://api.mdblist.com/docs/ — ratings via
- * GET /{movie|show}/{imdbId}/ratings and live tracking via the Scrobble
+ * GET /{imdb|tmdb}/{movie|show}/{id} and live tracking via the Scrobble
  * (POST /scrobble/start|pause|stop|clear) and Sync (GET /sync/playback,
  * GET/POST /sync/watched[/remove]) sections. The key travels as the `apikey`
  * query parameter on every request.
@@ -201,68 +303,87 @@ object MdbListClient {
         }
     }
 
-    private fun newEmptyObject(): JSONObject = JSONObject()
+    /**
+     * A numeric field that MDBList may send as a number OR as a string
+     * ("8.8"), and may send as ""/"N/A". Anything unusable is null rather
+     * than a NaN that would later format as "NaN".
+     */
+    private fun JSONObject.numberOrNull(name: String): Double? {
+        val raw = opt(name) ?: return null
+        val parsed = when (raw) {
+            is Number -> raw.toDouble()
+            is String -> raw.trim().toDoubleOrNull()
+            else -> null
+        }
+        return parsed?.takeIf { it.isFinite() }
+    }
 
-    /** MDBList ratings for a movie (type="movie") or a show (type="show"). */
+    /**
+     * The media route is `/{provider}/{type}/{id}` — the ratings arrive in
+     * that response's `ratings` array, NOT on a `/ratings` sub-path.
+     *
+     * That sub-path is what this used to call
+     * (`/movie/tt0111161/ratings`), which matches no route in the API
+     * (the path shape is `/{media_provider}/{media_type}/{media_id}`), so
+     * every request 404'd and the detail screen silently showed no ratings
+     * for any title. The provider is chosen from the id's shape: IMDb ids
+     * go through `imdb`, numeric ids through `tmdb`.
+     */
+    private fun mediaUrl(mediaId: String, mediaType: String, apiKey: String): String {
+        val type = if (mediaType.lowercase() == "movie") "movie" else "show"
+        val provider = if (mediaId.startsWith("tt")) "imdb" else "tmdb"
+        return "$BASE/$provider/$type/$mediaId?apikey=$apiKey"
+    }
+
+    /**
+     * MDBList ratings for a movie (type="movie") or a show (type="show").
+     * Accepts an IMDb id ("tt0111161") or a numeric TMDB id.
+     */
     suspend fun fetchRatings(
-        imdbId: String,
+        mediaId: String,
         mediaType: String,
         apiKey: String
     ): MdbListRatings? = withContext(Dispatchers.IO) {
-        if (apiKey.isBlank() || !imdbId.startsWith("tt")) return@withContext null
-        val type = if (mediaType.lowercase() == "movie") "movie" else "show"
-        val url = "$BASE/$type/$imdbId/ratings?apikey=$apiKey"
+        val id = mediaId.trim()
+        if (apiKey.isBlank() || id.isBlank()) return@withContext null
+        if (!id.startsWith("tt") && id.toIntOrNull() == null) return@withContext null
+
         runCatching {
+            val url = mediaUrl(id, mediaType, apiKey)
             client.newCall(Request.Builder().url(url).get().build()).execute().use { response ->
-                if (!response.isSuccessful) return@use null
-                val root = JSONObject(response.body?.string().orEmpty())
-
-                // MDBList responses vary by endpoint version: the values can
-                // sit flat on the root object or nested under a "ratings"
-                // object. Read BOTH and prefer whichever carries data.
-                val ratingsNode =
-                    root.optJSONObject("ratings") ?: newEmptyObject()
-
-                fun value(name: String): Double {
-                    val v = ratingsNode.optDouble(name, Double.NaN)
-                    return if (v.isNaN()) root.optDouble(name, Double.NaN) else v
+                if (!response.isSuccessful) {
+                    // Never silent: a routing/auth failure here is exactly what
+                    // "the ratings row never shows up" looks like from outside.
+                    Log.w(
+                        TAG,
+                        "ratings HTTP ${response.code} for $id (${mediaType.lowercase()})"
+                    )
+                    return@use null
                 }
-
-                fun has(name: String): Boolean = !value(name).isNaN()
-
-                // x/10 sources render with one decimal ("8.5").
-                fun score(name: String): String? =
-                    if (!has(name)) null
-                    else String.format(java.util.Locale.US, "%.1f", value(name))
-
-                // 0-100 sources render as percent ("95%").
-                fun percent(name: String): String? =
-                    if (!has(name)) null
-                    else "${value(name).toInt()}%"
-
-                // Metacritic is conventionally shown as "78/100".
-                fun metacritic(): String? =
-                    if (!has("metacritic")) null
-                    else "${value("metacritic").toInt()}/100"
-
-                // MyAnimeList scores live on a 1-10 scale at the source, but
-                // MDBList may normalize to 0-100; adapt to whichever arrives.
-                fun myAnimeList(): String? =
-                    if (!has("mal")) null
-                    else if (value("mal") > 10.0) "${value("mal").toInt()}%"
-                    else String.format(java.util.Locale.US, "%.1f", value("mal"))
-
-                val ratings = MdbListRatings(
-                    imdb = score("imdb"),
-                    tmdb = score("tmdb"),
-                    rottenTomatoes = percent("tomatoes"),
-                    metacritic = metacritic(),
-                    trakt = percent("trakt"),
-                    letterboxd = percent("letterboxd"),
-                    myAnimeList = myAnimeList()
-                )
-
-                if (ratings.hasAny) ratings else null
+                val root = JSONObject(response.body?.string().orEmpty())
+                val arr = root.optJSONArray("ratings")
+                val entries = ArrayList<MdbListRatingEntry>(arr?.length() ?: 0)
+                if (arr != null) {
+                    for (i in 0 until arr.length()) {
+                        val node = arr.optJSONObject(i) ?: continue
+                        val source = node.optString("source", "").trim()
+                        if (source.isBlank()) continue
+                        entries += MdbListRatingEntry(
+                            source = source,
+                            value = node.numberOrNull("value"),
+                            score = node.numberOrNull("score")
+                        )
+                    }
+                }
+                val ratings = buildMdbListRatings(entries)
+                if (ratings == null) {
+                    Log.i(
+                        TAG,
+                        "ratings response had no usable sources for $id " +
+                            "(entries=${entries.size})"
+                    )
+                }
+                ratings
             }
         }.getOrNull()
     }
@@ -1039,7 +1160,7 @@ object MdbListClient {
 
             // Only cache successful non-empty fetches: an empty result from
             // a transient API failure must not blank the badges for 5 min.
-            if (result != null && !result.isEmpty) {
+            if (!result.isEmpty) {
                 cachedSnapshot = result
                 cachedSnapshotAt = System.currentTimeMillis()
                 cachedSnapshotKey = apiKey

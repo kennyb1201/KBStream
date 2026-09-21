@@ -45,30 +45,30 @@ internal object DetailRatingEnrichment {
         vm.viewModelScope.launch {
             val meta = vm.meta.value
             val rawId = meta?.id ?: vm.imdbId
+            val tmdbId = vm.tmdbDetail.value?.id?.takeIf { it > 0 }
             val resolved = rawId.takeIf { it.startsWith("tt") }
-                ?: run {
-                    val tmdbId = vm.tmdbDetail.value?.id?.takeIf { it > 0 }
-                    if (tmdbId == null) {
-                        Log.i(
-                            "KBStream",
-                            "MDBList ratings waiting: no imdb id and no tmdb id yet"
-                        )
-                        return@launch
-                    }
-                    vm.tmdbRepository.resolveImdbId(tmdbId, normalizedType).orEmpty()
-                }
-            if (!resolved.startsWith("tt")) {
+                ?: tmdbId?.let {
+                    vm.tmdbRepository.resolveImdbId(it, normalizedType).orEmpty()
+                }.orEmpty()
+            // The media route is id-based, so a TMDB id is a perfectly good
+            // key (provider "tmdb") — an unresolvable IMDb id used to be the
+            // end of the ratings row for that title even though TMDB had
+            // already handed us the id it needs.
+            val queryId = resolved.takeIf { it.startsWith("tt") }
+                ?: tmdbId?.toString()
+            if (queryId == null) {
                 Log.i(
                     "KBStream",
-                    "MDBList ratings skipped: could not resolve an imdb id (raw=$rawId)"
+                    "MDBList ratings skipped: no imdb id and no tmdb id (raw=$rawId)"
                 )
                 return@launch
             }
-            val ratings = MdbListClient.fetchRatings(resolved, normalizedType, key)
+            Log.d("KBStream", "MDBList ratings query id=$queryId ($normalizedType)")
+            val ratings = MdbListClient.fetchRatings(queryId, normalizedType, key)
             if (ratings?.hasAny != true) {
                 Log.i(
                     "KBStream",
-                    "MDBList ratings empty for $resolved ($normalizedType) — " +
+                    "MDBList ratings empty for $queryId ($normalizedType) — " +
                         "title may not be rated on mdblist.com"
                 )
             }
