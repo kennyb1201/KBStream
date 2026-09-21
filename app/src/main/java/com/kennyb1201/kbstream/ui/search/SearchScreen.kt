@@ -73,6 +73,7 @@ import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
+import com.kennyb1201.kbstream.ui.components.rememberLongPressModifier
 import com.kennyb1201.kbstream.ui.components.PosterSize
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -115,6 +116,7 @@ fun SearchScreen(
     val suggestions by viewModel.suggestions.collectAsStateWithLifecycle()
     val browseCategories by viewModel.browseCategories.collectAsStateWithLifecycle()
     val browseSubmenuLoading by viewModel.browseSubmenuLoading.collectAsStateWithLifecycle()
+    val hiddenBrowseChips by viewModel.hiddenBrowseChips.collectAsStateWithLifecycle()
 
     // Add-on search rail title toggles (addon name / catalog type). These
     // apply ONLY to the addon search rails below — the built-in TMDB
@@ -132,6 +134,15 @@ fun SearchScreen(
         mutableStateOf<SearchTitleResult?>(
             null
         )
+    }
+
+    // Long-press menus for the browse browser: a submenu chip offers "Hide",
+    // the category strip offers "Unhide all" for the hidden chips under it.
+    var hiddenChipMenu by remember {
+        mutableStateOf<Pair<String, BrowseEntry>?>(null)
+    }
+    var categoryChipMenu by remember {
+        mutableStateOf<BrowseCategory?>(null)
     }
 
     // "Add to list…" picker target (title + which lists to offer).
@@ -283,7 +294,19 @@ fun SearchScreen(
                     SearchBrowseBrowser(
                         viewModel = viewModel,
                         categories = browseCategories,
-                        submenuLoading = browseSubmenuLoading
+                        submenuLoading = browseSubmenuLoading,
+                        onChipLongPress = { categoryKey, entry ->
+                            hiddenChipMenu = categoryKey to entry
+                        },
+                        onCategoryLongPress = { category ->
+                            // Nothing to offer unless this category actually
+                            // has hidden chips to bring back.
+                            val hiddenCount = BrowseChipVisibility.countHidden(
+                                category.key,
+                                hiddenBrowseChips
+                            )
+                            if (hiddenCount > 0) categoryChipMenu = category
+                        }
                     )
                 }
             }
@@ -571,6 +594,53 @@ fun SearchScreen(
                 onDismiss = {
                     dismissTitleMenu()
                 }
+            )
+        }
+
+        // Long-press on a browse chip. Hide is the only action: a normal
+        // press already opens the chip's discover screen.
+        hiddenChipMenu?.let { (categoryKey, entry) ->
+            PosterContextMenu(
+                title = entry.name,
+                subtitle = "Browse chip",
+                actions = listOf(
+                    PosterContextAction(
+                        label = "Hide",
+                        description = "Remove this chip from the browse list",
+                        isDestructive = true
+                    ) {
+                        viewModel.hideBrowseChip(categoryKey, entry)
+                        hiddenChipMenu = null
+                    }
+                ),
+                onDismiss = { hiddenChipMenu = null }
+            )
+        }
+
+        // Long-press on a category chip: the way back from Hide. Chips are
+        // hidden per category, so this restores this strip's chips only.
+        categoryChipMenu?.let { category ->
+            val hiddenCount = BrowseChipVisibility.countHidden(
+                category.key,
+                hiddenBrowseChips
+            )
+            PosterContextMenu(
+                title = category.label,
+                subtitle = if (hiddenCount == 1) {
+                    "1 hidden chip"
+                } else {
+                    "$hiddenCount hidden chips"
+                },
+                actions = listOf(
+                    PosterContextAction(
+                        label = "Unhide all ($hiddenCount)",
+                        description = "Bring every hidden chip in this category back"
+                    ) {
+                        viewModel.unhideAllBrowseChips(category.key)
+                        categoryChipMenu = null
+                    }
+                ),
+                onDismiss = { categoryChipMenu = null }
             )
         }
 
@@ -898,7 +968,9 @@ private val SEARCH_RAIL_EDGE_PADDING = 20.dp
 private fun SearchBrowseBrowser(
     viewModel: SearchViewModel,
     categories: List<BrowseCategory>,
-    submenuLoading: Boolean
+    submenuLoading: Boolean,
+    onChipLongPress: ((String, BrowseEntry) -> Unit)? = null,
+    onCategoryLongPress: ((BrowseCategory) -> Unit)? = null
 ) {
     // Selected category lives in the activity-scoped ViewModel, so backing
     // out of a discover screen re-opens the same submenu instead of the
@@ -931,6 +1003,9 @@ private fun SearchBrowseBrowser(
                     accent = activeCategory?.key == category.key,
                     onClick = {
                         viewModel.selectBrowseCategory(category.key)
+                    },
+                    onLongClick = onCategoryLongPress?.let { handler ->
+                        { handler(category) }
                     }
                 )
             }
@@ -961,6 +1036,7 @@ private fun SearchBrowseBrowser(
                     entries = category.entries,
                     categoryKey = category.key,
                     onEntryClicked = viewModel::onBrowseEntryClicked,
+                    onEntryLongClick = onChipLongPress,
                     returnChip = returnChip,
                     onReturnChipConsumed = {
                         viewModel.browseReturnChip = null
@@ -984,6 +1060,7 @@ private fun SubmenuChipFlowRow(
     entries: List<BrowseEntry>,
     categoryKey: String,
     onEntryClicked: (String, BrowseEntry) -> Unit,
+    onEntryLongClick: ((String, BrowseEntry) -> Unit)? = null,
     returnChip: Pair<String, Int>?,
     onReturnChipConsumed: () -> Unit
 ) {
@@ -1007,6 +1084,9 @@ private fun SubmenuChipFlowRow(
             SearchChip(
                 label = entry.name,
                 onClick = { onEntryClicked(categoryKey, entry) },
+                onLongClick = onEntryLongClick?.let { handler ->
+                    { handler(categoryKey, entry) }
+                },
                 grabInitialFocus = isReturnChip,
                 onInitialFocusConsumed = {
                     returnChipConsumed = true
@@ -1045,7 +1125,10 @@ private fun SearchChip(
     modifier: Modifier = Modifier,
     accent: Boolean = true,
     grabInitialFocus: Boolean = false,
-    onInitialFocusConsumed: (() -> Unit)? = null
+    onInitialFocusConsumed: (() -> Unit)? = null,
+    // Long press (hold Select/Enter) opens the caller's context menu, e.g.
+    // Hide on a browse chip. Null keeps a plain select-only chip.
+    onLongClick: (() -> Unit)? = null
 ) {
     var focused by remember { mutableStateOf(false) }
     // Return-chip restore: when this chip is the one that opened the
@@ -1080,6 +1163,7 @@ private fun SearchChip(
             focusedBorder = Border(BorderStroke(2.dp, KBAccent))
         ),
         modifier = modifier
+            .then(rememberLongPressModifier(onLongClick))
             .focusRequester(returnFocusRequester)
             .onFocusChanged { focused = it.isFocused }
     ) {

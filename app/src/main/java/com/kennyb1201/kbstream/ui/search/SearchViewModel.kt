@@ -1116,6 +1116,69 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         _browseCategories.asStateFlow()
 
     /**
+     * Browse chips this profile hid from the chip long-press menu, keyed by
+     * [BrowseChipVisibility.key] ("category\u0001name").
+     */
+    private val _hiddenBrowseChips =
+        MutableStateFlow<Set<String>>(emptySet())
+
+    val hiddenBrowseChips: StateFlow<Set<String>> =
+        _hiddenBrowseChips.asStateFlow()
+
+    /**
+     * The unfiltered sidebar as last built, so hiding or unhiding a chip
+     * republishes instantly instead of re-resolving keywords and collections.
+     */
+    private var rawBrowseCategories: List<BrowseCategory> = BROWSE_CATEGORIES
+
+    private fun loadHiddenBrowseChips() {
+        _hiddenBrowseChips.value = BrowseChipVisibility.hiddenKeys(app)
+    }
+
+    /**
+     * The single publish point for the sidebar. Every path that builds
+     * categories goes through here: the raw list is remembered first (so
+     * [hideBrowseChip] / [unhideAllBrowseChips] can republish it) and the
+     * chips this profile hid are then dropped. Filtering here rather than
+     * inside [baseBrowseCategories] keeps the raw list intact, so unhiding a
+     * chip needs no second TMDB resolve or disk-cache read.
+     */
+    private fun publishBrowseCategories(categories: List<BrowseCategory>) {
+        rawBrowseCategories = categories
+        val hidden = _hiddenBrowseChips.value
+        _browseCategories.value =
+            if (hidden.isEmpty()) {
+                categories
+            } else {
+                categories.map { category ->
+                    category.copy(
+                        entries = category.entries.filterNot { entry ->
+                            BrowseChipVisibility.key(category.key, entry.name) in hidden
+                        }
+                    )
+                }
+            }
+    }
+
+    /** Long-press "Hide" on a browse chip. */
+    fun hideBrowseChip(categoryKey: String, entry: BrowseEntry) {
+        if (entry.name.isBlank()) return
+        _hiddenBrowseChips.value =
+            BrowseChipVisibility.hide(app, categoryKey, entry.name)
+        publishBrowseCategories(rawBrowseCategories)
+        // The chip that opened a discover screen may no longer exist, so an
+        // armed return chip would focus nothing on the way back.
+        browseReturnChip = null
+    }
+
+    /** Long-press on a category chip: bring back everything hidden in it. */
+    fun unhideAllBrowseChips(categoryKey: String) {
+        _hiddenBrowseChips.value =
+            BrowseChipVisibility.unhideAll(app, categoryKey)
+        publishBrowseCategories(rawBrowseCategories)
+    }
+
+    /**
      * True while the ACTIVE profile is a kids profile (kidsMaxAge set).
      * Drives the kid-focused browse chips, keyword suggestions, search
      * certification filtering, and add-on rail suppression.
@@ -1129,10 +1192,35 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         if (isKidsMode) KIDS_KEYWORD_NAMES else BROWSE_KEYWORD_NAMES
 
     private fun activeCollectionNames(): List<String> =
-        if (isKidsMode) KIDS_COLLECTION_NAMES else BROWSE_COLLECTION_NAMES
+        if (isKidsMode) {
+            KIDS_COLLECTION_NAMES + KIDS_COLLECTION_NAMES_EXTRA
+        } else {
+            BROWSE_COLLECTION_NAMES
+        }
 
     private fun baseBrowseCategories(): List<BrowseCategory> =
-        if (isKidsMode) KIDS_BROWSE_CATEGORIES else BROWSE_CATEGORIES
+        if (isKidsMode) kidsBrowseCategories() else BROWSE_CATEGORIES
+
+    /**
+     * Kids sidebar with the overflow additions merged in (see
+     * [KIDS_SERVICES_EXTRA] / [KIDS_STUDIOS_EXTRA]). The main catalog file
+     * has grown past the size the editor rewrites in one pass, so new kids
+     * services/studios live in SearchBrowseCatalogExtras and are appended
+     * here; appending keeps the popular-first ordering the main list already
+     * applied.
+     */
+    private fun kidsBrowseCategories(): List<BrowseCategory> =
+        KIDS_BROWSE_CATEGORIES.map { category ->
+            when (category.key) {
+                "services" -> category.copy(
+                    entries = category.entries + KIDS_SERVICES_EXTRA_ENTRIES
+                )
+                "studios" -> category.copy(
+                    entries = category.entries + KIDS_STUDIOS_EXTRA
+                )
+                else -> category
+            }
+        }
 
     /**
      * Re-evaluate kids mode after a profile (or its kids setting) changed:
@@ -1164,7 +1252,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         _selectedBrowseCategoryKey.value = null
 
         browseCacheFresh = false
-        _browseCategories.value = baseBrowseCategories()
+        publishBrowseCategories(baseBrowseCategories())
         loadBrowseCatalogCache()
 
         val needsResolve = !catalogResolveStarted && !browseCacheFresh
@@ -1216,6 +1304,10 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     // uninitialized StateFlow and crashed at startup (Sentry ANDROID-9).
     init {
         loadRecentSearches()
+        // Hidden chips load first: the sidebar publish below and the cache
+        // merge that follows both filter against the hidden set.
+        loadHiddenBrowseChips()
+        publishBrowseCategories(baseBrowseCategories())
         // Restore the last-resolved keyword/collection ids from disk so the
         // browse submenu renders instantly; a background refresh then only
         // repairs gaps after the TTL.
@@ -1346,7 +1438,11 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             }.awaitAll().filterNotNull()
         }
         val collectionEntries = coroutineScope {
-            (BROWSE_COLLECTION_NAMES + KIDS_COLLECTION_NAMES).distinct().map { name ->
+            (
+                BROWSE_COLLECTION_NAMES +
+                    KIDS_COLLECTION_NAMES +
+                    KIDS_COLLECTION_NAMES_EXTRA
+                ).distinct().map { name ->
                 async {
                     catalogResolveSemaphore.withPermit {
                         resolveWithRetry(name) {
@@ -1364,13 +1460,15 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             }.awaitAll().filterNotNull()
         }
 
-        _browseCategories.value = baseBrowseCategories().map { category ->
-            when (category.key) {
-                "keywords" -> category.copy(entries = keywordEntries)
-                "collections" -> category.copy(entries = collectionEntries)
-                else -> category
+        publishBrowseCategories(
+            baseBrowseCategories().map { category ->
+                when (category.key) {
+                    "keywords" -> category.copy(entries = keywordEntries)
+                    "collections" -> category.copy(entries = collectionEntries)
+                    else -> category
+                }
             }
-        }
+        )
         _browseSubmenuLoading.value = false
         saveBrowseCatalogCache(keywordEntries, collectionEntries)
     }
@@ -1444,15 +1542,17 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             val keywordsForMode = keywords.filter { it.name in activeKeywords }
             val collectionsForMode = collections.filter { it.name in activeCollections }
 
-            _browseCategories.value = baseBrowseCategories().map { category ->
-                when (category.key) {
-                    "keywords" ->
-                        category.copy(entries = keywordsForMode.ifEmpty { category.entries })
-                    "collections" ->
-                        category.copy(entries = collectionsForMode.ifEmpty { category.entries })
-                    else -> category
+            publishBrowseCategories(
+                baseBrowseCategories().map { category ->
+                    when (category.key) {
+                        "keywords" ->
+                            category.copy(entries = keywordsForMode.ifEmpty { category.entries })
+                        "collections" ->
+                            category.copy(entries = collectionsForMode.ifEmpty { category.entries })
+                        else -> category
+                    }
                 }
-            }
+            )
         }.onFailure { Log.w(TAG, "browse catalog cache read failed", it) }
     }
 

@@ -105,3 +105,48 @@ fun KBCard(
         content = content
     )
 }
+
+/**
+ * Long-press detection for surfaces that cannot use [KBCard] — the search
+ * browse chips, whose border/colors differ from the shared card. Returns a
+ * modifier that fires [onLongClick] once Select/Enter has been held past
+ * [LONG_PRESS_THRESHOLD_MS], and swallows the matching KeyUp so the
+ * surface's own onClick does not also fire. Timestamp-based for the same
+ * reason as [KBCard]: many TV remotes never emit repeat KeyDown events, so
+ * key-repeat cannot be used to measure the hold.
+ */
+@Composable
+fun rememberLongPressModifier(onLongClick: (() -> Unit)?): Modifier {
+    var pressStartTime by remember { mutableLongStateOf(0L) }
+
+    return Modifier.onPreviewKeyEvent { event ->
+        val isSelectKey =
+            event.key.nativeKeyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER ||
+                event.key.nativeKeyCode == android.view.KeyEvent.KEYCODE_ENTER
+
+        if (onLongClick == null || !isSelectKey) return@onPreviewKeyEvent false
+
+        when (event.type) {
+            KeyEventType.KeyDown -> {
+                if (event.nativeKeyEvent.repeatCount == 0) {
+                    pressStartTime = System.currentTimeMillis()
+                }
+                // Never consume KeyDown - focus/ripple behave normally.
+                false
+            }
+
+            KeyEventType.KeyUp -> {
+                if (System.currentTimeMillis() - pressStartTime >=
+                    LONG_PRESS_THRESHOLD_MS
+                ) {
+                    onLongClick()
+                    true // swallow so the surface does not also fire onClick
+                } else {
+                    false // short press - let the surface handle its onClick
+                }
+            }
+
+            else -> false
+        }
+    }
+}

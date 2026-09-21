@@ -500,7 +500,43 @@ val BROWSE_NETWORKS = listOf(
     BrowseEntry(2444, "MotorTrend"),
     BrowseEntry(802, "Cooking Channel"),
     BrowseEntry(530, "Destination America"),
-    BrowseEntry(5459, "Boomerang")
+    BrowseEntry(5459, "Boomerang"),
+    // Fourth wave (2026-09) — ids resolved via flagship-show probes
+    // (/search/tv -> /tv/{id}.networks; TMDB has NO network search endpoint,
+    // so /search/network 404s), then confirmed with a RECENT discover
+    // replica. Each parenthesised date is that probe's newest series, so
+    // archive-only pages (Logo, AXS TV, CMT, TV Land) are deliberate
+    // archive pages rather than a broken list:
+    //   Travel Channel 209 (2023), Nat Geo Wild 1043 (2026), Smithsonian
+    //   Channel 658 (2020), VICE TV 3706 (2024), CNN 59 (2025), HLN 181
+    //   (2020), IFC 124 (2023), SundanceTV 270 (2024), VH1 158 (2022),
+    //   CMT 85 (2019), TV Land 397 (2017), Logo 62 (2016), AXS TV 206
+    //   (2013), REELZ 367 (2022), The Weather Channel 306, Bloomberg
+    //   Television 666, C-SPAN 322, NBA TV 301, NHL Network 907, FS1 2317.
+    // Skipped because TMDB has no network page at all: American Heroes
+    // Channel, Discovery Life, Fox Business, NewsNation, NFL / MLB / Golf /
+    // Tennis / Big Ten / SEC Network, UniMás, Galavisión, Estrella TV,
+    // Ovation, MeTV, Comet.
+    BrowseEntry(209, "Travel Channel"),
+    BrowseEntry(1043, "Nat Geo Wild"),
+    BrowseEntry(658, "Smithsonian Channel"),
+    BrowseEntry(3706, "VICE TV"),
+    BrowseEntry(59, "CNN"),
+    BrowseEntry(181, "HLN"),
+    BrowseEntry(124, "IFC"),
+    BrowseEntry(270, "SundanceTV"),
+    BrowseEntry(158, "VH1"),
+    BrowseEntry(85, "CMT"),
+    BrowseEntry(397, "TV Land"),
+    BrowseEntry(62, "Logo"),
+    BrowseEntry(206, "AXS TV"),
+    BrowseEntry(367, "REELZ"),
+    BrowseEntry(306, "The Weather Channel"),
+    BrowseEntry(666, "Bloomberg Television"),
+    BrowseEntry(322, "C-SPAN"),
+    BrowseEntry(301, "NBA TV"),
+    BrowseEntry(907, "NHL Network"),
+    BrowseEntry(2317, "FS1")
 )
 
 // ---------------------------------------------------------------------------
@@ -512,13 +548,15 @@ val BROWSE_NETWORKS = listOf(
 /** Household-name streaming services, in curated popularity order. */
 private val POPULAR_SERVICES_ORDER = listOf(
     "Netflix", "Prime Video", "Disney+", "Apple TV", "HBO Max", "Hulu",
-    "Paramount+", "Peacock", "ESPN+", "Tubi", "Pluto TV", "Crunchyroll"
+    "Paramount+", "Peacock", "ESPN+", "Tubi", "Pluto TV", "Crunchyroll",
+    "TCM", "Fox One", "HiDive"
 )
 
 /** Broadcast majors + the biggest cable brands, curated order. */
 private val POPULAR_NETWORKS_ORDER = listOf(
     "ABC", "NBC", "CBS", "FOX", "MTV", "Comedy Central", "Nickelodeon",
-    "Cartoon Network", "Adult Swim", "USA Network", "FX", "TNT", "TBS"
+    "Cartoon Network", "Adult Swim", "USA Network", "FX", "TNT", "TBS",
+    "CNN", "Travel Channel", "IFC", "SundanceTV"
 )
 
 /** The traditional majors + top franchise houses, curated order. */
@@ -526,7 +564,8 @@ private val POPULAR_STUDIOS_ORDER = listOf(
     "Warner Bros. Pictures", "Walt Disney Pictures", "Universal Pictures",
     "Paramount Pictures", "Columbia Pictures", "20th Century Fox",
     "Metro-Goldwyn-Mayer", "Marvel Studios", "Lucasfilm", "Pixar",
-    "DreamWorks Animation", "Illumination", "Studio Ghibli"
+    "DreamWorks Animation", "Illumination", "Studio Ghibli",
+    "A24", "NEON", "StudioCanal", "Pathé", "Gaumont", "Lionsgate"
 )
 
 /** Kids-first animation/TV brands, curated order. */
@@ -661,7 +700,64 @@ val BROWSE_STUDIOS: List<BrowseEntry> = popularFirst(
     BrowseEntry(10427, "Open Road Films"),
     BrowseEntry(13184, "Annapurna Pictures"),
     BrowseEntry(81, "Plan B Entertainment"),
-    BrowseEntry(147786, "Dimension Films")
+    BrowseEntry(147786, "Dimension Films"),
+    // Fourth wave (2026-09) — indies, foreign labels, genre houses, and the
+    // animation shops the kids list leans on. Every id picked from
+    // /search/company by NAME MATCH + a non-empty movie discover slate;
+    // the famous names whose first hit was an empty duplicate were resolved
+    // to the canonical page instead (NEON 90733 over the 0-movie 307597,
+    // StudioCanal 694 over 218178, Pathé 7981 over 209044, Gaumont 9 over
+    // 276068, New Regency Pictures 10104, Zentropa Entertainments 76,
+    // Shochiku 192, Nikkatsu Corporation 955, Constantin Film 47,
+    // Nordisk Film 143164, Lotte Entertainment 7819, Huayi Brothers
+    // Pictures 3393, The Asylum 1311, WildBrain Studios 148496).
+    // Skipped: Cannon Films / Sony Pictures Imageworks / Netflix Animation
+    // / RLJE Films / Bleecker Street — no company page with a real slate.
+    BrowseEntry(47729, "STXfilms"),
+    BrowseEntry(90733, "NEON"),
+    BrowseEntry(694, "StudioCanal"),
+    BrowseEntry(7981, "Pathé"),
+    BrowseEntry(9, "Gaumont"),
+    BrowseEntry(10104, "New Regency Pictures"),
+    BrowseEntry(911, "Roadside Attractions"),
+    BrowseEntry(307, "IFC Films"),
+    BrowseEntry(1030, "Magnolia Pictures"),
+    BrowseEntry(12852, "Shout! Factory"),
+    BrowseEntry(88606, "Vertical"),
+    BrowseEntry(76992, "Saban Films"),
+    BrowseEntry(6626, "Voltage Pictures"),
+    BrowseEntry(6896, "EuropaCorp"),
+    BrowseEntry(47, "Constantin Film"),
+    BrowseEntry(143164, "Nordisk Film"),
+    BrowseEntry(76, "Zentropa Entertainments"),
+    BrowseEntry(192, "Shochiku"),
+    BrowseEntry(955, "Nikkatsu Corporation"),
+    BrowseEntry(1311, "The Asylum"),
+    BrowseEntry(9118, "Samuel Goldwyn Films"),
+    BrowseEntry(10210, "Morgan Creek Entertainment"),
+    BrowseEntry(130, "Jerry Bruckheimer Films"),
+    BrowseEntry(1885, "Silver Pictures"),
+    BrowseEntry(437, "Heyday Films"),
+    BrowseEntry(7576, "EON Productions"),
+    BrowseEntry(76907, "Atomic Monster"),
+    BrowseEntry(2481, "Platinum Dunes"),
+    BrowseEntry(2061, "Twisted Pictures"),
+    BrowseEntry(829, "Vertigo Entertainment"),
+    BrowseEntry(7164, "TMS Entertainment"),
+    BrowseEntry(5372, "OLM"),
+    BrowseEntry(1023, "Nelvana"),
+    BrowseEntry(148496, "WildBrain Studios"),
+    BrowseEntry(4152, "Titmouse"),
+    BrowseEntry(23948, "Cartoon Saloon"),
+    BrowseEntry(2787, "Reel FX Creative Studios"),
+    BrowseEntry(8089, "Animal Logic"),
+    BrowseEntry(179999, "Skydance Animation"),
+    BrowseEntry(1569, "Yash Raj Films"),
+    BrowseEntry(19146, "Dharma Productions"),
+    BrowseEntry(3522, "T-Series"),
+    BrowseEntry(7819, "Lotte Entertainment"),
+    BrowseEntry(3491, "Showbox"),
+    BrowseEntry(3393, "Huayi Brothers Pictures")
     ),
     name = { it.name },
     popular = POPULAR_STUDIOS_ORDER
@@ -923,7 +1019,51 @@ val BROWSE_SERVICES = listOf(
         providerId = 1963,
         networkOrCompanyId = null,
         networkIsCompany = false
-    )
+    ),
+    //
+    // Fourth wave (2026-09) — genre, niche, and international streamers.
+    // Every providerId re-verified live against the CURRENT US registry
+    // (/watch/providers/movie + /tv). None of these has a verified
+    // network/company page to carry the header logo, so they open on the
+    // watch-provider rails alone and fall back to the text header exactly
+    // like Xumo Play above (provider rails still cover movies AND series).
+    BrowseService("TCM", providerId = 361, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("Fox One", providerId = 2545, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("HiDive", providerId = 430, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("RetroCrush", providerId = 446, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("Kocowa", providerId = 464, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("Rakuten Viki", providerId = 344, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("iQIYI", providerId = 581, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("AsianCrush", providerId = 514, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("MHz Choice", providerId = 427, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("MagellanTV", providerId = 551, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("OVID", providerId = 433, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("Kino Film Collection", providerId = 2135, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("Metrograph", providerId = 585, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("ARROW", providerId = 529, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("Shout! Factory TV", providerId = 439, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("Midnight Pulp", providerId = 1960, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("Troma NOW", providerId = 2078, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("Hi-YAH!", providerId = 503, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("Pure Flix", providerId = 278, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("BYUtv", providerId = 2129, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("Fawesome", providerId = 2409, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("Revry", providerId = 473, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("Dekkoo", providerId = 444, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("Here TV", providerId = 417, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("WOW Presents Plus", providerId = 546, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("Chai Flicks", providerId = 438, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("BroadwayHD", providerId = 554, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("Lifetime Movie Club", providerId = 284, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("Ovation TV", providerId = 1953, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("Vice TV", providerId = 458, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("VIX", providerId = 457, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("Cineverse", providerId = 1957, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("DistroTV", providerId = 1971, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("Fandor", providerId = 25, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("Filmzie", providerId = 559, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("DisneyNOW", providerId = 508, networkOrCompanyId = null, networkIsCompany = false),
+    BrowseService("FXNow", providerId = 123, networkOrCompanyId = null, networkIsCompany = false)
 )
 
 // Merged "Services & Networks" submenu: every streaming service (with its
@@ -1067,7 +1207,101 @@ val BROWSE_COLLECTION_NAMES = listOf(
     "The LEGO Movie Collection", // TMDB canonical: 'The Lego Movie Collection'
     "The Boss Baby Collection",
     "The Croods Collection",
-    "Sing Collection"
+    "Sing Collection",
+    // Fifth wave (2026-09). Every name below was re-verified against
+    // /search/collection and resolves EXACTLY (the resolver prefers an
+    // exact-name hit, so an inexact name silently loses the chip). Names
+    // that returned no exact match were left out entirely — The Texas
+    // Chainsaw Massacre, Dollars Trilogy, The Twilight Saga, Blade, Hulk,
+    // Ouija, RED, 300, Night at the Museum, Sleeping Beauty, Snow White,
+    // Tarzan, Winnie the Pooh and Inside Out only exist under unrelated
+    // same-ish titles. Where TMDB's canonical page carries a slightly
+    // different name, the canonical spelling is used:
+    //   'Spider-Man: Spider-Verse', 'The Gremlins', 'The Jack Ryan',
+    //   '28 Days/Weeks/Years Later', 'Has Fallen', 'The Amityville'.
+    // Prestige / crime / drama
+    "The Godfather Collection",
+    "Dirty Harry Collection",
+    "Crank Collection",
+    "Death Wish Collection",
+    "Friday Collection",
+    // Sci-fi / adventure tentpoles
+    "Dune Collection",
+    "Blade Runner Collection",
+    "Gladiator Collection",
+    "Kill Bill Collection",
+    "Tron Collection",
+    "Independence Day Collection",
+    "Pacific Rim Collection",
+    "The Meg Collection",
+    "RoboCop Collection",
+    "Sin City Collection",
+    "The Crow Collection",
+    "Beetlejuice Collection",
+    "The Gremlins Collection",
+    "Planet of the Apes (Reboot) Collection",
+    // Action / heist / comedy franchises
+    "The Karate Kid Collection",
+    "Beverly Hills Cop Collection",
+    "Creed Collection",
+    "The Equalizer Collection",
+    "The Expendables Collection",
+    "The Purge Collection",
+    "A Quiet Place Collection",
+    "The Strangers Collection",
+    "Don't Breathe Collection",
+    "Escape Room Collection",
+    "Wrong Turn Collection",
+    "Jeepers Creepers Collection",
+    "Children of the Corn Collection",
+    "V/H/S Collection",
+    "Leprechaun Collection",
+    "Critters Collection",
+    "Tremors Collection",
+    "Child's Play Collection",
+    "Hellraiser Collection",
+    "The Exorcist Collection",
+    "The Ring Collection",
+    "The Grudge Collection",
+    "The Nun Collection",
+    "The Amityville Collection",
+    "Zombieland Collection",
+    "Resident Evil Collection",
+    "Underworld Collection",
+    "Fear Street Collection",
+    "28 Days/Weeks/Years Later Collection",
+    "Pitch Perfect Collection",
+    "Now You See Me Collection",
+    "Fifty Shades Collection",
+    "Magic Mike Collection",
+    "Wayne's World Collection",
+    "Bill & Ted Collection",
+    "Austin Powers Collection",
+    "Dumb and Dumber Collection",
+    "Meet the Parents Collection",
+    "Police Academy Collection",
+    "Honey, I Shrunk the Kids Collection",
+    // Superhero solos + spy sagas
+    "Iron Man Collection",
+    "Thor Collection",
+    "Captain America Collection",
+    "Guardians of the Galaxy Collection",
+    "Ant-Man Collection",
+    "The Amazing Spider-Man Collection",
+    "Spider-Man: Spider-Verse Collection",
+    "Fantastic Beasts Collection",
+    "The Jack Ryan Collection",
+    "Has Fallen Collection",
+    // Animation / family franchises not already listed above
+    "Chicken Run Collection",
+    "Wallace & Gromit Collection",
+    "Shaun the Sheep Collection",
+    "Open Season Collection",
+    "Surf's Up Collection",
+    "Pokémon Collection",
+    "The Swan Princess Collection",
+    "Casper Collection",
+    "Monster High Collection"
 )
 
 /**

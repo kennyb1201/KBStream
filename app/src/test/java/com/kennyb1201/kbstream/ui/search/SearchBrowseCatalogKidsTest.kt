@@ -61,7 +61,13 @@ class SearchBrowseCatalogKidsTest {
         // unlike keywords/collections they are NOT a subset of the standard
         // streaming-services list. The real invariants: every entry can
         // drive a discover page and no brand appears twice.
-        val unusable = KIDS_SERVICES.filter {
+        // The kids list is split across two files (SearchBrowseCatalog plus
+        // SearchBrowseCatalogExtras, which the ViewModel merges in), so the
+        // invariants have to run over BOTH halves or the overflow would
+        // never be checked.
+        val allKidsServices = KIDS_SERVICES + KIDS_SERVICES_EXTRA
+
+        val unusable = allKidsServices.filter {
             it.providerId == null && it.networkOrCompanyId == null
         }
         assertTrue(
@@ -69,7 +75,7 @@ class SearchBrowseCatalogKidsTest {
             unusable.isEmpty()
         )
 
-        val dupes = KIDS_SERVICES.groupingBy { it.name.trim() }.eachCount()
+        val dupes = allKidsServices.groupingBy { it.name.trim() }.eachCount()
             .filterValues { it > 1 }.keys
         assertTrue("duplicate kids services: $dupes", dupes.isEmpty())
     }
@@ -80,7 +86,8 @@ class SearchBrowseCatalogKidsTest {
     fun `no duplicate names inside any chip list`() {
         for ((label, list) in mapOf(
             "KIDS_KEYWORD_NAMES" to KIDS_KEYWORD_NAMES,
-            "KIDS_COLLECTION_NAMES" to KIDS_COLLECTION_NAMES,
+            "KIDS_COLLECTION_NAMES" to
+                (KIDS_COLLECTION_NAMES + KIDS_COLLECTION_NAMES_EXTRA),
             "BROWSE_KEYWORD_NAMES" to BROWSE_KEYWORD_NAMES,
             "BROWSE_COLLECTION_NAMES" to BROWSE_COLLECTION_NAMES
         )) {
@@ -94,7 +101,8 @@ class SearchBrowseCatalogKidsTest {
     fun `no blank or whitespace-only names`() {
         for ((label, list) in mapOf(
             "KIDS_KEYWORD_NAMES" to KIDS_KEYWORD_NAMES,
-            "KIDS_COLLECTION_NAMES" to KIDS_COLLECTION_NAMES
+            "KIDS_COLLECTION_NAMES" to
+                (KIDS_COLLECTION_NAMES + KIDS_COLLECTION_NAMES_EXTRA)
         )) {
             val blanks = list.filter { it.isBlank() }
             assertTrue("blank entries in $label: ${blanks.size}", blanks.isEmpty())
@@ -111,7 +119,8 @@ class SearchBrowseCatalogKidsTest {
         // 14 into KIDS_SERVICES surfaced a kids profile's search with adult
         // PBS programming.
         val banned = setOf(14, 1279, 159)
-        val offenders = KIDS_SERVICES.filter { it.networkOrCompanyId in banned }
+        val offenders = (KIDS_SERVICES + KIDS_SERVICES_EXTRA)
+            .filter { it.networkOrCompanyId in banned }
         assertTrue(
             "kids services contain known-wrong network ids: ${offenders.map { it.name }}",
             offenders.isEmpty()
