@@ -7,10 +7,6 @@ import com.kennyb1201.kbstream.data.iptv.db.IptvDao
 import java.io.BufferedInputStream
 import java.io.InputStream
 import java.io.InputStreamReader
-import java.time.LocalDateTime
-import java.time.OffsetDateTime
-import java.time.ZoneOffset
-import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.zip.GZIPInputStream
 import kotlinx.coroutines.Dispatchers
@@ -261,7 +257,7 @@ private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
             }
         }
 
-        val aliasKeys = buildAliasKeys(id, displayNames)
+        val aliasKeys = epgAliasKeys(id, displayNames)
         return EpgChannelEntity(
             id = id,
             sourceUrl = sourceUrl,
@@ -330,115 +326,22 @@ private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
     }
 
     private fun parseXmltvDate(value: String?): Long {
-        val normalized = value?.trim().orEmpty()
-        if (normalized.isBlank()) return 0L
+        parseXmltvDateMillis(value)?.let { return it }
 
-        parseCompactXmltvDate(normalized)?.let { return it }
-        parseIsoLikeXmltvDate(normalized)?.let { return it }
-
-        if (dateParseFailureLogsRemaining > 0) {
+        // Unparseable (not merely blank): this is the case the budgeted log
+        // exists for. See parseXmltvDateMillis for the accepted spellings.
+        if (!value.isNullOrBlank() && dateParseFailureLogsRemaining > 0) {
             dateParseFailureLogsRemaining--
-            Log.w(TAG, "DATE PARSE FAILED raw=$normalized remaining=$dateParseFailureLogsRemaining")
+            Log.w(
+                TAG,
+                "DATE PARSE FAILED raw=${value.trim()} remaining=$dateParseFailureLogsRemaining"
+            )
         }
         return 0L
     }
 
-    private fun parseCompactXmltvDate(value: String): Long? {
-        val firstWhitespace = value.indexOfFirst { it.isWhitespace() }
-        val datePart = if (firstWhitespace == -1) value else value.substring(0, firstWhitespace)
-        val tzPart = if (firstWhitespace == -1) {
-            null
-        } else {
-            value.substring(firstWhitespace).trim().takeIf { it.isNotEmpty() }
-        }
-
-        val normalizedDate = when (datePart.length) {
-            14 -> datePart
-            12 -> datePart + "00"
-            10 -> datePart + "0000"
-            8 -> datePart + "000000"
-            else -> return null
-        }
-
-        return runCatching {
-            if (!tzPart.isNullOrBlank()) {
-                val normalizedTz = normalizeXmltvOffset(tzPart) ?: return null
-                OffsetDateTime.parse("$normalizedDate $normalizedTz", XMLTV_OFFSET_FORMATTER)
-                    .toInstant()
-                    .toEpochMilli()
-            } else {
-                LocalDateTime.parse(normalizedDate, XMLTV_UTC_FORMATTER)
-                    .toInstant(ZoneOffset.UTC)
-                    .toEpochMilli()
-            }
-        }.getOrNull()
-    }
-
-    private fun normalizeXmltvOffset(value: String): String? {
-        val offset = value.trim()
-        return when {
-            offset.equals("Z", ignoreCase = true) -> "+0000"
-            offset.equals("UTC", ignoreCase = true) -> "+0000"
-            OFFSET_4.matches(offset) -> offset
-            OFFSET_WITH_COLON.matches(offset) -> offset.replace(":", "")
-            else -> null
-        }
-    }
-
-    private fun parseIsoLikeXmltvDate(value: String): Long? {
-        val withT = value.replace(' ', 'T')
-        val withZ = if (value.endsWith("Z")) value else "${value}Z"
-
-        return parseIsoCandidate(value)
-            ?: parseIsoCandidate(withT)
-            ?: if (withZ != value) parseIsoCandidate(withZ) else null
-    }
-
-    private fun parseIsoCandidate(candidate: String): Long? {
-        runCatching {
-            return OffsetDateTime.parse(candidate, DateTimeFormatter.ISO_OFFSET_DATE_TIME)
-                .toInstant()
-                .toEpochMilli()
-        }
-        runCatching {
-            return LocalDateTime.parse(candidate.removeSuffix("Z"))
-                .toInstant(ZoneOffset.UTC)
-                .toEpochMilli()
-        }
-        return null
-    }
-
-    private fun buildAliasKeys(id: String, displayNames: List<String>): List<String> {
-        val keys = LinkedHashSet<String>(2 + displayNames.size * 3)
-
-        fun add(value: String?) {
-            value?.trim()?.takeIf { it.isNotBlank() }?.let(keys::add)
-        }
-
-        add(id)
-        add(normalizeChannelKey(id))
-        displayNames.forEach { name ->
-            add(name)
-            add(normalizeChannelKey(name))
-            add(simplifyChannelName(name))
-        }
-        return keys.toList()
-    }
-
     private fun normalizeChannelKey(value: String): String =
         value.trim().lowercase(Locale.US)
-
-    private fun simplifyChannelName(value: String): String? {
-        val simplified = value
-            .lowercase(Locale.US)
-            .replace(BRACKETED_TEXT, " ")
-            .replace(PARENTHESIZED_TEXT, " ")
-            .replace(CHANNEL_QUALIFIERS, " ")
-            .replace("+", " plus ")
-            .replace(NON_ALPHANUMERIC, "")
-            .trim()
-        return simplified.ifBlank { null }
-    }
 
     private fun skip(parser: XmlPullParser) {
         if (parser.eventType != XmlPullParser.START_TAG) return
@@ -467,20 +370,6 @@ private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
         const val DEFAULT_FUTURE_WINDOW_MS = 18 * 60 * 60 * 1000L
 
         val IMPORT_MUTEX = Mutex()
-
-        val XMLTV_UTC_FORMATTER: DateTimeFormatter =
-            DateTimeFormatter.ofPattern("yyyyMMddHHmmss")
-        val XMLTV_OFFSET_FORMATTER: DateTimeFormatter =
-            DateTimeFormatter.ofPattern("yyyyMMddHHmmss Z")
-
-        val OFFSET_4 = Regex("[+-]\\d{4}")
-        val OFFSET_WITH_COLON = Regex("[+-]\\d{2}:\\d{2}")
-        val BRACKETED_TEXT = Regex("""\[[^\]]*]""")
-        val PARENTHESIZED_TEXT = Regex("""\([^)]*\)""")
-        val CHANNEL_QUALIFIERS = Regex(
-            """\b(hd|uhd|fhd|sd|4k|1080p|720p|hevc|h265|h264|hdr|aac|fps|usa|us|uk|ca|au)\b"""
-        )
-        val NON_ALPHANUMERIC = Regex("""[^a-z0-9]+""")
 
         var dateParseFailureLogsRemaining = MAX_DATE_PARSE_FAILURE_LOGS
     }

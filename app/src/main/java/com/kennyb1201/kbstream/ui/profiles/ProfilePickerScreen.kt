@@ -285,13 +285,14 @@ fun ProfilePickerScreen(
                         // Exit gate verified: run the held action (the
                         // destination profile has no PIN of its own — that
                         // case was routed to the enter gate above).
+                        // `action` is non-null by construction here
+                        // (wasExitGate checks it), so there is no null branch.
                         when (action) {
                             is ExitGateAction.Switch -> {
                                 ProfileManager.setActive(pickerContext, action.target)
                                 onSelect()
                             }
                             ExitGateAction.Manage -> onManage()
-                            null -> Unit
                         }
                     } else {
                         // Enter gate verified: activate the destination.

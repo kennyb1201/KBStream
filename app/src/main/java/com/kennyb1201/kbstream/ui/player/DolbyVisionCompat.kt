@@ -35,6 +35,30 @@ import java.io.ByteArrayOutputStream
  * semantics popularized by the dovi_tool / ffmpeg toolchain; written
  * independently against Media3 1.9 internals.
  */
+/**
+ * How long a recorded native-Dolby-Vision decoder failure keeps suppressing
+ * DV passthrough on this device.
+ *
+ * The failure is a property of the box (TCL/Realtek's
+ * `OMX.realtek.video.dvhe.st.decoder` errors out on the first frame with
+ * `OMX_ErrorInsufficientResources`), not of the file, so remembering it saves
+ * every later DV title the failed attempt, the error banner and the rebuild.
+ * It expires rather than sticking forever: a firmware or decoder-list change
+ * should be able to bring Dolby Vision back without the user clearing app
+ * data, and the cost of re-probing is one failed attempt every two weeks.
+ */
+internal const val DV_PASSTHROUGH_FAILURE_TTL_MS = 14L * 24L * 60L * 60L * 1000L
+
+/**
+ * Whether a recorded DV decoder failure should still suppress passthrough.
+ * [failedAtMillis] is 0 when nothing has ever been recorded.
+ */
+internal fun dvPassthroughSuppressed(
+    failedAtMillis: Long,
+    nowMillis: Long
+): Boolean = failedAtMillis > 0L &&
+    (nowMillis - failedAtMillis) < DV_PASSTHROUGH_FAILURE_TTL_MS
+
 internal object DolbyVisionCompat {
 
     // Dual-layer Profile 7 (Blu-ray remuxes) is the DV flavor that routinely

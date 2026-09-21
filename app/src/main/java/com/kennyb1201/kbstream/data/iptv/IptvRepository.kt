@@ -21,6 +21,16 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import org.json.JSONObject
 
+/**
+ * Coarse time bucket for the lineup memo key. The guide window slides with
+ * `now` on every request, so keying on the raw bounds could never match. One
+ * minute is short enough that a memoized "now playing" cannot go visibly stale
+ * and long enough to absorb the duplicate request the field log showed.
+ */
+internal fun guideWindowBucket(utcMillis: Long): Long = utcMillis / GUIDE_WINDOW_BUCKET_MS
+
+internal const val GUIDE_WINDOW_BUCKET_MS = 60_000L
+
 /** A fully-aired program with a resolved catch-up (DVR) playback URL. */
 data class CatchupProgram(
     val title: String,
@@ -49,6 +59,20 @@ class IptvRepository(
 
     private val guideSnapshotMutex = Mutex()
     private val guideSnapshots = ConcurrentHashMap<String, GuideSnapshot>()
+
+    // Memoized lineup results. The guide flow is re-subscribed on every screen
+    // recomposition and refresh tick, and each pass re-runs the entire
+    // pipeline: match resolution plus a program query per 8 channels. The
+    // field log caught the identical pass twice inside 0.4s — same batch row
+    // counts, same 665 rows emitted — which is pure duplicate DB work. The
+    // 14,344-channel snapshot was cached; nothing else was.
+    private val guideQueryCache = java.util.Collections.synchronizedMap(
+        object : LinkedHashMap<GuideQueryKey, CachedGuideQuery>(8, 0.75f, true) {
+            override fun removeEldestEntry(
+                eldest: MutableMap.MutableEntry<GuideQueryKey, CachedGuideQuery>
+            ): Boolean = size > MAX_CACHED_GUIDE_QUERIES
+        }
+    )
 
     suspend fun loadPlaylist(
         playlistUrl: String,
@@ -168,6 +192,30 @@ class IptvRepository(
             return@flow
         }
 
+        // Identical playlist, guides, channel window and minute: the rows
+        // cannot have changed (a successful import clears this cache), so hand
+        // back the previous answer instead of re-querying for it.
+        val cacheKey = GuideQueryKey(
+            playlistUrl = normalizedPlaylistUrl,
+            guideUrls = normalizedGuideUrls,
+            channelIds = playlist.channels.map { it.id },
+            windowStartBucket = guideWindowBucket(windowStart),
+            windowEndBucket = guideWindowBucket(windowEnd),
+            limit = limit
+        )
+        guideQueryCache[cacheKey]?.let { cached ->
+            if (System.currentTimeMillis() - cached.atUtcMillis < GUIDE_QUERY_CACHE_TTL_MS) {
+                Log.w(
+                    TAG,
+                    "LINEUP QUERY memo hit channels=${playlist.channels.size} " +
+                        "rows=${cached.items.size}"
+                )
+                emit(cached.items)
+                return@flow
+            }
+            guideQueryCache.remove(cacheKey)
+        }
+
         // Snapshots for every configured source; a source whose guide has
         // never been imported contributes nothing instead of failing the
         // whole lineup.
@@ -247,14 +295,17 @@ class IptvRepository(
             "LINEUP QUERY rows=${dedupedRows.size} sources=${snapshots.size}"
         )
 
-        emit(
-            mapChannels(
-                channels = playlist.channels,
-                resolvedMatches = resolvedMatches,
-                rows = dedupedRows,
-                nowUtcMillis = System.currentTimeMillis()
-            )
+        val items = mapChannels(
+            channels = playlist.channels,
+            resolvedMatches = resolvedMatches,
+            rows = dedupedRows,
+            nowUtcMillis = System.currentTimeMillis()
         )
+        guideQueryCache[cacheKey] = CachedGuideQuery(
+            items = items,
+            atUtcMillis = System.currentTimeMillis()
+        )
+        emit(items)
     }.flowOn(Dispatchers.Default)
 
     private suspend fun getOrCreateGuideSnapshot(epgUrl: String): GuideSnapshot {
@@ -311,6 +362,8 @@ class IptvRepository(
         guideSnapshotMutex.withLock {
             guideSnapshots.remove(normalizedGuideUrl)
         }
+        // Freshly imported programs: any memoized lineup is stale by definition.
+        guideQueryCache.clear()
     }
 
     private suspend fun loadCachedMatches(
@@ -720,15 +773,8 @@ class IptvRepository(
             endUtcMillis = row.endUtcMillis
         )
 
-    private fun normalizeLookupKey(value: String): String =
-        value.trim()
-            .lowercase(Locale.US)
-            .replace(BRACKETED_TEXT, " ")
-            .replace(PARENTHESIZED_TEXT, " ")
-            .replace("&", " and ")
-            .replace("+", " plus ")
-            .replace(NON_LOOKUP_CHARACTERS, "")
-            .trim()
+    /** See [epgLookupKey] — the matching rules live there so they are testable. */
+    private fun normalizeLookupKey(value: String): String = epgLookupKey(value)
 
     private fun normalizeGuideKey(value: String): String =
         value.trim().lowercase(Locale.US)
@@ -830,6 +876,25 @@ class IptvRepository(
         val guideByDisplayName: Map<String, EpgChannelEntity>
     )
 
+    /**
+     * Identity of a lineup query — everything that can change the emitted rows.
+     * Hits are decided by structural equality, not by a hash, so a collision
+     * can never hand back another window's programs.
+     */
+    private data class GuideQueryKey(
+        val playlistUrl: String,
+        val guideUrls: List<String>,
+        val channelIds: List<String>,
+        val windowStartBucket: Long,
+        val windowEndBucket: Long,
+        val limit: Int
+    )
+
+    private data class CachedGuideQuery(
+        val items: List<IptvChannelWithEpg>,
+        val atUtcMillis: Long
+    )
+
     private companion object {
         const val TAG = "IptvRepository"
         const val CACHE_PAGE_SIZE = 500
@@ -844,9 +909,12 @@ class IptvRepository(
         // useful result.
         const val MIN_PROGRAM_SEARCH_LENGTH = 2
 
-        val BRACKETED_TEXT = Regex("""\[[^]]*]""")
-        val PARENTHESIZED_TEXT = Regex("""\([^)]*\)""")
-        val NON_LOOKUP_CHARACTERS = Regex("""[^a-z0-9.]+""")
+        /** Bound on memoized lineup windows (the guide paginates 80 at a time). */
+        const val MAX_CACHED_GUIDE_QUERIES = 8
+
+        /** How long a memoized lineup may be reused before it is recomputed. */
+        const val GUIDE_QUERY_CACHE_TTL_MS = 60_000L
+
 
         val importRequestMutex = Mutex()
         val activeGuideImports =

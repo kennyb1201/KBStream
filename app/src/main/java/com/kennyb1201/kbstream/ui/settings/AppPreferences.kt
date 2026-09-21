@@ -45,6 +45,7 @@ object AppPreferences {
     private const val KEY_STRIP_HDR10_PLUS = "strip_hdr10_plus"             // independent of the DV mode
     private const val KEY_CONVERT_P7_TO_81 = "dv_convert_p7_to_81"          // P7 → Profile 8.1 (independent of the DV mode)
     private const val KEY_CONVERT_P5_TO_81 = "dv_convert_p5_to_81"          // P5 → Profile 8.1 (independent of the DV mode)
+    private const val KEY_DV_PASSTHROUGH_FAILED_AT = "dv_passthrough_failed_at" // learned: box's DV decoder failed, 0 = none
     private const val KEY_P5_GLES_CORRECTION = "dv_p5_gles_correction"      // legacy: P5 GLES color path is derived now, see getP5GlesCorrection
     private const val KEY_DEFAULT_ASPECT_RATIO = "default_aspect_ratio"     // 0=fit, 1=zoom, 2=fill
     private const val KEY_PREFERRED_AUDIO_LANG = "preferred_audio_language"   // BCP-47 tag or "" for auto
@@ -444,7 +445,35 @@ object AppPreferences {
     }
 
     fun setDvCompatMode(context: Context, mode: Int) {
-        prefs(context).edit().putInt(KEY_DV_COMPAT_MODE, mode).apply()
+        prefs(context).edit()
+            .putInt(KEY_DV_COMPAT_MODE, mode)
+            // Touching the DV mode is the user's "try again" — drop the learned
+            // device capability so the next DV title probes passthrough afresh
+            // (see getDvPassthroughFailedAt).
+            .remove(KEY_DV_PASSTHROUGH_FAILED_AT)
+            .apply()
+    }
+
+    // ── Learned Dolby Vision capability of THIS box ───────────────────────
+    // Some devices advertise a video/dolby-vision decoder, report
+    // format_supported=YES, and then fail the DV decoder on the first frame
+    // (TCL/Realtek: OMX_ErrorInsufficientResources, 0x80001000). That is a
+    // property of the hardware, not of the file, so the player records when it
+    // happened and lets the auto mode start DV titles stripped instead of
+    // repeating the failed attempt on every viewing. The timestamp (not a
+    // bool) keeps it self-healing: DolbyVisionCompat
+    // .DV_PASSTHROUGH_FAILURE_TTL_MS decides when to probe again, and changing
+    // the DV mode clears it outright.
+    fun getDvPassthroughFailedAt(context: Context): Long =
+        prefs(context).getLong(KEY_DV_PASSTHROUGH_FAILED_AT, 0L)
+
+    fun setDvPassthroughFailedAt(context: Context, atMillis: Long) {
+        prefs(context).edit().putLong(KEY_DV_PASSTHROUGH_FAILED_AT, atMillis).apply()
+    }
+
+    fun clearDvPassthroughFailure(context: Context) {
+        if (getDvPassthroughFailedAt(context) == 0L) return
+        prefs(context).edit().remove(KEY_DV_PASSTHROUGH_FAILED_AT).apply()
     }
 
     // ── Per-profile 8.1 conversion toggles ───────────────────────────────

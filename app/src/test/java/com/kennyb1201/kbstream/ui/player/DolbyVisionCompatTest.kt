@@ -133,4 +133,32 @@ class DolbyVisionCompatTest {
         assertEquals("DV P7 → 8.1", normalizeCodec("hvc1.2.4.L153.B0", "dvhe.07.06", convertedTo81 = true))
         assertEquals("H.265", normalizeCodec("hvc1.2.4.L153.B0"))
     }
+
+    // Learned device capability: a box whose DV decoder hard-fails.
+
+    @Test
+    fun `a recorded DV decoder failure suppresses passthrough inside its TTL`() {
+        val failedAt = 1_000_000L
+        assertTrue(dvPassthroughSuppressed(failedAt, failedAt))
+        assertTrue(
+            dvPassthroughSuppressed(
+                failedAt,
+                failedAt + DV_PASSTHROUGH_FAILURE_TTL_MS - 1L
+            )
+        )
+    }
+
+    @Test
+    fun `the suppression expires so Dolby Vision can come back on its own`() {
+        val failedAt = 1_000_000L
+        assertFalse(dvPassthroughSuppressed(failedAt, failedAt + DV_PASSTHROUGH_FAILURE_TTL_MS))
+        assertFalse(
+            dvPassthroughSuppressed(failedAt, failedAt + DV_PASSTHROUGH_FAILURE_TTL_MS * 10L)
+        )
+    }
+
+    @Test
+    fun `nothing recorded means passthrough is never suppressed`() {
+        assertFalse(dvPassthroughSuppressed(0L, System.currentTimeMillis()))
+    }
 }

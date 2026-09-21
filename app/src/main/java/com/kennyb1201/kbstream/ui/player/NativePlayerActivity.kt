@@ -492,6 +492,13 @@ class NativePlayerActivity : ComponentActivity() {
     private var manualRetryToken = 0
     private var rebufferStartedAtMs = 0L
 
+    // Startup cost breakdown, logged once per attempt at the first frame.
+    // The "Rebuffer stall" line alone cannot say whether the seconds went into
+    // loading the source or into the decoder's first frame, and any buffering
+    // policy change for heavy 4K sources has to be based on that split.
+    private var startupTraceStartMs = 0L
+    private var firstReadyAtMs = 0L
+
     // Black-video watchdog: some files reach READY with audio playing but the
     // video decoder never produces a frame (silent black screen, no error).
     // Track first-frame rendering and surface an actionable notice instead of
@@ -2794,6 +2801,8 @@ class NativePlayerActivity : ComponentActivity() {
         // black-video watchdog can re-arm and report at most once per attempt.
         videoTrackPresent = false
         firstFrameRendered = false
+        startupTraceStartMs = System.currentTimeMillis()
+        firstReadyAtMs = 0L
         blackVideoNoticeShown = false
         // Invalidate any black-video recovery scheduled for the previous
         // player instance. Without this, a watchdog armed on the old player
@@ -2891,7 +2900,32 @@ class NativePlayerActivity : ComponentActivity() {
         // to HDR10, because a DV-capable box (Fire TV Stick) does not imply a
         // DV-capable display — the user picks Strip All precisely for TVs that
         // black-screen on the DV passthrough.
-        val nativeDvSupported = DolbyVisionCompat.supportsNativeDolbyVision()
+        // Learned capability of THIS box. A device can advertise
+        // video/dolby-vision and still hard-fail the DV decoder on the first
+        // frame (TCL/Realtek: OMX_ErrorInsufficientResources, 0x80001000), so
+        // the player records that failure and stops choosing passthrough for
+        // this box: without it, every DV title pays the failed attempt, the
+        // error banner and a full player rebuild before landing on the same
+        // strip it could have used from the start. Only the auto mode consults
+        // it — "None" is the user explicitly asking for pass-through — and the
+        // record expires / is cleared when the DV mode changes, so Dolby
+        // Vision can come back on its own.
+        val deviceNativeDvSupported = DolbyVisionCompat.supportsNativeDolbyVision()
+        val dvPassthroughFailedAt = AppPreferences.getDvPassthroughFailedAt(this)
+        val nativeDvSuppressed =
+            dvCompatMode == AppPreferences.DV_COMPAT_AUTO &&
+                dvPassthroughSuppressed(
+                    failedAtMillis = dvPassthroughFailedAt,
+                    nowMillis = System.currentTimeMillis()
+                )
+        val nativeDvSupported = deviceNativeDvSupported && !nativeDvSuppressed
+        if (nativeDvSuppressed) {
+            Log.i(
+                "PLAYER_DV",
+                "Native DV passthrough suppressed — this device's DV decoder failed at " +
+                    "$dvPassthroughFailedAt (deviceNativeDv=$deviceNativeDvSupported)"
+            )
+        }
         val dvRewriteEnabled = dvCompatMode != AppPreferences.DV_COMPAT_OFF
         val convertAllProfiles = dvCompatMode == AppPreferences.DV_COMPAT_ALL
         // Per-profile 8.1 conversion: the "P7 → 8.1" mode (Auto) always
@@ -2981,7 +3015,7 @@ class NativePlayerActivity : ComponentActivity() {
             "DV settings mode=$dvCompatMode rewriteEnabled=$dvRewriteEnabled " +
                 "allProfiles=$convertAllProfiles to81=$convertTo81 " +
                 "(p7=$convertP7To81 p5=$convertP5To81) stripHdr10Plus=$stripHdr10Plus " +
-                "nativeDv=$nativeDvSupported " +
+                "nativeDv=$nativeDvSupported deviceNativeDv=$deviceNativeDvSupported " +
                 "audioDecoder=$audioDecoderPriority " +
                 "audioSeparate=${!currentAudioUrl.isNullOrBlank()}"
         )
@@ -3292,7 +3326,12 @@ class NativePlayerActivity : ComponentActivity() {
                     scheduleAutoHide()
                 }
                 scrobbleSimkl("start")
-                if (enableTunneling && !firstFrameRendered && exoPlayer?.currentPosition ?: 0L < 500L) {
+                // Nudge a tunneled stream that renders nothing on its own. The
+                // elvis used to sit outside the comparison, which made the
+                // right-hand side dead code and hid what is actually tested.
+                if (enableTunneling && !firstFrameRendered &&
+                    (exoPlayer?.currentPosition ?: 0L) < 500L
+                ) {
                     val pos = exoPlayer?.currentPosition ?: 0L
                     exoPlayer?.seekTo(pos + 100L)
                 }
@@ -3308,6 +3347,9 @@ class NativePlayerActivity : ComponentActivity() {
                     updateUIBuffering()
                 }
                 Player.STATE_READY -> {
+                    // First READY of this attempt: the point that splits
+                    // "source loaded" from "decoder painted".
+                    if (firstReadyAtMs == 0L) firstReadyAtMs = System.currentTimeMillis()
                     if (rebufferStartedAtMs != 0L) {
                         val stalledMs = System.currentTimeMillis() - rebufferStartedAtMs
                         Log.w("PLAYER_PERF", "Rebuffer stall: ${stalledMs}ms")
@@ -3441,6 +3483,12 @@ class NativePlayerActivity : ComponentActivity() {
             ) {
                 dvStripRetryDone = true
                 forceDvStripForSession = true
+                // Remember it for this device so the next DV title starts
+                // stripped instead of paying this failure and rebuild again.
+                AppPreferences.setDvPassthroughFailedAt(
+                    this@NativePlayerActivity,
+                    System.currentTimeMillis()
+                )
                 errorMessageStr = null
                 Log.w(
                     "PLAYER_DV",
@@ -3596,6 +3644,19 @@ class NativePlayerActivity : ComponentActivity() {
         if (firstFrameRendered) return
         firstFrameRendered = true
         firstFrameRenderedAtMs = System.currentTimeMillis()
+        // One actionable startup line. The right-hand gap is the decoder/GPU,
+        // the left-hand one is the network + extractor (the DV strip rewrites
+        // every sample on the way through) + buffer fill.
+        if (startupTraceStartMs > 0L && firstReadyAtMs > 0L) {
+            Log.w(
+                "PLAYER_PERF",
+                "Startup source→ready=${firstReadyAtMs - startupTraceStartMs}ms " +
+                    "ready→firstFrame=${firstFrameRenderedAtMs - firstReadyAtMs}ms " +
+                    "total=${firstFrameRenderedAtMs - startupTraceStartMs}ms " +
+                    "codec=${streamCodec ?: "?"} ${streamWidth}x$streamHeight " +
+                    "bitrate=${streamBitrate} mime=${streamMimeType ?: "?"}"
+            )
+        }
         reconnectingContainer.visibility = View.GONE
         bufferingSpinner.visibility = View.GONE
         // The first rendered frame is the moment the splash goes away: video
@@ -3610,6 +3671,14 @@ class NativePlayerActivity : ComponentActivity() {
         // setting it on isPlaying turned any post-audio buffering into the
         // small-spinner branch instead of the full splash.
         hasPlayedOnce = true
+        // Dolby Vision passthrough that actually renders is proof this box can
+        // do it, so forget any recorded failure. A track that still carries the
+        // dvhe/dvh1 label arrived as Dolby Vision (the extractor did not strip
+        // it); a stripped one arrives as plain hvc1 and correctly proves
+        // nothing.
+        if (dvLabelFromCodec(streamCodec) != null) {
+            AppPreferences.clearDvPassthroughFailure(this)
+        }
     }
 
     /**
