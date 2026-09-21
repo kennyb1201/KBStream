@@ -436,16 +436,41 @@ fun GuideScreen(
     //     while nothing else consumed the press; that made this screen a
     //     one-way door whenever a focused field ate Back.
     //  3. the setup overlay over a loaded guide closes, staying put;
-    //  4. anything else leaves the guide.
-    // Registered on the screen that owns the state, so the outcome never
-    // depends on which other handler happens to be enabled.
-    BackHandler(enabled = showSearch || showSetup || playlist == null) {
+    //  4. anything else leaves the guide (the same place MainActivity routes
+    //     Back to from the guide).
+    //
+    // Two entry points share this one decision:
+    //  - the root key handler, which claims Back on the way DOWN the tree so no
+    //    focused child can swallow it first (the setup form's own fields used
+    //    to be able to);
+    //  - the BackHandler, which covers the frames where nothing in the guide
+    //    holds focus at all, so the key never reaches a key handler.
+    val handleGuideBack: () -> Boolean = {
         when {
-            showSearch -> dismissSearch()
-            playlist == null -> onBack()
-            showSetup -> dismissSetup()
-            else -> onBack()
+            showSearch -> {
+                dismissSearch()
+                true
+            }
+            // Before a playlist exists the setup form IS this screen, so Back
+            // is the only way out of it.
+            playlist == null -> {
+                onBack()
+                true
+            }
+            // Playlist loaded: the form is an overlay over the guide, so Back
+            // closes the overlay and stays here.
+            showSetup -> {
+                dismissSetup()
+                true
+            }
+            else -> {
+                onBack()
+                true
+            }
         }
+    }
+    BackHandler(enabled = showSearch || showSetup || playlist == null) {
+        handleGuideBack()
     }
 
     // Live-filtered channel list for the search overlay: case-insensitive
@@ -748,6 +773,16 @@ LaunchedEffect(channelListState, groupedChannelIds) {
             .background(KBVoid)
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+
+                // Back is claimed here, on the way down the tree, so nothing
+                // focused inside the screen can get first refusal on it — the
+                // playlist setup form's URL fields were able to, which is what
+                // made that screen feel like a trap. (An OPEN IME window is
+                // the one thing this cannot see: it owns Back itself, which is
+                // why the setup fields never open the keyboard on focus.)
+                if (event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_BACK) {
+                    return@onPreviewKeyEvent handleGuideBack()
+                }
 
                 // Channel-number entry only when the guide owns the stage:
                 // never while the setup form, hidden-items manager, or
