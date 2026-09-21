@@ -1205,10 +1205,29 @@ object MdbListClient {
             }.getOrNull()
         }
 
+    /**
+     * MDBList's list/watchlist items carry the artwork as `poster`, but the
+     * field is not always an absolute URL: some payloads hand back a bare
+     * TMDB path ("\/abc.jpg") and others name the key `poster_url` /
+     * `poster_path`. A relative value loaded verbatim by the poster grid is
+     * exactly the "MDBList rows have no poster" symptom, so normalize to an
+     * absolute image URL (prefixed with TMDB's w500 base) and treat the
+     * literal "null" string as absent.
+     */
+    private fun normalizePosterUrl(raw: String?): String? {
+        val value = raw?.trim()?.takeIf { it.isNotBlank() && !it.equals("null", true) }
+            ?: return null
+        if (value.startsWith("http://") || value.startsWith("https://")) return value
+        val path = if (value.startsWith("/")) value else "/$value"
+        return "https://image.tmdb.org/t/p/w500$path"
+    }
+
     private fun entryFromJson(obj: JSONObject, fallbackType: String): MdbListEntry? {
         val ids = obj.optJSONObject("ids")
         val imdbId = ids?.optString("imdb")?.takeIf { it.startsWith("tt") }
+            ?: obj.optString("imdb_id", "").takeIf { it.startsWith("tt") }
         val tmdbId = ids?.optInt("tmdb", -1)?.takeIf { it > 0 }
+            ?: obj.optInt("tmdb_id", -1).takeIf { it > 0 }
         val mediatype = obj.optString("mediatype", fallbackType)
         return MdbListEntry(
             title = obj.optString("title", "").ifBlank {
@@ -1221,7 +1240,13 @@ object MdbListClient {
             },
             year = obj.optInt("release_year", -1).takeIf { it > 0 }
                 ?: obj.optInt("year", -1).takeIf { it > 0 },
-            poster = obj.optString("poster", "").ifBlank { null },
+            poster = normalizePosterUrl(
+                obj.optString("poster", "").ifBlank {
+                    obj.optString("poster_url", "").ifBlank {
+                        obj.optString("poster_path", "")
+                    }
+                }
+            ),
             imdbId = imdbId,
             tmdbId = tmdbId
         )

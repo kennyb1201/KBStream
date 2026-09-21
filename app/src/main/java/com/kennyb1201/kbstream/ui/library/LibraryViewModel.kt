@@ -74,6 +74,12 @@ data class LibraryUiState(
     // TMDB rating per (type::imdb-or-tmdb key) for the sort + captions.
     val ratings: Map<String, Double> = emptyMap(),
 
+    // Resolved poster URL per dedupe key, filled in during enrichment for
+    // rows whose tracker payload carried no artwork (MDBList watchlists and
+    // personal lists often omit it). Applied by [LibraryViewModel.pushDisplay]
+    // so those grids show real posters instead of title-only placeholders.
+    val posters: Map<String, String> = emptyMap(),
+
     // Watched badges: set of "type::imdbId" keys, same convention the
     // genre/actor screens use.
     val watchedKeys: Set<String> = emptyList<String>().toSet(),
@@ -468,7 +474,8 @@ class LibraryViewModel(
             data class Resolved(
                 val key: String,
                 val rating: Double?,
-                val watched: String?
+                val watched: String?,
+                val poster: String?
             )
 
             val resolved = coroutineScope {
@@ -507,10 +514,22 @@ class LibraryViewModel(
                             }.getOrNull()
                             rating = detail?.voteAverage?.takeIf { it > 0.0 }
 
+                            // Poster backfill: only needed when the tracker
+                            // payload did not carry artwork. Reuses the same
+                            // cached TMDB detail this block already fetched
+                            // for the rating, so it costs no extra request.
+                            val poster = if (item.posterUrl.isNullOrBlank()) {
+                                detail?.posterPath?.takeIf { it.isNotBlank() }
+                                    ?.let { TmdbRepository.POSTER_BASE + it }
+                            } else {
+                                null
+                            }
+
                             Resolved(
                                 key = LocalLibraryStore.dedupeKey(item),
                                 rating = rating,
-                                watched = watched
+                                watched = watched,
+                                poster = poster
                             )
                         }
                     }.awaitAll()
@@ -519,12 +538,15 @@ class LibraryViewModel(
             if (version != requestVersion) return@launch
 
             val ratings = _uiState.value.ratings.toMutableMap()
+            val posters = _uiState.value.posters.toMutableMap()
             resolved.forEach { r ->
                 r.rating?.let { ratings[r.key] = it }
+                r.poster?.let { posters[r.key] = it }
             }
 
             _uiState.value = _uiState.value.copy(
                 ratings = ratings,
+                posters = posters,
                 watchedKeys = _uiState.value.watchedKeys +
                     resolved.mapNotNull { it.watched }.toSet()
             )
@@ -562,20 +584,42 @@ class LibraryViewModel(
         val ratings = state.ratings
         val watched = state.watchedKeys
         val hide = state.hideWatched
+        val posters = state.posters
         _uiState.value = state.copy(
             allItems = applyUnwatched(
-                sortItems(canonicalAll, sort, ratings), watched, hide
+                applyPosters(sortItems(canonicalAll, sort, ratings), posters), watched, hide
             ),
             localItems = applyUnwatched(
-                sortItems(canonicalLocal, sort, ratings), watched, hide
+                applyPosters(sortItems(canonicalLocal, sort, ratings), posters), watched, hide
             ),
             watchlistItems = applyUnwatched(
-                sortItems(canonicalWatchlist, sort, ratings), watched, hide
+                applyPosters(sortItems(canonicalWatchlist, sort, ratings), posters), watched, hide
             ),
             selectedListItems = applyUnwatched(
-                sortItems(canonicalListItems, sort, ratings), watched, hide
+                applyPosters(sortItems(canonicalListItems, sort, ratings), posters), watched, hide
             )
         )
+    }
+
+    /**
+     * Fills in missing poster URLs from the resolved-poster map (keyed by
+     * dedupe key). Rows that already carry a poster are left untouched, so a
+     * tracker-provided URL always wins over the TMDB fallback.
+     */
+    private fun applyPosters(
+        items: List<LibraryItem>,
+        posters: Map<String, String>
+    ): List<LibraryItem> {
+        if (posters.isEmpty()) return items
+        return items.map { item ->
+            if (!item.posterUrl.isNullOrBlank()) {
+                item
+            } else {
+                posters[LocalLibraryStore.dedupeKey(item)]
+                    ?.let { item.copy(posterUrl = it) }
+                    ?: item
+            }
+        }
     }
 
     /**

@@ -56,6 +56,8 @@ import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
+import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
@@ -82,10 +84,16 @@ fun LibraryScreen(
 
     val topFocusRequester = remember { FocusRequester() }
 
+    // The row whose long-press menu is open (null = no menu). A long press
+    // opens this menu instead of removing straight away, so removal is an
+    // explicit choice rather than an accidental one.
+    var menuItem by remember { mutableStateOf<LibraryItem?>(null) }
+
     LaunchedEffect(Unit) {
         topFocusRequester.requestFocus()
     }
 
+    Box(modifier = Modifier.fillMaxSize()) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -182,12 +190,7 @@ fun LibraryScreen(
                     },
                     sourceLabel = { it.source.label },
                     onItemClick = onItemClick,
-                    onItemLongClick = { item ->
-                        // Simkl rows are add-only (no API to remove).
-                        if (item.source != LibrarySource.SIMKL_WATCHLIST) {
-                            viewModel.removeItem(item)
-                        }
-                    },
+                    onItemLongClick = { item -> menuItem = item },
                     ratings = state.ratings,
                     watchedKeys = state.watchedKeys
                 )
@@ -204,9 +207,7 @@ fun LibraryScreen(
                     },
                     sourceLabel = { it.source.label },
                     onItemClick = onItemClick,
-                    onItemLongClick = { item ->
-                        viewModel.removeItem(item)
-                    },
+                    onItemLongClick = { item -> menuItem = item },
                     ratings = state.ratings,
                     watchedKeys = state.watchedKeys
                 )
@@ -229,12 +230,7 @@ fun LibraryScreen(
                     },
                     sourceLabel = { it.source.label },
                     onItemClick = onItemClick,
-                    onItemLongClick = { item ->
-                        // Simkl rows are add-only (no API to remove).
-                        if (item.source != LibrarySource.SIMKL_WATCHLIST) {
-                            viewModel.removeItem(item)
-                        }
-                    },
+                    onItemLongClick = { item -> menuItem = item },
                     ratings = state.ratings,
                     watchedKeys = state.watchedKeys
                 )
@@ -256,13 +252,104 @@ fun LibraryScreen(
                     },
                     onCreateList = { viewModel.createLocalList(it) },
                     onItemClick = onItemClick,
-                    onItemLongClick = { item -> viewModel.removeItem(item) },
+                    onItemLongClick = { item -> menuItem = item },
                     ratings = state.ratings,
                     watchedKeys = state.watchedKeys
                 )
             }
         }
     }
+
+    // Long-press menu overlay. Rendered as a sibling of the content Column so
+    // it dims and traps focus above the grid, exactly like the shared poster
+    // menu on every other screen.
+    menuItem?.let { item ->
+        LibraryItemMenu(
+            item = item,
+            onDismiss = { menuItem = null },
+            onOpenDetails = { id ->
+                menuItem = null
+                onItemClick(item.mediaType, id)
+            },
+            onRemove = {
+                menuItem = null
+                viewModel.removeItem(item)
+            }
+        )
+    }
+    }
+}
+
+/**
+ * Long-press menu for one Library row, built on the app-wide
+ * [PosterContextMenu] so a long press looks and behaves the same here as on
+ * Home, Search and the detail rails. Simkl rows are add-only (the API has no
+ * remove-from-watchlist endpoint), so they get an explanatory row instead of
+ * a destructive one.
+ */
+@Composable
+private fun LibraryItemMenu(
+    item: LibraryItem,
+    onDismiss: () -> Unit,
+    onOpenDetails: (String) -> Unit,
+    onRemove: () -> Unit
+) {
+    val subtitle = listOfNotNull(
+        item.year?.toString(),
+        item.source.label
+    ).joinToString(" · ")
+
+    PosterContextMenu(
+        title = item.title,
+        subtitle = subtitle,
+        actions = buildList {
+            item.navigationId?.let { id ->
+                add(
+                    PosterContextAction(
+                        label = "Go to Details",
+                        description = "Open this title's detail page"
+                    ) {
+                        onOpenDetails(id)
+                    }
+                )
+            }
+
+            when (item.source) {
+                LibrarySource.LOCAL,
+                LibrarySource.MDBLIST_WATCHLIST -> add(
+                    PosterContextAction(
+                        label = "Remove from Library",
+                        description = "Remove it here and on every connected tracker",
+                        isDestructive = true
+                    ) {
+                        onRemove()
+                    }
+                )
+
+                LibrarySource.LOCAL_LIST,
+                LibrarySource.MDBLIST_LIST -> add(
+                    PosterContextAction(
+                        label = "Remove from this list",
+                        description = item.listName?.let { "Take it out of \"$it\"" },
+                        isDestructive = true
+                    ) {
+                        onRemove()
+                    }
+                )
+
+                LibrarySource.SIMKL_WATCHLIST,
+                LibrarySource.SIMKL_LIST -> add(
+                    PosterContextAction(
+                        label = "Managed on Simkl",
+                        description = "Remove it from your watchlist on simkl.com"
+                    ) {
+                        onDismiss()
+                    }
+                )
+            }
+        },
+        onDismiss = onDismiss
+    )
 }
 
 /** Thin rule between the filter group and the sort group in the chip strip. */
