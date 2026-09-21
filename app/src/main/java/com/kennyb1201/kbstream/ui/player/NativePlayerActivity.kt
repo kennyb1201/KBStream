@@ -135,6 +135,15 @@ private const val ASPECT_MODE_FORCE_4_3 = 4
 private const val CONTROLS_HIDE_DELAY_MS = 6_000L
 private const val NEXT_UP_COUNTDOWN_SECONDS = 5
 
+// How long a duplicate of a confirm press that skipped a segment keeps being
+// absorbed as that press's own trailing event - see [dispatchKeyEvent].
+//
+// Sized to cover a select press held long enough to autorepeat (the first
+// repeat lands ~500 ms in) as well as an IR remote's fast double-fire. The
+// cost is that a deliberate second press inside the window does nothing; a
+// press after it is an ordinary controls-overlay toggle again.
+private const val SKIP_CONFIRM_GRACE_MS = 1_200L
+
 // Zap banner: how long the channel-info overlay stays on screen after the
 // last CH+/CH− press, and how much EPG lookahead a single lookup loads.
 private const val ZAP_BANNER_VISIBLE_MS = 5_000L
@@ -934,6 +943,10 @@ class NativePlayerActivity : ComponentActivity() {
     // Segments already auto-skipped this session, so deliberately seeking back
     // into an intro is never fought.
     private val autoSkippedSegments = HashSet<String>()
+
+    /// Uptime until which a duplicate of the confirm press that skipped a
+    /// segment is still absorbed as that press's own trailing event.
+    private var skipConfirmGraceUntilMs = 0L
     private var activeIntroStampBacking: IntroDbStamp? = null
 
     /**
@@ -1280,6 +1293,86 @@ class NativePlayerActivity : ComponentActivity() {
         splashItemName?.visibility = View.GONE
     }
 
+    /**
+     * True when nothing but the video (or a skip prompt) owns the screen: no
+     * controls overlay, panel, picker, error card or next-up popup. The
+     * confirm-key handling in [dispatchKeyEvent] bails out on a false here, so
+     * those UIs keep OK for their own buttons.
+     */
+    private fun plainPlaybackForeground(): Boolean =
+        !controlsVisible &&
+            !showSettingsPanel &&
+            !isPickerShowing &&
+            errorContainer.visibility != View.VISIBLE &&
+            infoPanel.visibility != View.VISIBLE &&
+            !(::nextUpPanel.isInitialized && nextUpPanel.visibility == View.VISIBLE)
+
+    /**
+     * The D-pad keys that raise the controls overlay. Swallowed while a skip
+     * prompt is up - see [dispatchKeyEvent] - because a skippable segment is
+     * the prompt's alone. Nothing else loses anything by it: UP/DOWN only ever
+     * reach the overlay or the live channel zap (and a live channel never
+     * offers a prompt), and LEFT/RIGHT only reach the overlay too, since the
+     * direct-scrub branch of the player's key handling requires no visible
+     * prompt in the first place.
+     */
+    private fun isOverlayRaisingKey(keyCode: Int): Boolean =
+        keyCode == KeyEvent.KEYCODE_DPAD_UP ||
+            keyCode == KeyEvent.KEYCODE_DPAD_DOWN ||
+            keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
+            keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
+
+    /**
+     * While a segment is skippable, the controls overlay cannot be raised and
+     * OK can only do one thing: skip.
+     *
+     * The player's own confirm handling sits on the video surface's key
+     * listener, which picks between "activate the skip prompt" and "toggle the
+     * controls overlay" by reading the prompt's visibility as the press
+     * arrives. The press that skips hides the prompt while doing so, so every
+     * event after it in the same press - a held key's autorepeat, or the
+     * trailing half of an IR remote's double-fire - was read as "no prompt
+     * up" and toggled the overlay on over the video the user had just skipped
+     * into. Focus then sat on the overlay's play/pause button, so the next OK
+     * press toggled playback instead of dismissing it and Back was the only
+     * way out of the overlay. The same handler is what opened the overlay on
+     * UP/DOWN/LEFT/RIGHT, and it read the visible prompt as "the user is
+     * reaching for the skip button", so it opened the overlay *and* parked
+     * focus on the prompt.
+     *
+     * Resolving both here - once, before the view tree sees them - is what
+     * makes a skippable segment prompt-only. Media keys are deliberately left
+     * alone: a pause is a deliberate request and pausing needs the overlay.
+     * The guard keeps every panel, picker and popup working normally.
+     */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (plainPlaybackForeground()) {
+            if (btnSkipIntro.visibility == View.VISIBLE) {
+                if (isConfirmKey(event.keyCode)) {
+                    if (event.action == KeyEvent.ACTION_DOWN) {
+                        // One press, one skip: autorepeat must not skip twice,
+                        // and the grace window is armed off the press that did
+                        // skip.
+                        if (event.repeatCount == 0) btnSkipIntro.performClick()
+                        skipConfirmGraceUntilMs =
+                            android.os.SystemClock.uptimeMillis() + SKIP_CONFIRM_GRACE_MS
+                    }
+                    return true
+                }
+                if (isOverlayRaisingKey(event.keyCode)) return true
+            } else if (
+                isConfirmKey(event.keyCode) &&
+                android.os.SystemClock.uptimeMillis() < skipConfirmGraceUntilMs
+            ) {
+                // The prompt is gone - either the press above consumed it, or
+                // the segment ended on its own. Absorb what is left of that
+                // press instead of letting it become an overlay toggle.
+                return true
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -1293,6 +1386,22 @@ class NativePlayerActivity : ComponentActivity() {
 
         setContentView(R.layout.activity_player)
         bindViews()
+        // An overlay that was already up when a segment became skippable comes
+        // down with the prompt's arrival, so a skip segment never has one on
+        // screen - whether it was opened before the segment or through the key
+        // paths this class does not own (a touch tap on the video). A panel,
+        // picker or info view is left alone: those are deliberate, and their
+        // owner tears them down.
+        btnSkipIntro.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            if (btnSkipIntro.visibility == View.VISIBLE &&
+                controlsVisible &&
+                !showSettingsPanel &&
+                !isPickerShowing &&
+                infoPanel.visibility != View.VISIBLE
+            ) {
+                hideControls()
+            }
+        }
         addonSubtitleController = AddonSubtitleController(this) {
             // Separate-audio sessions cannot be rebuilt via setMediaItem
             // without losing the merged audio track, so addon subtitle
