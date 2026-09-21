@@ -584,6 +584,34 @@ object MdbListClient {
     }
 
     /**
+     * POST /sync/watched — record a WHOLE show as watched from its show ids
+     * alone (a `shows` entry with no seasons/episodes). MDBList expands that
+     * server-side across the show's episodes, exactly like the ids-only
+     * `shows` body [/sync/watched/remove] already relies on — so a poster
+     * "Mark as Watched" on a series is one call, without the app having to
+     * know the season/episode list first (which is the data a long-press on
+     * a poster never has).
+     */
+    suspend fun pushWatchedShow(
+        context: Context,
+        imdbId: String?,
+        tmdbId: Int?
+    ): Boolean {
+        val apiKey = apiKey(context)
+        if (apiKey.isBlank()) return false
+        val ids = idsNode(imdbId, tmdbId) ?: return false
+        val payload = JSONObject().put(
+            "shows",
+            JSONArray().put(
+                JSONObject()
+                    .put("ids", ids)
+                    .put("watched_at", java.time.Instant.now().toString())
+            )
+        )
+        return postSync(apiKey, "$BASE/sync/watched?apikey=$apiKey", payload)
+    }
+
+    /**
      * Episode watch pushes/removes use the nested Trakt-compatible shape:
      * {shows: [{ids, seasons: [{number, episodes: [{number}]}]}]}. The
      * top-level `episodes` array on /sync/watched matches by episode-level

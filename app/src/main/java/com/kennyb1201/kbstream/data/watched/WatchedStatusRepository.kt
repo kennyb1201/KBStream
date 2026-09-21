@@ -1339,24 +1339,34 @@ class WatchedStatusRepository(
             }
         }
 
-        // Mirror whole-title marks to MDBList when a key is set. Movies
-        // push directly; whole-show marks need per-season data MDBList's
-        // ids-only body can't express, so series rely on the per-episode
-        // pushes from the player completion path instead.
+        // Mirror whole-title marks to MDBList when a key is set. Movies push
+        // as a completed movie and series as a whole-show entry — MDBList
+        // expands that ids-only show across every episode server-side, the
+        // same shape its /sync/watched/remove already accepts, so both media
+        // types reach the account from one long-press. (Series used to be
+        // skipped here on the belief that ids alone could not express a
+        // whole-show mark, which left MDBList showing nothing after a mark
+        // that Simkl recorded fine.)
         com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext
             ?.let { mdbListContext ->
-                if (
-                    MdbListClient.isConfigured(mdbListContext) &&
-                    normalizedType == "movie"
-                ) {
+                if (MdbListClient.isConfigured(mdbListContext)) {
                     try {
-                        MdbListClient.pushWatched(
-                            mdbListContext,
-                            mediaType = "movie",
-                            imdbId = normalizedId.takeIf { it.startsWith("tt") },
-                            tmdbId = normalizedId.removePrefix("tmdb:").toIntOrNull()
-                                ?.takeIf { normalizedId.startsWith("tmdb:") }
-                        )
+                        when (normalizedType) {
+                            "movie" -> MdbListClient.pushWatched(
+                                mdbListContext,
+                                mediaType = "movie",
+                                imdbId = normalizedId.takeIf { it.startsWith("tt") },
+                                tmdbId = normalizedId.removePrefix("tmdb:").toIntOrNull()
+                                    ?.takeIf { normalizedId.startsWith("tmdb:") }
+                            )
+
+                            "series" -> MdbListClient.pushWatchedShow(
+                                mdbListContext,
+                                imdbId = normalizedId.takeIf { it.startsWith("tt") },
+                                tmdbId = normalizedId.removePrefix("tmdb:").toIntOrNull()
+                                    ?.takeIf { normalizedId.startsWith("tmdb:") }
+                            )
+                        }
                     } catch (e: Exception) {
                         Log.e(
                             "WATCHED_REPO",
