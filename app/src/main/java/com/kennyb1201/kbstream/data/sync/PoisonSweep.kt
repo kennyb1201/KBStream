@@ -10,6 +10,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
+import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 
@@ -107,6 +108,8 @@ internal object PoisonSweep {
     // row, so part 2 removes it too — otherwise the very next pull re-applies
     // the marker from the cloud and re-draws the badge.
     private const val PENDING_MARKER_PARENTS = "poison_sweep_pending_marker_parents"
+    // What the last user-triggered reset did, so Settings → Sync can show it.
+    private const val REPORT_RESET = "poison_sweep_report_reset"
     private const val OVERRIDES_PREFS_BASE = "kbstream_watched_overrides"
     private const val OVERRIDES_KEY = "watched_overrides"
     private const val DB_BASE = "kbstream_watch_history"
@@ -136,9 +139,148 @@ internal object PoisonSweep {
         // can be told apart from one whose rows were never attributable.
         val detail = listOfNotNull(
             flags.getString(REPORT_LOCAL, null),
-            flags.getString(REPORT_CLOUD, null)
+            flags.getString(REPORT_CLOUD, null),
+            flags.getString(REPORT_RESET, null)?.let { "last reset: $it" }
         ).joinToString(" · ")
         return if (detail.isEmpty()) base else "$base — $detail"
+    }
+
+    /**
+     * CLEAR EYE BADGES — the deterministic, user-triggered reset of THIS
+     * profile's in-progress state.
+     *
+     * Every automatic pass before this one had to PROVE a row was a copy
+     * before deleting it, and the surviving real-world case is exactly the one
+     * that cannot be proven: the phantom's twin was already deleted on the
+     * other device, so no fingerprint, stamp or witness rule can pair it — and
+     * because the badge is re-derived from that one local resume row, no cache
+     * wipe sticks either.
+     *
+     * This path does not attribute anything. For the ACTIVE profile only it
+     * deletes:
+     *  1. the resume rows — precisely what the eye badge is derived from
+     *     locally (`positionMs > 0 AND isCompleted = 0`, the rows
+     *     [com.kennyb1201.kbstream.data.history.WatchHistoryDao]
+     *     .getResumeForParent returns),
+     *  2. the local watched-marker rows that render the badge (partial-only
+     *     rows; checkmarks are left alone),
+     *  3. the CLOUD copies of both, under this profile's scope only, so no pull
+     *     can bring them back on any device,
+     *  4. the MDBList watched snapshot, since a snapshot cached on THIS device
+     *     before the cleanup would answer the badge question from memory.
+     *
+     * What it does NOT do: touch completed history (checkmarks stay), touch any
+     * other profile, or touch the trackers. A show that is genuinely in
+     * progress in THIS profile's own Simkl/MDBList account is re-derived from
+     * that account and its badge comes back — that one is real, not a phantom.
+     */
+    fun clearInProgressForActiveProfile(
+        context: Context,
+        scope: CoroutineScope,
+        client: () -> SupabaseClient?,
+        isSignedIn: () -> Boolean,
+        pullNow: suspend (Context) -> Unit,
+        onDone: (String) -> Unit = {}
+    ) {
+        val appCtx = context.applicationContext
+        scope.launch {
+            // Same lock as the sweep: both write the same pending prefs and
+            // touch the same databases.
+            sweepMutex.withLock {
+                val outcome = runCatching {
+                    clearInProgressInternal(appCtx, client, isSignedIn, pullNow)
+                }.getOrElse { "failed: ${it.message}" }
+                appCtx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .edit().putString(REPORT_RESET, outcome).apply()
+                runCatching { onDone(outcome) }
+            }
+        }
+    }
+
+    private suspend fun clearInProgressInternal(
+        context: Context,
+        client: () -> SupabaseClient?,
+        isSignedIn: () -> Boolean,
+        pullNow: suspend (Context) -> Unit
+    ): String {
+        // The launch window has no in-memory profile yet, so fall back to the
+        // same stored-active-id rule the rest of the app resolves with.
+        val pid = ProfileManager.activeProfile.value?.id
+            ?: ProfileStorage.activeProfileId(context)
+            ?: return "no active profile"
+
+        // (1) Resume rows — the badge's local source of truth.
+        val resumeRows = localHistoryWrites(context, pid)
+            .filter { (it.positionMs ?: 0L) > 0L && it.isCompleted != true }
+        deleteLocalHistoryRows(context, pid, resumeRows.map { it.id })
+
+        // (2) The markers themselves. Partial-only: a completed row is a
+        //     checkmark and stays.
+        var localMarkers = 0
+        runCatching {
+            val dao = WatchHistoryDatabase.getInstanceScoped(context).watchedStatusDao()
+            val partial = dao.getAll().filter { it.isPartiallyWatched && !it.isWatched }
+            partial.forEach { dao.deleteByKey(it.key) }
+            localMarkers = partial.size
+        }.onFailure {
+            Log.w(TAG, "in-progress reset: local marker clear failed: ${it.message}")
+        }
+
+        // (3) The cloud copies under THIS scope. The history rows would
+        //     re-download on the next pull, and the markers would re-paint the
+        //     badges seconds later — the reason earlier local-only attempts
+        //     looked like they did nothing.
+        var cloudRows = 0
+        var note = ""
+        val c = client()
+        if (c == null || !isSignedIn()) {
+            note = " · cloud skipped (sign in)"
+        } else {
+            cloudRows += deleteCloudKeys(
+                c,
+                TABLE_HISTORY,
+                resumeRows.map { SyncKeys.scoped(it.id, pid) }
+            )
+            val watchedRows = readCloudRows(c, TABLE_WATCHED)
+            if (watchedRows == null) {
+                note = " · cloud read failed"
+            } else {
+                cloudRows += deleteCloudKeys(
+                    c,
+                    TABLE_WATCHED,
+                    PoisonDetector.partialMarkersForScope(watchedRows, pid)
+                )
+            }
+        }
+
+        // (4) A snapshot cached on THIS device before the cleanup would still
+        //     answer "started" from memory, and the badge is derived from these
+        //     snapshots as well as from local rows — so a stale one would
+        //     defeat the reset and make it look like it did nothing.
+        runCatching { MdbListClient.invalidateWatchedSnapshot() }
+        runCatching {
+            WatchHistoryDatabase.getInstance(context).tmdbJsonCacheDao().deleteByKeys(
+                listOf(
+                    "$pid/simkl:all_show_items",
+                    "$pid/simkl:continue_watching",
+                    "$pid/simkl:completed_movies"
+                )
+            )
+        }.onFailure {
+            Log.w(TAG, "in-progress reset: simkl blob clear failed: ${it.message}")
+        }
+        runCatching { SimklRepository.clearTransientCaches() }
+
+        WatchedStatusRepository.invalidateAllCaches()
+        if (note.isEmpty()) {
+            runCatching { pullNow(context) }
+                .onFailure { Log.w(TAG, "in-progress reset: post-clean pull failed: ${it.message}") }
+        }
+
+        val report =
+            "resume=${resumeRows.size} markers=$localMarkers cloud=$cloudRows$note"
+        Log.i(TAG, "in-progress reset for $pid — $report")
+        return report
     }
 
     /**

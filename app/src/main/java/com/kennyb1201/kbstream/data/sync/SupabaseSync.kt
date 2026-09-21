@@ -562,6 +562,24 @@ object SupabaseSync {
      */
     fun poisonSweepStatus(context: Context): String = PoisonSweep.status(context)
 
+    /**
+     * CLEAR EYE BADGES — the deterministic reset of the ACTIVE profile's
+     * in-progress state (resume rows + eye markers, local and cloud). The
+     * automatic sweep can only delete rows it can PROVE are copies, which
+     * leaves the phantom whose twin was already cleaned on another device; this
+     * does not attribute anything, so it cannot miss. Fire-and-forget.
+     */
+    fun clearInProgressForActiveProfile(context: Context, onDone: (String) -> Unit = {}) {
+        PoisonSweep.clearInProgressForActiveProfile(
+            context = context,
+            scope = scope,
+            client = { client },
+            isSignedIn = { isSignedIn() },
+            pullNow = { pullAllNow(it) },
+            onDone = onDone
+        )
+    }
+
     fun enqueueHistory(entity: WatchHistoryEntity, profileId: String? = currentProfileId()) {
         if (!isSignedIn()) return
         val payload = buildJsonObject {

@@ -678,6 +678,31 @@ internal object PoisonDetector {
     }
 
     /**
+     * EVERY eye-badge marker under [profileId]'s scope: a partial-only row
+     * (started-but-unfinished with no completed flag).
+     *
+     * Deliberately attribution-FREE and scope-limited. The cleanup built on
+     * [orphanedPartialMarkers] has to prove a row is a copy before touching it,
+     * which leaves the one case nothing can prove — a phantom marker whose
+     * twin was already deleted on another device, so no rule can pair it. This
+     * is the list the user-triggered reset uses instead: it does not matter
+     * WHICH of these are phantoms, because the user asked for the eye badges of
+     * this profile to go away.
+     */
+    fun partialMarkersForScope(watchedRows: List<Row>, profileId: String): List<String> =
+        watchedRows.mapNotNull { row ->
+            if (!SyncKeys.matchesProfile(row.storedKey, profileId)) return@mapNotNull null
+            val watched =
+                fieldBool(row.payload, WatchedMarkerRules.WATCHED_FIELD) ?: false
+            val partial =
+                fieldBool(row.payload, WatchedMarkerRules.PARTIAL_FIELD) ?: false
+            // A completed row is a checkmark, not an eye badge, and is never
+            // part of this cleanup.
+            if (watched || !partial) return@mapNotNull null
+            row.storedKey
+        }
+
+    /**
      * True when a history row's parent id names the same title as a marker
      * row's imdb id. Tolerant on purpose: history rows store the parent as it
      * was resolved (often the bare IMDb id, sometimes prefixed), a mismatch

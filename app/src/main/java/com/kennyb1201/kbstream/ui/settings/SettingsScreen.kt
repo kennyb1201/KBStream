@@ -1710,6 +1710,63 @@ private fun SyncHealthSection() {
             }
         }
         Spacer(modifier = Modifier.height(10.dp))
+        // Deterministic escape hatch for the eye badges. The automatic cleanup
+        // can only delete rows it can PROVE were copied between profiles, which
+        // leaves the phantom whose twin was already removed on another device;
+        // this reset needs no proof — it clears this profile's in-progress
+        // state outright. Two taps, no dialog, because the description has to
+        // be readable before the press that does it.
+        var confirmClearBadges by remember { mutableStateOf(false) }
+        var clearBadgesStatus by remember { mutableStateOf<String?>(null) }
+        KBCard(
+            onClick = {
+                if (confirmClearBadges) {
+                    confirmClearBadges = false
+                    clearBadgesStatus = "clearing…"
+                    sync.clearInProgressForActiveProfile(context) { outcome ->
+                        clearBadgesStatus = outcome
+                    }
+                } else {
+                    confirmClearBadges = true
+                    clearBadgesStatus = null
+                }
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(KBSurfaceRaised, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                Text(
+                    text = if (confirmClearBadges) {
+                        "TAP AGAIN TO CLEAR EYE BADGES"
+                    } else {
+                        "CLEAR EYE BADGES · ${activeProfile?.name ?: "this profile"}"
+                    },
+                    color = if (confirmClearBadges) KBAccent else KBAccent.copy(alpha = 0.85f),
+                    style = MaterialTheme.typography.labelSmall
+                )
+                Text(
+                    text = if (confirmClearBadges) {
+                        "Deletes this profile's started-but-unfinished (eye) badges " +
+                            "and their resume positions — here and on the other " +
+                            "devices. Completed history and checkmarks are kept. A " +
+                            "show still in progress in this profile's own " +
+                            "Simkl/MDBList comes back, because that badge is real."
+                    } else {
+                        clearBadgesStatus?.let { "Last run: $it" }
+                            ?: "Removes the started-but-unfinished (eye) badges for " +
+                            "this profile only. Use this when a badge survives the " +
+                            "cleanup above."
+                    },
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(10.dp))
         val diagnosticsScope = rememberCoroutineScope()
         var diagnosticsStatus by remember { mutableStateOf<String?>(null) }
         KBCard(

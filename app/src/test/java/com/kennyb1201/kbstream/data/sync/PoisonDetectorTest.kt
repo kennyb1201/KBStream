@@ -604,4 +604,93 @@ class PoisonDetectorTest {
         )
         assertTrue(doomed.isEmpty())
     }
+
+    // ── partialMarkersForScope: the user-triggered eye-badge reset ───────
+    //
+    // This one deliberately searches by SCOPE instead of by proof, so the
+    // tests that matter are that it cannot reach past the profile it was
+    // asked about, and that a checkmark is never mistaken for an eye badge.
+
+    @Test
+    fun `the reset takes every partial marker of the profile it was asked about`() {
+        val doomed = PoisonDetector.partialMarkersForScope(
+            watchedRows = listOf(
+                marker(pidB, "tt1"),
+                marker(pidB, "tt2", type = "tv"),
+                marker(pidB, "tt3") // duplicate key form, still listed once
+            ).distinctBy { it.storedKey },
+            profileId = pidB
+        )
+        assertEquals(listOf("p:$pidB:series::tt1", "p:$pidB:tv::tt2", "p:$pidB:series::tt3"), doomed)
+    }
+
+    @Test
+    fun `the reset never leaves the profile it was asked about`() {
+        val doomed = PoisonDetector.partialMarkersForScope(
+            watchedRows = listOf(
+                marker(pidA, "tt1"),
+                marker(pidC, "tt2"),
+                marker(pidB, "tt3")
+            ),
+            profileId = pidB
+        )
+        assertEquals(listOf("p:$pidB:series::tt3"), doomed)
+    }
+
+    @Test
+    fun `the reset keeps checkmarks`() {
+        val doomed = PoisonDetector.partialMarkersForScope(
+            watchedRows = listOf(
+                // Finished: a checkmark, not an eye badge.
+                marker(pidB, "tt1", watched = true),
+                // Watched AND partial at once: still a checkmark on screen.
+                marker(pidB, "tt2", watched = true, partial = true),
+                // Neither flag: nothing to draw.
+                marker(pidB, "tt3", watched = false, partial = false),
+                marker(pidB, "tt4")
+            ),
+            profileId = pidB
+        )
+        assertEquals(listOf("p:$pidB:series::tt4"), doomed)
+    }
+
+    @Test
+    fun `the reset ignores legacy unscoped rows`() {
+        val doomed = PoisonDetector.partialMarkersForScope(
+            watchedRows = listOf(
+                PoisonDetector.Row(
+                    "series::tt1",
+                    buildJsonObject {
+                        put("imdbId", "tt1")
+                        put("isWatched", false)
+                        put("isPartiallyWatched", true)
+                    }
+                ),
+                marker(pidB, "tt2")
+            ),
+            profileId = pidB
+        )
+        assertEquals(listOf("p:$pidB:series::tt2"), doomed)
+    }
+
+    @Test
+    fun `the reset is empty when the profile has no eye badges`() {
+        val doomed = PoisonDetector.partialMarkersForScope(
+            watchedRows = listOf(marker(pidB, "tt1", watched = true)),
+            profileId = pidB
+        )
+        assertTrue(doomed.isEmpty())
+    }
+
+    @Test
+    fun `the reset needs no twin — a lone unpaired marker still goes`() {
+        // The real-world case: the other device already deleted the copy, so
+        // no fingerprint can pair this row. Attribution-free means it goes
+        // anyway.
+        val doomed = PoisonDetector.partialMarkersForScope(
+            watchedRows = listOf(marker(pidB, "tt7")),
+            profileId = pidB
+        )
+        assertEquals(listOf("p:$pidB:series::tt7"), doomed)
+    }
 }
