@@ -503,9 +503,18 @@ object SupabaseSync {
      * synced back down onto the new profile as phantom watched markers
      * (with clean Simkl/MDBList dashboards, because the data never came
      * from the trackers — it was our own sync table echoing it back).
+     *
+     * Resolution also falls back to the profile persisted in the profiles
+     * store when the in-memory active profile is not bound yet: this runs
+     * from Application.onCreate (session restore, seed push) before
+     * MainActivity activates a profile, and a null here used to publish the
+     * legacy un-namespaced rows — which every profile then pulled and wrote
+     * into its own stores.
      */
     private fun currentProfileId(): String? =
-        com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id
+        appContextRef?.get()
+            ?.let { com.kennyb1201.kbstream.data.sync.ProfileStorage.activeProfileId(it) }
+            ?: com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id
 
     // Pure key rules live in [SyncKeys] so they are unit tested directly.
     private fun scopedKey(originalKey: String, pid: String? = currentProfileId()): String =

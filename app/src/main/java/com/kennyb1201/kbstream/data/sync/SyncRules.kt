@@ -53,6 +53,24 @@ internal object SyncKeys {
 }
 
 /**
+ * Which profile a namespaced store resolves to.
+ *
+ * [storedActiveId] is the id the profiles store has persisted and [ids] is the
+ * profile list in its stored order — the same pair (stored id, else first
+ * profile) [ProfileManager.init] activates. Both halves must agree: there is a
+ * real window where nothing is bound in memory yet (Application.onCreate
+ * constructs profile-scoped singletons before MainActivity runs init), and in
+ * that window a store that cannot name a profile falls back to the legacy
+ * un-namespaced name — which is how one profile's data got read from, and
+ * written into, the shared store instead of its own.
+ */
+internal object ProfileScopeRules {
+
+    fun resolve(storedActiveId: String?, ids: List<String>): String? =
+        ids.firstOrNull { it == storedActiveId } ?: ids.firstOrNull()
+}
+
+/**
  * Merge decision for every pulled row: the remote copy wins only when it is
  * strictly NEWER. Equal timestamps keep the local row, which is what stops a
  * pull from re-writing (and re-invalidating caches for) every row on every

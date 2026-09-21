@@ -74,6 +74,24 @@ object ProfileManager {
     /** True once at least one profile exists — gates the first-launch picker. */
     fun hasProfiles(context: Context): Boolean = loadProfiles(context).isNotEmpty()
 
+    /**
+     * The active profile id: the bound one when there is one, otherwise the
+     * one the profiles store says is active. Resolves the SAME pair [init]
+     * activates (stored id, falling back to the first profile), so a caller
+     * running before [init] — Application.onCreate builds profile-scoped
+     * singletons — binds to the profile the app is about to activate instead
+     * of the legacy un-namespaced store. Returns null only when no profile
+     * exists at all.
+     */
+    internal fun resolveActiveId(context: Context): String? {
+        _activeProfile.value?.id?.let { return it }
+        return ProfileScopeRules.resolve(
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(KEY_ACTIVE, null),
+            loadProfiles(context).map { it.id }
+        )
+    }
+
     fun init(context: Context) {
         val list = loadProfiles(context)
         _profiles.value = list
@@ -610,9 +628,17 @@ object ProfileManager {
  */
 object ProfileStorage {
 
+    /**
+     * The profile scoped stores resolve to right now (null = legacy/global,
+     * i.e. no profile exists yet). See [ProfileManager.resolveActiveId] for
+     * why this does not just read the in-memory active profile.
+     */
+    fun activeProfileId(context: Context): String? =
+        ProfileManager.resolveActiveId(context)
+
     /** Returns the SharedPreferences name for a profile-scoped store. */
     fun prefsName(context: Context, baseName: String): String {
-        val active = ProfileManager.activeProfile.value?.id
+        val active = activeProfileId(context)
             ?: return baseName // no profiles yet → legacy/global store
         return "$active.$baseName"
     }
@@ -628,7 +654,7 @@ object ProfileStorage {
     fun dbName(profileId: String, baseName: String): String = "$profileId.$baseName"
 
     fun dbNameForActive(context: Context, baseName: String): String {
-        val active = ProfileManager.activeProfile.value?.id ?: return baseName
+        val active = activeProfileId(context) ?: return baseName
         return dbName(active, baseName)
     }
 

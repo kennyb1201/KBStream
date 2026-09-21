@@ -335,13 +335,21 @@ object PrefsPayloadBuilder {
     }
 
     fun buildAddons(context: Context): JsonObject =
+        buildAddons(
+            scopedPrefs(context, "kbstream_addons")
+                .getString("installed_addons_json", null).orEmpty()
+        )
+
+    /**
+     * Payload for an addon set the caller has ALREADY written, so the blob
+     * carries exactly the JSON that went to disk for that profile. Re-reading
+     * the active profile's store here instead would publish whichever profile
+     * happened to be active at enqueue time.
+     */
+    fun buildAddons(addonsJson: String): JsonObject =
         buildJsonObject {
             put("updatedAt", System.currentTimeMillis())
-            put(
-                "installed_addons_json",
-                scopedPrefs(context, "kbstream_addons")
-                    .getString("installed_addons_json", null).orEmpty()
-            )
+            put("installed_addons_json", addonsJson)
         }
 
     fun buildSimklAuth(context: Context): JsonObject {

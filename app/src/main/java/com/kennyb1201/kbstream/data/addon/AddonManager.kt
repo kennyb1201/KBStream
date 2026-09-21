@@ -23,21 +23,58 @@ class AddonManager(
     private val context: Context
 ) {
 
+    /**
+     * The addon store for a SPECIFIC profile; `null` means the legacy
+     * un-namespaced store, which only applies while no profile exists at all.
+     *
+     * Reads and writes name the profile explicitly rather than resolving the
+     * ambient active profile at write time. The active profile can change
+     * between a mutation's read and its write (a switch landing during a
+     * manifest fetch), and resolving it late is how one profile's addon list
+     * got persisted into a sibling profile's store — the addons that showed up
+     * on another profile, or vanished from this one when they were removed
+     * there.
+     */
+    private fun addonPrefs(profileId: String?): android.content.SharedPreferences {
+        val appContext = com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext
+            ?: context.applicationContext
+        val name = when (profileId) {
+            null -> "kbstream_addons"
+            else -> com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
+                profileId,
+                "kbstream_addons"
+            )
+        }
+        return appContext.getSharedPreferences(name, Context.MODE_PRIVATE)
+    }
+
+    /**
+     * Profile the in-memory list was loaded from. Every mutation is pinned to
+     * it, so a write can never land in a different profile than the list it
+     * was computed from.
+     */
+    private var loadedProfileId: String? = null
+
+    /** Depth of an in-progress read-modify-write; 0 at the outermost entry. */
+    private var mutationDepth = 0
+
+    /**
+     * The profile the app is currently showing. Falls back to the profile
+     * persisted in the profiles store, because Application.onCreate builds
+     * this singleton before ProfileManager.init binds the active profile —
+     * without it, the launch-time load and the launch-time manifest refresh
+     * both resolved the legacy un-namespaced store instead of the profile the
+     * user was actually in.
+     */
+    private fun activeStoreProfileId(): String? {
+        val appContext = com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext
+            ?: context.applicationContext
+        return com.kennyb1201.kbstream.data.sync.ProfileStorage.activeProfileId(appContext)
+    }
+
+    /** The active profile's addon store (scoped launch-time bookkeeping). */
     private val prefs
-        get() = com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext
-            ?.let { appContext ->
-                appContext.getSharedPreferences(
-                    com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
-                        appContext,
-                        "kbstream_addons"
-                    ),
-                    Context.MODE_PRIVATE
-                )
-            }
-                ?: context.applicationContext.getSharedPreferences(
-                    "kbstream_addons",
-                    Context.MODE_PRIVATE
-                )
+        get() = addonPrefs(activeStoreProfileId())
 
     private val moshi =
         Moshi.Builder()
@@ -152,8 +189,9 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
             )
 
     init {
+        loadedProfileId = activeStoreProfileId()
         _installedAddons.value =
-            loadFromPreferencesOrDefaults()
+            loadFromPreferencesOrDefaults(loadedProfileId)
     }
 
     fun hasAddon(
@@ -176,11 +214,53 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
             )
     }
 
-    private fun loadFromPreferencesOrDefaults():
-            List<InstalledAddon> {
+    /**
+     * Guard for every read-modify-write of the addon list (UI mutators, the
+     * background manifest apply, the cloud apply). The profile sync check runs
+     * only at the outermost entry, so a profile switch landing mid-mutation
+     * cannot swap the base list — or the store it will be written to — out
+     * from under the transform.
+     */
+    private inline fun mutate(block: () -> Unit) {
+        synchronized(stateLock) {
+            ensureProfileSyncedLocked()
+            mutationDepth++
+            try {
+                block()
+            } finally {
+                mutationDepth--
+            }
+        }
+    }
+
+    /**
+     * Reloads whenever the active profile changed while this singleton was
+     * alive, so no consumer keeps serving — or persisting — the profile it
+     * just left. Caller holds [stateLock].
+     */
+    private fun ensureProfileSyncedLocked() {
+        if (mutationDepth > 0) return
+        val activeId = activeStoreProfileId()
+        if (activeId == loadedProfileId) return
+        loadForLocked(activeId)
+    }
+
+    /** Loads [profileId]'s addon list into the singleton. Caller holds [stateLock]. */
+    private fun loadForLocked(profileId: String?) {
+        loadedProfileId = profileId
+        _installedAddons.value =
+            loadFromPreferencesOrDefaults(profileId)
+        _catalogOrderVersion.value += 1
+    }
+
+    private fun loadFromPreferencesOrDefaults(
+        profileId: String?
+    ): List<InstalledAddon> {
+
+        val store = addonPrefs(profileId)
 
         val json =
-            prefs.getString(
+            store.getString(
                 KEY,
                 null
             )
@@ -190,7 +270,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
             val defaults =
                 defaultAddons()
 
-            saveToPrefs(defaults)
+            saveToPrefs(defaults, profileId)
 
             return defaults
         }
@@ -216,7 +296,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                 )
 
             if (normalized != loaded) {
-                saveToPrefs(normalized)
+                saveToPrefs(normalized, profileId)
             }
 
             normalized
@@ -226,22 +306,18 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
             val defaults =
                 defaultAddons()
 
-            saveToPrefs(defaults)
+            saveToPrefs(defaults, profileId)
 
             defaults
         }
     }
 
-    /** Prefs-only write for the cloud path (no re-enqueue of cloud data). */
-    private fun saveToPrefsRaw(addonsJson: String) {
-        prefs.edit().putString(KEY, addonsJson).apply()
-    }
-
     private fun saveToPrefs(
-        addons: List<InstalledAddon>
+        addons: List<InstalledAddon>,
+        profileId: String?
     ) {
 
-        prefs.edit()
+        addonPrefs(profileId).edit()
             .putString(
                 KEY,
                 adapter.toJson(addons)
@@ -253,12 +329,16 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
             List<InstalledAddon> {
         synchronized(stateLock) {
 
+        ensureProfileSyncedLocked()
+
         return _installedAddons.value.ifEmpty {
 
-            loadFromPreferencesOrDefaults()
-                .also {
-                    _installedAddons.value = it
-                }
+            // Straight reload, no version bump: a profile that genuinely has
+            // no addons would otherwise bump the order version on every read.
+            _installedAddons.value =
+                loadFromPreferencesOrDefaults(loadedProfileId)
+
+            _installedAddons.value
         }
         }
     }
@@ -267,22 +347,34 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         addons: List<InstalledAddon>
     ) {
         synchronized(stateLock) {
+        // Pin the profile this list belongs to. The ambient active profile is
+        // deliberately NOT consulted here: it may already have moved on, and
+        // resolving it late would persist this profile's addons into that one.
+        val profileId = loadedProfileId
+
         val normalized =
             normalizeGlobalCatalogOrder(
                 addons
             )
 
-        saveToPrefs(normalized)
+        val json =
+            adapter.toJson(normalized)
+
+        addonPrefs(profileId).edit()
+            .putString(KEY, json)
+            .apply()
 
         _installedAddons.value =
             normalized
 
-        // Cross-device sync: push the full addon set (small JSON blob).
+        // Cross-device sync: push the full addon set (small JSON blob) under
+        // the SAME profile it was just written for.
         com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
             com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
                 appContext,
                 com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_ADDONS,
-                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildAddons(appContext)
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildAddons(json),
+                profileId
             )
         }
         }
@@ -302,7 +394,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
     fun updateInstalled(
         transform: (List<InstalledAddon>) -> List<InstalledAddon>?
     ) {
-        synchronized(stateLock) {
+        mutate {
             val next = transform(getInstalledAddons())
             if (next != null) {
                 saveInstalledAddons(next)
@@ -313,7 +405,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
     fun removeAddon(
         id: String
     ) {
-        synchronized(stateLock) {
+        mutate {
 
         saveInstalledAddons(
             getInstalledAddons()
@@ -331,7 +423,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
      * state, so double-presses don't rewrite prefs.
      */
     fun setAddonEnabled(id: String, enabled: Boolean) {
-        synchronized(stateLock) {
+        mutate {
             val current = getInstalledAddons()
             val target = current.firstOrNull { it.id == id } ?: return
             if (target.enabled == enabled) return
@@ -357,7 +449,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         id: String,
         newName: String?
     ) {
-        synchronized(stateLock) {
+        mutate {
 
         val cleaned =
             newName
@@ -396,7 +488,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         id: String,
         direction: Int
     ) {
-        synchronized(stateLock) {
+        mutate {
 
         val current =
             getInstalledAddons()
@@ -439,7 +531,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         catalogId: String,
         showOnHome: Boolean
     ) {
-        synchronized(stateLock) {
+        mutate {
 
         val updated =
             getInstalledAddons()
@@ -488,7 +580,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         catalogId: String,
         direction: Int
     ) {
-        synchronized(stateLock) {
+        mutate {
 
         val configurations =
             getCatalogConfigurations()
@@ -537,7 +629,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         catalogId: String,
         targetIndex: Int
     ) {
-        synchronized(stateLock) {
+        mutate {
 
         val configurations =
             getCatalogConfigurations()
@@ -595,7 +687,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         catalogId: String,
         name: String?
     ) {
-        synchronized(stateLock) {
+        mutate {
 
         val updated =
             getInstalledAddons()
@@ -649,7 +741,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         manifestUrl: String,
         manifest: AddonManifest
     ) {
-        synchronized(stateLock) {
+        mutate {
 
         val current =
             getInstalledAddons()
@@ -807,9 +899,13 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
 
         } else {
 
-            current.add(
-                updatedAddon
-            )
+            // Apply-only: never INSERT here. This runs from the manifest
+            // refresh, which iterates the list captured when the refresh
+            // STARTED. An addon missing from the current list therefore means
+            // the user removed it while its manifest was downloading (adding
+            // would resurrect it) or the profile changed mid-refresh (adding
+            // would leak one profile's addons into another's).
+            return
         }
 
         saveInstalledAddons(current)
@@ -824,7 +920,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         catalogType: String,
         catalogId: String
     ) {
-        synchronized(stateLock) {
+        mutate {
 
         val updated =
             getInstalledAddons()
@@ -888,10 +984,10 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
             }
     }
 
+    /** Force a reload from the ACTIVE profile's store (called on a switch). */
     fun refreshAddons() {
         synchronized(stateLock) {
-    _installedAddons.value = loadFromPreferencesOrDefaults()
-    _catalogOrderVersion.value += 1
+            loadForLocked(activeStoreProfileId())
         }
 }
 
@@ -939,7 +1035,9 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
     // background manifest apply finishes would write back a stale copy and
     // silently drop that apply (lost update). JVM monitors are reentrant, so
     // nested locked calls (moveCatalog -> getCatalogConfigurations ->
-    // saveInstalledAddons) are safe.
+    // saveInstalledAddons) are safe. Every mutator enters through [mutate],
+    // which pins the operation to ONE profile: the sync check runs at the
+    // outermost entry only, and the write names that same profile.
     private val stateLock = Any()
 
     private val applyMutex = Mutex()
@@ -951,12 +1049,24 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
      */
     suspend fun applySyncedAddons(addonsJson: String) {
         applyMutex.withLock {
-            saveToPrefsRaw(addonsJson)
-            refreshAddons()
+            // The pull filters cloud rows by profile scope, so this blob
+            // belongs to whichever profile is active now. Resolve it here and
+            // name it explicitly instead of resolving the ambient profile at
+            // prefs-write time — the row was fetched earlier.
+            val profileId = activeStoreProfileId()
+            addonPrefs(profileId).edit().putString(KEY, addonsJson).apply()
+            synchronized(stateLock) {
+                loadForLocked(profileId)
+            }
         }
     }
 
     fun refreshInstalledAddons() {
+        // Pin the profile this pass is for: the fetches below outlive a
+        // profile switch, and applying one profile's manifest onto another
+        // profile's list is how addons used to appear in profiles that never
+        // installed them.
+        val profileId = activeStoreProfileId()
         val addons = getInstalledAddons()
         if (addons.isEmpty()) return
 
@@ -965,6 +1075,8 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         addons.forEach { addon ->
             addonScope.launch {
                 runCatching {
+                    if (activeStoreProfileId() != profileId) return@runCatching
+
                     val manifest = repository.fetchManifest(addon.manifestUrl)
 
                     // Change detection: skip saving when nothing visible to
@@ -990,7 +1102,9 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                         Log.d(TAG_AUTO_UPDATE, "unchanged: ${addon.id}")
                     } else {
                         applyMutex.withLock {
-                            updateAddonFromManifest(addon.manifestUrl, manifest)
+                            if (activeStoreProfileId() == profileId) {
+                                updateAddonFromManifest(addon.manifestUrl, manifest)
+                            }
                         }
                         Log.i(
                             TAG_AUTO_UPDATE,
