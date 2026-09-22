@@ -15,6 +15,10 @@ import org.junit.Test
  */
 class ShowCompletionRulesTest {
 
+    // Simkl's tally (watched_episodes_count / total_episodes_count) decides
+    // whenever it is present; the show's list status only fills the gap when
+    // there is no tally at all.
+
     @Test
     fun `a caught-up but still airing show is not finished`() {
         // 20 of 30 episodes watched, 10 still to air: every AIRED episode is
@@ -52,7 +56,7 @@ class ShowCompletionRulesTest {
     }
 
     @Test
-    fun `a finished status is finished whatever the counts say`() {
+    fun `a finished status with every episode watched is finished`() {
         for (status in listOf("completed", "ended", "canceled", " COMPLETED ")) {
             assertTrue(
                 status,
@@ -67,14 +71,42 @@ class ShowCompletionRulesTest {
     }
 
     @Test
-    fun `an episode still waiting to be watched means unfinished`() {
-        // The counters claim a full tally, but Simkl still lists an episode
-        // to watch: the tally lost, the show stays unfinished (the eye).
+    fun `a stale completed status over an incomplete tally is not finished`() {
+        // Unmarking one season of a show marked watched as a whole leaves
+        // exactly this on the tracker: the show still says "completed" while
+        // its own tally knows a season is unwatched. The tally wins, so the
+        // poster goes back to the eye instead of the checkmark.
+        assertFalse(
+            ShowCompletionRules.isFullyWatched(
+                status = "completed",
+                watchedEpisodesCount = 20,
+                totalEpisodesCount = 30,
+                nextToWatch = null
+            )
+        )
+    }
+
+    @Test
+    fun `a finished status with no tally to go on is enough`() {
+        assertTrue(
+            ShowCompletionRules.isFullyWatched(
+                status = "completed",
+                watchedEpisodesCount = null,
+                totalEpisodesCount = null,
+                nextToWatch = null
+            )
+        )
+    }
+
+    @Test
+    fun `an episode still listed as next to watch means unfinished`() {
+        // No tally at all, and Simkl still lists something to watch: that is
+        // an unfinished show (the eye), not a finished one.
         assertFalse(
             ShowCompletionRules.isFullyWatched(
                 status = "watching",
-                watchedEpisodesCount = 5,
-                totalEpisodesCount = 5,
+                watchedEpisodesCount = null,
+                totalEpisodesCount = null,
                 nextToWatch = "S2E1"
             )
         )

@@ -137,15 +137,20 @@ object ShowCompletionRules {
     /**
      * The completed CHECKMARK rule.
      *
-     * A show counts as finished when Simkl says the show itself is over and
-     * the user marked it finished, or when the tally is COMPLETE - every
-     * episode of it watched, nothing left unaired. Watching every AIRED
-     * episode of a show that is still airing is "caught up", not
-     * "completed": the old aired-total rule returned true there, which
-     * painted the finished checkmark over shows the user was still in the
-     * middle of and hid the eye marker from a show marked up to the current
-     * progress. A next episode waiting to be watched also means the user has
-     * not finished the show.
+     * Simkl's own episode tally decides whenever it has one: every episode of
+     * the show watched means finished. Watching every AIRED episode of a show
+     * that is still airing is "caught up", not "completed" — the old
+     * aired-total rule returned true there, which painted the finished
+     * checkmark over shows the user was still in the middle of and hid the
+     * eye marker from a show marked up to the current progress. The tally
+     * also outranks the show's list status, because unmarking part of a show
+     * (or a tracker that keeps a stale "completed" status) leaves a
+     * completed status over an incomplete tally — that is not finished
+     * either.
+     *
+     * With no tally to go on, the show's status and a waiting next episode
+     * are all there is: a finished status with nothing left to watch counts
+     * as finished, a listed next episode does not.
      */
     fun isFullyWatched(
         status: String?,
@@ -154,15 +159,16 @@ object ShowCompletionRules {
         nextToWatch: String?
     ): Boolean {
 
-        val normalizedStatus =
-            status
-                ?.trim()
-                ?.lowercase()
+        val watched =
+            watchedEpisodesCount ?: 0
+
+        val total =
+            totalEpisodesCount ?: 0
 
         if (
-            normalizedStatus in FINISHED_STATUSES
+            total > 0
         ) {
-            return true
+            return watched >= total
         }
 
         if (
@@ -171,13 +177,12 @@ object ShowCompletionRules {
             return false
         }
 
-        val watched =
-            watchedEpisodesCount ?: 0
+        val normalizedStatus =
+            status
+                ?.trim()
+                ?.lowercase()
 
-        val total =
-            totalEpisodesCount ?: 0
-
-        return total > 0 && watched >= total
+        return normalizedStatus in FINISHED_STATUSES
     }
 
     /**

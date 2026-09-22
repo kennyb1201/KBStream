@@ -1378,7 +1378,31 @@ for (metaAddon in metaAddons) {
             _simklSeriesWatched.value =
                 _simklWatchedEpisodes.value.isNotEmpty()
 
-            // 3. Mirror to SIMKL when connected.
+            // 3. A manual whole-show mark cannot be cleared episode by
+            // episode, so a series carrying that override gets its tracker
+            // record rewritten instead. Clearing the override is also what
+            // stops the app's own poster from keeping its checkmark.
+            val hadWholeShowMark =
+                runCatching {
+                    watchedStatusRepository.clearWatchedOverride(
+                        parentId,
+                        "series"
+                    )
+                }.getOrDefault(false)
+
+            if (hadWholeShowMark) {
+                rewriteTrackersAfterPartialUnmark(
+                    parentId = parentId,
+                    showTmdbId = showTmdbId,
+                    title = showName,
+                    removed = validEpisodes.map { episode ->
+                        season to episode
+                    }.toSet()
+                )
+                return@launch
+            }
+
+            // 4. Mirror to SIMKL when connected.
             if (
                 simklRepository.isConfigured() &&
                 simklRepository.hasToken()
@@ -1402,7 +1426,7 @@ for (metaAddon in metaAddons) {
                 }
             }
 
-            // 4. Mirror the removal to MDBList when a key is set: one
+            // 5. Mirror the removal to MDBList when a key is set: one
             // bulk /sync/watched/remove call per batch.
             if (MdbListClient.isConfigured(getApplication())) {
                 runCatching {
@@ -1422,6 +1446,153 @@ for (metaAddon in metaAddons) {
                 }
             }
         }
+    }
+
+    /**
+     * Re-writes the trackers after part of a manually whole-show-marked
+     * series is unmarked.
+     *
+     * A "Mark as Watched" / "Mark Entire Series as Watched" on a series
+     * stores the show on Simkl and MDBList as ONE show-level record (ids
+     * only; the trackers expand it across every episode themselves). Neither
+     * tracker can clear that record with an episode-level removal - which is
+     * why unmarking a single season cleared the app while Simkl and MDBList
+     * kept showing the whole show as watched. The record has to be rewritten
+     * the way it was written: drop the whole show, then re-add exactly the
+     * episodes that are still marked watched ([removed] excluded).
+     */
+    private suspend fun rewriteTrackersAfterPartialUnmark(
+        parentId: String,
+        showTmdbId: Int?,
+        title: String,
+        removed: Set<Pair<Int, Int>>
+    ) {
+        // What is still watched: this device's completed rows merged with
+        // Simkl's per-episode snapshot (a cached read, no extra round trip),
+        // minus the episodes just unmarked.
+        val localPairs =
+            runCatching {
+                historyDao.getCompletedForParent(
+                    parentId
+                )
+            }.getOrDefault(
+                emptyList()
+            ).mapNotNull { row ->
+                val season =
+                    row.season
+                val episode =
+                    row.episode
+
+                if (season != null && episode != null) {
+                    season to episode
+                } else {
+                    null
+                }
+            }
+
+        val simklPairs =
+            runCatching {
+                simklRepository.getWatchedEpisodesForShowByImdb(
+                    imdbId = parentId,
+                    tmdbId = showTmdbId
+                )
+            }.getOrDefault(
+                emptySet()
+            )
+
+        val remainingBySeason =
+            (localPairs + simklPairs)
+                .filterNot { pair -> pair in removed }
+                .groupBy(
+                    keySelector = { pair -> pair.first },
+                    valueTransform = { pair -> pair.second }
+                )
+                .mapValues { (_, episodes) ->
+                    episodes.distinct().sorted()
+                }
+
+        val imdbId =
+            parentId.takeIf { it.startsWith("tt") }
+        val titleOrNull =
+            title.takeIf { it.isNotBlank() }
+        val appContext =
+            getApplication<Application>()
+
+        if (
+            simklRepository.isConfigured() &&
+            simklRepository.hasToken()
+        ) {
+            runCatching {
+                simklRepository.removeWatchedShow(
+                    showImdbId = parentId,
+                    title = titleOrNull,
+                    tmdbId = showTmdbId
+                )
+            }.onFailure { e ->
+                Log.e(
+                    "KBStream",
+                    "rewriteTrackers unmark simkl failed",
+                    e
+                )
+            }
+
+            remainingBySeason.forEach { (season, episodes) ->
+                runCatching {
+                    simklRepository.pushWatchedSeason(
+                        showImdbId = parentId,
+                        season = season,
+                        episodes = episodes,
+                        title = titleOrNull,
+                        tmdbId = showTmdbId
+                    )
+                }.onFailure { e ->
+                    Log.e(
+                        "KBStream",
+                        "rewriteTrackers re-mark simkl failed s=$season",
+                        e
+                    )
+                }
+            }
+        }
+
+        if (MdbListClient.isConfigured(appContext)) {
+            runCatching {
+                MdbListClient.removeWatchedShow(
+                    appContext,
+                    imdbId = imdbId,
+                    tmdbId = showTmdbId
+                )
+            }.onFailure { e ->
+                Log.e(
+                    "KBStream",
+                    "rewriteTrackers unmark mdblist failed",
+                    e
+                )
+            }
+
+            remainingBySeason.forEach { (season, episodes) ->
+                runCatching {
+                    MdbListClient.pushWatchedEpisodes(
+                        appContext,
+                        imdbId = imdbId,
+                        tmdbId = showTmdbId,
+                        season = season,
+                        episodes = episodes
+                    )
+                }.onFailure { e ->
+                    Log.e(
+                        "KBStream",
+                        "rewriteTrackers re-mark mdblist failed s=$season",
+                        e
+                    )
+                }
+            }
+        }
+
+        Log.i(
+            "KBStream",
+            "rewriteTrackers finished parent=$parentId seasons=${remainingBySeason.size} removed=${removed.size}"
+        )
     }
 
     /**
@@ -1792,7 +1963,30 @@ for (metaAddon in metaAddons) {
             _simklSeriesWatched.value =
                 _simklWatchedEpisodes.value.isNotEmpty()
 
-            // 3. Mirror to SIMKL when connected.
+            // 3. Same whole-show repair as the season path: a manual
+            // whole-show mark on the trackers cannot be cleared episode by
+            // episode, and its local override must go too.
+            val hadWholeShowMark =
+                runCatching {
+                    watchedStatusRepository.clearWatchedOverride(
+                        parentId,
+                        "series"
+                    )
+                }.getOrDefault(false)
+
+            if (hadWholeShowMark) {
+                rewriteTrackersAfterPartialUnmark(
+                    parentId = parentId,
+                    showTmdbId = showTmdbId,
+                    title = showName,
+                    removed = validEpisodes.map { episode ->
+                        season to episode
+                    }.toSet()
+                )
+                return@launch
+            }
+
+            // 4. Mirror to SIMKL when connected.
             if (
                 simklRepository.isConfigured() &&
                 simklRepository.hasToken()
@@ -1816,7 +2010,7 @@ for (metaAddon in metaAddons) {
                 }
             }
 
-            // 4. Mirror the removal to MDBList when a key is set: one
+            // 5. Mirror the removal to MDBList when a key is set: one
             // bulk /sync/watched/remove call per batch.
             if (MdbListClient.isConfigured(getApplication())) {
                 runCatching {

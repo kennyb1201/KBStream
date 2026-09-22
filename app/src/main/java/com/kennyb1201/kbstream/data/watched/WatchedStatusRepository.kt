@@ -1583,6 +1583,112 @@ class WatchedStatusRepository(
             }
     }
 
+    /**
+     * Drops the manual whole-title watched override WITHOUT touching the
+     * trackers, and reports whether one was actually stored.
+     *
+     * Called when part of a manually marked title is unmarked (one episode,
+     * one season): the user is saying the title is not fully watched, so a
+     * leftover override would keep resolving the poster as watched forever.
+     * The return value doubles as the signal that the trackers hold a
+     * whole-title record for this title — the shape a poster "Mark as
+     * Watched" writes — which an episode-level removal cannot clear (see the
+     * rewrite in the detail screen's unmark path).
+     */
+    suspend fun clearWatchedOverride(
+        id: String,
+        type: String
+    ): Boolean {
+
+        val normalizedId =
+            id.trim()
+
+        if (
+            normalizedId.isBlank()
+        ) {
+            return false
+        }
+
+        val normalizedType =
+            normalizeType(
+                type
+            )
+
+        val key =
+            cacheKey(
+                normalizedId,
+                normalizedType
+            )
+
+        val overrideKeys =
+            localWatchedOverrideKeys()
+
+        if (
+            key !in overrideKeys
+        ) {
+            return false
+        }
+
+        val now =
+            System.currentTimeMillis()
+
+        overridesPrefs
+            .edit()
+            .putStringSet(
+                KEY_WATCHED_OVERRIDES,
+                overrideKeys
+                    .toMutableSet()
+                    .apply {
+                        remove(key)
+                    }
+            )
+            .apply()
+
+        // The manual mark is gone, so the cached row must go with it: left
+        // in place it would keep answering "watched" until its TTL expires.
+        cacheMutex.withLock {
+            cache[key] =
+                now to WatchedCacheEntry(
+                    isWatched = false,
+                    isPartiallyWatched = false
+                )
+        }
+
+        _watchedStateVersion.value =
+            now
+
+        WatchStateBus.notifyChanged(
+            key,
+            false
+        )
+
+        // The override set is profile-synced, so the other devices have to
+        // drop it as well or they keep painting the checkmark.
+        com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueueWatched(
+                com.kennyb1201.kbstream.data.cache.WatchedStatusEntity(
+                    key = key,
+                    imdbId = normalizedId,
+                    mediaType = normalizedType,
+                    isWatched = false,
+                    updatedAt = now
+                )
+            )
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+                appContext,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_WATCHED_OVERRIDES,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildWatchedOverrides(appContext)
+            )
+        }
+
+        Log.i(
+            "WATCHED_REPO",
+            "Local watched override cleared: $key"
+        )
+
+        return true
+    }
+
     private fun normalizeType(
         type: String
     ): String {
