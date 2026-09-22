@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.components
 
 import android.content.Context
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -27,7 +28,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -41,6 +41,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.tv.material3.Border
+import androidx.tv.material3.Glow
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.library.LibraryList
@@ -477,21 +479,50 @@ private fun PickerRow(
     // One TV clickable Surface, not `.focusable().clickable()`: that stack is
     // two focus targets, so the first D-pad press only landed focus and the
     // row had to be pressed a second time to actually pick the list.
+    //
+    // The focus treatment lives ON the Surface (border, scale, glow) exactly
+    // as AddonListCard and the poster context-menu rows do it — same accent
+    // ring, same raised fill, same small lift. It used to be a hand-rolled
+    // `.clip(shape).border(...)` on the caller's `modifier`, which wraps the
+    // whole Surface: that clip swallowed the focus-scale animation at the
+    // row's layout bounds, so the bottom half of the two-line body (the
+    // description) was sliced off, and the Material default scale was left in
+    // charge of the growth, which was far more than any other row's.
     androidx.tv.material3.Surface(
         onClick = onClick,
         shape = androidx.tv.material3.ClickableSurfaceDefaults.shape(shape = shape),
         colors = androidx.tv.material3.ClickableSurfaceDefaults.colors(
-            containerColor = if (focused) KBSurfaceRaised else KBSurface,
-            contentColor = KBTextHi
+            containerColor = KBSurface,
+            contentColor = KBTextHi,
+            focusedContainerColor = KBSurfaceRaised,
+            focusedContentColor = KBAccent,
+            pressedContainerColor = KBSurfaceRaised,
+            pressedContentColor = KBAccent
+        ),
+        // AddonListCard's value. The row keeps its layout height on focus
+        // (see the clip note above), so the description cannot be pushed past
+        // the list item it lives in.
+        scale = androidx.tv.material3.ClickableSurfaceDefaults.scale(
+            focusedScale = 1.015f
+        ),
+        border = androidx.tv.material3.ClickableSurfaceDefaults.border(
+            border = Border(
+                border = BorderStroke(1.dp, KBTextLo.copy(alpha = 0.25f)),
+                shape = shape
+            ),
+            focusedBorder = Border(
+                border = BorderStroke(2.dp, KBAccent),
+                shape = shape
+            )
+        ),
+        glow = androidx.tv.material3.ClickableSurfaceDefaults.glow(
+            focusedGlow = Glow(
+                elevationColor = KBAccent,
+                elevation = 6.dp
+            )
         ),
         modifier = modifier
             .fillMaxWidth()
-            .clip(shape)
-            .border(
-                1.dp,
-                if (focused) KBAccent else KBTextLo.copy(alpha = 0.25f),
-                shape
-            )
             .onFocusChanged { focused = it.isFocused }
     ) {
         Row(
