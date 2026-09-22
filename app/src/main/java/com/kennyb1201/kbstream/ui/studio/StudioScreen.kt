@@ -401,12 +401,23 @@ private fun StudioHeader(
 }
 
 /**
- * Brand logo rendered for a dark surface. Sample the decoded artwork's
- * pixels; when the mark is dark and essentially colorless (black/gray logos
- * drawn for light backgrounds — the TMDB company/network default), recolor
- * it white via a SrcIn tint, which preserves the alpha and turns the mark
- * into a white silhouette. Light or strongly colored logos pass through
- * unchanged (the Netflix N, NBC peacock, etc. stay colored).
+ * Brand logo rendered for a dark surface, in one of three ways decided by
+ * sampling the decoded artwork (see [brandMarkTreatment]):
+ *
+ *  - [BrandMark.WHITEN]   the dark, colorless glyph-on-transparency that the
+ *                         TMDB company/network endpoints default to. A SrcIn
+ *                         tint preserves its alpha and turns it into a white
+ *                         silhouette.
+ *  - [BrandMark.AS_IS]    colored marks (Netflix N, NBC peacock), light
+ *                         marks, and dark PLATES that carry their own light
+ *                         lettering — tinting one of those is what produced
+ *                         the unreadable solid white circles, because it
+ *                         whitens the plate and its knockout letters alike.
+ *  - [BrandMark.UNUSABLE] a featureless filled plate, or artwork that never
+ *                         arrives. Nothing is drawn, so the header's name
+ *                         text stands alone instead of a white disc (or a
+ *                         360dp blank slot) next to it.
+ *
  * Public so other screens can share the same logic.
  */
 @Composable
@@ -416,7 +427,12 @@ fun BrandLogo(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var tintWhite by remember(url) { mutableStateOf(false) }
+    var treatment by remember(url) { mutableStateOf(BrandMark.AS_IS) }
+    // Set when the artwork cannot read as a logo at all. The header then
+    // keeps its (large) name text and reclaims this component's width.
+    var unreadable by remember(url) { mutableStateOf(false) }
+
+    if (unreadable) return
 
     val request = remember(url) {
         ImageRequest.Builder(context)
@@ -430,26 +446,47 @@ fun BrandLogo(
         model = request,
         contentDescription = name,
         contentScale = ContentScale.Fit,
-        colorFilter = if (tintWhite) {
+        colorFilter = if (treatment == BrandMark.WHITEN) {
             ColorFilter.tint(Color.White, BlendMode.SrcIn)
         } else {
             null
         },
         onSuccess = { state ->
-            tintWhite = isDarkMonochromeMark(state.result.image)
+            treatment = brandMarkTreatment(state.result.image)
+            unreadable = treatment == BrandMark.UNUSABLE
         },
-        onError = { tintWhite = false },
+        // A logo that never arrives must not hold its slot open either.
+        onError = { unreadable = true },
         modifier = modifier
     )
 }
 
+/** How a sampled brand mark should be drawn on the dark header. */
+private enum class BrandMark { AS_IS, WHITEN, UNUSABLE }
+
 /**
- * True when the decoded mark is dark and essentially colorless — the
- * signature of a logo designed for a light background.
+ * Decides how a decoded brand mark should be drawn.
+ *
+ * Sampling is deliberately coarse (one 48x48 tile) because this runs once per
+ * logo, and three measurements separate the cases:
+ *
+ *  - coverage: fraction of the tile that is opaque. A wordmark or a glyph
+ *    covers well under half of it; a filled disc or square covers most of it.
+ *  - spread: the luminance range between the mark's darkest and lightest
+ *    opaque pixel. It is near zero for a flat silhouette and large for a mark
+ *    that has its own internal contrast (dark plate, light lettering).
+ *  - avgLum / avgSat: how dark and how colorless the mark is overall.
+ *
+ * A dark, colorless, low-coverage glyph is the logo-for-a-light-background
+ * case and gets whitened. A dark, colorless, HIGH-coverage plate with no
+ * internal contrast is the case this exists for: whitening it used to erase
+ * whatever it said and leave a solid white circle, and leaving it alone just
+ * hides a dark disc on a dark header — so it is reported unreadable and the
+ * screen shows the brand name by itself.
  */
-private fun isDarkMonochromeMark(image: coil3.Image): Boolean {
+private fun brandMarkTreatment(image: coil3.Image): BrandMark {
     return try {
-        val src = (image as? coil3.BitmapImage)?.bitmap ?: return false
+        val src = (image as? coil3.BitmapImage)?.bitmap ?: return BrandMark.AS_IS
         val small = if (src.width <= 48 && src.height <= 48) {
             src
         } else {
@@ -457,31 +494,51 @@ private fun isDarkMonochromeMark(image: coil3.Image): Boolean {
         }
         val pixels = IntArray(small.width * small.height)
         small.getPixels(pixels, 0, small.width, 0, 0, small.width, small.height)
+        if (pixels.isEmpty()) return BrandMark.AS_IS
+
         var count = 0
         var lumTotal = 0f
         var satTotal = 0f
+        var lumMin = 1f
+        var lumMax = 0f
         for (pixel in pixels) {
             val alpha = (pixel ushr 24) and 0xFF
             if (alpha < 64) continue // transparent padding
             val r = (pixel shr 16) and 0xFF
             val g = (pixel shr 8) and 0xFF
             val b = pixel and 0xFF
-            lumTotal += (0.299f * r + 0.587f * g + 0.114f * b) / 255f
+            val lum = (0.299f * r + 0.587f * g + 0.114f * b) / 255f
+            lumTotal += lum
+            lumMin = minOf(lumMin, lum)
+            lumMax = maxOf(lumMax, lum)
             val max = maxOf(r, g, b)
             val min = minOf(r, g, b)
             satTotal += (max - min) / 255f
             count++
         }
-        if (count == 0) {
-            false
-        } else {
-            val avgLum = lumTotal / count
-            val avgSat = satTotal / count
-            avgLum < 0.55f && avgSat < 0.28f
+        // Fully transparent artwork draws nothing: treat as unreadable rather
+        // than reserving the header's logo slot for it.
+        if (count == 0) return BrandMark.UNUSABLE
+
+        val coverage = count.toFloat() / pixels.size
+        val avgLum = lumTotal / count
+        val avgSat = satTotal / count
+        val spread = lumMax - lumMin
+
+        when {
+            // Featureless filled plate (solid disc/square): nothing to read.
+            coverage > 0.62f && spread < 0.12f && avgSat < 0.28f ->
+                BrandMark.UNUSABLE
+
+            // Dark, colorless glyph on transparency: drawn for a light
+            // background, so it is safe to recolor white.
+            avgLum < 0.55f && avgSat < 0.28f -> BrandMark.WHITEN
+
+            else -> BrandMark.AS_IS
         }
     } catch (_: Exception) {
         // Undecodable/protected bitmap — leave the logo untouched.
-        false
+        BrandMark.AS_IS
     }
 }
 

@@ -50,9 +50,19 @@ data class CrossBase(
     val companyId: Int? = null
 )
 
+/**
+ * One page of a browse rail.
+ *
+ * [nextPage] is the first TMDB page this rail has NOT merged yet. Page
+ * deepening (see [TmdbRepository.finishDeepRailPage]) consumes several TMDB
+ * pages before a rail first renders, so a later "load more" has to resume
+ * after the last one instead of re-fetching pages that are already on screen
+ * (which would return nothing new and look like a dead press).
+ */
 data class TagRailPage(
     val items: List<StudioItem>,
-    val hasMore: Boolean
+    val hasMore: Boolean,
+    val nextPage: Int = 2
 )
 
 
@@ -111,6 +121,20 @@ class TmdbRepository private constructor(context: Context) {
      * [dropPosterless].
      */
     internal val minRecentVoteCount = 0
+
+    /**
+     * Rail depth policy for the Search browse chips' screens (genre,
+     * keyword, network, studio, service, decade, cross-genre). TMDB returns
+     * 20 rows per discover page and the rail loaders used to render exactly
+     * that first page — so after the artwork and availability filters a
+     * chip's rails showed barely a dozen rows and read as a half-empty
+     * catalog. Page 1 now keeps pulling until a rail reaches
+     * [RAIL_DEPTH_TARGET_ITEMS] rows, capped at [RAIL_DEPTH_MAX_PAGE] so
+     * opening one screen costs at most a few requests per rail.
+     */
+    internal val RAIL_DEPTH_TARGET_ITEMS = 60
+    internal val RAIL_DEPTH_MAX_PAGE = 3
+
     internal val today: String
         get() = LocalDate.now().toString()
 
@@ -951,6 +975,10 @@ class TmdbRepository private constructor(context: Context) {
 
         val filters = com.kennyb1201.kbstream.data.kb.KBFilters(
             voteCountGte = voteFloor,
+            // English-only catalogs while that switch is on (see
+            // [browseLanguage]) — this is the cross-genre and decade rails
+            // behind the Search browse chips.
+            withOriginalLanguage = browseLanguage(),
             // A genre-base screen (Tag on a genre) ANDs the chip genre via
             // TMDB's comma OR semantics within the same filter field.
             withGenres = if (base.kind == "genre") {
@@ -971,16 +999,12 @@ class TmdbRepository private constructor(context: Context) {
             year = if (base.kind == "decade") base.id else null
         )
 
-        val items = runCatching {
-            discoverKB(
-                mediaType = if (isTv) "tv" else "movie",
-                page = page,
-                sortBy = sortBy,
-                filters = filters
-            )
-        }.getOrNull().orEmpty()
-            .map { StudioItem(it, if (isTv) "series" else "movie") }
-            .distinctBy { it.item.id }
+        val (items, nextPage) = deepenDiscover(
+            mediaType = if (isTv) "tv" else "movie",
+            sortBy = sortBy,
+            filters = filters,
+            page = page
+        )
 
         val filtered =
             if (isDigitalFilterEnabled()) {
@@ -988,7 +1012,9 @@ class TmdbRepository private constructor(context: Context) {
             } else {
                 items
             }
-        return kidsFilterPage(TagRailPage(filtered, items.size >= 20))
+        return kidsFilterPage(
+            TagRailPage(filtered, items.size >= 20, nextPage = nextPage)
+        )
     }
 
     /**
@@ -1020,6 +1046,19 @@ class TmdbRepository private constructor(context: Context) {
      */
     fun isDigitalFilterEnabled(): Boolean =
         AppPreferences.getHomeRailHideUpcoming(appContext)
+
+    /**
+     * The `with_original_language` value every browse/discover rail should
+     * filter with: "en" while Settings' English-only switch is on (the
+     * default), null when it is off.
+     *
+     * Deliberately not applied to free-text search — a search for a title by
+     * name must still find it whatever its original language. This gates the
+     * discover surfaces only: the Search browse chips (Genre / Keyword /
+     * Service / Network / Studio / Decade) and the rails they open.
+     */
+    internal fun browseLanguage(): String? =
+        if (AppPreferences.getBrowseEnglishOnly(appContext)) "en" else null
 
     /**
      * App-wide availability filter (Home digital-release toggle). Given
@@ -1214,7 +1253,10 @@ class TmdbRepository private constructor(context: Context) {
      * reflects the RAW result set, so filtering can never stop a rail from
      * paging.
      */
-    internal suspend fun finishRailPage(results: List<StudioItem>): TagRailPage {
+    internal suspend fun finishRailPage(
+        results: List<StudioItem>,
+        nextPage: Int = 2
+    ): TagRailPage {
         val distinct = dropPosterless(results.distinctBy { it.item.id })
 
         val filtered =
@@ -1229,9 +1271,80 @@ class TmdbRepository private constructor(context: Context) {
         return kidsFilterPage(
             TagRailPage(
                 items = filtered,
-                hasMore = results.isNotEmpty()
+                hasMore = results.isNotEmpty(),
+                nextPage = nextPage
             )
         )
+    }
+
+    /**
+     * [finishRailPage] with depth: the four dimension rail loaders in
+     * [TmdbRailPages] (genre / keyword / network / company) fetch page 1
+     * through [load] and, while the rail is still under
+     * [RAIL_DEPTH_TARGET_ITEMS], through the pages after it. A page is only
+     * followed by another when it came back non-empty — a short catalog ends
+     * the loop instead of asking TMDB for pages that cannot exist.
+     *
+     * Merged pages go through [finishRailPage] once, so the artwork and
+     * availability filters still run a single time over the whole rail, and
+     * the reported [TagRailPage.nextPage] is the first page not merged yet.
+     * Paging past page 1 is untouched: a "load more" fetches exactly the page
+     * it asked for.
+     */
+    internal suspend fun finishDeepRailPage(
+        page: Int,
+        load: suspend (Int) -> List<StudioItem>
+    ): TagRailPage {
+        val first = load(page)
+        if (page != 1) return finishRailPage(first, nextPage = page + 1)
+
+        val merged = first.toMutableList()
+        var next = 2
+        while (merged.size < RAIL_DEPTH_TARGET_ITEMS && next <= RAIL_DEPTH_MAX_PAGE) {
+            val more = load(next)
+            if (more.isEmpty()) break
+            merged += more
+            next++
+        }
+        return finishRailPage(merged, nextPage = next)
+    }
+
+    /**
+     * The same deepening for the discover-backed rails (service, decade,
+     * cross-genre), which build their own `KBFilters` instead of going through
+     * [TmdbRailPages]. Returns the merged rows paired with the page a later
+     * "load more" should ask for.
+     */
+    private suspend fun deepenDiscover(
+        mediaType: String,
+        sortBy: String,
+        filters: com.kennyb1201.kbstream.data.kb.KBFilters,
+        page: Int
+    ): Pair<List<StudioItem>, Int> {
+        val itemType = if (mediaType.equals("tv", ignoreCase = true)) "series" else "movie"
+
+        suspend fun load(p: Int): List<StudioItem> = runCatching {
+            discoverKB(mediaType = mediaType, page = p, sortBy = sortBy, filters = filters)
+        }.getOrNull().orEmpty()
+            .map { StudioItem(it, itemType) }
+            .distinctBy { it.item.id }
+
+        val first = load(page)
+        if (page != 1) return first to (page + 1)
+
+        val merged = first.toMutableList()
+        var next = 2
+        while (merged.size < RAIL_DEPTH_TARGET_ITEMS && next <= RAIL_DEPTH_MAX_PAGE) {
+            val more = load(next)
+            if (more.isEmpty()) break
+            merged += more
+            next++
+        }
+        // Across pages, not just within one: a popularity-sorted discover
+        // page shifts as items gain votes, so page 2 can repeat a row page 1
+        // already had. (The [finishDeepRailPage] path is deduped by
+        // [finishRailPage] instead.)
+        return merged.distinctBy { it.item.id } to next
     }
 
     suspend fun getGenreRailPage(genreId: Int, title: String, page: Int): TagRailPage =
@@ -1291,22 +1404,19 @@ class TmdbRepository private constructor(context: Context) {
         }
         val filters = com.kennyb1201.kbstream.data.kb.KBFilters(
             year = yearRange,
-            voteCountGte = voteFloor
+            voteCountGte = voteFloor,
+            withOriginalLanguage = browseLanguage()
         )
 
-        val items = runCatching {
-            discoverKB(
-                mediaType = if (isTv) "tv" else "movie",
-                page = page,
-                sortBy = sortBy,
-                filters = filters
-            )
-        }.getOrNull().orEmpty()
-            .map { StudioItem(it, if (isTv) "series" else "movie") }
-            .distinctBy { it.item.id }
+        val (items, nextPage) = deepenDiscover(
+            mediaType = if (isTv) "tv" else "movie",
+            sortBy = sortBy,
+            filters = filters,
+            page = page
+        )
 
         // A discover page caps at 20 items; a full page means more exist.
-        return kidsFilterPage(TagRailPage(items, items.size >= 20))
+        return kidsFilterPage(TagRailPage(items, items.size >= 20, nextPage = nextPage))
     }
 
     /**
@@ -1352,7 +1462,8 @@ class TmdbRepository private constructor(context: Context) {
         }
 
         val base = com.kennyb1201.kbstream.data.kb.KBFilters(
-            voteCountGte = voteFloor
+            voteCountGte = voteFloor,
+            withOriginalLanguage = browseLanguage()
         )
         val filters = if (mode == "originals") {
             // A network id only makes sense for TV; a company id applies to
@@ -1379,19 +1490,15 @@ class TmdbRepository private constructor(context: Context) {
                 releaseDateLte = today
             )
         }
-        val items = runCatching {
-            discoverKB(
-                mediaType = if (isTv) "tv" else "movie",
-                page = page,
-                sortBy = sortBy,
-                filters = filters
-            )
-        }.getOrNull().orEmpty()
-            .map { StudioItem(it, if (isTv) "series" else "movie") }
-            .distinctBy { it.item.id }
+        val (items, nextPage) = deepenDiscover(
+            mediaType = if (isTv) "tv" else "movie",
+            sortBy = sortBy,
+            filters = filters,
+            page = page
+        )
 
         // A discover page caps at 20 items; a full page means more exist.
-        return kidsFilterPage(TagRailPage(items, items.size >= 20))
+        return kidsFilterPage(TagRailPage(items, items.size >= 20, nextPage = nextPage))
     }
 
     // ------------------------------------------------------------------
@@ -1444,7 +1551,9 @@ class TmdbRepository private constructor(context: Context) {
             } else {
                 result.items
             }
-        return kidsFilterPage(TagRailPage(filtered, result.hasMore))
+        return kidsFilterPage(
+            TagRailPage(filtered, result.hasMore, nextPage = result.nextPage)
+        )
     }
 
     // ------------------------------------------------------------------
@@ -1578,7 +1687,9 @@ class TmdbRepository private constructor(context: Context) {
             } else {
                 result.items
             }
-        return kidsFilterPage(TagRailPage(filtered, result.hasMore))
+        return kidsFilterPage(
+            TagRailPage(filtered, result.hasMore, nextPage = result.nextPage)
+        )
     }
 
     suspend fun searchCollection(query: String): List<TmdbSearchCollectionResult> {
@@ -1738,7 +1849,13 @@ class TmdbRepository private constructor(context: Context) {
         const val PROFILE_BASE = "https://image.tmdb.org/t/p/w185"
         const val BACKDROP_BASE = "https://image.tmdb.org/t/p/w1280"
         const val POSTER_BASE = "https://image.tmdb.org/t/p/w500"
-        const val LOGO_BASE = "https://image.tmdb.org/t/p/original"
+        // w780, not original: company/network logo PNGs at "original" are
+        // routinely 1500-2500px wide (hundreds of KB to a few MB). They
+        // are drawn into a 360dp header slot and force-decoded in software
+        // for the pixel analysis behind BrandLogo, so the original size
+        // only made headers look logo-less for as long as the download
+        // took.
+        const val LOGO_BASE = "https://image.tmdb.org/t/p/w780"
         private const val MAX_IMDB_DISK_AGE_MS = 90L * 24L * 60L * 60L * 1000L
     }
 }

@@ -10,6 +10,11 @@ package com.kennyb1201.kbstream.data.tmdb
  * the active profile's kids ceiling. They only read the repository's API
  * client, vote floors and filters, so they live here and [TmdbRepository] keeps
  * thin members with the original names — every call site is unchanged.
+ *
+ * Each loader is now a thin wrapper: it resolves the English-only language
+ * setting and hands the per-page fetch (`*PageItems`) to
+ * [TmdbRepository.finishDeepRailPage], which also decides how many TMDB pages
+ * a rail renders with (see `RAIL_DEPTH_TARGET_ITEMS`).
  */
 internal object TmdbRailPages {
 
@@ -38,6 +43,27 @@ internal object TmdbRailPages {
     ): TagRailPage {
         if (repo.apiKey.isBlank()) return TagRailPage(emptyList(), false)
 
+        // Settings' English-only switch (on by default) gates every rail on
+        // this file's screens — see TmdbRepository.browseLanguage.
+        val lang = repo.browseLanguage()
+
+        return repo.finishDeepRailPage(page) { p ->
+            genrePageItems(repo, genreId, title, p, lang)
+        }
+    }
+
+    /**
+     * [genrePage]'s discover queries for ONE TMDB page, before the filters.
+     * Deepening a rail past that single page is
+     * [TmdbRepository.finishDeepRailPage]'s job.
+     */
+    private suspend fun genrePageItems(
+        repo: TmdbRepository,
+        genreId: Int,
+        title: String,
+        page: Int,
+        lang: String?
+    ): List<StudioItem> {
         val results = when (title) {
             "MOVIES · RECENT" -> runCatching {
                 repo.api.discoverMovieByGenre(
@@ -46,6 +72,7 @@ internal object TmdbRailPages {
                     "primary_release_date.desc",
                     repo.minRecentVoteCount,
                     releaseDateLte = repo.today,
+                    withOriginalLanguage = lang,
                     page = page
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
@@ -57,6 +84,7 @@ internal object TmdbRailPages {
                     "popularity.desc",
                     repo.minVoteCount,
                     releaseDateLte = repo.today,
+                    withOriginalLanguage = lang,
                     page = page
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
@@ -68,6 +96,7 @@ internal object TmdbRailPages {
                     "vote_count.desc",
                     repo.minTopRatedVoteCount,
                     releaseDateLte = repo.today,
+                    withOriginalLanguage = lang,
                     page = page
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
@@ -79,6 +108,7 @@ internal object TmdbRailPages {
                     "first_air_date.desc",
                     repo.minRecentVoteCount,
                     firstAirDateLte = repo.today,
+                    withOriginalLanguage = lang,
                     page = page
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
@@ -90,6 +120,7 @@ internal object TmdbRailPages {
                     "popularity.desc",
                     repo.minVoteCount,
                     firstAirDateLte = repo.today,
+                    withOriginalLanguage = lang,
                     page = page
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
@@ -101,14 +132,14 @@ internal object TmdbRailPages {
                     "vote_count.desc",
                     repo.minTopRatedVoteCount,
                     firstAirDateLte = repo.today,
+                    withOriginalLanguage = lang,
                     page = page
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
 
             else -> emptyList()
         }
-
-        return repo.finishRailPage(results)
+        return results
     }
 
     suspend fun keywordPage(
@@ -119,6 +150,25 @@ internal object TmdbRailPages {
     ): TagRailPage {
         if (repo.apiKey.isBlank()) return TagRailPage(emptyList(), false)
 
+        // Settings' English-only switch (on by default) gates every rail on
+        // this file's screens — see TmdbRepository.browseLanguage.
+        val lang = repo.browseLanguage()
+
+        return repo.finishDeepRailPage(page) { p ->
+            keywordPageItems(repo, keywordId, title, p, lang)
+        }
+    }
+
+    /**
+     * [keywordPage]'s discover queries for ONE TMDB page, before the filters.
+     */
+    private suspend fun keywordPageItems(
+        repo: TmdbRepository,
+        keywordId: Int,
+        title: String,
+        page: Int,
+        lang: String?
+    ): List<StudioItem> {
         val results = when (title) {
             "MOVIES · RECENT" -> runCatching {
                 repo.api.discoverMovieByKeyword(
@@ -127,6 +177,7 @@ internal object TmdbRailPages {
                     "primary_release_date.desc",
                     repo.minRecentVoteCount,
                     releaseDateLte = repo.today,
+                    withOriginalLanguage = lang,
                     page = page
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
@@ -138,6 +189,7 @@ internal object TmdbRailPages {
                     "popularity.desc",
                     repo.minVoteCount,
                     releaseDateLte = repo.today,
+                    withOriginalLanguage = lang,
                     page = page
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
@@ -149,6 +201,7 @@ internal object TmdbRailPages {
                     "vote_count.desc",
                     repo.minTopRatedVoteCount,
                     releaseDateLte = repo.today,
+                    withOriginalLanguage = lang,
                     page = page
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
@@ -160,6 +213,7 @@ internal object TmdbRailPages {
                     "first_air_date.desc",
                     repo.minRecentVoteCount,
                     firstAirDateLte = repo.today,
+                    withOriginalLanguage = lang,
                     page = page
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
@@ -171,6 +225,7 @@ internal object TmdbRailPages {
                     "popularity.desc",
                     repo.minVoteCount,
                     firstAirDateLte = repo.today,
+                    withOriginalLanguage = lang,
                     page = page
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
@@ -182,14 +237,14 @@ internal object TmdbRailPages {
                     "vote_count.desc",
                     repo.minTopRatedVoteCount,
                     firstAirDateLte = repo.today,
+                    withOriginalLanguage = lang,
                     page = page
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
 
             else -> emptyList()
         }
-
-        return repo.finishRailPage(results)
+        return results
     }
 
     /**
@@ -212,11 +267,31 @@ internal object TmdbRailPages {
     ): TagRailPage {
         if (repo.apiKey.isBlank()) return TagRailPage(emptyList(), false)
 
+        // Settings' English-only switch (on by default) gates every rail on
+        // this file's screens — see TmdbRepository.browseLanguage.
+        val lang = repo.browseLanguage()
+
         if (title.startsWith("MOVIES")) {
             return companyId?.let { companyPage(repo, it, title, page) }
                 ?: TagRailPage(emptyList(), false)
         }
 
+        return repo.finishDeepRailPage(page) { p ->
+            networkPageItems(repo, networkId, title, p, lang)
+        }
+    }
+
+    /**
+     * [networkPage]'s series discover queries for ONE TMDB page, before the
+     * filters (see [genrePageItems]).
+     */
+    private suspend fun networkPageItems(
+        repo: TmdbRepository,
+        networkId: Int,
+        title: String,
+        page: Int,
+        lang: String?
+    ): List<StudioItem> {
         val results = when (title) {
             "SERIES · RECENT" -> runCatching {
                 repo.api.discoverByNetwork(
@@ -225,6 +300,7 @@ internal object TmdbRailPages {
                     "first_air_date.desc",
                     repo.minRecentVoteCount,
                     firstAirDateLte = repo.today,
+                    withOriginalLanguage = lang,
                     page = page
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
@@ -236,6 +312,7 @@ internal object TmdbRailPages {
                     "popularity.desc",
                     repo.minVoteCount,
                     firstAirDateLte = repo.today,
+                    withOriginalLanguage = lang,
                     page = page
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
@@ -247,14 +324,14 @@ internal object TmdbRailPages {
                     "vote_count.desc",
                     repo.minTopRatedVoteCount,
                     firstAirDateLte = repo.today,
+                    withOriginalLanguage = lang,
                     page = page
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
 
             else -> emptyList()
         }
-
-        return repo.finishRailPage(results)
+        return results
     }
 
     suspend fun companyPage(
@@ -265,6 +342,26 @@ internal object TmdbRailPages {
     ): TagRailPage {
         if (repo.apiKey.isBlank()) return TagRailPage(emptyList(), false)
 
+        // Settings' English-only switch (on by default) gates every rail on
+        // this file's screens — see TmdbRepository.browseLanguage.
+        val lang = repo.browseLanguage()
+
+        return repo.finishDeepRailPage(page) { p ->
+            companyPageItems(repo, companyId, title, p, lang)
+        }
+    }
+
+    /**
+     * [companyPage]'s discover queries for ONE TMDB page, before the filters
+     * (see [genrePageItems]).
+     */
+    private suspend fun companyPageItems(
+        repo: TmdbRepository,
+        companyId: Int,
+        title: String,
+        page: Int,
+        lang: String?
+    ): List<StudioItem> {
         val results = when (title) {
             "MOVIES · RECENT" -> runCatching {
                 repo.api.discoverMovieByCompany(
@@ -273,6 +370,7 @@ internal object TmdbRailPages {
                     sortBy = "primary_release_date.desc",
                     voteCountGte = repo.minRecentVoteCount,
                     releaseDateLte = repo.today,
+                    withOriginalLanguage = lang,
                     page = page
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
@@ -284,6 +382,7 @@ internal object TmdbRailPages {
                     sortBy = "popularity.desc",
                     voteCountGte = repo.minVoteCount,
                     releaseDateLte = repo.today,
+                    withOriginalLanguage = lang,
                     page = page
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
@@ -295,6 +394,7 @@ internal object TmdbRailPages {
                     sortBy = "vote_count.desc",
                     voteCountGte = repo.minTopRatedVoteCount,
                     releaseDateLte = repo.today,
+                    withOriginalLanguage = lang,
                     page = page
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
@@ -306,6 +406,7 @@ internal object TmdbRailPages {
                     sortBy = "first_air_date.desc",
                     voteCountGte = repo.minRecentVoteCount,
                     firstAirDateLte = repo.today,
+                    withOriginalLanguage = lang,
                     page = page
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
@@ -317,6 +418,7 @@ internal object TmdbRailPages {
                     sortBy = "popularity.desc",
                     voteCountGte = repo.minVoteCount,
                     firstAirDateLte = repo.today,
+                    withOriginalLanguage = lang,
                     page = page
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
@@ -328,13 +430,13 @@ internal object TmdbRailPages {
                     sortBy = "vote_count.desc",
                     voteCountGte = repo.minTopRatedVoteCount,
                     firstAirDateLte = repo.today,
+                    withOriginalLanguage = lang,
                     page = page
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
 
             else -> emptyList()
         }
-
-        return repo.finishRailPage(results)
+        return results
     }
 }

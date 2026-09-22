@@ -369,7 +369,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
                 _pagingStates.value = _pagingStates.value.toMutableMap().apply {
                     this[title] = StudioRailPagingState(
-                        nextPage = pageNumber + 1,
+                        // Resumes after whatever page deepening already merged
+                        // for this rail (see TagRailPage.nextPage).
+                        nextPage = page.nextPage,
                         hasMore = page.hasMore,
                         isLoadingMore = false
                     )

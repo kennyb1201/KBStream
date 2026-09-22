@@ -161,6 +161,7 @@ fun SettingsScreen(
     var captionRating by remember { mutableStateOf(AppPreferences.getPosterCaptionRating(context)) }
     var posterSizeIdx by remember { mutableStateOf(AppPreferences.getPosterSize(context).toInt()) }
     var railHideUpcoming by remember { mutableStateOf(AppPreferences.getHomeRailHideUpcoming(context)) }
+    var browseEnglishOnly by remember { mutableStateOf(AppPreferences.getBrowseEnglishOnly(context)) }
     var landscapeCards by remember { mutableStateOf(AppPreferences.getHomeLandscapeCards(context)) }
     var partialWatchBadge by remember { mutableStateOf(AppPreferences.getPosterPartialWatchBadge(context)) }
     var amoledBlack by remember { mutableStateOf(AppPreferences.getAmoledBlack(context)) }
@@ -1169,6 +1170,18 @@ fun SettingsScreen(
                     onToggle = {
                         railHideUpcoming = it
                         AppPreferences.setHomeRailHideUpcoming(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                ToggleRow(
+                    label = "English-Only Browse & Discover",
+                    description = "Limits the Search browse chips (genres, keywords, services, networks, studios, decades) to English-language catalogs. Turn off for anime, Spanish-language networks, and other non-English catalogs.",
+                    checked = browseEnglishOnly,
+                    onToggle = {
+                        browseEnglishOnly = it
+                        AppPreferences.setBrowseEnglishOnly(context, it)
                     }
                 )
 

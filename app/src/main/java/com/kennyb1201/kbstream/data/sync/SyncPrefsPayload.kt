@@ -118,6 +118,7 @@ object PrefsPayloadBuilder {
         "poster_caption_year",
         "poster_caption_rating",
         "home_rail_hide_upcoming",
+        "browse_english_only",               // catalog language filter, not device-specific
         "home_landscape_cards",
         "poster_partial_watch_badge",
         "binge_group_prefer",                // binge continuity, not device-specific

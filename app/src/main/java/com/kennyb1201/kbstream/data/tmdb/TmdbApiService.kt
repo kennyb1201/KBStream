@@ -97,6 +97,7 @@ interface TmdbApiService {
         @Query("sort_by") sortBy: String,
         @Query("vote_count.gte") voteCountGte: Int? = null,
         @Query("primary_release_date.lte") releaseDateLte: String? = null,
+        @Query("with_original_language") withOriginalLanguage: String? = null,
         @Query("page") page: Int = 1
     ): TmdbDiscoverResponse
 
@@ -107,6 +108,7 @@ interface TmdbApiService {
         @Query("sort_by") sortBy: String,
         @Query("vote_count.gte") voteCountGte: Int? = null,
         @Query("first_air_date.lte") firstAirDateLte: String? = null,
+        @Query("with_original_language") withOriginalLanguage: String? = null,
         @Query("page") page: Int = 1
     ): TmdbDiscoverResponse
 
@@ -117,6 +119,7 @@ interface TmdbApiService {
         @Query("sort_by") sortBy: String,
         @Query("vote_count.gte") voteCountGte: Int? = null,
         @Query("primary_release_date.lte") releaseDateLte: String? = null,
+        @Query("with_original_language") withOriginalLanguage: String? = null,
         @Query("page") page: Int = 1
     ): TmdbDiscoverResponse
 
@@ -127,6 +130,7 @@ interface TmdbApiService {
         @Query("sort_by") sortBy: String,
         @Query("vote_count.gte") voteCountGte: Int? = null,
         @Query("first_air_date.lte") firstAirDateLte: String? = null,
+        @Query("with_original_language") withOriginalLanguage: String? = null,
         @Query("page") page: Int = 1
     ): TmdbDiscoverResponse
 
@@ -137,6 +141,7 @@ interface TmdbApiService {
         @Query("sort_by") sortBy: String,
         @Query("vote_count.gte") voteCountGte: Int? = null,
         @Query("primary_release_date.lte") releaseDateLte: String? = null,
+        @Query("with_original_language") withOriginalLanguage: String? = null,
         @Query("page") page: Int = 1
     ): TmdbDiscoverResponse
 
@@ -147,6 +152,7 @@ interface TmdbApiService {
         @Query("sort_by") sortBy: String,
         @Query("vote_count.gte") voteCountGte: Int? = null,
         @Query("first_air_date.lte") firstAirDateLte: String? = null,
+        @Query("with_original_language") withOriginalLanguage: String? = null,
         @Query("page") page: Int = 1
     ): TmdbDiscoverResponse
 
@@ -157,6 +163,7 @@ interface TmdbApiService {
         @Query("sort_by") sortBy: String,
         @Query("vote_count.gte") voteCountGte: Int? = null,
         @Query("first_air_date.lte") firstAirDateLte: String? = null,
+        @Query("with_original_language") withOriginalLanguage: String? = null,
         @Query("page") page: Int = 1
     ): TmdbDiscoverResponse
 

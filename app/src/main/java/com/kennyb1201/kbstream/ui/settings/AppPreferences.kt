@@ -68,6 +68,7 @@ object AppPreferences {
     private const val KEY_MDBLIST_API_KEY = "mdblist_api_key"
     private const val KEY_OPENSUBTITLES_API_KEY = "opensubtitles_api_key"
     private const val KEY_HIDE_UPCOMING = "home_rail_hide_upcoming"
+    private const val KEY_BROWSE_ENGLISH_ONLY = "browse_english_only"
     private const val KEY_LANDSCAPE_CARDS = "home_landscape_cards"
     private const val KEY_POSTER_PARTIAL_WATCH_BADGE = "poster_partial_watch_badge"
     private fun prefs(context: Context): SharedPreferences =
@@ -794,6 +795,25 @@ object AppPreferences {
 
     fun setHomeRailHideUpcoming(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_HIDE_UPCOMING, enabled).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
+    // ── Browse & discover: English-only catalogs ─────────────────────
+    //
+    // On by default. Every discover rail behind the Search browse chips then
+    // sends with_original_language=en, so a Studio/Service/Genre/Keyword/
+    // Decade page is an English catalog instead of a worldwide one — which is
+    // what the rails kept surfacing (foreign broadcasters' slates, anime
+    // shorts, non-US soap operas) no matter how the sort was floored.
+    //
+    // Off is the escape hatch for the categories where English-only is
+    // actively wrong: Animation (anime is Japanese), and the Spanish-language
+    // networks (Telemundo, Univision) whose catalog is Spanish by definition.
+    fun getBrowseEnglishOnly(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_BROWSE_ENGLISH_ONLY, true)
+
+    fun setBrowseEnglishOnly(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_BROWSE_ENGLISH_ONLY, enabled).apply()
         syncDisplayPrefsBlob(context)
     }
 
