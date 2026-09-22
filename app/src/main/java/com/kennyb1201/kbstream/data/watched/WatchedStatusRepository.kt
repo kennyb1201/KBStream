@@ -795,6 +795,27 @@ class WatchedStatusRepository(
         }
     }
 
+    /**
+     * Marks this device's cached Simkl marker sets as stale so the next
+     * preload re-reads them from the server instead of answering from the
+     * snapshot taken before a watched-state write.
+     *
+     * The write that unmarks part of a series rewrites the tracker record - 
+     * and clears Simkl's own caches - but this repository keeps its OWN copy
+     * of the completed/partial show sets for [REMOTE_SET_TTL_MS]. Left in
+     * place, that copy kept resolving the show as fully watched, so the
+     * poster stayed on the completed checkmark and the eye never appeared,
+     * for up to 15 minutes after the unmark.
+     */
+    suspend fun invalidateRemoteWatchSets() {
+        cacheMutex.withLock {
+            simklSetsFetchedAt = 0L
+        }
+
+        _watchedStateVersion.value =
+            System.currentTimeMillis()
+    }
+
     suspend fun forceRefresh(
         items: List<Pair<String, String>>
     ): Set<String> {
@@ -1551,6 +1572,139 @@ class WatchedStatusRepository(
                     }
                 }
             }
+
+        // The cached Simkl marker sets still describe the state BEFORE this
+        // mark. Without dropping them a preload in the next 15 minutes keeps
+        // resolving the title from that snapshot, and the tracker push above
+        // (which rewrote the title's record) is exactly what makes the
+        // snapshot wrong. Same reasoning for the unmark / partial paths.
+        invalidateRemoteWatchSets()
+    }
+
+    /**
+     * After PART of a series is unmarked: the title is no longer completed but
+     * still has watched episodes, so it must resolve as started-but-unfinished
+     * - the eye badge - instead of keeping the completed checkmark.
+     *
+     * Why a dedicated call: the checkmark came from a manual whole-show
+     * override PLUS Simkl's cached "completed shows" snapshot. Clearing the
+     * override alone left both the snapshot and the on-disk per-key row still
+     * saying "watched", so the poster kept its checkmark until the remote-set
+     * TTL expired - and the eye never appeared, because nothing had ever
+     * recorded "started". This drops every completed trace for the title across
+     * both id flavors, records the partial state in memory AND on disk, and
+     * wakes the badge listeners.
+     */
+    suspend fun markPartiallyWatchedLocal(
+        id: String,
+        type: String
+    ) {
+        val normalizedId = id.trim()
+        if (normalizedId.isBlank()) return
+
+        val normalizedType = normalizeType(type)
+        if (normalizedType != "series") return
+
+        val key = cacheKey(normalizedId, normalizedType)
+        val now = System.currentTimeMillis()
+
+        val idForms = runCatching { watchedIdForms(normalizedId, normalizedType) }
+            .getOrDefault(setOf(normalizedId))
+        val formKeys = (idForms.map { form -> cacheKey(form, normalizedType) } + key).toSet()
+        val scrubForms = idForms + normalizedId
+
+        // 1. The manual "Mark as Watched" override is what painted the
+        // checkmark; leaving it behind would flip the badge straight back on.
+        overridesPrefs
+            .edit()
+            .putStringSet(
+                KEY_WATCHED_OVERRIDES,
+                localWatchedOverrideKeys()
+                    .toMutableSet()
+                    .apply { removeAll(formKeys) }
+            )
+            .apply()
+
+        // 2. In memory: not completed, but started - and scrub every trace of
+        // "completed" so the stale snapshot cannot resurrect the checkmark.
+        val partialImdbForms = scrubForms.filter { form -> form.startsWith("tt") }.toSet()
+        val partialTmdbForms = scrubForms.filter { form -> form.startsWith("tmdb:") }.toSet()
+
+        cacheMutex.withLock {
+            formKeys.forEach { formKey ->
+                cache[formKey] =
+                    now to WatchedCacheEntry(
+                        isWatched = false,
+                        isPartiallyWatched = true
+                    )
+            }
+
+            completedMovieKeys =
+                completedMovieKeys
+                    .filterNot { entry ->
+                        scrubForms.any { form -> entry == form || entry == "imdb:$form" }
+                    }
+                    .toSet()
+
+            completedShowImdbIds = completedShowImdbIds - scrubForms
+            completedShowTmdbKeys = completedShowTmdbKeys - scrubForms
+
+            partialShowImdbIds = partialShowImdbIds + partialImdbForms
+            partialShowTmdbKeys = partialShowTmdbKeys + partialTmdbForms
+        }
+
+        // 3. On disk: the per-key row a cold start reads. The old completed row
+        // would otherwise still be inside its TTL and repaint the checkmark.
+        val diskRows = formKeys.map { formKey ->
+            WatchedStatusEntity(
+                key = formKey,
+                imdbId = formKey.substringAfter("::"),
+                mediaType = normalizedType,
+                isWatched = false,
+                isPartiallyWatched = true,
+                updatedAt = now
+            )
+        }
+
+        try {
+            watchedStatusDao.upsertAll(diskRows)
+        } catch (e: Exception) {
+            Log.e("WATCHED_REPO", "partial state write failed for $key", e)
+        }
+
+        _watchedStateVersion.value = now
+
+        formKeys.forEach { formKey ->
+            // Resolved state is "eye", not "unwatched": announcing plain
+            // false here made every collector drop the partial flag and the
+            // poster lost the eye the unmark had just given it.
+            WatchStateBus.notifyChanged(
+                watchedKey = formKey,
+                isWatched = false,
+                isPartiallyWatched = true
+            )
+        }
+
+        // 4. Cross-device: the partial flag travels with the watched rows, and
+        // the override removal with the prefs blob.
+        com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
+            diskRows.forEach { row ->
+                com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueueWatched(row)
+            }
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+                appContext,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_WATCHED_OVERRIDES,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildWatchedOverrides(appContext)
+            )
+        }
+
+        Log.i("WATCHED_REPO", "Local partially-watched state set: $key")
+
+        // The sets this path scrubbed in memory are re-read from the server
+        // on the next refresh - but only if the cached copy is marked stale;
+        // otherwise the completed set it was scrubbed from comes straight
+        // back and the checkmark with it.
+        invalidateRemoteWatchSets()
     }
 
     /**
@@ -1763,6 +1917,11 @@ class WatchedStatusRepository(
                     }
                 }
             }
+
+        // Drop the cached Simkl marker sets so the next preload re-reads them
+        // instead of resurrecting this title from the pre-unmark snapshot
+        // (which is how an unmarked show kept its completed checkmark).
+        invalidateRemoteWatchSets()
     }
 
     /**
@@ -1876,6 +2035,10 @@ class WatchedStatusRepository(
             "WATCHED_REPO",
             "Local watched override cleared: $key"
         )
+
+        // Same as the partial path: the cached remote sets must not answer
+        // for this title any more.
+        invalidateRemoteWatchSets()
 
         return true
     }

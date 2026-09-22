@@ -244,6 +244,31 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         return watchedStatusRepository.observeIsWatched(id, type)
     }
 
+    /**
+     * Re-resolves this screen's poster rows (More Like This / collection)
+     * after a watched-state write.
+     *
+     * Those rows read a ONE-SHOT snapshot of the watched state taken when the
+     * page loaded, so a season unmark left every one of them showing the
+     * completed checkmark it had resolved earlier - the eye never appeared
+     * until the page was reloaded. Re-running the (cached, no extra network)
+     * resolution against the repository - which the write has already
+     * updated - repaints them: checkmark for a fully watched title, eye for
+     * one that is now only partly watched.
+     */
+    private fun refreshPostersAfterWatchedChange() {
+        val type =
+            mediaType.ifBlank {
+                normalizeMediaType(
+                    _meta.value?.type.orEmpty()
+                )
+            }
+
+        if (type.isBlank()) return
+
+        refreshPosterWatchedStatus(type)
+    }
+
     private fun refreshPosterWatchedStatus(type: String) {
         viewModelScope.launch {
             try {
@@ -1380,6 +1405,8 @@ for (metaAddon in metaAddons) {
                     )
                 }
             }
+
+            refreshPostersAfterWatchedChange()
         }
     }
 
@@ -1455,6 +1482,12 @@ for (metaAddon in metaAddons) {
             // episode, so a series carrying that override gets its tracker
             // record rewritten instead. Clearing the override is also what
             // stops the app's own poster from keeping its checkmark.
+            //
+            // This MUST run before the "started but unfinished" write below:
+            // clearing the override rewrites the cached row as neither
+            // watched NOR partial, so running it afterwards wiped the partial
+            // marker this path had just set - the poster lost its eye and the
+            // badge went bare.
             val hadWholeShowMark =
                 runCatching {
                     watchedStatusRepository.clearWatchedOverride(
@@ -1462,6 +1495,28 @@ for (metaAddon in metaAddons) {
                         "series"
                     )
                 }.getOrDefault(false)
+
+            // The show is no longer completed but still has watched
+            // episodes, so record started-but-unfinished: the badge becomes
+            // the eye at once - on this screen and on every poster - instead
+            // of keeping the completed checkmark from the cached Simkl
+            // snapshot / the old on-disk row.
+            if (_simklWatchedEpisodes.value.isNotEmpty() ||
+                _watchedEpisodeKeys.value.isNotEmpty()
+            ) {
+                runCatching {
+                    watchedStatusRepository.markPartiallyWatchedLocal(
+                        parentId,
+                        "series"
+                    )
+                }.onFailure { e ->
+                    Log.e(
+                        "KBStream",
+                        "markPartiallyWatchedLocal failed after unmark",
+                        e
+                    )
+                }
+            }
 
             if (hadWholeShowMark) {
                 rewriteTrackersAfterPartialUnmark(
@@ -1666,6 +1721,10 @@ for (metaAddon in metaAddons) {
             "KBStream",
             "rewriteTrackers finished parent=$parentId seasons=${remainingBySeason.size} removed=${removed.size}"
         )
+
+        // This path returns early from the unmark flows, so it has to repaint
+        // the poster rows itself.
+        refreshPostersAfterWatchedChange()
     }
 
     /**
@@ -1851,6 +1910,8 @@ for (metaAddon in metaAddons) {
                     e
                 )
             }
+
+            refreshPostersAfterWatchedChange()
         }
     }
 
@@ -1905,6 +1966,8 @@ for (metaAddon in metaAddons) {
                     e
                 )
             }
+
+            refreshPostersAfterWatchedChange()
         }
     }
 
@@ -2038,7 +2101,9 @@ for (metaAddon in metaAddons) {
 
             // 3. Same whole-show repair as the season path: a manual
             // whole-show mark on the trackers cannot be cleared episode by
-            // episode, and its local override must go too.
+            // episode, and its local override must go too. Runs BEFORE the
+            // partial write below, which the override clear would
+            // otherwise wipe (see the season path).
             val hadWholeShowMark =
                 runCatching {
                     watchedStatusRepository.clearWatchedOverride(
@@ -2046,6 +2111,28 @@ for (metaAddon in metaAddons) {
                         "series"
                     )
                 }.getOrDefault(false)
+
+            // The show is no longer completed but still has watched
+            // episodes, so record started-but-unfinished: the badge becomes
+            // the eye at once - on this screen and on every poster - instead
+            // of keeping the completed checkmark from the cached Simkl
+            // snapshot / the old on-disk row.
+            if (_simklWatchedEpisodes.value.isNotEmpty() ||
+                _watchedEpisodeKeys.value.isNotEmpty()
+            ) {
+                runCatching {
+                    watchedStatusRepository.markPartiallyWatchedLocal(
+                        parentId,
+                        "series"
+                    )
+                }.onFailure { e ->
+                    Log.e(
+                        "KBStream",
+                        "markPartiallyWatchedLocal failed after unmark",
+                        e
+                    )
+                }
+            }
 
             if (hadWholeShowMark) {
                 rewriteTrackersAfterPartialUnmark(
@@ -2102,6 +2189,8 @@ for (metaAddon in metaAddons) {
                     )
                 }
             }
+
+            refreshPostersAfterWatchedChange()
         }
     }
 

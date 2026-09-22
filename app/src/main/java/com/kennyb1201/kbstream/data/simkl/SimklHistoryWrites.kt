@@ -64,9 +64,7 @@ suspend fun SimklRepository.pushWatchedMovieImpl(
             // A fresh watched write invalidates the completed-movie
             // snapshot and the Continue Watching feed so watched markers
             // and the rail reflect the new state immediately.
-            cachedCompletedMovieKeys = null
-            cachedCompletedMovieKeysFetchedAt = 0L
-            clearContinueWatchingCache()
+            invalidateWatchedSnapshots()
 
             // Close any open playback session for the movie so the just-
             // watched title can't resurface in Continue Watching at its
@@ -136,9 +134,7 @@ suspend fun SimklRepository.pushWatchedShowImpl(
             // A fresh watched write invalidates the cached show library
             // and the Continue Watching feed so episode-watched filters
             // and the rail reflect the new state immediately.
-            cachedAllShowItems = null
-            cachedAllShowItemsFetchedAt = 0L
-            clearContinueWatchingCache()
+            invalidateWatchedSnapshots()
 
             // Close any open playback sessions for the show so the just-
             // watched title can't resurface in Continue Watching at its
@@ -203,18 +199,11 @@ suspend fun SimklRepository.removeWatchedMovieImpl(
             }
             Log.e("SIMKL_REPO", "removeWatchedMovie failed code=${response.code()} body=$errorText")
         } else {
-            // Drop the in-memory watched sets so a later preload re-fetches
-            // fresh remote state instead of resurrecting this title from a
-            // stale completed-list snapshot.
-            cachedCompletedMovieKeys = null
-            cachedCompletedMovieKeysFetchedAt = 0L
-            cachedAllShowItems = null
-            cachedAllShowItemsFetchedAt = 0L
-
-            // The Continue Watching feed is snapshotted in-memory and on
-            // disk; drop it so the removed title doesn't resurface from
-            // the stale snapshot on the next rail refresh.
-            clearContinueWatchingCache()
+            // Drop every watched snapshot - memory and disk - so a later
+            // preload re-fetches fresh remote state instead of resurrecting
+            // this title from a stale completed-list snapshot or the 12h
+            // show-library blob.
+            invalidateWatchedSnapshots()
 
             Log.i("SIMKL_REPO", "removeWatchedMovie ok imdb=$imdbId")
         }
@@ -270,15 +259,7 @@ suspend fun SimklRepository.removeWatchedShowImpl(
             }
             Log.e("SIMKL_REPO", "removeWatchedShow failed code=${response.code()} body=$errorText")
         } else {
-            cachedCompletedMovieKeys = null
-            cachedCompletedMovieKeysFetchedAt = 0L
-            cachedAllShowItems = null
-            cachedAllShowItemsFetchedAt = 0L
-
-            // The Continue Watching feed is snapshotted in-memory and on
-            // disk; drop it so the removed title doesn't resurface from
-            // the stale snapshot on the next rail refresh.
-            clearContinueWatchingCache()
+            invalidateWatchedSnapshots()
 
             Log.i("SIMKL_REPO", "removeWatchedShow ok show=$showImdbId")
         }
@@ -345,9 +326,7 @@ suspend fun SimklRepository.pushWatchedEpisodeImpl(
             // A fresh watched write invalidates the cached show library
             // and the Continue Watching feed so episode-watched filters
             // and the rail reflect the new state immediately.
-            cachedAllShowItems = null
-            cachedAllShowItemsFetchedAt = 0L
-            clearContinueWatchingCache()
+            invalidateWatchedSnapshots()
 
             // Close the open playback session for this episode so the
             // just-watched episode can't resurface in Continue Watching
@@ -438,9 +417,7 @@ suspend fun SimklRepository.pushWatchedSeasonImpl(
             // Watching feed so any stale playback session for the just-
             // marked episodes gets filtered (and deleted) on the next
             // rail refresh instead of lingering at its old progress.
-            cachedAllShowItems = null
-            cachedAllShowItemsFetchedAt = 0L
-            clearContinueWatchingCache()
+            invalidateWatchedSnapshots()
 
             // Close open playback sessions for the marked episodes so
             // they can't resurface in Continue Watching at their old
@@ -527,8 +504,18 @@ suspend fun SimklRepository.removeWatchedSeasonImpl(
             // Drop the in-memory show snapshot so the next detail load
             // re-fetches fresh per-episode state from Simkl instead of
             // resurrecting this season from the stale snapshot.
-            cachedAllShowItems = null
-            cachedAllShowItemsFetchedAt = 0L
+            // Drop BOTH watched snapshots this write invalidates:
+            //
+            // - the show library (memory and the 12h disk blob), whose
+            //   pre-write copy still counts the unmarked season as watched
+            //   everywhere the badges resolve from - which is why a series
+            //   unmarked season-by-season kept its completed checkmark
+            //   instead of the eye;
+            // - the Continue Watching feed, whose cached list was built
+            //   while the show was still fully watched (so the feed's own
+            //   caught-up filter had excluded it), which is why it never
+            //   returned to the rail until the app was restarted.
+            invalidateWatchedSnapshots()
 
             Log.i("SIMKL_REPO", "removeWatchedSeason ok show=$showImdbId s=$season eps=${validEpisodes.size}")
         }

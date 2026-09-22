@@ -6142,29 +6142,39 @@ private suspend fun calculateEpisodesRemaining(
 
         viewModelScope.launch {
 
-            WatchStateBus.updates.collect {
-                (key, isWatched) ->
+            WatchStateBus.updates.collect { update ->
 
                 val current =
                     _watchedKeys.value
                         .toMutableSet()
 
-                if (isWatched) {
-                    current.add(key)
+                if (update.isWatched) {
+                    current.add(update.key)
                 } else {
-                    current.remove(key)
+                    current.remove(update.key)
                 }
 
                 _watchedKeys.value =
                     current
 
-                // A manual mark/unmark always clears the eye badge for that
-                // key: markWatchedLocal resolves it to fully-watched (the
-                // checkmark wins) and markUnwatchedLocal resets it entirely.
-                if (key in _partialWatchedKeys.value) {
-                    _partialWatchedKeys.value =
-                        _partialWatchedKeys.value - key
+                // The badge state as the write resolved it - not "anything
+                // that is not watched is bare". A manual whole-title mark
+                // resolves to the checkmark (no eye); unmarking PART of a
+                // series resolves to the eye, and this event is what paints
+                // it immediately instead of leaving the tile bare until the
+                // next marker preload.
+                val partial =
+                    _partialWatchedKeys.value
+                        .toMutableSet()
+
+                if (update.isPartiallyWatched) {
+                    partial.add(update.key)
+                } else {
+                    partial.remove(update.key)
                 }
+
+                _partialWatchedKeys.value =
+                    partial
 
                 // Dynamic addon catalogs (BingeCat "Because you watched …",
                 // collections that grow as you watch) are computed from the
@@ -6191,6 +6201,16 @@ private suspend fun calculateEpisodesRemaining(
         dynamicCatalogRefreshJob?.cancel()
         dynamicCatalogRefreshJob = viewModelScope.launch {
             delay(DYNAMIC_CATALOG_REFRESH_DELAY_MS)
+
+            // Every bus event is an explicit watched-state change (mark /
+            // unmark / partial), and those change what Continue Watching
+            // should hold: a show whose season was just unmarked has
+            // something to resume again, while one just marked watched does
+            // not. Bump the trigger so the up-next rail re-merges against a
+            // FRESH Simkl feed instead of the list built before the change
+            // (the debounce keeps a burst of writes to one recompute).
+            _refreshTrigger.value += 1
+
             runCatching {
                 loadRailsInternal(
                     forceRefresh = true,

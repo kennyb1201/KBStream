@@ -337,6 +337,9 @@ class SimklRepository(
         cachedContinueWatching =
             null
 
+        cachedContinueWatchingFetchedAt =
+            0L
+
         cachedAllShowItems =
             null
 
@@ -651,6 +654,57 @@ class SimklRepository(
     ): Boolean = removeWatchedShowImpl(showImdbId, title, tmdbId)
 
     /**
+     * Drops EVERY cached Simkl watched-state snapshot - the show library,
+     * the completed-movie set and the Continue Watching feed - in memory AND
+     * on disk.
+     *
+     * The disk half matters as much as the memory half: [getAllShowItemsCached]
+     * falls straight back to the 12h disk blob the moment the memory copy is
+     * cleared, so a write that only nulled the memory copy left the PRE-write
+     * library answering the very next read. That is how a series the user had
+     * just unmarked - with Simkl's own record already rewritten correctly -
+     * kept resolving as fully watched here: the stale blob still said every
+     * episode was watched, so the poster kept its completed checkmark instead
+     * of turning into the eye, and Continue Watching saw nothing left to
+     * resume and left the show off the rail.
+     */
+    internal suspend fun invalidateWatchedSnapshots() {
+        invalidateShowLibraryCache()
+
+        cachedCompletedMovieKeys = null
+        cachedCompletedMovieKeysFetchedAt = 0L
+
+        // Clears the Continue Watching feed in memory and on disk too.
+        clearContinueWatchingCache()
+
+        runCatching {
+            tmdbJsonCacheDao?.deleteByKeys(
+                listOf(
+                    diskKey(COMPLETED_MOVIES_DISK_KEY_BASE)
+                )
+            )
+        }
+    }
+
+    /**
+     * Drops the cached show library - memory AND the 12h disk blob - so the
+     * next read re-fetches it instead of answering from the snapshot taken
+     * before the write.
+     */
+    internal suspend fun invalidateShowLibraryCache() {
+        cachedAllShowItems = null
+        cachedAllShowItemsFetchedAt = 0L
+
+        runCatching {
+            tmdbJsonCacheDao?.deleteByKeys(
+                listOf(
+                    diskKey(ALL_SHOW_ITEMS_DISK_KEY_BASE)
+                )
+            )
+        }
+    }
+
+    /**
      * Drops the in-memory and on-disk Continue Watching snapshot so the next
      * rail refresh re-fetches from Simkl instead of serving the stale list
      * (e.g. right after a title was removed from history via
@@ -658,6 +712,7 @@ class SimklRepository(
      */
     internal suspend fun clearContinueWatchingCache() {
         cachedContinueWatching = null
+        cachedContinueWatchingFetchedAt = 0L
         runCatching {
             tmdbJsonCacheDao?.deleteByKeys(
                 listOf(diskKey(CONTINUE_WATCHING_DISK_KEY_BASE))
@@ -1785,7 +1840,10 @@ class SimklRepository(
 
         if (
             !forceRefresh &&
-            cachedContinueWatching != null
+            cachedContinueWatching != null &&
+            System.currentTimeMillis() -
+                cachedContinueWatchingFetchedAt <
+                CONTINUE_WATCHING_TTL_MS
         ) {
             return cachedContinueWatching.orEmpty()
         }
@@ -1819,6 +1877,9 @@ class SimklRepository(
                 if (parsed != null) {
                     cachedContinueWatching =
                         parsed
+
+                    cachedContinueWatchingFetchedAt =
+                        System.currentTimeMillis()
 
                     return parsed
                 }
@@ -2155,26 +2216,14 @@ class SimklRepository(
                     .asSequence()
                     .filter { item ->
 
-                        val status =
-                            item.status
-                                ?.trim()
-                                ?.lowercase()
-
-                        if (
-                            status == "dropped" ||
-                            status == "completed" ||
-                            status == "ended" ||
-                            status == "canceled"
-                        ) {
-                            false
-                        } else {
-                            // Caught-up shows stay off the rail (nothing aired
-                            // left to watch) even though the poster badge for
-                            // them is now the eye, not the completed checkmark.
-                            !isCaughtUpOnAiredEpisodes(
-                                item
-                            )
-                        }
+                        // One shared rule: dropped shows never appear, a show
+                        // the user still has aired episodes to watch does -
+                        // even when Simkl's list status still says
+                        // "completed" (whole-show mark, then a season
+                        // unmarked), and a caught-up show does not.
+                        isContinueWatchingCandidate(
+                            item
+                        )
                     }
                     .mapNotNull { item ->
 
@@ -2305,6 +2354,9 @@ class SimklRepository(
 
             cachedContinueWatching =
                 result
+
+            cachedContinueWatchingFetchedAt =
+                System.currentTimeMillis()
 
             runCatching {
                 tmdbJsonCacheDao?.upsert(
@@ -2807,6 +2859,17 @@ class SimklRepository(
         private const val ALL_SHOW_ITEMS_DISK_TTL_MS =
             12L * 60L * 60L * 1000L
 
+        /*
+         * How long the in-memory Continue Watching list may be trusted. It
+         * used to be trusted forever (cleared only by a watched write), so a
+         * list fetched at the wrong instant - right after an unmark, before
+         * Simkl's feed had caught up - stayed for the whole session and the
+         * show never came back to the rail until an app restart. The disk
+         * copy already had a TTL; this is the memory copy's.
+         */
+        private const val CONTINUE_WATCHING_TTL_MS =
+            3L * 60L * 1000L
+
         private const val CONTINUE_WATCHING_DISK_TTL_MS =
             6L * 60L * 60L * 1000L
 
@@ -2850,6 +2913,12 @@ class SimklRepository(
             List<SimklContinueWatchingItem>? =
             null
 
+        // When [cachedContinueWatching] was last built, so it can age out
+        // (see CONTINUE_WATCHING_TTL_MS).
+        @Volatile
+        private var cachedContinueWatchingFetchedAt: Long =
+            0L
+
         /**
          * Profile-switch isolation: drops every in-memory watched-state
          * snapshot. Simkl auth is per-profile (scoped simkl_auth prefs), so
@@ -2861,6 +2930,7 @@ class SimklRepository(
          */
         fun clearTransientCaches() {
             cachedContinueWatching = null
+            cachedContinueWatchingFetchedAt = 0L
             INSTANCE?.let { instance ->
                 instance.clearWatchedCachesForProfileSwitch()
             }

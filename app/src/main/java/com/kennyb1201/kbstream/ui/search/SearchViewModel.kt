@@ -1322,21 +1322,27 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             .launchIn(viewModelScope)
 
         WatchStateBus.updates
-            .onEach { (key, isWatched) ->
+            .onEach { update ->
                 val current = _watchedKeys.value.toMutableSet()
-                if (isWatched) {
-                    current.add(key)
+                if (update.isWatched) {
+                    current.add(update.key)
                 } else {
-                    current.remove(key)
+                    current.remove(update.key)
                 }
                 _watchedKeys.value = current
 
-                // A manual mark/unmark always clears the eye badge for that
-                // key: the completed checkmark wins, or the tile goes back
-                // to unwatched.
-                if (key in _partialWatchedKeys.value) {
-                    _partialWatchedKeys.value = _partialWatchedKeys.value - key
+                // The badge state as the write resolved it: a whole-title
+                // mark resolves to the checkmark (no eye), while unmarking
+                // part of a series resolves to the eye and has to show it
+                // right away instead of leaving the tile bare until the next
+                // marker preload.
+                val partial = _partialWatchedKeys.value.toMutableSet()
+                if (update.isPartiallyWatched) {
+                    partial.add(update.key)
+                } else {
+                    partial.remove(update.key)
                 }
+                _partialWatchedKeys.value = partial
             }
             .launchIn(viewModelScope)
     }

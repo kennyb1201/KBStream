@@ -186,6 +186,77 @@ object ShowCompletionRules {
     }
 
     /**
+     * Continue Watching's INCLUSION rule for a watching-feed show: is this
+     * show worth a rail card because the user has something left to watch?
+     *
+     * The show's list status must not veto this on its own. Marking a series
+     * watched whole-show sets Simkl's status to "completed", and unmarking a
+     * season removes the episodes WITHOUT resetting that status - so keying
+     * the rail off the status alone kept a show the user had just made
+     * resumable again hidden from Continue Watching forever.
+     *
+     * The episode tally is the authority whenever it exists: nothing aired
+     * left to watch means nothing to resume (the caught-up show stays off).
+     * Only with no tally at all does the status fall back to deciding, and
+     * only a genuinely finished show with nothing queued next is excluded.
+     * The one unconditional exclusion is "dropped": the user took it off
+     * their list, so it never belongs on the rail.
+     */
+    fun isContinueWatchingCandidate(
+        status: String?,
+        watchedEpisodesCount: Int?,
+        totalEpisodesCount: Int?,
+        notAiredEpisodesCount: Int?,
+        nextToWatch: String?
+    ): Boolean {
+
+        val normalizedStatus =
+            status
+                ?.trim()
+                ?.lowercase()
+
+        // Deliberately off the user's list: never a rail card.
+        if (
+            normalizedStatus == "dropped"
+        ) {
+            return false
+        }
+
+        val watched =
+            watchedEpisodesCount ?: 0
+
+        val total =
+            totalEpisodesCount ?: 0
+
+        val notAired =
+            notAiredEpisodesCount ?: 0
+
+        val airedTotal =
+            if (total > 0) {
+                total - notAired
+            } else {
+                0
+            }
+
+        // The tally decides when it exists: every aired episode watched
+        // means there is nothing to resume.
+        if (
+            airedTotal > 0
+        ) {
+            return watched < airedTotal
+        }
+
+        // No tally, but Simkl is queueing an episode to watch next.
+        if (
+            !nextToWatch.isNullOrBlank()
+        ) {
+            return true
+        }
+
+        return normalizedStatus !in FINISHED_STATUSES
+    }
+
+    /**
      * Continue Watching's rule: true when every AIRED episode is watched,
      * even though more episodes may still be coming. The rail uses this to
      * keep a caught-up show off it (there is nothing to resume), while the
@@ -245,6 +316,26 @@ internal fun SimklRepository.isShowFullyWatched(
 
         totalEpisodesCount =
             item.totalEpisodesCount,
+
+        nextToWatch =
+            item.nextToWatch
+    )
+
+internal fun SimklRepository.isContinueWatchingCandidate(
+    item: SimklWatchingShowItem
+): Boolean =
+    ShowCompletionRules.isContinueWatchingCandidate(
+        status =
+            item.status,
+
+        watchedEpisodesCount =
+            item.watchedEpisodesCount,
+
+        totalEpisodesCount =
+            item.totalEpisodesCount,
+
+        notAiredEpisodesCount =
+            item.notAiredEpisodesCount,
 
         nextToWatch =
             item.nextToWatch
