@@ -340,11 +340,16 @@ private class SplitModeRenderersFactory(
     }
 
     /**
-     * Installs the A/V sync offset processor. Media3 has no audio offset API,
-     * so the shift rides in the PCM stream (see [AudioDelayProcessor]). It is
-     * attached unconditionally — at 0 ms it is a pure pass-through — so moving
-     * the slider takes effect without rebuilding the player, and so no audio
-     * path can ever silently lose the correction.
+     * Installs the A/V sync offset processor and the downmix / dialogue
+     * enhancer. Media3 has no audio offset API, so the shift rides in the PCM
+     * stream (see [AudioDelayProcessor]). Both are attached unconditionally — at
+     * their defaults they are pure pass-throughs — so moving a slider or picking
+     * a downmix layout takes effect without rebuilding the player, and so no
+     * audio path can ever silently lose the correction.
+     *
+     * Order matters: the delay runs first (it only inserts or drops leading
+     * silence), then [AudioDownmixProcessor] folds the channels, applies the
+     * dialogue/volume gain and limits the result.
      */
     override fun buildAudioSink(
         context: Context,
@@ -352,7 +357,12 @@ private class SplitModeRenderersFactory(
         enableAudioTrackPlaybackParams: Boolean
     ): AudioSink =
         DefaultAudioSink.Builder(context)
-            .setAudioProcessors(arrayOf(AudioDelayProcessor.instance))
+            .setAudioProcessors(
+                arrayOf(
+                    AudioDelayProcessor.instance,
+                    AudioDownmixProcessor.instance
+                )
+            )
             .setEnableFloatOutput(enableFloatOutput)
             .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
             .build()
@@ -3641,13 +3651,28 @@ class NativePlayerActivity : ComponentActivity() {
                 // software-decoded PCM track gets created with FLAG_HW_AV_SYNC
                 // and AudioFlinger refuses it (createTrack error -38,
                 // "Cannot create AudioTrack"). Same rule KB uses.
-                if (enableTunneling && !isLiveChannel &&
+                //
+                // It is also skipped whenever the audio tuning is active: a
+                // tunneled track bypasses the audio sink's processors entirely,
+                // so the downmix / dialogue enhancer / volume boost would be
+                // silently ignored and the user would hear the untouched mix
+                // after having explicitly asked for it. Tuning wins.
+                val audioTuningActive = !PlayerAudioTuning.isNeutral
+                if (enableTunneling && !isLiveChannel && !audioTuningActive &&
                     audioExtMode != DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
                 ) {
                     trackSelectionParameters = androidx.media3.exoplayer.trackselection.DefaultTrackSelector
                         .Parameters.Builder(this@NativePlayerActivity)
                         .setTunnelingEnabled(true).build()
                     Log.i("PLAYER_TUNNEL", "Tunneled via TrackSelector")
+                } else if (enableTunneling && audioTuningActive) {
+                    Log.i(
+                        "PLAYER_TUNNEL",
+                        "Tunneling skipped: audio tuning active (downmix=" +
+                            PlayerAudioTuning.downmixTarget +
+                            " dialogue=" + PlayerAudioTuning.dialogueBoost +
+                            " volume=+" + PlayerAudioTuning.volumeBoostDb + "dB)"
+                    )
                 }
                 playWhenReady = !fromActorReturn
             }

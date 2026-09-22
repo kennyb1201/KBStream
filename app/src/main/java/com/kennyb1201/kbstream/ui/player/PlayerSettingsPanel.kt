@@ -249,6 +249,67 @@ fun SettingsPanel(
 
             Spacer(modifier = Modifier.height(14.dp))
 
+            // ── AUDIO ──────────────────────────────────────────────
+            // These three are the app's own PCM path (see AudioDownmixProcessor):
+            // a downmix that lifts dialogue over score and effects, and a
+            // limited volume boost for streams mixed too quietly. "Global"
+            // follows Settings → Video & Audio; anything else is remembered for
+            // THIS show only, so a badly mixed series does not push the next
+            // one through the same boost.
+            SectionHeader("AUDIO")
+            Text(
+                text = if (PlayerTrackBridge.titleKey == null) {
+                    "Applies for this session"
+                } else {
+                    "Remembered for this show"
+                },
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+
+            AudioOptionRows(
+                label = "Downmix",
+                options = PlayerAudioTuning.DOWNMIX_OPTIONS,
+                selected = PlayerTrackBridge.audioDownmix,
+                onSelect = { PlayerTrackBridge.chooseAudioDownmix(context, it) }
+            )
+            Text(
+                text = "Stereo folds 5.1/7.1 into your TV's speakers with dialogue up front. " +
+                    "Layout changes apply from the next stream start.",
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+
+            AudioOptionRows(
+                label = "Dialogue boost",
+                options = PlayerAudioTuning.DIALOGUE_OPTIONS,
+                selected = PlayerTrackBridge.audioDialogueBoost,
+                onSelect = { PlayerTrackBridge.chooseAudioDialogueBoost(context, it) }
+            )
+            Text(
+                text = "Lifts the centre channel (voices) and trims the surrounds that carry " +
+                    "score and explosions.",
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+
+            AudioOptionRows(
+                label = "Volume boost",
+                options = PlayerAudioTuning.VOLUME_OPTIONS,
+                selected = PlayerTrackBridge.audioVolumeBoostDb,
+                onSelect = { PlayerTrackBridge.chooseAudioVolumeBoost(context, it) }
+            )
+            Text(
+                text = "Extra gain for quiet mixes, with a limiter so loud scenes do not clip.",
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelSmall
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
             // ── A/V SYNC ──────────────────────────────────────────
             SectionHeader("A/V SYNC")
             Text(
@@ -331,6 +392,36 @@ fun SettingsPanel(
 
             Spacer(modifier = Modifier.height(8.dp))
         }
+    }
+}
+
+/**
+ * A labelled row of [PlayerAudioTuning] pills with "Global" (value -1) first,
+ * chunked four per line so the panel does not scroll sideways.
+ */
+@Composable
+private fun AudioOptionRows(
+    label: String,
+    options: List<Pair<String, Int>>,
+    selected: Int,
+    onSelect: (Int) -> Unit
+) {
+    Text(
+        text = label,
+        color = KBTextHi,
+        style = MaterialTheme.typography.bodySmall,
+        modifier = Modifier.padding(bottom = 4.dp)
+    )
+    val entries = listOf("Global" to -1) + options
+    entries.chunked(4).forEach { row ->
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            row.forEach { (name, value) ->
+                KBCard(onClick = { onSelect(value) }) {
+                    PillChip(name, selected == value)
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(6.dp))
     }
 }
 

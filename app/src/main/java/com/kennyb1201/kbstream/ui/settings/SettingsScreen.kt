@@ -53,6 +53,7 @@ import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
+import com.kennyb1201.kbstream.ui.player.PlayerAudioTuning
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -148,6 +149,11 @@ fun SettingsScreen(
     // Fire TV OS doesn't support PiP for third-party apps; hide the toggle there.
     val isFireTv = android.os.Build.MANUFACTURER.equals("Amazon", ignoreCase = true)
     var audioDecoder by remember { mutableIntStateOf(AppPreferences.getAudioDecoder(context)) }
+    // Audio downmix / dialogue / volume: the global defaults the player's own
+    // panel offers to override per show (see PlayerAudioTuning).
+    var audioDownmix by remember { mutableIntStateOf(AppPreferences.getAudioDownmix(context)) }
+    var audioDialogueBoost by remember { mutableIntStateOf(AppPreferences.getAudioDialogueBoost(context)) }
+    var audioVolumeBoostDb by remember { mutableIntStateOf(AppPreferences.getAudioVolumeBoostDb(context)) }
     var heroTrailerAutoplay by remember { mutableStateOf(AppPreferences.getHeroTrailerAutoplay(context)) }
     var heroTrailerMuted by remember { mutableStateOf(AppPreferences.getHeroTrailerMuted(context)) }
     var use24hClock by remember { mutableStateOf(AppPreferences.getUse24HourClock(context)) }
@@ -688,6 +694,66 @@ fun SettingsScreen(
                             "FFmpeg audio first — decodes DTS/TrueHD to PCM. Best format support but higher CPU usage."
                         else -> ""
                     },
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                AudioTuningRow(
+                    label = "Audio Downmix",
+                    description = when (audioDownmix) {
+                        PlayerAudioTuning.DOWNMIX_STEREO ->
+                            "Fold 5.1/7.1 into stereo with the centre channel (dialogue) lifted and " +
+                                "the surrounds trimmed. Best for a TV's own speakers."
+                        PlayerAudioTuning.DOWNMIX_SURROUND ->
+                            "Keep 5.1 (7.1 folds into it). Use with an AVR or a device that really has " +
+                                "six channels."
+                        else ->
+                            "Leave the layout to the device. Its own downmix is a plain fold with no " +
+                                "dialogue lift — the reason speech sits under the music."
+                    },
+                    options = PlayerAudioTuning.DOWNMIX_OPTIONS,
+                    selected = audioDownmix,
+                    onSelect = {
+                        audioDownmix = it
+                        AppPreferences.setAudioDownmix(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                AudioTuningRow(
+                    label = "Dialogue Boost",
+                    description = "Lifts voices (the centre channel, or the phantom centre of a stereo " +
+                        "track) over score, ambience and explosions. Off is the untouched mix.",
+                    options = PlayerAudioTuning.DIALOGUE_OPTIONS,
+                    selected = audioDialogueBoost,
+                    onSelect = {
+                        audioDialogueBoost = it
+                        AppPreferences.setAudioDialogueBoost(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                AudioTuningRow(
+                    label = "Volume Boost",
+                    description = "Extra gain for mixes that are simply too quiet, with a limiter that " +
+                        "catches peaks so loud scenes do not distort.",
+                    options = PlayerAudioTuning.VOLUME_OPTIONS,
+                    selected = audioVolumeBoostDb,
+                    onSelect = {
+                        audioVolumeBoostDb = it
+                        AppPreferences.setAudioVolumeBoostDb(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "Applies to the app's PCM audio path. Tunneled Playback is skipped while any of " +
+                        "these are on (a tunnel bypasses the audio chain), and a downmix layout change " +
+                        "lands on the next stream. Any title can override these from the player's own panel.",
                     color = KBTextLo,
                     style = MaterialTheme.typography.labelSmall
                 )
@@ -1993,6 +2059,41 @@ private fun SettingsClearHistoryDialog(
 }
 
 // ── Helper composables ──────────────────────────────────────────
+
+/**
+ * A labelled option row for the audio-tuning settings: description under the
+ * label, then the pills, four per line.
+ */
+@Composable
+private fun AudioTuningRow(
+    label: String,
+    description: String,
+    options: List<Pair<String, Int>>,
+    selected: Int,
+    onSelect: (Int) -> Unit
+) {
+    Text(
+        text = label,
+        color = KBTextHi,
+        style = MaterialTheme.typography.bodySmall,
+        modifier = Modifier.padding(bottom = 4.dp)
+    )
+    options.chunked(4).forEach { row ->
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            row.forEach { (name, value) ->
+                KBCard(onClick = { onSelect(value) }) {
+                    PillChip(name, selected == value)
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+    }
+    Text(
+        text = description,
+        color = KBTextLo,
+        style = MaterialTheme.typography.labelSmall
+    )
+}
 
 @Composable
 private fun PillChip(label: String, selected: Boolean) {

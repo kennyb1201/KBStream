@@ -48,7 +48,18 @@ internal object PlayerTitlePrefs {
          * E-AC3 5.1" keeps meaning the same thing — which is exactly the track
          * a language-only preference picks wrong.
          */
-        val audioTrackSignature: String = ""
+        val audioTrackSignature: String = "",
+        /**
+         * Audio downmix override for this show, or -1 for "follow the global
+         * setting". A file whose only audio track is a quiet, badly mixed 5.1
+         * can be fixed once here and inherited by every later episode, without
+         * pushing the next show through a boost it does not need.
+         */
+        val audioDownmix: Int = -1,
+        /** Dialogue/centre lift override, or -1 for the global setting. */
+        val audioDialogueBoost: Int = -1,
+        /** Volume-boost override in dB, or -1 for the global setting. */
+        val audioVolumeBoostDb: Int = -1
     ) {
         /** True when nothing differs from the global defaults. */
         val isEmpty: Boolean
@@ -56,7 +67,10 @@ internal object PlayerTitlePrefs {
                 subtitleLang.isBlank() &&
                 subtitleOffsetMs == 0 &&
                 audioDelayMs == 0 &&
-                audioTrackSignature.isBlank()
+                audioTrackSignature.isBlank() &&
+                audioDownmix < 0 &&
+                audioDialogueBoost < 0 &&
+                audioVolumeBoostDb < 0
     }
 
     @Serializable

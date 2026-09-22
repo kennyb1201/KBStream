@@ -14,6 +14,7 @@ import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import com.kennyb1201.kbstream.data.player.LanguageMatch
 import com.kennyb1201.kbstream.data.player.PlayerTitlePrefs
+import com.kennyb1201.kbstream.ui.settings.AppPreferences
 
 /**
  * Bridge between the Compose playback panel and [NativePlayerActivity].
@@ -82,6 +83,19 @@ internal object PlayerTrackBridge {
     var audioTrackSignature: String = ""
         private set
 
+    /**
+     * Per-show audio tuning, or -1 for "follow the global setting". The global
+     * values live in [PlayerAudioTuning] already; these are only the overrides
+     * this title carries, and every change republishes the resolved values so
+     * the audio processor picks them up on the next buffer.
+     */
+    var audioDownmix by mutableStateOf(-1)
+        private set
+    var audioDialogueBoost by mutableStateOf(-1)
+        private set
+    var audioVolumeBoostDb by mutableStateOf(-1)
+        private set
+
     // ── Appliers registered by the activity ───────────────────────────────
     private var applyAudioLanguage: ((String) -> Unit)? = null
     private var applySubtitleLanguage: ((String) -> Unit)? = null
@@ -124,6 +138,9 @@ internal object PlayerTrackBridge {
         playerProvider = null
         titleKey = null
         wiredPlayer = null
+        audioDownmix = -1
+        audioDialogueBoost = -1
+        audioVolumeBoostDb = -1
     }
 
     /**
@@ -151,8 +168,15 @@ internal object PlayerTrackBridge {
         audioDelayMs = remembered?.audioDelayMs ?: 0
         subtitleOffsetMs = remembered?.subtitleOffsetMs ?: 0
         audioTrackSignature = remembered?.audioTrackSignature.orEmpty()
+        // -1 means "no override": the session then uses the global setting.
+        audioDownmix = remembered?.audioDownmix ?: -1
+        audioDialogueBoost = remembered?.audioDialogueBoost ?: -1
+        audioVolumeBoostDb = remembered?.audioVolumeBoostDb ?: -1
         audioTracks = emptyList()
         rememberedTrackApplied = false
+
+        // Resolve global + override into the live tuning the processor reads.
+        publishAudioTuning(context)
     }
 
     /** The global preference a title inherits when its own choice is "Auto". */
@@ -162,6 +186,48 @@ internal object PlayerTrackBridge {
     fun setGlobalLanguages(audio: String, subtitle: String) {
         globalAudioLanguage = audio
         globalSubtitleLanguage = subtitle
+    }
+
+    /**
+     * Publishes the audio tuning in effect for this session: the global defaults
+     * from Settings, overridden by whatever this title remembers.
+     *
+     * Called when a session starts and after every panel change; the processor
+     * reads [PlayerAudioTuning] per buffer, so this is all it takes to hear a
+     * change.
+     */
+    fun publishAudioTuning(context: Context) {
+        PlayerAudioTuning.apply(
+            downmixTarget = audioDownmix.takeIf { it >= 0 }
+                ?: AppPreferences.getAudioDownmix(context),
+            dialogueBoost = audioDialogueBoost.takeIf { it >= 0 }
+                ?: AppPreferences.getAudioDialogueBoost(context),
+            volumeBoostDb = audioVolumeBoostDb.takeIf { it >= 0 }
+                ?: AppPreferences.getAudioVolumeBoostDb(context)
+        )
+    }
+
+    // ── Audio tuning choices from the panel (per show) ─────────────────────
+
+    /** [target] -1 = follow the global downmix setting. */
+    fun chooseAudioDownmix(context: Context, target: Int) {
+        audioDownmix = target
+        persist(context)
+        publishAudioTuning(context)
+    }
+
+    /** [level] -1 = follow the global dialogue-boost setting. */
+    fun chooseAudioDialogueBoost(context: Context, level: Int) {
+        audioDialogueBoost = level
+        persist(context)
+        publishAudioTuning(context)
+    }
+
+    /** [db] -1 = follow the global volume-boost setting. */
+    fun chooseAudioVolumeBoost(context: Context, db: Int) {
+        audioVolumeBoostDb = db
+        persist(context)
+        publishAudioTuning(context)
     }
 
     /** This show's language, or the global one when the show is on "Auto". */
@@ -426,10 +492,14 @@ internal object PlayerTrackBridge {
         audioTrackSignature = ""
         audioDelayMs = 0
         subtitleOffsetMs = 0
+        audioDownmix = -1
+        audioDialogueBoost = -1
+        audioVolumeBoostDb = -1
         applyAudioDelay?.invoke(0)
         applySubtitleOffset?.invoke(0)
         applyAudioLanguage?.invoke(globalAudioLanguage)
         applySubtitleLanguage?.invoke(globalSubtitleLanguage)
+        publishAudioTuning(context)
     }
 
     private fun persist(context: Context) {
@@ -442,7 +512,10 @@ internal object PlayerTrackBridge {
                 subtitleLang = subtitleLanguage,
                 subtitleOffsetMs = subtitleOffsetMs,
                 audioDelayMs = audioDelayMs,
-                audioTrackSignature = audioTrackSignature
+                audioTrackSignature = audioTrackSignature,
+                audioDownmix = audioDownmix,
+                audioDialogueBoost = audioDialogueBoost,
+                audioVolumeBoostDb = audioVolumeBoostDb
             )
         )
     }

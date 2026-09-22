@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.settings
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.kennyb1201.kbstream.ui.player.PlayerAudioTuning
 
 /**
  * Persistent player defaults stored in SharedPreferences.
@@ -41,6 +42,9 @@ object AppPreferences {
     private const val KEY_DECODER_PRIORITY = "decoder_priority" // combined (one release), migrated below
     private const val KEY_VIDEO_DECODER = "video_decoder" // legacy key, removed on migration
     private const val KEY_AUDIO_DECODER = "audio_decoder"                      // 0=auto, 1=ffmpeg-only
+    private const val KEY_AUDIO_DOWNMIX = "audio_downmix_target"               // 0=auto, 2=stereo, 6=5.1 (see PlayerAudioTuning)
+    private const val KEY_AUDIO_DIALOGUE_BOOST = "audio_dialogue_boost"       // 0=off, 1=low, 2=high
+    private const val KEY_AUDIO_VOLUME_BOOST_DB = "audio_volume_boost_db"     // 0-15 dB, with the limiter
     private const val KEY_DV_COMPAT_MODE = "dv_compat_mode"                  // 0=p7->8.1, 1=none, 3=strip all (2=legacy auto+hdr10+, 4=legacy combined 8.1)
     private const val KEY_STRIP_HDR10_PLUS = "strip_hdr10_plus"             // independent of the DV mode
     private const val KEY_CONVERT_P7_TO_81 = "dv_convert_p7_to_81"          // P7 → Profile 8.1 (independent of the DV mode)
@@ -381,6 +385,45 @@ object AppPreferences {
 
     fun setAudioDecoder(context: Context, priority: Int) {
         prefs(context).edit().putInt(KEY_AUDIO_DECODER, priority.coerceIn(0, 2)).apply()
+    }
+
+    // ── Audio downmix / dialogue / volume ────────────────────────────────
+    // The global defaults for the app's own PCM audio path (see
+    // AudioDownmixProcessor). A title can override all three from the player's
+    // panel; those live in PlayerTitlePrefs, which falls back to these.
+    //
+    //   downmix: 0 = Auto (leave the layout to the device/HAL), 2 = stereo,
+    //            6 = 5.1
+    //   dialogue: 0 = off, 1 = low, 2 = high (centre/phantom-centre lift)
+    //   volume: overall gain in dB, 0-15, applied with the limiter
+    fun getAudioDownmix(context: Context): Int =
+        prefs(context).getInt(KEY_AUDIO_DOWNMIX, PlayerAudioTuning.DOWNMIX_AUTO)
+
+    fun setAudioDownmix(context: Context, target: Int) {
+        prefs(context).edit()
+            .putInt(
+                KEY_AUDIO_DOWNMIX,
+                when (target) {
+                    PlayerAudioTuning.DOWNMIX_STEREO -> PlayerAudioTuning.DOWNMIX_STEREO
+                    PlayerAudioTuning.DOWNMIX_SURROUND -> PlayerAudioTuning.DOWNMIX_SURROUND
+                    else -> PlayerAudioTuning.DOWNMIX_AUTO
+                }
+            )
+            .apply()
+    }
+
+    fun getAudioDialogueBoost(context: Context): Int =
+        prefs(context).getInt(KEY_AUDIO_DIALOGUE_BOOST, 0).coerceIn(0, 2)
+
+    fun setAudioDialogueBoost(context: Context, level: Int) {
+        prefs(context).edit().putInt(KEY_AUDIO_DIALOGUE_BOOST, level.coerceIn(0, 2)).apply()
+    }
+
+    fun getAudioVolumeBoostDb(context: Context): Int =
+        prefs(context).getInt(KEY_AUDIO_VOLUME_BOOST_DB, 0).coerceIn(0, 15)
+
+    fun setAudioVolumeBoostDb(context: Context, db: Int) {
+        prefs(context).edit().putInt(KEY_AUDIO_VOLUME_BOOST_DB, db.coerceIn(0, 15)).apply()
     }
 
     // ── Dolby Vision compatibility ─────────────────────────────────────
