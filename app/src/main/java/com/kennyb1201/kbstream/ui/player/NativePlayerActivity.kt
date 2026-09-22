@@ -227,6 +227,28 @@ private const val ASPECT_MODE_FORCE_4_3 = 4
 private const val CONTROLS_HIDE_DELAY_MS = 6_000L
 private const val NEXT_UP_COUNTDOWN_SECONDS = 5
 
+// The Up Next panel now opens before the episode ends, so its auto-advance
+// countdown is held until this close to the end. A touch longer than
+// [NEXT_UP_COUNTDOWN_SECONDS] keeps the handoff on the end of the episode
+// instead of cutting the last minute off it.
+private const val NEXT_UP_HOLD_THRESHOLD_MS = 6_000L
+
+// How early the Up Next / Because-you-watched panel appears when the source
+// carries no credits marker: this long before the declared duration. End
+// credits usually run a minute or two, so the fallback has to sit back far
+// enough to land with the credits rather than after them.
+private const val END_PANEL_LEAD_MS = 75_000L
+
+// When IntroDB does carry a credits row, open this long *before* it: the panel
+// is then settled on screen as the credits start instead of appearing with
+// them (the marker is the first frame of the credits, not an early warning).
+private const val END_PANEL_CREDITS_LEAD_MS = 12_000L
+
+// Floor for the credits-marker trigger: even when a crowd-sourced credits row
+// points way back, never raise the panel more than "end minus this" - a bad
+// row must not interrupt the last minutes of the episode.
+private const val END_PANEL_MIN_REMAINING_MS = 15_000L
+
 // How long a duplicate of a confirm press that skipped a segment keeps being
 // absorbed as that press's own trailing event - see [dispatchKeyEvent].
 //
@@ -1299,6 +1321,20 @@ class NativePlayerActivity : ComponentActivity() {
     private var playbackEndedHandled = false
     private var lastPolledPos = -1L
     private var posStallTicks = 0
+
+    // Earliest-end trigger: the Up Next / Because-you-watched panel now opens
+    // during the end credits (or shortly before the end) instead of waiting
+    // for STATE_ENDED, which many streams never fire. Set once the panel is
+    // shown so the real end event does not show it a second time.
+    private var endPanelsShown = false
+
+    // True while the because-you-watched panel is up over a shrunk (corner)
+    // video, so the credits keep playing in the corner.
+    private var creditsModeActive = false
+
+    // The panel's layout params from before credits mode (width/gravity picked
+    // at runtime), so leaving credits mode restores the XML sizing exactly.
+    private var creditsModePanelParams: android.widget.FrameLayout.LayoutParams? = null
     private var episodeTitle: String? = null
     private var preferredAudioLang = ""
     private var preferredSubtitleLang = ""
@@ -1312,6 +1348,11 @@ class NativePlayerActivity : ComponentActivity() {
     private var overlayNextPrefetchKey: String? = null
     private var pendingNextEpisodeRuntime: Int? = null
     private var nextUpCountdownRemaining = 0
+
+    // True when the Up Next panel opened while the episode still had real time
+    // left: the auto-advance countdown waits for the end of the episode rather
+    // than running from the moment the early panel appeared.
+    private var nextUpCountdownHeld = false
     private val nextUpCountdownHandler = Handler(Looper.getMainLooper())
     private val nextUpCountdownRunnable = object : Runnable {
         override fun run() {
@@ -2402,6 +2443,8 @@ class NativePlayerActivity : ComponentActivity() {
         // Populate header info
         updateHeaderInfo()
         updateSettingsPanelState()
+        // Match the end-of-episode popups to the AMOLED / pure-black toggles.
+        applyPlayerPanelTheme()
     }
 
     private fun setupListeners() {
@@ -5001,11 +5044,14 @@ class NativePlayerActivity : ComponentActivity() {
         }
     }
 
-    private fun pillBg(selected: Boolean, focused: Boolean): Int = when {
-        selected && focused -> R.drawable.pill_chip_selected_focused_bg
-        selected -> R.drawable.pill_chip_selected_bg
-        focused -> R.drawable.pill_chip_focused_bg
-        else -> R.drawable.pill_chip_bg
+    private fun applyPillBackground(view: TextView, selected: Boolean, focused: Boolean) {
+        view.background = when {
+            selected && focused ->
+                ContextCompat.getDrawable(this, R.drawable.pill_chip_selected_focused_bg)
+            selected -> ContextCompat.getDrawable(this, R.drawable.pill_chip_selected_bg)
+            focused -> ContextCompat.getDrawable(this, R.drawable.pill_chip_focused_bg)
+            else -> roundedDrawable(panelSurfaceColor(), 6f)
+        }
     }
 
     /**
@@ -5131,11 +5177,11 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     private fun applyPillState(view: TextView, selected: Boolean) {
-        view.setBackgroundResource(pillBg(selected, view.isFocused))
+        applyPillBackground(view, selected, view.isFocused)
         view.setTextColor(if (selected) getColor(R.color.kb_void) else getColor(R.color.kb_text_hi))
         view.setOnFocusChangeListener { v, _ ->
             val tv = v as TextView
-            tv.setBackgroundResource(pillBg(selected, tv.isFocused))
+            applyPillBackground(tv, selected, tv.isFocused)
             tv.setTextColor(if (selected) getColor(R.color.kb_void) else getColor(R.color.kb_text_hi))
     }
 
@@ -5272,7 +5318,7 @@ class NativePlayerActivity : ComponentActivity() {
         listOf(btnOffsetMinus, btnOffsetPlus).forEach { btn ->
             btn.setOnFocusChangeListener { v, focused ->
                 val tv = v as TextView
-                tv.setBackgroundResource(pillBg(false, focused))
+                applyPillBackground(tv, false, focused)
             }
         }
     }
@@ -5688,6 +5734,7 @@ class NativePlayerActivity : ComponentActivity() {
         dismissPicker()
         dismissSettingsPanel()
         becauseYouWatchedPanel.visibility = View.GONE
+        exitCreditsMode()
     }
 
     // --- Retry ---
@@ -5717,6 +5764,57 @@ class NativePlayerActivity : ComponentActivity() {
         scrobbleSimkl("stop", progressOverride = 100.0)
         scope?.launch {
             saveProgress(reason = "ended", forceCompleted = true)
+        }
+        // The panel is normally already up from maybeTriggerEndPanels (it opens
+        // during the credits) with its auto-advance countdown held because the
+        // episode was not over yet. Playback is over now, so let it run.
+        if (nextUpCountdownHeld) armNextUpAutoAdvance(remainingMs = 0L)
+        showEndPanels()
+    }
+
+    /**
+     * Raises the end-of-episode panel as the credits roll instead of waiting
+     * for playback to fully end. The trigger is the title's credits marker
+     * (IntroDB) when there is one, pulled [END_PANEL_CREDITS_LEAD_MS] early so
+     * the panel is already up as the credits start; a source with no marker
+     * falls back to [END_PANEL_LEAD_MS] before the declared duration. A marker
+     * pointing implausibly early is clamped to [END_PANEL_MIN_REMAINING_MS]
+     * before the end.
+     */
+    private fun maybeTriggerEndPanels(pos: Long, dur: Long) {
+        if (endPanelsShown || playbackEndedHandled || isLiveChannel) return
+        if (dur <= 0L || dur == C.TIME_UNSET) return
+        val creditsStart = introDbStamps
+            .filter {
+                (it.type == IntroDbMarkerType.Credits ||
+                    it.type == IntroDbMarkerType.Outro) &&
+                    AutoSkipRules.isSkippableSegment(it)
+            }
+            .minByOrNull { it.startMs }
+            ?.startMs
+        val triggerAt = (if (creditsStart != null) {
+            (creditsStart - END_PANEL_CREDITS_LEAD_MS)
+                .coerceAtMost(dur - END_PANEL_MIN_REMAINING_MS)
+        } else {
+            dur - END_PANEL_LEAD_MS
+        }).coerceAtLeast(0L)
+        // A non-positive trigger means the clip is shorter than the lead (or a
+        // bad marker sits at 0): leave it to onPlaybackEnded instead of
+        // popping the panel the moment playback starts.
+        if (triggerAt <= 0L) return
+        if (pos < triggerAt) return
+        showEndPanels()
+    }
+
+    /**
+     * Decides which end-of-episode panel to raise - the Up Next popup when a
+     * next episode exists, the because-you-watched credits recommendations
+     * when none does - and shows it exactly once per session.
+     */
+    private fun showEndPanels() {
+        if (endPanelsShown || isLiveChannel) return
+        endPanelsShown = true
+        scope?.launch {
             // Series episodes show the "Up next" popup; anything without a
             // next episode (movies, finished finales) gets the
             // because-you-watched credits recommendations instead.
@@ -5738,6 +5836,113 @@ class NativePlayerActivity : ComponentActivity() {
             } else {
                 showBecauseYouWatchedPanel()
             }
+        }
+    }
+
+    /**
+     * The native player's XML panels carry fixed colors, so the AMOLED /
+     * pure-black theme toggles never reached them. Re-resolve their background
+     * here so the end-of-episode popups match the rest of the app.
+     */
+    private fun applyPlayerPanelTheme() {
+        val surfaceColor = panelSurfaceColor()
+        listOf(becauseYouWatchedPanel, nextUpPanel).forEach { panel ->
+            panel.background = roundedDrawable(panelRaisedColor(), 16f)
+        }
+        // Everything sitting on the panel has its own fill: the next
+        // episode's still, the frames the posters load into, the
+        // because-you-watched featured backdrop, and the neutral pills.
+        // Left alone they keep the XML's fixed @color/kb_surface, which is
+        // what made the popups ignore the AMOLED / pure-black toggles.
+        nextUpThumb.setBackgroundColor(surfaceColor)
+        bywViews.values.forEach { refs ->
+            (refs.cardView as? ViewGroup)?.getChildAt(0)?.setBackgroundColor(surfaceColor)
+        }
+        becauseYouWatchedPanel.findViewWithTag<View>("byw_featured_backdrop")
+            ?.setBackgroundColor(surfaceColor)
+        applyPillBackground(btnNextDismiss, selected = false, focused = btnNextDismiss.isFocused)
+    }
+
+    /** AMOLED-aware stand-in for @color/kb_surface (card / artwork fills). */
+    private fun panelSurfaceColor(): Int {
+        val amoled = AppPreferences.getAmoledBlack(this)
+        return when {
+            amoled && AppPreferences.getPureBlackSurface(this) -> 0xFF000000.toInt()
+            amoled -> 0xFF06080B.toInt()
+            else -> getColor(R.color.kb_surface)
+        }
+    }
+
+    /** AMOLED-aware stand-in for @color/kb_surface_raised (panel fills). */
+    private fun panelRaisedColor(): Int {
+        val amoled = AppPreferences.getAmoledBlack(this)
+        return when {
+            amoled && AppPreferences.getPureBlackSurface(this) -> 0xFF050505.toInt()
+            amoled -> 0xFF0D1117.toInt()
+            else -> getColor(R.color.kb_surface_raised)
+        }
+    }
+
+    /** Rounded rectangle standing in for the XML shape drawables. */
+    private fun roundedDrawable(color: Int, radiusDp: Float): android.graphics.drawable.GradientDrawable =
+        android.graphics.drawable.GradientDrawable().apply {
+            shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+            setColor(color)
+            cornerRadius = radiusDp * resources.displayMetrics.density
+        }
+
+    /**
+     * The because-you-watched panel opens while the end credits are rolling:
+     * shrink the video (the credits themselves) into the bottom-right corner so
+     * the recommendations get the screen, and move the panel into the space
+     * that leaves on the left so the picks never cover the credits.
+     */
+    private fun enterCreditsMode() {
+        if (creditsModeActive) return
+        creditsModeActive = true
+        val density = resources.displayMetrics.density
+        val screenW = resources.displayMetrics.widthPixels
+        val pipW = (screenW * 0.32f).toInt()
+        val pipH = (pipW * 9 / 16)
+        val margin = (24 * density).toInt()
+        listOf<View>(playerView, p5VideoGlesView).forEach { v ->
+            (v.layoutParams as android.widget.FrameLayout.LayoutParams).apply {
+                width = pipW
+                height = pipH
+                gravity = android.view.Gravity.BOTTOM or android.view.Gravity.END
+                setMargins(margin, margin, margin, margin)
+            }
+            v.requestLayout()
+        }
+        creditsModePanelParams =
+            becauseYouWatchedPanel.layoutParams as android.widget.FrameLayout.LayoutParams
+        becauseYouWatchedPanel.layoutParams = android.widget.FrameLayout.LayoutParams(
+            (screenW - pipW - margin * 3).coerceAtLeast(screenW / 2),
+            android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = android.view.Gravity.TOP or android.view.Gravity.START
+            setMargins(margin, margin, margin, margin)
+        }
+        becauseYouWatchedPanel.requestLayout()
+    }
+
+    /** Restores the video to full screen and the panel to its XML box. */
+    private fun exitCreditsMode() {
+        if (!creditsModeActive) return
+        creditsModeActive = false
+        listOf<View>(playerView, p5VideoGlesView).forEach { v ->
+            (v.layoutParams as android.widget.FrameLayout.LayoutParams).apply {
+                width = android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                height = android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                gravity = android.view.Gravity.TOP or android.view.Gravity.START
+                setMargins(0, 0, 0, 0)
+            }
+            v.requestLayout()
+        }
+        creditsModePanelParams?.let { saved ->
+            becauseYouWatchedPanel.layoutParams = saved
+            creditsModePanelParams = null
+            becauseYouWatchedPanel.requestLayout()
         }
     }
 
@@ -5840,7 +6045,11 @@ class NativePlayerActivity : ComponentActivity() {
         if (bywDismissed || isLiveChannel) return
         val ctx = this
         bywTitle.text = itemName ?: "This title"
+        applyPlayerPanelTheme()
         becauseYouWatchedPanel.visibility = View.VISIBLE
+        // Credits are rolling: shrink the video into the corner so the picks
+        // own the screen while the credits keep playing.
+        enterCreditsMode()
 
         scope?.launch {
             val picks: List<BywPick> = withContext(Dispatchers.IO) {
@@ -5851,6 +6060,8 @@ class NativePlayerActivity : ComponentActivity() {
                 becauseYouWatchedPanel.visibility != View.VISIBLE
             ) {
                 becauseYouWatchedPanel.visibility = View.GONE
+                // Nothing to recommend: put the video back full screen.
+                exitCreditsMode()
                 return@launch
             }
 
@@ -6145,7 +6356,7 @@ class NativePlayerActivity : ComponentActivity() {
             val posterFrame = android.widget.FrameLayout(this).apply {
                 layoutParams = LinearLayout.LayoutParams(dp(108), dp(162))
                 clipToOutline = true
-                setBackgroundColor(getColor(R.color.kb_surface))
+                setBackgroundColor(panelSurfaceColor())
             }
             val poster = ImageView(this).apply {
                 layoutParams = android.widget.FrameLayout.LayoutParams(
@@ -6206,7 +6417,7 @@ class NativePlayerActivity : ComponentActivity() {
                 isFocusable = true
                 isFocusableInTouchMode = true
                 setPadding(dp(8), dp(4), dp(8), dp(4))
-                setBackgroundResource(pillBg(true, false))
+                applyPillBackground(this, true, false)
                 setTextColor(getColor(R.color.kb_void))
             }
             val details = TextView(this).apply {
@@ -6215,7 +6426,7 @@ class NativePlayerActivity : ComponentActivity() {
                 isFocusable = true
                 isFocusableInTouchMode = true
                 setPadding(dp(8), dp(4), dp(8), dp(4))
-                setBackgroundResource(pillBg(false, false))
+                applyPillBackground(this, false, false)
                 setTextColor(getColor(R.color.kb_text_hi))
             }
             buttons.addView(play)
@@ -6235,11 +6446,11 @@ class NativePlayerActivity : ComponentActivity() {
             card.setOnClickListener { bywOpenDetails(pick) }
 
             play.setOnFocusChangeListener { v, hasFocus ->
-                (v as TextView).setBackgroundResource(pillBg(true, hasFocus))
+                applyPillBackground(v as TextView, true, hasFocus)
                 if (hasFocus) featureBywPick(pick)
             }
             details.setOnFocusChangeListener { v, hasFocus ->
-                (v as TextView).setBackgroundResource(pillBg(false, hasFocus))
+                applyPillBackground(v as TextView, false, hasFocus)
                 if (hasFocus) featureBywPick(pick)
             }
             card.setOnFocusChangeListener { _, hasFocus ->
@@ -6333,7 +6544,7 @@ class NativePlayerActivity : ComponentActivity() {
                     it.marginEnd = dp(14)
                 }
                 scaleType = ImageView.ScaleType.CENTER_CROP
-                setBackgroundColor(getColor(R.color.kb_surface))
+                setBackgroundColor(panelSurfaceColor())
             }
             strip.addView(backdrop)
             val textCol = LinearLayout(this).apply {
@@ -6487,6 +6698,7 @@ class NativePlayerActivity : ComponentActivity() {
             nextUpThumb.setImageDrawable(null)
         }
 
+        applyPlayerPanelTheme()
         nextUpPanel.visibility = View.VISIBLE
         btnNextPlay.requestFocus()
 
@@ -6497,6 +6709,7 @@ class NativePlayerActivity : ComponentActivity() {
                 // Binge watchdog: enough unattended episodes have played in a
                 // row - hold here and make the user confirm they're awake.
                 // Pressing PLAY NEXT resets the counter and continues.
+                nextUpCountdownHeld = false
                 nextUpCountdownRemaining = 0
                 nextUpCountdown.text = "Are you still there? Press PLAY NEXT to continue"
                 nextUpCountdown.setTextColor(
@@ -6505,14 +6718,9 @@ class NativePlayerActivity : ComponentActivity() {
                 nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
                 return
             }
-            nextUpCountdownRemaining = NEXT_UP_COUNTDOWN_SECONDS
-            nextUpCountdown.text = "Playing next in $nextUpCountdownRemaining"
-            nextUpCountdown.setTextColor(
-                androidx.core.content.ContextCompat.getColor(this, R.color.kb_text_lo)
-            )
-            nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
-            nextUpCountdownHandler.postDelayed(nextUpCountdownRunnable, 1_000L)
+            armNextUpAutoAdvance(playerRemainingMs())
         } else {
+            nextUpCountdownHeld = false
             nextUpCountdownRemaining = 0
             nextUpCountdown.text = "PLAY NEXT to continue, or press BACK to exit"
         }
@@ -6543,12 +6751,51 @@ class NativePlayerActivity : ComponentActivity() {
         }
     }
 
+    /** Milliseconds left in the episode, or -1 when the duration is unknown. */
+    private fun playerRemainingMs(): Long {
+        val player = exoPlayer ?: return -1L
+        val dur = player.duration
+        if (dur <= 0L || dur == C.TIME_UNSET) return -1L
+        return (dur - player.currentPosition).coerceAtLeast(0L)
+    }
+
+    /**
+     * Arms the auto-advance countdown for the Up Next panel. The panel opens
+     * before the episode is over (see [maybeTriggerEndPanels]), so counting
+     * down from the moment it appears would cut the ending: while real time is
+     * left the countdown is held and the panel only says what happens next,
+     * then [maybeStartHeldNextUpCountdown] runs it at the end.
+     */
+    private fun armNextUpAutoAdvance(remainingMs: Long) {
+        nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
+        if (remainingMs > NEXT_UP_HOLD_THRESHOLD_MS) {
+            nextUpCountdownHeld = true
+            nextUpCountdown.text = "Playing next when this episode ends"
+            nextUpCountdown.setTextColor(ContextCompat.getColor(this, R.color.kb_text_lo))
+            return
+        }
+        nextUpCountdownHeld = false
+        nextUpCountdownRemaining = NEXT_UP_COUNTDOWN_SECONDS
+        nextUpCountdown.text = "Playing next in $nextUpCountdownRemaining"
+        nextUpCountdown.setTextColor(ContextCompat.getColor(this, R.color.kb_text_lo))
+        nextUpCountdownHandler.postDelayed(nextUpCountdownRunnable, 1_000L)
+    }
+
+    /** Starts the held countdown once playback has reached the end. */
+    private fun maybeStartHeldNextUpCountdown(pos: Long, dur: Long) {
+        if (!nextUpCountdownHeld) return
+        if (dur <= 0L || dur == C.TIME_UNSET) return
+        if (pos < dur - NEXT_UP_HOLD_THRESHOLD_MS) return
+        armNextUpAutoAdvance(remainingMs = 0L)
+    }
+
     private fun launchNextEpisode(
         targetSeason: Int,
         targetEpisode: Int,
         episodeName: String? = null,
         runtimeMinutes: Int? = null
     ) {
+        nextUpCountdownHeld = false
         nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
         val label = buildString {
             append("S${targetSeason}E$targetEpisode")
@@ -6624,6 +6871,10 @@ class NativePlayerActivity : ComponentActivity() {
                 // the clock keeps counting and auto-next never triggers. Detect
                 // that state here so completion is handled exactly like a real
                 // ENDED event.
+                // Fire the end-of-episode panel as the credits roll, not only
+                // when playback finally reports ENDED.
+                maybeTriggerEndPanels(pos, dur)
+                maybeStartHeldNextUpCountdown(pos, dur)
                 detectStallEndedFallback(
                     player,
                     pos,
