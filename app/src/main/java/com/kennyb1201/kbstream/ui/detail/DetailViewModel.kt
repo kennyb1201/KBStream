@@ -1425,6 +1425,246 @@ for (metaAddon in metaAddons) {
     }
 
     /**
+     * Cleans the (season -> episode numbers) map the episode/season chip
+     * menus hand in: drops invalid entries and sorts/dedupes the numbers so
+     * a whole-series mark cannot write the same row twice.
+     */
+    private fun normalizeSeasonEpisodes(
+        seasonEpisodes: List<Pair<Int, List<Int>>>
+    ): List<Pair<Int, List<Int>>> =
+        seasonEpisodes
+            .map { (season, episodes) ->
+                season to episodes
+                    .filter { it > 0 }
+                    .distinct()
+                    .sorted()
+            }
+            .filter { (season, episodes) ->
+                season >= 0 && episodes.isNotEmpty()
+            }
+            .distinctBy { it.first }
+
+    /**
+     * Long-press "Mark Entire Series as Watched" (episode / season chip
+     * menus): the one-shot answer for shows with a lot of seasons. Writes a
+     * completed local row for every episode the caller could enumerate,
+     * drops the title's resume rows so nothing is left half-watched in
+     * Continue Watching, and records the whole-show watched override — which
+     * is also what mirrors the mark to SIMKL and MDBList (one call each),
+     * syncs it to the other devices, and paints the poster checkmark.
+     *
+     * An empty [seasonEpisodes] still marks the show on the trackers and the
+     * poster; it just cannot paint per-episode state locally.
+     */
+    fun markSeriesWatched(
+        seasonEpisodes: List<Pair<Int, List<Int>>>
+    ) {
+        val parentId = imdbId
+        if (parentId.isBlank()) return
+
+        val seasonsToMark =
+            normalizeSeasonEpisodes(seasonEpisodes)
+
+        viewModelScope.launch {
+            val showName =
+                _meta.value?.name?.ifBlank {
+                    _tmdbDetail.value?.name
+                        ?: _tmdbDetail.value?.title
+                        ?: ""
+                } ?: _tmdbDetail.value?.name
+                ?: _tmdbDetail.value?.title
+                ?: ""
+            val posterUrl =
+                _meta.value?.poster?.takeIf {
+                    it.isNotBlank()
+                } ?: _tmdbDetail.value?.posterPath
+                ?.let {
+                    TmdbRepository.POSTER_BASE + it
+                }
+            // Synthetic addon-videos detail carries a -1 sentinel id; it is
+            // not a real TMDB id and must never reach Simkl.
+            val showTmdbId =
+                _tmdbDetail.value?.id?.takeIf { it > 0 }
+
+            val now =
+                System.currentTimeMillis()
+
+            // 1. Local: one completed row per episode, so the season and
+            // episode badges survive the next load()/restart. One bulk write,
+            // not one transaction per episode.
+            val rows =
+                seasonsToMark.flatMap { (season, episodes) ->
+                    episodes.mapNotNull { episode ->
+                        WatchedEpisodeState
+                            .buildEpisodeKey(
+                                parentId = parentId,
+                                season = season,
+                                episode = episode
+                            )
+                            ?.let { key ->
+                                WatchHistoryEntity(
+                                    id = key,
+                                    parentId = parentId,
+                                    type = "series",
+                                    name = showName,
+                                    poster = posterUrl,
+                                    streamUrl = null,
+                                    positionMs = 0L,
+                                    durationMs = 1L,
+                                    season = season,
+                                    episode = episode,
+                                    updatedAt = now,
+                                    isCompleted = true,
+                                    completedAt = now
+                                )
+                            }
+                    }
+                }
+
+            if (rows.isNotEmpty()) {
+                runCatching {
+                    historyDao.upsertAll(
+                        rows
+                    )
+                }.onFailure { e ->
+                    Log.e(
+                        "KBStream",
+                        "markSeriesWatched rows failed count=${rows.size}",
+                        e
+                    )
+                }
+            }
+
+            // 2. The show has nothing left to resume: drop the resume rows and
+            // the in-memory copies the hero / episode chips read, so the page
+            // stops offering "Resume S5E3" on an episode that is now watched.
+            runCatching {
+                historyDao.deleteResumeRowsForParent(
+                    parentId
+                )
+            }.onFailure { e ->
+                Log.e(
+                    "KBStream",
+                    "markSeriesWatched resume cleanup failed",
+                    e
+                )
+            }
+
+            _inProgressByStreamId.value =
+                emptyMap()
+            _resumeInfo.value =
+                null
+
+            // 3. Optimistic in-memory state so the badges light up instantly.
+            val pairs =
+                seasonsToMark
+                    .flatMap { (season, episodes) ->
+                        episodes.map { episode ->
+                            season to episode
+                        }
+                    }
+                    .toSet()
+
+            _watchedEpisodeKeys.value =
+                _watchedEpisodeKeys.value +
+                    pairs.mapNotNull { (season, episode) ->
+                        WatchedEpisodeState.buildEpisodeKey(
+                            parentId = parentId,
+                            season = season,
+                            episode = episode
+                        )
+                    }
+            _simklWatchedEpisodes.value =
+                _simklWatchedEpisodes.value + pairs
+            _simklSeriesWatched.value = true
+
+            // 4. Whole-show mark: local override (poster checkmark) + SIMKL
+            // whole-show push + MDBList whole-show push + cross-device sync.
+            runCatching {
+                watchedStatusRepository.markWatchedLocal(
+                    parentId,
+                    "series"
+                )
+            }.onFailure { e ->
+                Log.e(
+                    "KBStream",
+                    "markSeriesWatched override failed",
+                    e
+                )
+            }
+
+            // 5. Drop any paused SIMKL session for the show, or the remote
+            // feed re-adds it to Continue Watching on the next refresh.
+            runCatching {
+                simklRepository.deletePlaybackSessionsForParent(
+                    parentId = parentId,
+                    title = showName.takeIf { it.isNotBlank() }
+                )
+            }.onFailure { e ->
+                Log.e(
+                    "KBStream",
+                    "markSeriesWatched simkl session cleanup failed",
+                    e
+                )
+            }
+        }
+    }
+
+    /**
+     * Long-press "Mark Entire Series as Unwatched" (episode / season chip
+     * menus): deletes every local completed row for the show, clears the
+     * in-memory episode state so the badges clear instantly, and removes the
+     * whole show from SIMKL history / MDBList via the same whole-show
+     * unmark the poster menu uses.
+     */
+    fun markSeriesUnwatched() {
+        val parentId = imdbId
+        if (parentId.isBlank()) return
+
+        viewModelScope.launch {
+            // 1. Local: every completed row for this show, whatever season or
+            // episode numbers they were written with.
+            runCatching {
+                historyDao.deleteCompletedForParent(
+                    parentId
+                )
+            }.onFailure { e ->
+                Log.e(
+                    "KBStream",
+                    "markSeriesUnwatched delete failed",
+                    e
+                )
+            }
+
+            // 2. Optimistic in-memory state so badges clear instantly.
+            _watchedEpisodeKeys.value =
+                _watchedEpisodeKeys.value
+                    .filterNot { key -> key.startsWith("$parentId:") }
+                    .toSet()
+            _completedEpisodeIds.value =
+                emptySet()
+            _simklWatchedEpisodes.value =
+                emptySet()
+            _simklSeriesWatched.value = false
+
+            // 3. Whole-show unmark: override removed + SIMKL history delete +
+            // MDBList removal.
+            runCatching {
+                watchedStatusRepository.markUnwatchedLocal(
+                    parentId,
+                    "series"
+                )
+            }.onFailure { e ->
+                Log.e(
+                    "KBStream",
+                    "markSeriesUnwatched override failed",
+                    e
+                )
+            }
+        }
+    }
+
+    /**
      * Long-press "Mark as Watched" on an episode card: marks exactly one
      * episode locally and on SIMKL (reuses the season machinery with a
      * single-episode list).

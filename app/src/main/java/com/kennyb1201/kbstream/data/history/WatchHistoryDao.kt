@@ -35,6 +35,18 @@ interface WatchHistoryDao {
         )
     }
 
+    /**
+     * Bulk form of [upsert] in ONE transaction: a whole-series "mark watched"
+     * writes a row per episode, and hundreds of separate transactions is both
+     * slow and a lot of churn on the SQLite writer.
+     */
+    @androidx.room.Transaction
+    suspend fun upsertAll(entries: List<WatchHistoryEntity>) {
+        entries.forEach { entry ->
+            upsert(entry)
+        }
+    }
+
     @Query("SELECT * FROM watch_history WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): WatchHistoryEntity?
 
@@ -184,6 +196,15 @@ suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity>
         season: Int,
         episode: Int
     )
+
+    @Query(
+        """
+        DELETE FROM watch_history
+        WHERE parentId = :parentId
+          AND isCompleted = 1
+        """
+    )
+    suspend fun deleteCompletedForParent(parentId: String)
 
     @Query("DELETE FROM watch_history")
     suspend fun clearAll()

@@ -74,6 +74,8 @@ import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
+import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
+import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.components.rememberLongPressModifier
 import com.kennyb1201.kbstream.ui.components.PosterSize
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
@@ -574,16 +576,14 @@ fun SearchScreen(
                         onItemClick(selected.meta)
                     },
                     PosterContextAction(
-                        label = if (isWatched) {
-                            "Mark as Unwatched"
-                        } else {
-                            "Mark as Watched"
-                        },
-                        description = if (isWatched) {
-                            "Clear watched status on this device and Simkl"
-                        } else {
-                            "Show this title as watched"
-                        }
+                        label = watchedMenuLabel(
+                            isWatched = isWatched,
+                            mediaType = result.type
+                        ),
+                        description = watchedMenuDescription(
+                            isWatched = isWatched,
+                            mediaType = result.type
+                        )
                     ) {
                         val selected = result
                         menuResult = null

@@ -15,6 +15,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kennyb1201.kbstream.data.kb.KBContentItem
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
+import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
+import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 
@@ -133,12 +135,14 @@ fun KBFolderScreen(
                     }
                 },
                 PosterContextAction(
-                    label = if (menuWatched) "Mark as Unwatched" else "Mark as Watched",
-                    description = if (menuWatched) {
-                        "Clear watched status on this device and Simkl"
-                    } else {
-                        "Show this title as watched"
-                    }
+                    label = watchedMenuLabel(
+                        isWatched = menuWatched,
+                        mediaType = item.type
+                    ),
+                    description = watchedMenuDescription(
+                        isWatched = menuWatched,
+                        mediaType = item.type
+                    )
                 ) {
                     menuTarget = null
                     if (menuWatched) {

@@ -125,118 +125,139 @@ suspend fun SimklRepository.getAccountInfoImpl(): SimklUser? {
     }.getOrNull()
 }
 
-internal fun SimklRepository.isShowFullyWatched(
-    item: SimklWatchingShowItem
-): Boolean {
+/**
+ * The pure decision rules behind the watched markers, kept out of
+ * [SimklRepository] so they can be unit-tested without an Android context.
+ */
+object ShowCompletionRules {
 
-    val status =
-        item.status
-            ?.trim()
-            ?.lowercase()
+    private val FINISHED_STATUSES =
+        setOf("completed", "ended", "canceled")
 
-    val watched =
-        item.watchedEpisodesCount ?: 0
+    /**
+     * The completed CHECKMARK rule.
+     *
+     * A show counts as finished when Simkl says the show itself is over and
+     * the user marked it finished, or when the tally is COMPLETE - every
+     * episode of it watched, nothing left unaired. Watching every AIRED
+     * episode of a show that is still airing is "caught up", not
+     * "completed": the old aired-total rule returned true there, which
+     * painted the finished checkmark over shows the user was still in the
+     * middle of and hid the eye marker from a show marked up to the current
+     * progress. A next episode waiting to be watched also means the user has
+     * not finished the show.
+     */
+    fun isFullyWatched(
+        status: String?,
+        watchedEpisodesCount: Int?,
+        totalEpisodesCount: Int?,
+        nextToWatch: String?
+    ): Boolean {
 
-    val total =
-        item.totalEpisodesCount ?: 0
+        val normalizedStatus =
+            status
+                ?.trim()
+                ?.lowercase()
 
-    val notAired =
-        item.notAiredEpisodesCount ?: 0
-
-    val airedTotal =
-        if (total > 0) {
-            total - notAired
-        } else {
-            0
+        if (
+            normalizedStatus in FINISHED_STATUSES
+        ) {
+            return true
         }
 
-    if (
-        airedTotal > 0 &&
-        watched >= airedTotal
-    ) {
-        return true
+        if (
+            !nextToWatch.isNullOrBlank()
+        ) {
+            return false
+        }
+
+        val watched =
+            watchedEpisodesCount ?: 0
+
+        val total =
+            totalEpisodesCount ?: 0
+
+        return total > 0 && watched >= total
     }
 
-    val hasNext =
-        !item.nextToWatch
-            .isNullOrBlank()
+    /**
+     * Continue Watching's rule: true when every AIRED episode is watched,
+     * even though more episodes may still be coming. The rail uses this to
+     * keep a caught-up show off it (there is nothing to resume), while the
+     * badge rule above stays strict - a caught-up show is still "started,
+     * not finished", so it shows the eye marker.
+     */
+    fun isCaughtUpOnAiredEpisodes(
+        watchedEpisodesCount: Int?,
+        totalEpisodesCount: Int?,
+        notAiredEpisodesCount: Int?
+    ): Boolean {
 
-    val isFinishedStatus =
-        status == "completed" ||
-            status == "ended" ||
-            status == "canceled"
+        val watched =
+            watchedEpisodesCount ?: 0
 
-    if (
-        isFinishedStatus &&
-        !hasNext
-    ) {
-        return true
+        val total =
+            totalEpisodesCount ?: 0
+
+        val notAired =
+            notAiredEpisodesCount ?: 0
+
+        val airedTotal =
+            if (total > 0) {
+                total - notAired
+            } else {
+                0
+            }
+
+        return airedTotal > 0 &&
+            watched >= airedTotal
     }
-
-    if (
-        total > 0 &&
-        watched >= total
-    ) {
-        return true
-    }
-
-    return false
 }
+
+internal fun SimklRepository.isCaughtUpOnAiredEpisodes(
+    item: SimklWatchingShowItem
+): Boolean =
+    ShowCompletionRules.isCaughtUpOnAiredEpisodes(
+        watchedEpisodesCount =
+            item.watchedEpisodesCount,
+
+        totalEpisodesCount =
+            item.totalEpisodesCount,
+
+        notAiredEpisodesCount =
+            item.notAiredEpisodesCount
+    )
+
+internal fun SimklRepository.isShowFullyWatched(
+    item: SimklWatchingShowItem
+): Boolean =
+    ShowCompletionRules.isFullyWatched(
+        status =
+            item.status,
+
+        watchedEpisodesCount =
+            item.watchedEpisodesCount,
+
+        totalEpisodesCount =
+            item.totalEpisodesCount,
+
+        nextToWatch =
+            item.nextToWatch
+    )
 
 internal fun SimklRepository.isShowFullyWatched(
     item: SimklWatchingShowDetailedItem
-): Boolean {
+): Boolean =
+    ShowCompletionRules.isFullyWatched(
+        status =
+            item.status,
 
-    val status =
-        item.status
-            ?.trim()
-            ?.lowercase()
+        watchedEpisodesCount =
+            item.watchedEpisodesCount,
 
-    val watched =
-        item.watchedEpisodesCount ?: 0
+        totalEpisodesCount =
+            item.totalEpisodesCount,
 
-    val total =
-        item.totalEpisodesCount ?: 0
-
-    val notAired =
-        item.notAiredEpisodesCount ?: 0
-
-    val airedTotal =
-        if (total > 0) {
-            total - notAired
-        } else {
-            0
-        }
-
-    if (
-        airedTotal > 0 &&
-        watched >= airedTotal
-    ) {
-        return true
-    }
-
-    val hasNext =
-        !item.nextToWatch
-            .isNullOrBlank()
-
-    val isFinishedStatus =
-        status == "completed" ||
-            status == "ended" ||
-            status == "canceled"
-
-    if (
-        isFinishedStatus &&
-        !hasNext
-    ) {
-        return true
-    }
-
-    if (
-        total > 0 &&
-        watched >= total
-    ) {
-        return true
-    }
-
-    return false
-}
+        nextToWatch =
+            item.nextToWatch
+    )

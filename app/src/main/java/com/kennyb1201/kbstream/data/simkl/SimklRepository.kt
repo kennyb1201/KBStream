@@ -1860,7 +1860,14 @@ class SimklRepository(
                     ]
                         ?: return false
 
-                return isShowFullyWatched(
+                /*
+                 * Continue Watching only cares that there is nothing AIRED
+                 * left to resume, so a caught-up show still drops its stale
+                 * 95%-progress session here. The badge rule is stricter
+                 * (isShowFullyWatched) and no longer counts a caught-up
+                 * show as finished.
+                 */
+                return isCaughtUpOnAiredEpisodes(
                     watchingEntry
                 )
             }
@@ -2161,7 +2168,10 @@ class SimklRepository(
                         ) {
                             false
                         } else {
-                            !isShowFullyWatched(
+                            // Caught-up shows stay off the rail (nothing aired
+                            // left to watch) even though the poster badge for
+                            // them is now the eye, not the completed checkmark.
+                            !isCaughtUpOnAiredEpisodes(
                                 item
                             )
                         }

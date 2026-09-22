@@ -120,6 +120,8 @@ import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
+import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
+import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -653,6 +655,49 @@ fun DetailScreen(
         }
 
         ::numbersFor
+    }
+
+    // Whole-series long-press action: every season's episode numbers in one
+    // map, so a show with a lot of seasons can be marked watched or unwatched
+    // in a single shot instead of season by season.
+    val wholeSeriesEpisodeNumbers = remember(
+        seasons,
+        tmdbDetail,
+        episodes,
+        effectiveSeason
+    ) {
+        seasons.mapNotNull { seasonNum ->
+            seasonEpisodeNumbersFor(seasonNum)
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { numbers ->
+                    seasonNum to numbers
+                }
+        }
+    }
+
+    // True when every known episode of the show is already watched, so the
+    // whole-series action knows which way to toggle.
+    val wholeSeriesWatched = remember(
+        wholeSeriesEpisodeNumbers,
+        watchedEpisodeKeys,
+        simklWatchedEpisodes,
+        id
+    ) {
+        wholeSeriesEpisodeNumbers.isNotEmpty() &&
+            wholeSeriesEpisodeNumbers.all { (season, numbers) ->
+                val watchedSet =
+                    WatchedEpisodeState
+                        .effectiveWatchedEpisodesForSeason(
+                            parentId = id,
+                            season = season,
+                            simklWatchedEpisodes =
+                                simklWatchedEpisodes,
+                            watchedEpisodeKeys =
+                                watchedEpisodeKeys
+                        )
+
+                numbers.all { it in watchedSet }
+            }
     }
 
     val resolvedTargetEpisode = remember(
@@ -3054,16 +3099,14 @@ fun DetailScreen(
                                 }
                             },
                             PosterContextAction(
-                                label = if (isWatched) {
-                                    "Mark as Unwatched"
-                                } else {
-                                    "Mark as Watched"
-                                },
-                                description = if (isWatched) {
-                                    "Clear watched status on this device and Simkl"
-                                } else {
-                                    "Show this title as watched"
-                                }
+                                label = watchedMenuLabel(
+                                    isWatched = isWatched,
+                                    mediaType = target.mediaType
+                                ),
+                                description = watchedMenuDescription(
+                                    isWatched = isWatched,
+                                    mediaType = target.mediaType
+                                )
                             ) {
                                 val selected = target
                                 posterMenu = null
@@ -3140,6 +3183,28 @@ fun DetailScreen(
                                     viewModel.markSeasonWatched(
                                         selected.seasonNumber,
                                         selected.episodeNumbers
+                                    )
+                                }
+                                lastSeasonFocusRequester?.requestFocus()
+                            },
+                            PosterContextAction(
+                                label = if (wholeSeriesWatched) {
+                                    "Mark Entire Series as Unwatched"
+                                } else {
+                                    "Mark Entire Series as Watched"
+                                },
+                                description = if (wholeSeriesWatched) {
+                                    "Clear every season on this device and your trackers"
+                                } else {
+                                    "Every season at once, not just this one"
+                                }
+                            ) {
+                                seasonMenu = null
+                                if (wholeSeriesWatched) {
+                                    viewModel.markSeriesUnwatched()
+                                } else {
+                                    viewModel.markSeriesWatched(
+                                        wholeSeriesEpisodeNumbers
                                     )
                                 }
                                 lastSeasonFocusRequester?.requestFocus()
@@ -3243,6 +3308,31 @@ fun DetailScreen(
                                         viewModel.markSeasonWatched(
                                             selected.season,
                                             selected.seasonEpisodeNumbers
+                                        )
+                                    }
+                                    lastEpisodeFocusRequester?.requestFocus()
+                                }
+                            )
+
+                            add(
+                                PosterContextAction(
+                                    label = if (wholeSeriesWatched) {
+                                        "Mark Entire Series as Unwatched"
+                                    } else {
+                                        "Mark Entire Series as Watched"
+                                    },
+                                    description = if (wholeSeriesWatched) {
+                                        "Clear every season on this device and your trackers"
+                                    } else {
+                                        "Every season at once, not just this one"
+                                    }
+                                ) {
+                                    episodeMenu = null
+                                    if (wholeSeriesWatched) {
+                                        viewModel.markSeriesUnwatched()
+                                    } else {
+                                        viewModel.markSeriesWatched(
+                                            wholeSeriesEpisodeNumbers
                                         )
                                     }
                                     lastEpisodeFocusRequester?.requestFocus()

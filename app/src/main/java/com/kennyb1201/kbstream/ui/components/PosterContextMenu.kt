@@ -49,6 +49,47 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 
 /**
+ * Label for the long-press watched toggle on a poster / title tile. On a
+ * SERIES the action marks or clears the whole show — every season, on this
+ * device and on the connected trackers — so it says so outright instead of
+ * the ambiguous "Mark as Watched", which is what someone hunting for a
+ * one-shot "mark the entire series" action needs to be able to find.
+ */
+fun watchedMenuLabel(
+    isWatched: Boolean,
+    mediaType: String?
+): String = when {
+    isSeriesType(mediaType) && isWatched -> "Mark Entire Series as Unwatched"
+    isSeriesType(mediaType) -> "Mark Entire Series as Watched"
+    isWatched -> "Mark as Unwatched"
+    else -> "Mark as Watched"
+}
+
+/** Every media-type spelling the app has to treat as a series. */
+fun isSeriesType(mediaType: String?): Boolean =
+    mediaType?.trim()?.lowercase() in
+        setOf("series", "tv", "show", "anime", "anime.series")
+
+/**
+ * Description paired with [watchedMenuLabel]: movies flip one title's watched
+ * state, a series flips every season of it on this device and on the
+ * connected trackers (Simkl / MDBList).
+ */
+fun watchedMenuDescription(
+    isWatched: Boolean,
+    mediaType: String?
+): String = when {
+    isSeriesType(mediaType) && isWatched ->
+        "Clear every season on this device and your trackers"
+    isSeriesType(mediaType) ->
+        "Mark every season watched on this device and your trackers"
+    isWatched ->
+        "Clear watched status on this device and Simkl"
+    else ->
+        "Show this title as watched"
+}
+
+/**
  * One selectable row in a [PosterContextMenu]. The action itself is
  * responsible for dismissing the menu (the caller normally clears its
  * menu state first, then runs the action / restores focus).
