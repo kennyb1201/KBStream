@@ -5985,10 +5985,45 @@ class NativePlayerActivity : ComponentActivity() {
     private fun refillPlayerChromeView(view: View) {
         if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.N) return
         val background = view.background ?: return
-        val rippled = background is android.graphics.drawable.RippleDrawable
-        val content = (background as? android.graphics.drawable.RippleDrawable)
-            ?.getDrawable(0)
-            ?: background
+
+        /*
+         * A RippleDrawable IS a LayerDrawable, and layer 0 is only its
+         * CONTENT while it actually has one: real-world ripples exist with no
+         * layer at all (or a mask only), and LayerDrawable.getDrawable(0)
+         * throws IndexOutOfBoundsException on those. This pass runs from
+         * onCreate's bindViews, so that exception force-closed the player on
+         * launch whenever AMOLED was on - Sentry ANDROID-D, TCL Smart TV,
+         * one frame after the activity started. Look the content layer up
+         * instead of assuming it, and treat a ripple without one as "not a
+         * chrome fill".
+         */
+        val ripple =
+            background as? android.graphics.drawable.RippleDrawable
+        val rippled = ripple != null
+
+        val content =
+            if (ripple == null) {
+                background
+            } else {
+                if (ripple.numberOfLayers <= 0) return
+
+                val contentIndex =
+                    (0 until ripple.numberOfLayers).firstOrNull { index ->
+                        runCatching {
+                            ripple.getId(index) == android.R.id.content
+                        }.getOrDefault(false)
+                    }
+
+                // XML ripples usually leave their single item untagged, so
+                // fall back to the first layer when nothing is marked as the
+                // content. A mask-only ripple then resolves to its mask,
+                // whose fill matches neither chrome color below, so nothing
+                // changes for it.
+                runCatching {
+                    ripple.getDrawable(contentIndex ?: 0)
+                }.getOrNull() ?: return
+            }
+
         val shape = content as? android.graphics.drawable.GradientDrawable ?: return
         val fill = shape.color?.defaultColor ?: return
         val replacement = when (fill) {
