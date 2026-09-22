@@ -91,6 +91,12 @@ fun LibraryScreen(
 
     LaunchedEffect(Unit) {
         topFocusRequester.requestFocus()
+        // Re-read the list every time this tab is opened. The ViewModel is
+        // activity-scoped, so without this the tab kept showing whatever
+        // snapshot it took the first time it was visited — a title added from
+        // a detail page (or removed here) never appeared, which made
+        // "Add to Library" look like it had silently failed.
+        viewModel.refresh()
     }
 
     Box(modifier = Modifier.fillMaxSize()) {

@@ -209,10 +209,8 @@ fun LibraryAddToListDialog(
             member += "MY_LIST"
         }
         localLists.forEach { list ->
-            val has = LocalLibraryStore.listItems(context, list.id).any {
-                LocalLibraryStore.dedupeKeyOf(normalizedType, imdbId, tmdbId) ==
-                    LocalLibraryStore.dedupeKeyOf(it.mediaType, it.imdbId, it.tmdbId)
-            }
+            val has = LocalLibraryStore.listItems(context, list.id)
+                .any { LocalLibraryStore.matches(it, normalizedType, imdbId, tmdbId) }
             if (has) member += "local:${list.id}"
         }
         if (mdbConnected) {

@@ -68,6 +68,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.KBTextField
+import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterCard
@@ -514,11 +515,14 @@ fun SearchScreen(
                 viewModel = viewModel
             )
 
-            val resultTmdbId = result.id.removePrefix("tmdb:").toIntOrNull()
+            // Search mixes TMDB rows ("tmdb:123") with add-on rows
+            // ("tt12345"). Split the id so an IMDB-keyed result still gets a
+            // real library badge, and so the picker below can actually add it.
+            val resultIds = LibraryIds.split(result.id)
             val resultInLibrary = viewModel.isInLocalLibrary(
                 result.type,
-                null,
-                resultTmdbId
+                resultIds.imdbId,
+                resultIds.tmdbId
             )
 
             PosterContextMenu(
@@ -553,8 +557,8 @@ fun SearchScreen(
                         menuResult = null
                         addToListTarget = LibraryAddTarget(
                             mediaType = selected.type,
-                            imdbId = null,
-                            tmdbId = selected.id.removePrefix("tmdb:").toIntOrNull(),
+                            imdbId = resultIds.imdbId,
+                            tmdbId = resultIds.tmdbId,
                             title = selected.name,
                             year = selected.year,
                             posterUrl = selected.poster

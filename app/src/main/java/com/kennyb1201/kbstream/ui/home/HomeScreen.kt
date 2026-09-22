@@ -105,6 +105,7 @@ import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.tmdb.movieStatusTag
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
+import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
@@ -3134,20 +3135,21 @@ fun HomeScreen(
                         continueWatchingMenu = null
                         val showType = selectedItem.parentType?.lowercase()
                             ?: selectedItem.id.substringBefore(':').lowercase()
-                        // parentId is a stream key ("tmdb:123:S:E"); take
-                        // its numeric head, falling back to the item id.
-                        val showTmdbId = selectedItem.parentId
-                            ?.substringBefore(':')
-                            ?.removePrefix("tmdb:")
-                            ?.toIntOrNull()
-                            ?: selectedItem.id
-                                .substringBefore(':')
-                                .removePrefix("tmdb:")
-                                .toIntOrNull()
+                        // parentId is the SHOW's own id ("tt12345" or
+                        // "tmdb:123"); the row's id is a stream key
+                        // ("tt12345:2:5"). Split whichever one the item
+                        // actually has: the old numeric-TMDB-only read
+                        // produced a null id for IMDB-keyed shows, and an
+                        // add with no id at all was dropped silently — the
+                        // press looked like it did nothing.
+                        val showIds = LibraryIds.splitFirst(
+                            selectedItem.parentId,
+                            selectedItem.id
+                        )
                         viewModel.addToLibrary(
                             mediaType = showType,
-                            imdbId = null,
-                            tmdbId = showTmdbId,
+                            imdbId = showIds.imdbId,
+                            tmdbId = showIds.tmdbId,
                             title = selectedItem.showTitle ?: selectedItem.title,
                             posterUrl = selectedItem.poster
                         )
@@ -3158,21 +3160,22 @@ fun HomeScreen(
                     ) {
                         val selectedItem = menuItem
                         continueWatchingMenu = null
-                        // parentId is a stream key ("tmdb:123:S:E"); take
-                        // its numeric head, falling back to the item id.
-                        val showTmdbId = selectedItem.parentId
-                            ?.substringBefore(':')
-                            ?.removePrefix("tmdb:")
-                            ?.toIntOrNull()
-                            ?: selectedItem.id
-                                .substringBefore(':')
-                                .removePrefix("tmdb:")
-                                .toIntOrNull()
+                        // parentId is the SHOW's own id ("tt12345" or
+                        // "tmdb:123"); the row's id is a stream key
+                        // ("tt12345:2:5"). Split whichever one the item
+                        // actually has: the old numeric-TMDB-only read
+                        // produced a null id for IMDB-keyed shows, and an
+                        // add with no id at all was dropped silently — the
+                        // press looked like it did nothing.
+                        val showIds = LibraryIds.splitFirst(
+                            selectedItem.parentId,
+                            selectedItem.id
+                        )
                         addToListTarget = LibraryAddTarget(
                             mediaType = selectedItem.parentType?.lowercase()
                                 ?: selectedItem.id.substringBefore(':').lowercase(),
-                            imdbId = null,
-                            tmdbId = showTmdbId,
+                            imdbId = showIds.imdbId,
+                            tmdbId = showIds.tmdbId,
                             title = selectedItem.showTitle ?: selectedItem.title,
                             posterUrl = selectedItem.poster
                         )
@@ -3245,10 +3248,15 @@ fun HomeScreen(
                     target.meta.type
                 ) in watchedKeys
 
+            // The id the rail card actually carries: TMDB rails use
+            // "tmdb:123", add-on catalogs use "tt12345". Splitting it keys
+            // the badge and the add off the same id, so a title saved from
+            // an add-on rail still shows "In Library ✓" here.
+            val railIds = LibraryIds.split(target.meta.id)
             val railInLibrary = viewModel.isInLocalLibrary(
                 target.meta.type,
-                null,
-                target.meta.id.removePrefix("tmdb:").toIntOrNull()
+                railIds.imdbId,
+                railIds.tmdbId
             )
 
             PosterContextMenu(
@@ -3273,8 +3281,8 @@ fun HomeScreen(
                         if (!railInLibrary) {
                             viewModel.addToLibrary(
                                 mediaType = selected.meta.type,
-                                imdbId = null,
-                                tmdbId = selected.meta.id.removePrefix("tmdb:").toIntOrNull(),
+                                imdbId = railIds.imdbId,
+                                tmdbId = railIds.tmdbId,
                                 title = selected.meta.name,
                                 year = selected.meta.yearOrNull,
                                 posterUrl = selected.meta.poster
@@ -3290,8 +3298,8 @@ fun HomeScreen(
                         posterMenu = null
                         addToListTarget = LibraryAddTarget(
                             mediaType = selected.meta.type,
-                            imdbId = null,
-                            tmdbId = selected.meta.id.removePrefix("tmdb:").toIntOrNull(),
+                            imdbId = railIds.imdbId,
+                            tmdbId = railIds.tmdbId,
                             title = selected.meta.name,
                             year = selected.meta.yearOrNull,
                             posterUrl = selected.meta.poster

@@ -126,7 +126,10 @@ class LibraryViewModel(
     private var requestVersion = 0
 
     init {
-        refresh()
+        // No refresh here: the screen calls [refresh] every time it is
+        // opened, which is the behavior that matters — this ViewModel is
+        // activity-scoped, so an init-only snapshot went stale the moment
+        // the user added a title from another screen and came back.
         observeProfileSwitches()
     }
 
@@ -311,9 +314,27 @@ class LibraryViewModel(
 
             val appContext = getApplication<Application>()
 
-            // Local first: instant, always present.
+            // Local first: instant, always present. These rows are published
+            // before the tracker fetches below, so a slow (or unreachable)
+            // Simkl/MDBList can never leave this profile's own My List behind
+            // a "Loading…" placeholder — which is also what made an
+            // "Add to Library" look like it had done nothing when this tab
+            // was opened right after adding.
             val localItems = LocalLibraryStore.myList(appContext)
             val localLists = LocalLibraryStore.userLists(appContext)
+            val localListItems = localLists
+                .filter { it.id < 0 }
+                .flatMap { LocalLibraryStore.listItems(appContext, it.id) }
+            localListFlatCache = localListItems
+            canonicalLocal = localItems
+            canonicalAll = mergeAllSources(
+                listOf(localItems, canonicalWatchlist, localListItems)
+            )
+            _uiState.value = _uiState.value.copy(
+                loading = false,
+                lists = localLists + _uiState.value.lists.filter { it.id > 0 }
+            )
+            pushDisplay()
 
             val simklConnected =
                 simklRepository.isConfigured() && simklRepository.hasToken()
@@ -377,12 +398,9 @@ class LibraryViewModel(
             )
 
             // Canonical rows: ALL merges My List + watchlists + every local
-            // personal list, local rows winning over remote duplicates.
-            val localListItems = localLists
-                .filter { it.id < 0 }
-                .flatMap { LocalLibraryStore.listItems(appContext, it.id) }
-            localListFlatCache = localListItems
-            canonicalLocal = localItems
+            // personal list, local rows winning over remote duplicates. The
+            // local rows (and localListFlatCache) were already published
+            // above; only the remote halves are new here.
             canonicalWatchlist = watchlistMerged
             canonicalListItems = emptyList()
             canonicalAll = kidsFiltered(

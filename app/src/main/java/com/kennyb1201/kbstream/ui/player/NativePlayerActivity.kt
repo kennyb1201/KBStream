@@ -2428,6 +2428,20 @@ class NativePlayerActivity : ComponentActivity() {
         pickerList.isFocusable = true
         pickerList.isFocusableInTouchMode = true
         pickerList.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+        // Picker rows are inflated on demand, long after the chrome above was
+        // themed, so each one is retinted as it attaches (a recycled row keeps
+        // whatever background it was themed with).
+        pickerList.addOnChildAttachStateChangeListener(
+            object : androidx.recyclerview.widget.RecyclerView.OnChildAttachStateChangeListener {
+                override fun onChildViewAttachedToWindow(view: View) {
+                    if (AppPreferences.getAmoledBlack(this@NativePlayerActivity)) {
+                        refillPlayerChrome(view)
+                    }
+                }
+
+                override fun onChildViewDetachedFromWindow(view: View) = Unit
+            }
+        )
         pickerList.setOnKeyListener { _, keyCode, event ->
             if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
             if (keyCode == KeyEvent.KEYCODE_BACK) {
@@ -2445,6 +2459,9 @@ class NativePlayerActivity : ComponentActivity() {
         updateSettingsPanelState()
         // Match the end-of-episode popups to the AMOLED / pure-black toggles.
         applyPlayerPanelTheme()
+        // ... and the rest of the chrome: control-bar buttons, RETRY, the
+        // option pills and the panels behind them.
+        applyPlayerChromeTheme()
     }
 
     private fun setupListeners() {
@@ -5890,6 +5907,91 @@ class NativePlayerActivity : ComponentActivity() {
             setColor(color)
             cornerRadius = radiusDp * resources.displayMetrics.density
         }
+
+    /**
+     * AMOLED-aware stand-in for one XML chrome fill: the same corner radius
+     * and (for the ripple drawables) the same accent press ripple, but the
+     * fill follows the theme toggles.
+     */
+    private fun themedChromeBackground(
+        fill: Int,
+        radiusPx: Float,
+        rippled: Boolean
+    ): android.graphics.drawable.Drawable {
+        val body = android.graphics.drawable.GradientDrawable().apply {
+            setShape(android.graphics.drawable.GradientDrawable.RECTANGLE)
+            setColor(fill)
+            cornerRadius = radiusPx
+        }
+        if (!rippled) return body
+        val mask = android.graphics.drawable.GradientDrawable().apply {
+            setShape(android.graphics.drawable.GradientDrawable.RECTANGLE)
+            setColor(0xFF000000.toInt())
+            cornerRadius = radiusPx
+        }
+        return android.graphics.drawable.RippleDrawable(
+            android.content.res.ColorStateList.valueOf(getColor(R.color.kb_accent)),
+            body,
+            mask
+        )
+    }
+
+    /**
+     * The chrome around the video — the control-bar buttons, RETRY, the option
+     * pills, the picker rows and the panels behind them — is plain XML with
+     * fixed @color/kb_surface / @color/kb_surface_raised fills, so the AMOLED /
+     * pure-black toggles never reached it: a pure-black theme still painted
+     * #141A24 buttons. Views are matched by the fill color their own background
+     * carries rather than by resource id, so every button and pill is covered
+     * without a hand-kept list, and each one keeps its own corner radius and
+     * press ripple. Pills already restyled by [applyPillState] are skipped
+     * (their fill is no longer an XML color), as are the two end-of-episode
+     * panels handled by [applyPlayerPanelTheme].
+     */
+    private fun applyPlayerChromeTheme() {
+        // Without AMOLED the XML fills are already exactly right.
+        if (!AppPreferences.getAmoledBlack(this)) return
+        // getColor()/getCornerRadius() on a drawable are API 24+; older
+        // devices simply keep the (dark, not pure-black) XML fills.
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.N) return
+        refillPlayerChrome(findViewById(android.R.id.content))
+    }
+
+    /**
+     * [applyPlayerChromeTheme]'s walk. Also called for picker rows as they
+     * attach: those are inflated on demand, long after the activity's own
+     * view tree was themed.
+     */
+    private fun refillPlayerChrome(root: View) {
+        refillPlayerChromeView(root)
+        if (root is ViewGroup) {
+            for (index in 0 until root.childCount) {
+                refillPlayerChrome(root.getChildAt(index))
+            }
+        }
+    }
+
+    /** Retints one view when its background is one of the XML chrome fills. */
+    private fun refillPlayerChromeView(view: View) {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.N) return
+        val background = view.background ?: return
+        val rippled = background is android.graphics.drawable.RippleDrawable
+        val content = (background as? android.graphics.drawable.RippleDrawable)
+            ?.getDrawable(0)
+            ?: background
+        val shape = content as? android.graphics.drawable.GradientDrawable ?: return
+        val fill = shape.color?.defaultColor ?: return
+        val replacement = when (fill) {
+            getColor(R.color.kb_surface) ->
+                themedChromeBackground(panelSurfaceColor(), shape.cornerRadius, rippled)
+
+            getColor(R.color.kb_surface_raised) ->
+                themedChromeBackground(panelRaisedColor(), shape.cornerRadius, false)
+
+            else -> null
+        }
+        replacement?.let { view.background = it }
+    }
 
     /**
      * The because-you-watched panel opens while the end credits are rolling:

@@ -175,10 +175,48 @@ object LocalLibraryStore {
         return "$type:$imdb:${tmdbId ?: "-"}"
     }
 
-    fun isInMyList(context: Context, mediaType: String, imdbId: String?, tmdbId: Int?): Boolean {
-        val key = dedupeKeyOf(mediaType, imdbId, tmdbId)
-        return readList(context, KEY_MY_LIST).any { dedupeKey(it) == key }
+    /** Normalized media type every library comparison uses. */
+    fun normalizedType(mediaType: String): String = when (mediaType.lowercase()) {
+        "tv", "series" -> "series"
+        else -> "movie"
     }
+
+    private fun normalizedImdb(imdbId: String?): String? =
+        imdbId?.trim()
+            ?.removePrefix("tmdb:")
+            ?.takeIf { it.isNotBlank() }
+
+    /**
+     * True when [item] and the (mediaType, imdbId, tmdbId) triple name the
+     * same title: same normalized media type plus at least one shared id.
+     *
+     * The exact-triple compare ([dedupeKey]) only matches when BOTH sides
+     * carry the same ids. A title saved with both ids — the resolved IMDB id
+     * plus its TMDB id — therefore never matched a long-press lookup that
+     * only knows the TMDB id: the menu kept offering "Add to Library" for a
+     * title already on the list, the picker showed no ✓, and re-adding a
+     * title could not be told apart from adding it for the first time.
+     * Matching on either id is what those callers mean by "this title".
+     */
+    fun matches(
+        item: LibraryItem,
+        mediaType: String,
+        imdbId: String?,
+        tmdbId: Int?
+    ): Boolean {
+        if (normalizedType(item.mediaType) != normalizedType(mediaType)) return false
+        val aImdb = normalizedImdb(item.imdbId)
+        val bImdb = normalizedImdb(imdbId)
+        if (aImdb != null && bImdb != null && aImdb.equals(bImdb, ignoreCase = true)) {
+            return true
+        }
+        val aTmdb = item.tmdbId?.takeIf { it > 0 }
+        val bTmdb = tmdbId?.takeIf { it > 0 }
+        return aTmdb != null && bTmdb != null && aTmdb == bTmdb
+    }
+
+    fun isInMyList(context: Context, mediaType: String, imdbId: String?, tmdbId: Int?): Boolean =
+        readList(context, KEY_MY_LIST).any { matches(it, mediaType, imdbId, tmdbId) }
 
     fun addToMyList(
         context: Context,
@@ -365,8 +403,9 @@ object LocalLibraryStore {
     fun removeFromLocalList(context: Context, listId: Int, mediaType: String, imdbId: String?, tmdbId: Int?) {
         val lists = readLists(context)
         val target = lists.firstOrNull { it.id == listId } ?: return
-        val key = dedupeKeyOf(mediaType, imdbId, tmdbId)
-        target.items.removeAll { dedupeKey(it) == key }
+        // Match on either id: a removal passes whatever id the row it came
+        // from knows, which is often only one side of the stored pair.
+        target.items.removeAll { matches(it, mediaType, imdbId, tmdbId) }
         writeLists(context, lists)
     }
 
@@ -393,11 +432,10 @@ object LocalLibraryStore {
             tmdbId = tmdbId
         )
         if (entry.imdbId == null && entry.tmdbId == null) return false
-        val key = dedupeKey(entry)
 
         if (storageKey != null) {
             val items = readList(context, storageKey)
-            if (items.any { dedupeKey(it) == key }) return true
+            if (items.any { matches(it, mediaType, imdbId, tmdbId) }) return true
             items.add(0, entry)
             writeList(context, storageKey, items)
             return true
@@ -406,16 +444,15 @@ object LocalLibraryStore {
         val id = listId ?: return false
         val lists = readLists(context)
         val target = lists.firstOrNull { it.id == id } ?: return false
-        if (target.items.any { dedupeKey(it) == key }) return true
+        if (target.items.any { matches(it, mediaType, imdbId, tmdbId) }) return true
         target.items.add(0, entry)
         writeLists(context, lists)
         return true
     }
 
     private fun removeFromListInternal(context: Context, storageKey: String, mediaType: String, imdbId: String?, tmdbId: Int?) {
-        val key = dedupeKeyOf(mediaType, imdbId, tmdbId)
         val items = readList(context, storageKey)
-        val filtered = items.filter { dedupeKey(it) != key }
+        val filtered = items.filterNot { matches(it, mediaType, imdbId, tmdbId) }
         writeList(context, storageKey, filtered)
     }
 }
