@@ -555,7 +555,13 @@ for (metaAddon in metaAddons) {
                 } else {
                     detail.releaseDate?.takeIf { it.isNotBlank() }?.take(4)
                 },
-                imdbRating = detail.voteAverage?.let { "%.1f".format(it) },
+                // Deliberately no imdbRating here. TMDB's vote_average is
+                // not an IMDb score, and the meta line renders this field as
+                // "IMDb x.x" — which then disagreed with the MDBList IMDb
+                // chip on the same screen. A real IMDb rating only ever comes
+                // from the add-on meta (see the merge below); TMDB's own
+                // score is already shown as its own chip in the RATINGS
+                // strip.
                 runtime = if (normalizedType == "series") {
                     detail.episodeRunTime.firstOrNull()?.toString()
                 } else {
@@ -593,7 +599,10 @@ for (metaAddon in metaAddons) {
             logo = addonMeta?.logo ?: initialMeta?.logo,
             description = tmdbMeta?.description ?: addonMeta?.description ?: initialMeta?.description,
             releaseInfo = releaseFromAddon ?: releaseFromTmdb,
-            imdbRating = tmdbMeta?.imdbRating ?: addonMeta?.imdbRating,
+            // The meta add-on's rating is the only genuine IMDb figure in
+            // this merge; initialMeta is the poster/blurb the caller passed
+            // in and carries no rating.
+            imdbRating = addonMeta?.imdbRating ?: initialMeta?.imdbRating,
             runtime = tmdbMeta?.runtime ?: addonMeta?.runtime,
             language = tmdbMeta?.language ?: addonMeta?.language,
             country = tmdbMeta?.country ?: addonMeta?.country,

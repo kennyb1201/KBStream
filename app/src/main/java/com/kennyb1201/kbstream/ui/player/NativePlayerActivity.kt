@@ -167,6 +167,23 @@ private val OMX_ERROR_INSUFFICIENT_RESOURCES = 0x80001000.toInt()
 private const val DECODER_RESOURCE_RETRY_DELAY_MS = 6_000L
 
 /**
+ * How long a source switch leaves the box alone between releasing the old
+ * player and building the next one. A switch reuses the same output Surface
+ * for the new codec, and on this Realtek stack the outgoing 4K decoder's
+ * buffers stay bound to that Surface past kWhatReleaseCompleted: the next
+ * codec's setNativeWindowSizeFormatAndUsage then reconfigures a surface that
+ * is still holding ~10 x 4K buffers, and the codec comes back
+ * OMX_ErrorInsufficientResources (0x80001000) as soon as samples are
+ * submitted. The DV-strip and resource-exhaustion rebuilds below already wait
+ * 3s / 6s for this vendor behaviour (their own comments say the release lands
+ * ~3s after ExoPlayer lets the codec go); a source switch was the one rebuild
+ * that waited nothing - and the field log shows a session's first failure
+ * landing 4ms after the previous player was released, on a plain HDR10 HEVC
+ * file the box decodes natively.
+ */
+private const val SOURCE_SWITCH_SETTLE_MS = 3_000L
+
+/**
  * Weighted-rating rank (IMDB-style) for one credit of a person: the rating
  * blended toward a 6.5 prior worth 200 votes. The because-you-watched cast
  * tier used to sort by `popularity`, which is why "Because you watched Ted
@@ -3430,15 +3447,41 @@ class NativePlayerActivity : ComponentActivity() {
         startIntroStampPolling()
     }
 
-    private fun recreatePlayer() {
+    /**
+     * Rebuilds the player for the current source. [settleMs] is the
+     * source-switch path: detach the shared output Surface from the outgoing
+     * player, release it, and only then build the next one, leaving the vendor
+     * decoder [settleMs] to hand its 4K buffers back (see
+     * [SOURCE_SWITCH_SETTLE_MS]). Every other caller keeps the immediate
+     * rebuild by passing nothing.
+     */
+    private fun recreatePlayer(settleMs: Long = 0L) {
         // Disarm any outstanding stall/black-video timers tied to the old
         // player instance; fresh ones are armed when the new session is ready.
         stallWatchdogToken++
         subtitleCueHandler?.cancelPending()
         subtitleCueHandler = null
+        val settling = settleMs > 0L && exoPlayer != null
+        if (settling) {
+            // Detach first: otherwise the dying codec is still holding the
+            // SurfaceView's Surface when the next codec configures onto it.
+            playerView.player = null
+        }
         exoPlayer?.release()
         exoPlayer = null
-        createPlayer()
+        if (settling) {
+            Log.i(
+                "PLAYER_REBUILD",
+                "Source switch: waiting ${settleMs}ms for the previous decoder to " +
+                    "release its buffers before rebuilding the player"
+            )
+            handler.postDelayed(
+                { if (!isFinishing && !isDestroyed) createPlayer() },
+                settleMs
+            )
+        } else {
+            createPlayer()
+        }
     }
 
     private fun createPlayerListener() = object : Player.Listener {
@@ -6741,7 +6784,7 @@ class NativePlayerActivity : ComponentActivity() {
             showSplash()
         }
         dismissPicker()
-        recreatePlayer()
+        recreatePlayer(settleMs = SOURCE_SWITCH_SETTLE_MS)
     }
 
     /**

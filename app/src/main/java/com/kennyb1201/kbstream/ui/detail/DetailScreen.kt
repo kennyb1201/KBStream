@@ -1407,7 +1407,8 @@ fun DetailScreen(
                         val metaLine = remember(
                             m,
                             tmdbDetail,
-                            type
+                            type,
+                            mdbListRatings
                         ) {
                             val yearInfo =
                                 if (normalizedType == "series") {
@@ -1451,9 +1452,17 @@ fun DetailScreen(
                                     ?.let { "${it} min" }
                                     ?: m.runtime,
                                 m.language?.takeIf { it.isNotBlank() }?.uppercase(),
-                                m.imdbRating?.let {
-                                    "IMDb $it"
-                                }
+                                // IMDb score. MDBList's figure wins over the
+                                // meta add-on's so this line can never
+                                // disagree with the IMDb chip in the RATINGS
+                                // strip a few rows below it (the strip is the
+                                // only place either value is sourced from).
+                                (
+                                    mdbListRatings?.imdb
+                                        ?.takeIf { it.isNotBlank() }
+                                        ?: m.imdbRating
+                                            ?.takeIf { it.isNotBlank() }
+                                    )?.let { "IMDb $it" }
                             ).joinToString(" • ")
                         }
 
@@ -4015,8 +4024,14 @@ private fun EpisodeCard(
                         )
                     }
 
+                    // No score on an UNAVAILABLE card. A future episode's
+                    // TMDB vote average is computed from a handful of early
+                    // votes, so it lands on flat junk (a 2.0 is common) and
+                    // reads as a real rating next to the badge saying the
+                    // episode is not out yet.
                     val rating =
                         ep.voteAverage
+                            ?.takeIf { !isUnavailable }
 
                     if (
                         rating != null &&
