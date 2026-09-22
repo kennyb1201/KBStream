@@ -161,4 +161,75 @@ class DolbyVisionCompatTest {
     fun `nothing recorded means passthrough is never suppressed`() {
         assertFalse(dvPassthroughSuppressed(0L, System.currentTimeMillis()))
     }
+
+    // Vendor DV decoder refusal vs. genuine resource exhaustion.
+    //
+    // The TCL/Realtek DV decoder reports its refusal with the platform's own
+    // out-of-resources code (0x80001000), so the player must tell the two
+    // apart by the session. Getting this wrong sent a DV-capable TV to the
+    // "out of video decoder resources" banner instead of the HDR10 strip.
+
+    @Test
+    fun `a DV passthrough session whose decoder failed is the vendor refusal`() {
+        assertTrue(
+            dvPassthroughDecoderRefused(
+                isDecoderFailure = true,
+                dvPassthroughActive = true,
+                declaredDvCodec = "dvhe.08.06",
+                alreadyStripped = false
+            )
+        )
+    }
+
+    @Test
+    fun `a plain HEVC failure with passthrough on is not the DV refusal`() {
+        // Passthrough is on, but the failing track is not Dolby Vision: this
+        // is genuine exhaustion and must keep the next-source recovery.
+        assertFalse(
+            dvPassthroughDecoderRefused(
+                isDecoderFailure = true,
+                dvPassthroughActive = true,
+                declaredDvCodec = "hvc1.2.4.L153.B0",
+                alreadyStripped = false
+            )
+        )
+    }
+
+    @Test
+    fun `a DV failure without passthrough active is not the refusal`() {
+        // Passthrough was already suppressed/stripped: re-stripping proves
+        // nothing, so this must fall through to the resource recovery.
+        assertFalse(
+            dvPassthroughDecoderRefused(
+                isDecoderFailure = true,
+                dvPassthroughActive = false,
+                declaredDvCodec = "dvhe.07.06",
+                alreadyStripped = false
+            )
+        )
+    }
+
+    @Test
+    fun `an already-stripped session never re-takes the DV path`() {
+        assertFalse(
+            dvPassthroughDecoderRefused(
+                isDecoderFailure = true,
+                dvPassthroughActive = true,
+                declaredDvCodec = "dvhe.07.06",
+                alreadyStripped = true
+            )
+        )
+    }
+
+    @Test
+    fun `a non-decoder failure is never the DV refusal`() {
+        assertFalse(
+            dvPassthroughDecoderRefused(
+                isDecoderFailure = false,
+                dvPassthroughActive = true,
+                declaredDvCodec = "dvhe.08.06",
+                alreadyStripped = false
+            )
+        )
+    }
 }

@@ -3872,7 +3872,21 @@ class NativePlayerActivity : ComponentActivity() {
             // decode Dolby Vision", and both the recovery and the persisted
             // verdict below depend on telling them apart.
             val resourceExhausted = isDecoderResourceExhausted(error)
-            if (isDecoderError(error.errorCode)) {
+            val decoderFailure = isDecoderError(error.errorCode)
+            val declaredDvCodec = streamDeclaredDvCodec ?: streamCodec
+            // A DV passthrough session whose DV decoder refuses the first frame
+            // reports the platform's own out-of-resources code (see
+            // [dvPassthroughDecoderRefused]) — tell that apart from the box
+            // genuinely running out of decoders before choosing a recovery, or
+            // a DV-capable TV is sent to the next-source hunt instead of the
+            // HDR10 strip that plays.
+            val dvDecoderRefused = dvPassthroughDecoderRefused(
+                isDecoderFailure = decoderFailure,
+                dvPassthroughActive = dvPassthroughActive,
+                declaredDvCodec = declaredDvCodec,
+                alreadyStripped = forceDvStripForSession
+            )
+            if (decoderFailure) {
                 val codec = streamCodec
                 if (!codec.isNullOrBlank()) {
                     val dims = if (streamWidth > 0) " ${streamWidth}x$streamHeight" else ""
@@ -3893,9 +3907,9 @@ class NativePlayerActivity : ComponentActivity() {
             // decoder as plain HDR10. An explicit "None" (pure pass-through)
             // is the user's own choice and is left alone.
             if (!forceDvStripForSession &&
-                !resourceExhausted &&
-                isDecoderError(error.errorCode) &&
-                dvLabelFromCodec(streamDeclaredDvCodec ?: streamCodec) != null &&
+                (!resourceExhausted || dvDecoderRefused) &&
+                decoderFailure &&
+                dvLabelFromCodec(declaredDvCodec) != null &&
                 AppPreferences.getDvCompatMode(this@NativePlayerActivity) !=
                 AppPreferences.DV_COMPAT_OFF
             ) {
@@ -3911,6 +3925,12 @@ class NativePlayerActivity : ComponentActivity() {
                 // Recording that as a capability verdict stripped Dolby Vision
                 // off every title for the next 14 days on a TV that had just
                 // played it — which is the "DV is struggling" state.
+                //
+                // Reaching this branch with [resourceExhausted] set is only
+                // possible through [dvDecoderRefused], which has already
+                // established that the failure was the vendor DV decoder
+                // refusing a DV passthrough session (not the box running dry),
+                // so the verdict is safe to keep there too.
                 AppPreferences.setDvPassthroughFailedAt(
                     this@NativePlayerActivity,
                     System.currentTimeMillis()
@@ -7242,6 +7262,36 @@ internal fun normalizeResolution(width: Int, height: Int): String {
         else           -> "${maxDim}p"
     }
 }
+
+/**
+ * Whether a decoder failure on a Dolby Vision passthrough session is the
+ * vendor DV decoder refusing the profile, rather than the box being out of
+ * decoders.
+ *
+ * Some DV-capable boxes (TCL / Realtek: OMX.realtek.video.dvhe.st.decoder)
+ * advertise video/dolby-vision, so Media3 reports the format as supported, and
+ * then hard-fail the moment the first frame is submitted — reporting that
+ * refusal with the platform's own out-of-resources code
+ * (OMX_ErrorInsufficientResources, 0x80001000). By code alone it is
+ * indistinguishable from genuine resource exhaustion, which every later
+ * decoder on the process returns.
+ *
+ * The discriminator is the session: genuine exhaustion is a property of the
+ * box that only shows up once a decoder has already failed, while the DV
+ * refusal is the FIRST decode, with passthrough actually enabled and a
+ * declared-DV track on screen. Treating that first failure as exhaustion is
+ * what sent a DV-capable TV to "out of video decoder resources" and the
+ * next-source hunt instead of the HDR10 strip that plays.
+ */
+internal fun dvPassthroughDecoderRefused(
+    isDecoderFailure: Boolean,
+    dvPassthroughActive: Boolean,
+    declaredDvCodec: String?,
+    alreadyStripped: Boolean
+): Boolean = isDecoderFailure &&
+    dvPassthroughActive &&
+    !alreadyStripped &&
+    dvLabelFromCodec(declaredDvCodec) != null
 
 private val DV_PROFILE_CODEC = Regex("(?i)^(dvhe|dvh1|dvav|dva1)\\.(\\d+)")
 
