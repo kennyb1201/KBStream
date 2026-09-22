@@ -467,6 +467,9 @@ class NativePlayerActivity : ComponentActivity() {
         override fun run() {
             if (controlsVisible) {
                 updateClock()
+                // Live: keep the programme progress honest, and roll the
+                // block over when the programme ends.
+                tickLiveProgramBlock()
                 clockHandler.postDelayed(this, 1000)
             }
         }
@@ -678,6 +681,37 @@ class NativePlayerActivity : ComponentActivity() {
     private var zapNextTitle: TextView? = null
 
     /**
+     * Live-only programme block inside the controls overlay: what is on NOW
+     * (title, air window, elapsed progress, synopsis) and what is next, from
+     * the same guide rows the zap banner reads. Gone for VOD, where the
+     * episode row carries instead.
+     */
+    private var liveProgramBlock: View? = null
+    private var liveProgramStatus: TextView? = null
+    private var liveProgramTitle: TextView? = null
+    private var liveProgramProgress: ProgressBar? = null
+    private var liveProgramDesc: TextView? = null
+    private var liveProgramNext: TextView? = null
+
+    /**
+     * True once the arrival banner for this live channel has been shown, so a
+     * re-ready (reconnect, retry) cannot re-announce the same channel.
+     */
+    private var zapBannerInitialShown = false
+
+    /** Overlay CH ▲ / CH ▼ buttons (live only — see [updateControlsInfo]). */
+    private var btnChannelUp: TextView? = null
+    private var btnChannelDown: TextView? = null
+
+    /**
+     * "LIVE  •  CH 5  •  SPORTS" prefix of the block's status line. Kept
+     * beside the programme's own air window because the prefix describes the
+     * channel (fixed for as long as it plays) while the window changes with
+     * every programme.
+     */
+    private var liveProgramScope = "LIVE"
+
+    /**
      * Channel-number entry HUD and its pending commits. Typing digits while
      * watching live TV tunes directly, the way a set-top box does, so this
      * lives alongside the zap state.
@@ -721,20 +755,28 @@ class NativePlayerActivity : ComponentActivity() {
         SimpleDateFormat("h:mm a", Locale.getDefault())
     }
 
-    /** Move to the channel [delta] positions away in the guide lineup. */
-    private fun zapByOffset(delta: Int) {
-        // One channel is not a lineup: nothing to move to, and a "zap" to
-        // itself would only flash the banner.
-        if (!LiveChannelZapRegistry.zapEnabled()) return
-
-        // Establish the anchor once per player session: the entry whose id
-        // (or stream URL) matches what we were launched with.
+    /**
+     * The lineup entry playing right now, or null when the guide never
+     * published a lineup this session (a channel opened from outside the
+     * guide) or the playing URL is not in it. Also establishes the zap anchor
+     * once per session, from the id (or stream URL) the activity was launched
+     * with.
+     */
+    private fun currentZapChannel(): LiveChannelZapRegistry.ZapChannel? {
         if (zapChannelIndex < 0) {
             zapChannelIndex = LiveChannelZapRegistry.indexOfChannel(parentId)
                 .takeIf { it >= 0 }
                 ?: LiveChannelZapRegistry.indexOfStreamUrl(currentUrl)
         }
-        if (zapChannelIndex < 0) return
+        return LiveChannelZapRegistry.channelAt(zapChannelIndex)
+    }
+
+    /** Move to the channel [delta] positions away in the guide lineup. */
+    private fun zapByOffset(delta: Int) {
+        // One channel is not a lineup: nothing to move to, and a "zap" to
+        // itself would only flash the banner.
+        if (!LiveChannelZapRegistry.zapEnabled()) return
+        if (currentZapChannel() == null) return
 
         val targetIndex = LiveChannelZapRegistry.indexOfChannel(
             LiveChannelZapRegistry.offsetChannel(zapChannelIndex, delta)?.channelId ?: return
@@ -878,16 +920,7 @@ class NativePlayerActivity : ComponentActivity() {
         zapHandler.postDelayed(zapBannerHideRunnable, ZAP_BANNER_VISIBLE_MS)
 
         scope?.launch {
-            val now = System.currentTimeMillis()
-            val isFresh = cached != null && now - cached.fetchedAtMillis < ZAP_EPG_TTL_MS
-            val noSource = epgUrl.isBlank() || channel.epgChannelId.isNullOrBlank()
-            val info = if (isFresh || noSource) {
-                cached ?: ZapEpgInfo(now = null, next = null, fetchedAtMillis = now)
-            } else {
-                withContext(Dispatchers.IO) {
-                    loadZapEpg(epgUrl, channel.epgChannelId!!)
-                }
-            }
+            val info = resolveZapEpg(channel, cached)
             zapEpgCache[cacheKey] = info
             trimZapEpgCache()
             // Only apply if the banner is still showing THIS channel — a
@@ -899,6 +932,31 @@ class NativePlayerActivity : ComponentActivity() {
                 currentUrl == channel.streamUrl
             ) {
                 applyZapEpg(info)
+            }
+        }
+    }
+
+    /**
+     * The channel's now/next rows: the cached snapshot while it is fresh (or
+     * when the channel has no guide to read at all), otherwise one read of the
+     * same Room table the guide screen uses. Shared by the zap banner and the
+     * overlay's live programme block, so both always report the same
+     * programmes for the same channel.
+     */
+    private suspend fun resolveZapEpg(
+        channel: LiveChannelZapRegistry.ZapChannel,
+        cached: ZapEpgInfo?
+    ): ZapEpgInfo {
+        val epgUrl = channel.epgUrl?.trim().orEmpty()
+        val epgChannelId = channel.epgChannelId
+        val now = System.currentTimeMillis()
+        val isFresh = cached != null && now - cached.fetchedAtMillis < ZAP_EPG_TTL_MS
+        val noSource = epgUrl.isBlank() || epgChannelId.isNullOrBlank()
+        return if (isFresh || noSource) {
+            cached ?: ZapEpgInfo(now = null, next = null, fetchedAtMillis = now)
+        } else {
+            withContext(Dispatchers.IO) {
+                loadZapEpg(epgUrl, epgChannelId!!)
             }
         }
     }
@@ -972,6 +1030,160 @@ class NativePlayerActivity : ComponentActivity() {
         val overflow = zapEpgCache.size - zapEpgCacheLimit
         if (overflow > 0) {
             zapEpgCache.keys.take(overflow).forEach(zapEpgCache::remove)
+        }
+    }
+
+    /**
+     * True while the video surface - not a panel, picker, error card or skip
+     * prompt - owns the remote, which is when UP/DOWN and CH+/CH- may zap.
+     * One rule, read by both the surface's key listener and the activity's
+     * [onKeyDown] fallback, so a channel press can never work in one place and
+     * silently do nothing in the other.
+     */
+    private fun liveZapKeysFree(): Boolean =
+        isLiveChannel &&
+            !controlsVisible &&
+            !showSettingsPanel &&
+            !isPickerShowing &&
+            errorContainer.visibility != View.VISIBLE &&
+            btnSkipIntro.visibility != View.VISIBLE &&
+            LiveChannelZapRegistry.zapEnabled()
+
+    /** Cache key a channel's now/next rows are stored under. */
+    private fun zapEpgCacheKey(channel: LiveChannelZapRegistry.ZapChannel): String =
+        channel.channelId + "|" + channel.epgUrl?.trim().orEmpty()
+
+    /**
+     * Paints the overlay's live programme block for the channel playing now.
+     * Opening a channel, zapping and raising the overlay all come through
+     * here, so the block always describes the CURRENT channel. Guide rows are
+     * read off the resolved now/next cache, so a repeat costs no query.
+     */
+    private fun refreshLiveProgramBlock() {
+        val block = liveProgramBlock ?: return
+        if (!isLiveChannel) {
+            block.visibility = View.GONE
+            return
+        }
+        val channel = currentZapChannel()
+        if (channel == null) {
+            // No lineup this session (a channel opened from outside the
+            // guide): there is no guide id to look a programme up with.
+            block.visibility = View.GONE
+            return
+        }
+
+        val scopeLabel = LiveChannelZapRegistry.browsingGroup()
+            ?.takeIf { it.isNotBlank() && !it.equals("All", ignoreCase = true) }
+            ?.uppercase()
+        liveProgramScope = buildList {
+            add("LIVE")
+            channel.chno?.takeIf { it.isNotBlank() }?.let { add("CH $it") }
+            scopeLabel?.let(::add)
+        }.joinToString("  \u2022  ")
+
+        val cacheKey = zapEpgCacheKey(channel)
+        val cached = zapEpgCache[cacheKey]
+        // Instant paint with what we already know, then re-read if stale.
+        applyLiveEpg(cached, channel.name)
+        block.visibility = View.VISIBLE
+
+        scope?.launch {
+            val info = resolveZapEpg(channel, cached)
+            zapEpgCache[cacheKey] = info
+            trimZapEpgCache()
+            // A slow read must never repaint the block for a channel the user
+            // has already zapped away from.
+            if (liveProgramBlock?.visibility == View.VISIBLE &&
+                isLiveChannel &&
+                currentZapChannel()?.channelId == channel.channelId
+            ) {
+                applyLiveEpg(info, channel.name, fresh = true)
+            }
+        }
+    }
+
+    /**
+     * One now/next snapshot into the overlay's live block: programme title,
+     * its air window (start and end), a progress bar for how far in we are,
+     * the synopsis, and what follows.
+     */
+    private fun applyLiveEpg(
+        info: ZapEpgInfo?,
+        channelName: String,
+        fresh: Boolean = false
+    ) {
+        val now = info?.now
+        if (now == null) {
+            // "…" only reads as loading while a read is still in flight;
+            // otherwise the channel genuinely has no guide rows.
+            liveProgramTitle?.text = if (info == null) {
+                "\u2026"
+            } else if (channelName.isNotBlank()) {
+                channelName
+            } else {
+                "No programme data"
+            }
+            liveProgramStatus?.text = liveProgramScope
+            liveProgramProgress?.visibility = View.GONE
+            liveProgramDesc?.visibility = View.GONE
+            liveProgramDesc?.text = ""
+            liveProgramNext?.text = if (info == null) "" else "No guide data for this channel"
+            return
+        }
+
+        liveProgramTitle?.text = now.title
+        liveProgramStatus?.text = buildList {
+            add(liveProgramScope)
+            add(
+                zapTimeFormat.format(Date(now.startUtcMillis)) +
+                    " \u2013 " +
+                    zapTimeFormat.format(Date(now.endUtcMillis))
+            )
+            now.category?.takeIf { it.isNotBlank() }?.let(::add)
+        }.joinToString("  \u2022  ")
+
+        val span = (now.endUtcMillis - now.startUtcMillis).coerceAtLeast(1L)
+        val elapsed = (System.currentTimeMillis() - now.startUtcMillis)
+            .coerceIn(0L, span)
+        liveProgramProgress?.visibility = View.VISIBLE
+        liveProgramProgress?.max = 1000
+        liveProgramProgress?.progress = ((elapsed * 1000L) / span).toInt()
+
+        val synopsis = now.description?.trim().orEmpty()
+        liveProgramDesc?.text = synopsis
+        liveProgramDesc?.visibility = if (synopsis.isEmpty()) View.GONE else View.VISIBLE
+
+        liveProgramNext?.text = info.next?.let { next ->
+            "Up next  " + zapTimeFormat.format(Date(next.startUtcMillis)) + "  " + next.title
+        } ?: if (fresh) "No guide data for what follows" else ""
+    }
+
+    /**
+     * Per-second tick while the overlay is up: advance the programme progress
+     * bar, and roll the block over to the next programme once the current one
+     * ends (the rows are re-read, never guessed from the clock).
+     */
+    private fun tickLiveProgramBlock() {
+        if (!isLiveChannel || liveProgramBlock?.visibility != View.VISIBLE) return
+        val channel = currentZapChannel() ?: return
+        val info = zapEpgCache[zapEpgCacheKey(channel)]
+        val now = info?.now
+        val nowMs = System.currentTimeMillis()
+
+        if (now != null && nowMs < now.endUtcMillis) {
+            val span = (now.endUtcMillis - now.startUtcMillis).coerceAtLeast(1L)
+            liveProgramProgress?.progress =
+                (((nowMs - now.startUtcMillis).coerceIn(0L, span) * 1000L) / span).toInt()
+            return
+        }
+
+        // Nothing resolved, or the programme just ended. Re-read only once the
+        // cached row is older than the TTL, so a channel whose guide has
+        // nothing for this slot cannot turn the per-second tick into a
+        // per-second query.
+        if (info == null || nowMs - info.fetchedAtMillis >= ZAP_EPG_TTL_MS) {
+            refreshLiveProgramBlock()
         }
     }
     private var parentId = ""
@@ -2027,6 +2239,14 @@ class NativePlayerActivity : ComponentActivity() {
         zapNowProgress = findViewById(R.id.zap_now_progress)
         zapNowDesc = findViewById(R.id.zap_now_desc)
         zapNextTitle = findViewById(R.id.zap_next_title)
+        liveProgramBlock = findViewById(R.id.live_program_block)
+        liveProgramStatus = findViewById(R.id.live_program_status)
+        liveProgramTitle = findViewById(R.id.live_program_title)
+        liveProgramProgress = findViewById(R.id.live_program_progress)
+        liveProgramDesc = findViewById(R.id.live_program_desc)
+        liveProgramNext = findViewById(R.id.live_program_next)
+        btnChannelUp = findViewById(R.id.btn_channel_up)
+        btnChannelDown = findViewById(R.id.btn_channel_down)
         channelNumberHud = findViewById(R.id.channel_number_hud)
         bufferingSpinner = findViewById(R.id.buffering_spinner)
         reconnectingContainer = findViewById(R.id.reconnecting_container)
@@ -2187,6 +2407,16 @@ class NativePlayerActivity : ComponentActivity() {
     private fun setupListeners() {
         // Play/Pause
         btnPlayPause.setOnClickListener { togglePlayPause() }
+
+        // Live channel change from the overlay (the D-pad / CH+ keys zap too,
+        // but only while the overlay is hidden — see liveZapKeysFree).
+        btnChannelUp?.setOnClickListener { zapByOffset(+1) }
+        btnChannelDown?.setOnClickListener { zapByOffset(-1) }
+        listOfNotNull(btnChannelUp, btnChannelDown).forEach { button ->
+            button.setOnFocusChangeListener { _, focused ->
+                if (focused) removeAutoHide() else scheduleAutoHide()
+            }
+        }
 
         // Skip intro
         btnSkipIntro.setOnFocusChangeListener { v, focused ->
@@ -2652,11 +2882,7 @@ class NativePlayerActivity : ComponentActivity() {
                     // OK still opens the overlay on a live channel, and with
                     // no lineup to zap through this falls back to the old
                     // "UP/DOWN reveals the controls" behavior.
-                    val liveZap = isLiveChannel &&
-                        !controlsVisible &&
-                        errorContainer.visibility != View.VISIBLE &&
-                        btnSkipIntro.visibility != View.VISIBLE &&
-                        LiveChannelZapRegistry.zapEnabled()
+                    val liveZap = liveZapKeysFree()
                     when {
                         // Held keys are ignored: every zap tears down and
                         // restarts playback, so a repeat storm would sprint
@@ -2785,6 +3011,20 @@ class NativePlayerActivity : ComponentActivity() {
             }
             KeyEvent.KEYCODE_CHANNEL_DOWN -> {
                 if (isLiveChannel) { zapByOffset(-1); return true }
+            }
+            // D-pad fallback. The video surface's own listener zaps when it
+            // holds focus, so reaching here means focus sits somewhere else
+            // (a button that hid with the overlay, the root view) — which used
+            // to make changing channel from the player do nothing at all.
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
+                if (liveZapKeysFree()) {
+                    // Held keys are ignored: every zap rebuilds the player, so
+                    // a repeat storm would sprint through the lineup.
+                    if ((event?.repeatCount ?: 0) == 0) {
+                        zapByOffset(if (keyCode == KeyEvent.KEYCODE_DPAD_UP) +1 else -1)
+                    }
+                    return true
+                }
             }
         }
         return super.onKeyDown(keyCode, event)
@@ -3940,6 +4180,17 @@ class NativePlayerActivity : ComponentActivity() {
         }
         reconnectingContainer.visibility = View.GONE
         bufferingSpinner.visibility = View.GONE
+        // Live: announce the channel the moment its first frame is up, the
+        // way a set-top box does — channel identity, what is on now (with its
+        // air window and synopsis) and what follows. The overlay's programme
+        // block carries the same rows whenever the overlay is raised; this is
+        // the arrival notice. Once per channel: a reconnect must not replay it.
+        // ...unless the overlay is already up: that view carries the same
+        // programme block, and a card landing on top of it would just be noise.
+        if (isLiveChannel && !zapBannerInitialShown && !controlsVisible) {
+            zapBannerInitialShown = true
+            currentZapChannel()?.let { showZapBanner(it) }
+        }
         // The first rendered frame is the moment the splash goes away: video
         // is now visibly on screen underneath it. STATE_READY and isPlaying
         // both fire BEFORE the decoder paints, so they must not dismiss the
@@ -4718,6 +4969,16 @@ class NativePlayerActivity : ComponentActivity() {
         )
         btnSpeed.text = "${playbackSpeed}x"
         btnAspect.text = ASPECT_MODES.getOrElse(resizeModeIndex) { "Fit" }
+        // Live channels get the channel-change buttons and the NOW/NEXT
+        // programme block; VOD keeps the episode row instead.
+        val liveVisibility = if (isLiveChannel) View.VISIBLE else View.GONE
+        btnChannelUp?.visibility = liveVisibility
+        btnChannelDown?.visibility = liveVisibility
+        if (isLiveChannel) {
+            refreshLiveProgramBlock()
+        } else {
+            liveProgramBlock?.visibility = View.GONE
+        }
     }
 
     private fun pillBg(selected: Boolean, focused: Boolean): Int = when {
@@ -4938,6 +5199,11 @@ class NativePlayerActivity : ComponentActivity() {
                 // so the button is always one OK press away.
                 if (btnSkipIntro.visibility == View.VISIBLE) {
                     btnSkipIntro.requestFocus()
+                } else if (isLiveChannel && btnChannelUp?.visibility == View.VISIBLE) {
+                    // Live: changing channel is the primary action in the
+                    // overlay, so open on CH up rather than play/pause
+                    // (pausing live television is not a thing).
+                    btnChannelUp?.requestFocus()
                 } else {
                     btnPlayPause.requestFocus()
                 }
@@ -5216,8 +5482,13 @@ class NativePlayerActivity : ComponentActivity() {
 
     private fun scheduleAutoHide() {
         handler.removeCallbacks(autoHideRunnable)
-        // Don't auto-hide when paused — keep overlay visible
-        if (exoPlayer?.isPlaying == false) return
+        // Don't auto-hide when paused — keep overlay visible. Live is the
+        // exception: a live channel cannot be paused, and isPlaying reads
+        // false for the whole buffering start, which left the overlay up for
+        // the entire session. That is also what made UP/DOWN look broken on
+        // live TV — they navigate the visible overlay instead of zapping, so
+        // the channel never changed.
+        if (!isLiveChannel && exoPlayer?.isPlaying == false) return
         // Don't auto-hide while a panel is open: hiding the overlay mid-
         // navigation tears down the panel's focus and drops the user's spot.
         if (showSettingsPanel || isPickerShowing) return

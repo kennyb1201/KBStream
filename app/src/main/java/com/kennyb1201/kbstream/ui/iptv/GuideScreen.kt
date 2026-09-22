@@ -406,6 +406,20 @@ fun GuideScreen(
         }
     }
 
+    // Persist the landing spot the moment a channel is played instead of
+    // waiting for the selection effect above. The player is a separate screen,
+    // so this guide — and its in-memory selection — is torn down while it is
+    // up; a state effect can lose that race and then Back from the player
+    // dropped the user at the top of the list rather than on the channel they
+    // clicked. Group is saved with it so the restore lands in the same
+    // group's lineup (and therefore the same channel order) too.
+    fun rememberGuidePosition(item: IptvChannelWithEpg) {
+        guidePreferences.edit()
+            .putString("last_group", selectedGroup)
+            .putString("last_channel", channelKey(item))
+            .apply()
+    }
+
     fun resolveChannelNumber(entry: String) {
         if (entry.isBlank()) return
         val target = unhiddenChannels.firstOrNull { it.channel.tvgChno?.trim() == entry } ?: return
@@ -723,9 +737,17 @@ LaunchedEffect(channelListState, groupedChannelIds) {
   // once so Down from the tabs row is deterministic from the start.
   // When restoring the last-viewed channel, the row focus (in the
   // membership effect above) takes over instead of the "All" chip.
+  // The restore case has to be read from the SAVED key, not from the pending
+  // focus flag: that flag is cleared the moment the membership effect above
+  // starts, so a guide whose channels are already cached (the usual case)
+  // cleared it before this effect ran, this grabbed the chips row on the next
+  // frame, and returning from the player left focus on the tabs row instead of
+  // on the channel you clicked.
   LaunchedEffect(Unit) {
     awaitFrame()
-    if (!pendingFocusChannel) {
+    val restoringChannel = savedChannelKey
+        ?.takeIf { key -> groupedChannels.any { channelKey(it) == key } } != null
+    if (!pendingFocusChannel && !restoringChannel) {
         runCatching { allTabFocusRequester.requestFocus() }
     }
 }
@@ -960,6 +982,7 @@ Spacer(modifier = Modifier.height(14.dp))
                                                     (listOf(channelKey(item)) + recentChannelKeys)
                                                         .distinct()
                                                         .take(8)
+                                                rememberGuidePosition(item)
                                                 latestOnPlayChannel?.invoke(item)
                                             },
                                             onFocused = {
@@ -1094,6 +1117,7 @@ Spacer(modifier = Modifier.height(14.dp))
                                 (listOf(channelKey(item)) + recentChannelKeys)
                                     .distinct()
                                     .take(8)
+                            rememberGuidePosition(item)
                             latestOnPlayChannel?.invoke(item)
                             dismissSearch()
                         },
@@ -1239,6 +1263,7 @@ Spacer(modifier = Modifier.height(14.dp))
                                             (listOf(channelKey(target)) + recentChannelKeys)
                                                 .distinct()
                                                 .take(8)
+                                        rememberGuidePosition(target)
                                         latestOnPlayChannel?.invoke(target)
                                     }
                                     reminderBanner = null

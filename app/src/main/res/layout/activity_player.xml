@@ -277,19 +277,21 @@
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
+            android:fillViewport="true"
             android:scrollbars="none">
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:gravity="center_vertical"
                 android:orientation="vertical">
 
             <!-- Item name or clear logo -->
             <ImageView
                 android:id="@+id/clear_logo"
-                android:layout_width="320dp"
-                android:layout_height="100dp"
-                android:layout_marginTop="4dp"
-                android:layout_marginBottom="4dp"
+                android:layout_width="460dp"
+                android:layout_height="140dp"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="6dp"
                 android:scaleType="fitCenter"
                 android:visibility="gone"
                 android:contentDescription="Clear logo"
@@ -301,8 +303,75 @@
                 android:layout_height="wrap_content"
                 android:fontFamily="@font/oswald_semibold"
                 android:textColor="@color/kb_text_hi"
-                android:textSize="20sp"
+                android:textSize="30sp"
                 android:visibility="gone" />
+
+            <!-- Live channel programme block (IPTV only): what is on now —
+                 title, air window, progress, synopsis — then what is next.
+                 Hidden for VOD, where the episode row below carries instead. -->
+            <LinearLayout
+                android:id="@+id/live_program_block"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <!-- "LIVE  •  CH 5  •  SPORTS  •  8:00 PM – 9:30 PM" -->
+                <TextView
+                    android:id="@+id/live_program_status"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="@font/oswald_medium"
+                    android:textColor="@color/kb_accent"
+                    android:textSize="14sp"
+                    android:maxLines="1"
+                    android:ellipsize="end" />
+
+                <TextView
+                    android:id="@+id/live_program_title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:fontFamily="@font/oswald_semibold"
+                    android:textColor="@color/kb_text_hi"
+                    android:textSize="24sp"
+                    android:maxLines="1"
+                    android:ellipsize="end" />
+
+                <ProgressBar
+                    android:id="@+id/live_program_progress"
+                    style="@android:style/Widget.ProgressBar.Horizontal"
+                    android:layout_width="match_parent"
+                    android:layout_height="6dp"
+                    android:layout_marginTop="6dp"
+                    android:max="1000"
+                    android:progressTint="@color/kb_accent"
+                    android:progressBackgroundTint="#338891A0" />
+
+                <TextView
+                    android:id="@+id/live_program_desc"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:fontFamily="@font/oswald_medium"
+                    android:textColor="@color/kb_text_lo"
+                    android:textSize="15sp"
+                    android:maxLines="4"
+                    android:ellipsize="end"
+                    android:lineSpacingExtra="2dp" />
+
+                <TextView
+                    android:id="@+id/live_program_next"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:fontFamily="@font/oswald_medium"
+                    android:textColor="@color/kb_text_lo"
+                    android:textSize="14sp"
+                    android:maxLines="1"
+                    android:ellipsize="end" />
+            </LinearLayout>
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -315,8 +384,9 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:fontFamily="@font/oswald_medium"
+                    android:letterSpacing="0.08"
                     android:textColor="@color/kb_accent"
-                    android:textSize="14sp"
+                    android:textSize="20sp"
                     android:visibility="gone" />
 
                 <TextView
@@ -324,11 +394,11 @@
                     android:layout_width="0dp"
                     android:layout_weight="1"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:fontFamily="@font/oswald_medium"
-                    android:textColor="@color/kb_text_lo"
-                    android:textSize="14sp"
-                    android:maxLines="1"
+                    android:layout_marginStart="12dp"
+                    android:fontFamily="@font/oswald_semibold"
+                    android:textColor="@color/kb_text_hi"
+                    android:textSize="22sp"
+                    android:maxLines="2"
                     android:ellipsize="end"
                     android:visibility="gone" />
             </LinearLayout>
@@ -338,12 +408,13 @@
                 android:id="@+id/overview_text"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
+                android:layout_marginTop="10dp"
                 android:fontFamily="@font/oswald_medium"
                 android:textColor="@color/kb_text_hi"
-                android:textSize="13sp"
-                android:maxLines="3"
+                android:textSize="15sp"
+                android:maxLines="5"
                 android:ellipsize="end"
+                android:lineSpacingExtra="2dp"
                 android:visibility="gone" />
 
             <!-- Stream badge chips for the current source. These used to sit
@@ -461,6 +532,39 @@
                 android:layout_marginTop="12dp"
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
+
+                <!-- Live channel zapping (IPTV only): the D-pad/CH+ keys
+                     already zap while the overlay is hidden, but with the
+                     overlay up there has to be something on screen to press. -->
+                <TextView
+                    android:id="@+id/btn_channel_up"
+                    android:layout_width="64dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="10dp"
+                    android:background="@drawable/control_button_bg"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/seekbar"
+                    android:gravity="center"
+                    android:text="CH ▲"
+                    android:textColor="@color/kb_text_hi"
+                    android:textSize="15sp"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/btn_channel_down"
+                    android:layout_width="64dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="10dp"
+                    android:background="@drawable/control_button_bg"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/seekbar"
+                    android:gravity="center"
+                    android:text="CH ▼"
+                    android:textColor="@color/kb_text_hi"
+                    android:textSize="15sp"
+                    android:visibility="gone" />
 
                 <!-- Play/Pause (primary, focused by default) -->
                 <ImageView
