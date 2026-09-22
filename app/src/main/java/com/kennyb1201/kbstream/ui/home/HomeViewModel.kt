@@ -179,6 +179,128 @@ data class UpNextItem(
 )
 
 /**
+ * Media type as the Continue Watching dedupe rule sees it. Anything the app
+ * cannot place (a rail type like "anime") collapses to "unknown" rather than
+ * inventing a second bucket for the same show.
+ */
+internal fun upNextMediaType(type: String?): String =
+    when (type?.trim()?.lowercase()) {
+        "movie" -> "movie"
+        "series", "show", "tv" -> "series"
+        else -> "unknown"
+    }
+
+/**
+ * Dedupe id form: "tt..." stays as it is, prefixed ids lose their prefix
+ * ("tmdb:123" and "simkl:9" become "123" / "9").
+ */
+internal fun upNextIdentifier(rawId: String?): String? {
+    if (rawId.isNullOrBlank()) return null
+
+    val trimmed =
+        rawId.trim().lowercase()
+
+    return when {
+        trimmed.startsWith("tt") -> trimmed
+        trimmed.startsWith("tmdb:") -> trimmed.removePrefix("tmdb:")
+        trimmed.startsWith("simkl:") -> trimmed.removePrefix("simkl:")
+        else -> trimmed
+    }
+}
+
+/** Title key: the fallback identity of a show when its ids disagree. */
+internal fun upNextTitleKey(item: UpNextItem): String =
+    "title:${upNextMediaType(item.parentType)}:${item.title.trim().lowercase()}"
+
+/** One card per show: keyed by parent id when the card has one, title otherwise. */
+internal fun upNextShowKey(item: UpNextItem): String {
+    val normalizedParentId =
+        upNextIdentifier(item.parentId)
+
+    if (normalizedParentId != null) {
+        return "parent:${upNextMediaType(item.parentType)}:$normalizedParentId"
+    }
+
+    return upNextTitleKey(item)
+}
+
+/** Identity of one specific episode across id flavors (title based). */
+internal fun upNextEpisodeKey(item: UpNextItem): String? {
+    val season = item.season
+    val episode = item.episode
+
+    if (season == null || episode == null) {
+        return null
+    }
+
+    return "${upNextTitleKey(item)}:$season:$episode"
+}
+
+/**
+ * Drops the redundant twin cards a show can pick up on the rail:
+ *
+ *  1. "up next" style cards (Next up / New episode / New season) for a show
+ *     that already has an unfinished episode on the rail. A paused episode IS
+ *     what "continue watching" means for that show, so the suggestion for the
+ *     next one is only useful once the current episode is done.
+ *  2. a remote card for the very same episode a local resume row covers,
+ *     which can be keyed differently (imdb row vs tmdb/simkl card) and so
+ *     survive the show-level dedupe. The local card wins: it is the one that
+ *     can be resumed here with the exact stream it was paused on.
+ *
+ * Both cases are the same underlying bug - one show on the rail twice,
+ * because the local row and the tracker card carry different id flavors
+ * (which is how a show mid-S4E5 showed up alongside "New Episode S4E6").
+ * Matching therefore falls back to the show title when the parent keys
+ * disagree.
+ */
+internal fun collapseDuplicateUpNextCards(
+    items: List<UpNextItem>
+): List<UpNextItem> {
+
+    fun hasSomethingToResume(item: UpNextItem): Boolean =
+        item.badge == UpNextBadge.CONTINUE_WATCHING ||
+            item.startPositionMs > 0L ||
+            (item.progressPercent ?: 0f) > 0f
+
+    fun isLocal(item: UpNextItem): Boolean =
+        item.historyRowId != null
+
+    val resumeKeys =
+        items
+            .filter { item -> hasSomethingToResume(item) }
+            .flatMap { item ->
+                listOf(upNextShowKey(item), upNextTitleKey(item))
+            }
+            .toSet()
+
+    val localEpisodeKeys =
+        items
+            .filter { item -> isLocal(item) }
+            .mapNotNull { item -> upNextEpisodeKey(item) }
+            .toSet()
+
+    if (resumeKeys.isEmpty() && localEpisodeKeys.isEmpty()) {
+        return items
+    }
+
+    return items.filterNot { item ->
+        val redundantSuggestion =
+            !hasSomethingToResume(item) &&
+                (upNextShowKey(item) in resumeKeys ||
+                    upNextTitleKey(item) in resumeKeys)
+
+        val remoteTwinOfALocalEpisode =
+            !isLocal(item) &&
+                upNextEpisodeKey(item)?.let { key ->
+                    key in localEpisodeKeys
+                } == true
+
+        redundantSuggestion || remoteTwinOfALocalEpisode
+    }
+}
+
+/**
  * One row in the Home "Upcoming" rail: a show's next unaired episode,
  * derived for free from the Continue Watching enrichment (the TMDB detail
  * it already fetches carries next_episode_to_air). No extra network calls.
@@ -4734,46 +4856,13 @@ private suspend fun calculateEpisodesRemaining(
         )
     }
 
-    private fun normalizeIdentifier(
-        rawId: String?
-    ): String? {
-
-        if (
-            rawId.isNullOrBlank()
-        ) {
-            return null
-        }
-
-        val trimmed =
-            rawId
-                .trim()
-                .lowercase()
-
-        return when {
-
-            trimmed.startsWith("tt") ->
-                trimmed
-
-            trimmed.startsWith("tmdb:") ->
-                trimmed.removePrefix(
-                    "tmdb:"
-                )
-
-            trimmed.startsWith("simkl:") ->
-                trimmed.removePrefix(
-                    "simkl:"
-                )
-
-            else ->
-                trimmed
-        }
-    }
-
     private fun dedupeAndSortUpNext(
         items: List<UpNextItem>
     ): List<UpNextItem> {
 
-        return items
+        return collapseDuplicateUpNextCards(
+            items
+        )
             .groupBy(
                 ::showDedupeKey
             )
@@ -4816,32 +4905,8 @@ private suspend fun calculateEpisodesRemaining(
 
     private fun showDedupeKey(
         item: UpNextItem
-    ): String {
-
-        val normalizedType =
-            normalizeMediaType(
-                item.parentType
-            ) ?: "unknown"
-
-        val normalizedParentId =
-            normalizeIdentifier(
-                item.parentId
-            )
-
-        if (
-            normalizedParentId != null
-        ) {
-
-            return "parent:$normalizedType:$normalizedParentId"
-        }
-
-        val normalizedTitle =
-            item.title
-                .trim()
-                .lowercase()
-
-        return "title:$normalizedType:$normalizedTitle"
-    }
+    ): String =
+        upNextShowKey(item)
 
     private fun winnerScore(
     item: UpNextItem
