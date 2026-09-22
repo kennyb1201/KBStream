@@ -71,6 +71,30 @@ interface WatchHistoryDao {
     suspend fun getResumeForParent(parentId: String): WatchHistoryEntity?
 
     /**
+     * Flavor-tolerant form of [getResumeForParent].
+     *
+     * The same title is reachable under more than one id flavor - TMDB search
+     * rows and the hardcoded kids rails carry "tmdb:<n>", add-on catalogs and
+     * Continue Watching carry "tt..." - and a playback row is stored under
+     * whichever flavor launched it. Looking up only the route's own flavor
+     * therefore hides progress that was made from the other one (no RESUME
+     * button, no progress bar on a title paused elsewhere in the app).
+     * Callers pass the route id plus its resolved twin and get whichever row
+     * exists.
+     */
+    @Query(
+        """
+        SELECT * FROM watch_history
+        WHERE parentId IN (:parentIds)
+          AND positionMs > 0
+          AND isCompleted = 0
+        ORDER BY updatedAt DESC
+        LIMIT 1
+        """
+    )
+    suspend fun getResumeForParents(parentIds: List<String>): WatchHistoryEntity?
+
+    /**
      * Every in-progress row for a parent, newest first. The detail screen
      * maps these by episodeStreamId so every episode card can show its own
      * progress bar / time left — [getResumeForParent] only carries the most
@@ -87,6 +111,19 @@ interface WatchHistoryDao {
     )
     suspend fun getInProgressForParent(parentId: String): List<WatchHistoryEntity>
 
+    /** Flavor-tolerant form of [getInProgressForParent] (see
+     *  [getResumeForParents]). */
+    @Query(
+        """
+        SELECT * FROM watch_history
+        WHERE parentId IN (:parentIds)
+          AND positionMs > 0
+          AND isCompleted = 0
+        ORDER BY updatedAt DESC
+        """
+    )
+    suspend fun getInProgressForParents(parentIds: List<String>): List<WatchHistoryEntity>
+
     @Query(
         """
         SELECT * FROM watch_history
@@ -96,6 +133,19 @@ interface WatchHistoryDao {
         """
     )
     suspend fun getCompletedForParent(parentId: String): List<WatchHistoryEntity>
+
+    /** Flavor-tolerant form of [getCompletedForParent] (see
+     *  [getResumeForParents]): episode checkmarks and per-season watched
+     *  state must survive the title being opened from its other id flavor. */
+    @Query(
+        """
+        SELECT * FROM watch_history
+        WHERE parentId IN (:parentIds)
+          AND isCompleted = 1
+        ORDER BY season ASC, episode ASC, updatedAt DESC
+        """
+    )
+    suspend fun getCompletedForParents(parentIds: List<String>): List<WatchHistoryEntity>
 
     @Query(
         """
@@ -166,6 +216,19 @@ suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity>
     )
     suspend fun deleteResumeRowsForParent(parentId: String)
 
+    /** Flavor-tolerant form of [deleteResumeRowsForParent]: clearing the
+     *  resume rows of a title that has been fully marked watched must reach
+     *  the rows written under its other id flavor too. */
+    @Query(
+        """
+        DELETE FROM watch_history
+        WHERE parentId IN (:parentIds)
+          AND positionMs > 0
+          AND isCompleted = 0
+        """
+    )
+    suspend fun deleteResumeRowsForParents(parentIds: List<String>)
+
     @Query("UPDATE watch_history SET backdropUrl = :backdropUrl WHERE id = :id AND (backdropUrl IS NULL OR backdropUrl = '')")
     suspend fun updateBackdropIfMissing(id: String, backdropUrl: String)
 
@@ -182,6 +245,18 @@ suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity>
     )
     suspend fun deleteCompletedForParentSeason(parentId: String, season: Int)
 
+    /** Flavor-tolerant form of [deleteCompletedForParentSeason]: unmarking a
+     *  season must clear rows written under either id flavor. */
+    @Query(
+        """
+        DELETE FROM watch_history
+        WHERE parentId IN (:parentIds)
+          AND season = :season
+          AND isCompleted = 1
+        """
+    )
+    suspend fun deleteCompletedForParentsSeason(parentIds: List<String>, season: Int)
+
     @Query(
         """
         DELETE FROM watch_history
@@ -197,6 +272,22 @@ suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity>
         episode: Int
     )
 
+    /** Flavor-tolerant form of [deleteCompletedForParentSeasonEpisode]. */
+    @Query(
+        """
+        DELETE FROM watch_history
+        WHERE parentId IN (:parentIds)
+          AND season = :season
+          AND episode = :episode
+          AND isCompleted = 1
+        """
+    )
+    suspend fun deleteCompletedForParentsSeasonEpisode(
+        parentIds: List<String>,
+        season: Int,
+        episode: Int
+    )
+
     @Query(
         """
         DELETE FROM watch_history
@@ -205,6 +296,16 @@ suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity>
         """
     )
     suspend fun deleteCompletedForParent(parentId: String)
+
+    /** Flavor-tolerant form of [deleteCompletedForParent]. */
+    @Query(
+        """
+        DELETE FROM watch_history
+        WHERE parentId IN (:parentIds)
+          AND isCompleted = 1
+        """
+    )
+    suspend fun deleteCompletedForParents(parentIds: List<String>)
 
     @Query("DELETE FROM watch_history")
     suspend fun clearAll()

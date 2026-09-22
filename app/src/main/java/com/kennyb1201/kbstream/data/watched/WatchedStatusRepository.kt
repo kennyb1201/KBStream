@@ -8,6 +8,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
+import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -1182,6 +1183,195 @@ class WatchedStatusRepository(
         return "${normalizeType(type)}::${id.trim()}"
     }
 
+    private val tmdbRepository: TmdbRepository by lazy {
+        TmdbRepository.getInstance(context)
+    }
+
+    /**
+     * Writes [keys] into the persistent manual-override set (or removes them
+     * when [watched] is false), mirrors the result into the in-memory cache so
+     * every badge repaints at once, and wakes the watch-state listeners.
+     *
+     * Lives in one place because a mark and an unmark have to touch the same
+     * keys under the same rule: the id the user pressed is applied instantly,
+     * the title's twin flavor follows (see [watchedIdForms]).
+     */
+    private suspend fun applyOverrideKeys(
+        keys: Set<String>,
+        now: Long,
+        watched: Boolean
+    ) {
+        if (keys.isEmpty()) return
+
+        val updatedKeys =
+            (localWatchedOverrideKeys()
+                .toMutableSet()
+                .apply {
+                    if (watched) {
+                        addAll(keys)
+                    } else {
+                        removeAll(keys)
+                    }
+                })
+
+        overridesPrefs
+            .edit()
+            .putStringSet(
+                KEY_WATCHED_OVERRIDES,
+                updatedKeys
+            )
+            .apply()
+
+        cacheMutex.withLock {
+            keys.forEach { target ->
+                if (watched) {
+                    cache[target] =
+                        now to WatchedCacheEntry(
+                            isWatched = true,
+                            isPartiallyWatched = false
+                        )
+                } else {
+                    cache[target] =
+                        now to WatchedCacheEntry(
+                            isWatched = false,
+                            isPartiallyWatched = false
+                        )
+                }
+            }
+        }
+
+        _watchedStateVersion.value =
+            now
+
+        keys.forEach { target ->
+            WatchStateBus.notifyChanged(
+                target,
+                watched
+            )
+        }
+    }
+
+    /**
+     * The other id flavor that names the SAME title as [id].
+     *
+     * A title is reachable as "tt..." (add-on catalogs, Continue Watching)
+     * and as "tmdb:<n>" (TMDB search rows, the hardcoded kids rails), but a
+     * manual "Mark as Watched" override and a playback row are stored under
+     * one flavor only. Without the twin, marking from one surface left the
+     * other surface's copy unmarked - and unmarking it there removed a key
+     * that was never written, so the badge stayed on.
+     *
+     * IMDB -> TMDB reads the local resolution table first and only then asks
+     * TMDB (result cached both ways); TMDB -> IMDB goes through the shared
+     * [TmdbRepository.resolveImdbId] cache.
+     */
+    private suspend fun twinIdFor(
+        id: String,
+        normalizedType: String
+    ): String? {
+        val raw = id.trim()
+        if (raw.isBlank()) return null
+
+        return try {
+            when {
+                raw.startsWith("tt") ->
+                    tmdbRepository.resolveTmdbId(raw, normalizedType)
+                        ?.takeIf { it > 0 }
+                        ?.let { "tmdb:$it" }
+
+                raw.startsWith("tmdb:") || raw.all(Char::isDigit) -> run {
+                    val tmdbId = raw.removePrefix("tmdb:").toIntOrNull() ?: return@run null
+                    tmdbRepository.resolveImdbId(tmdbId, normalizedType)
+                        ?.trim()
+                        ?.takeIf { it.startsWith("tt") }
+                }
+
+                else -> null
+            }
+        } catch (e: Exception) {
+            Log.w("WATCHED_REPO", "twin resolution failed for $raw: ${e.message}")
+            null
+        }
+    }
+
+    /** Every id form this title should be marked/cleared under. */
+    private suspend fun watchedIdForms(
+        id: String,
+        normalizedType: String
+    ): Set<String> {
+        val forms = linkedSetOf(id.trim())
+        twinIdFor(id, normalizedType)?.let { forms += it }
+        return forms
+    }
+
+    /**
+     * Offline expansion of stored override keys with their twin flavor, read
+     * from the resolution table only - the preload path runs for every
+     * visible poster and must never issue a request per item. Marks made by
+     * this build already store both flavors; this is for overrides written
+     * before it existed.
+     */
+    /** Memo for [expandOverrideTwins]: the raw override set it was derived
+     *  from and the expanded result. Self-invalidating — a changed override
+     *  set never matches, so no explicit invalidation is needed. */
+    @Volatile
+    private var overrideTwinCache: Pair<Set<String>, Set<String>>? = null
+
+    private suspend fun expandOverrideTwins(
+        keys: Set<String>
+    ): Set<String> {
+        if (keys.isEmpty()) return keys
+
+        overrideTwinCache?.let { (cachedFor, expanded) ->
+            if (cachedFor == keys) return expanded
+        }
+
+        val expanded = keys.toMutableSet()
+        val dao = try {
+            WatchHistoryDatabase.getInstanceScoped(context).imdbResolutionDao()
+        } catch (e: Exception) {
+            null
+        } ?: return expanded
+
+        for (entry in keys) {
+            val separator = entry.indexOf("::")
+            if (separator <= 0) continue
+
+            val normalizedType = entry.substring(0, separator)
+            val id = entry.substring(separator + 2).trim()
+            if (id.isBlank()) continue
+
+            val twin = try {
+                when {
+                    id.startsWith("tmdb:") -> {
+                        val tmdbId = id.removePrefix("tmdb:").toIntOrNull()
+                        if (tmdbId == null) null
+                        else dao.getByKey("$normalizedType::$tmdbId")
+                            ?.imdbId
+                            ?.takeIf { it.startsWith("tt") }
+                    }
+
+                    id.startsWith("tt") ->
+                        dao.getByImdbId(id, normalizedType)
+                            ?.tmdbId
+                            ?.takeIf { it > 0 }
+                            ?.let { "tmdb:$it" }
+
+                    else -> null
+                }
+            } catch (e: Exception) {
+                null
+            }
+
+            if (twin != null) {
+                expanded += "$normalizedType::$twin"
+            }
+        }
+
+        overrideTwinCache = keys to expanded
+        return expanded
+    }
+
     /**
      * How long a resolved row may answer for a key before it is recomputed.
      *
@@ -1255,36 +1445,21 @@ class WatchedStatusRepository(
         val now =
             System.currentTimeMillis()
 
-        val updatedKeys =
-            (localWatchedOverrideKeys()
-                .toMutableSet()
-                .apply {
-                    add(key)
-                })
+        // 1. Instant: the id the user pressed, stored before any twin
+        // resolution so the badge flips without waiting on a request.
+        applyOverrideKeys(setOf(key), now, watched = true)
 
-        overridesPrefs
-            .edit()
-            .putStringSet(
-                KEY_WATCHED_OVERRIDES,
-                updatedKeys
-            )
-            .apply()
+        // 2. Best-effort: the same title's OTHER id flavor. A TMDB-keyed badge
+        // and an IMDB-keyed badge for one title used to disagree - the mark
+        // only "took" on the surface it was made from - and unmarking it on
+        // the other surface removed a key that was never written.
+        val formKeys = runCatching {
+            watchedIdForms(normalizedId, normalizedType)
+                .map { form -> cacheKey(form, normalizedType) }
+                .filter { formKey -> formKey != key }
+        }.getOrDefault(emptyList()).toSet()
 
-        cacheMutex.withLock {
-            cache[key] =
-                now to WatchedCacheEntry(
-                    isWatched = true,
-                    isPartiallyWatched = false
-                )
-        }
-
-        _watchedStateVersion.value =
-            now
-
-        WatchStateBus.notifyChanged(
-            key,
-            true
-        )
+        applyOverrideKeys(formKeys, now, watched = true)
 
         // Cross-device sync: push the mark immediately (last-write-wins).
         com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
@@ -1414,22 +1589,20 @@ class WatchedStatusRepository(
             System.currentTimeMillis()
 
         // 1. Drop the manual watched override (the thing "Mark as Watched"
-        // wrote). Leaving it in place would make every later resolution
-        // flip the badge straight back on.
-        val updatedKeys =
-            (localWatchedOverrideKeys()
-                .toMutableSet()
-                .apply {
-                    remove(key)
-                })
+        // wrote). Leaving it in place would make every later resolution flip
+        // the badge straight back on. Applied first, for the id the user
+        // pressed, so the badge clears without waiting on twin resolution.
+        applyOverrideKeys(setOf(key), now, watched = false)
 
-        overridesPrefs
-            .edit()
-            .putStringSet(
-                KEY_WATCHED_OVERRIDES,
-                updatedKeys
-            )
-            .apply()
+        // 2. Then every other id flavor this title is reachable by -
+        // unmarking from one surface used to remove a key that was never
+        // written and leave the badge on for the other.
+        val idForms = runCatching {
+            watchedIdForms(normalizedId, normalizedType)
+        }.getOrDefault(setOf(normalizedId))
+        val formKeys = (idForms.map { form -> cacheKey(form, normalizedType) } + key).toSet()
+
+        applyOverrideKeys(formKeys, now, watched = false)
 
         // 2. Force the in-memory cache to false AND scrub the id out of the
         // in-memory SIMKL completed sets. If the id stayed in those sets, a
@@ -1437,11 +1610,19 @@ class WatchedStatusRepository(
         // again from the stale snapshot before Simkl's server state is
         // re-fetched.
         cacheMutex.withLock {
-            cache[key] =
-                now to WatchedCacheEntry(
-                    isWatched = false,
-                    isPartiallyWatched = false
-                )
+            formKeys.forEach { formKey ->
+                cache[formKey] =
+                    now to WatchedCacheEntry(
+                        isWatched = false,
+                        isPartiallyWatched = false
+                    )
+            }
+
+            // Every id form of the title, not just the one that was passed in:
+            // the remote sets carry both flavors, so an unmark by IMDB used to
+            // leave the "tmdb:<n>" entry behind and a TMDB-keyed rail kept
+            // painting the checkmark until the next refresh.
+            val scrubForms = idForms + normalizedId
 
             when (
                 normalizedType
@@ -1449,26 +1630,27 @@ class WatchedStatusRepository(
                 "movie" ->
                     completedMovieKeys =
                         completedMovieKeys
-                            .filterNot {
-                                it == "imdb:$normalizedId" ||
-                                    it == normalizedId
+                            .filterNot { entry ->
+                                scrubForms.any { form ->
+                                    entry == form || entry == "imdb:$form"
+                                }
                             }
                             .toSet()
 
                 "series" -> {
                     completedShowImdbIds =
-                        completedShowImdbIds - normalizedId
+                        completedShowImdbIds - scrubForms
 
                     partialShowImdbIds =
-                        partialShowImdbIds - normalizedId
+                        partialShowImdbIds - scrubForms
 
                     // Same scrub for the TMDB-keyed twins, or a later remote
                     // refresh would recompute this show as watched again.
                     completedShowTmdbKeys =
-                        completedShowTmdbKeys - normalizedId
+                        completedShowTmdbKeys - scrubForms
 
                     partialShowTmdbKeys =
-                        partialShowTmdbKeys - normalizedId
+                        partialShowTmdbKeys - scrubForms
                 }
             }
         }
@@ -1620,11 +1802,16 @@ class WatchedStatusRepository(
                 normalizedType
             )
 
+        // Both id flavors of the title, so an override written from the other
+        // surface (or by an older build) is cleared too.
+        val idForms = watchedIdForms(normalizedId, normalizedType)
+        val formKeys = (idForms.map { form -> cacheKey(form, normalizedType) } + key).toSet()
+
         val overrideKeys =
             localWatchedOverrideKeys()
 
         if (
-            key !in overrideKeys
+            formKeys.none { formKey -> formKey in overrideKeys }
         ) {
             return false
         }
@@ -1639,7 +1826,7 @@ class WatchedStatusRepository(
                 overrideKeys
                     .toMutableSet()
                     .apply {
-                        remove(key)
+                        removeAll(formKeys)
                     }
             )
             .apply()
@@ -1647,20 +1834,24 @@ class WatchedStatusRepository(
         // The manual mark is gone, so the cached row must go with it: left
         // in place it would keep answering "watched" until its TTL expires.
         cacheMutex.withLock {
-            cache[key] =
-                now to WatchedCacheEntry(
-                    isWatched = false,
-                    isPartiallyWatched = false
-                )
+            formKeys.forEach { formKey ->
+                cache[formKey] =
+                    now to WatchedCacheEntry(
+                        isWatched = false,
+                        isPartiallyWatched = false
+                    )
+            }
         }
 
         _watchedStateVersion.value =
             now
 
-        WatchStateBus.notifyChanged(
-            key,
-            false
-        )
+        formKeys.forEach { formKey ->
+            WatchStateBus.notifyChanged(
+                formKey,
+                false
+            )
+        }
 
         // The override set is profile-synced, so the other devices have to
         // drop it as well or they keep painting the checkmark.
@@ -1810,8 +2001,10 @@ class WatchedStatusRepository(
                 )
             }
 
+        // Twin the stored overrides too, so an override written before this
+        // build (single flavor) still resolves for the title's other id.
         val localOverrideKeys =
-            localWatchedOverrideKeys()
+            expandOverrideTwins(localWatchedOverrideKeys())
 
         return items.map { (id, normalizedType) ->
 

@@ -1198,6 +1198,20 @@ object SupabaseSync {
     private val realtimeSubscriptions =
         java.util.concurrent.CopyOnWriteArrayList<RealtimeSubscription>()
 
+    /*
+     * Rebuild attempts per table since its last HEALTHY join.
+     *
+     * Realtime can be switched off server-side per table (the tables must be
+     * added to the `supabase_realtime` publication). When they are not, the
+     * join is rejected with a `system` error and supabase-kt leaves the
+     * channel UNSUBSCRIBED forever - which this class' health watcher would
+     * read as "dead channel, rebuild", re-joining every 15s and logging an
+     * ERROR each time, indefinitely. The counter lets a genuinely
+     * misconfigured deployment stop churning and say so once instead.
+     */
+    private val realtimeRebuildAttempts =
+        java.util.concurrent.ConcurrentHashMap<String, Int>()
+
     // Serializes start/stop so two auth paths that fire near-simultaneously
     // (session restore racing a manual sign-in) can't both pass the
     // "already subscribed?" check and create DUPLICATE channels — which
@@ -1210,6 +1224,9 @@ object SupabaseSync {
         scope.launch {
             realtimeMutex.withLock {
                 if (realtimeSubscriptions.isNotEmpty()) return@withLock
+                // A fresh sign-in starts with a clean failure budget, so a
+                // deployment that has since enabled Realtime recovers.
+                realtimeRebuildAttempts.clear()
                 try {
                     // One channel per table; the flow must be created BEFORE the
                     // channel subscribes (supabase-kt requirement).
@@ -1298,6 +1315,25 @@ object SupabaseSync {
                 var repaired = false
                 for (sub in subs) {
                     if (!isSignedIn()) break
+
+                    val attempts = realtimeRebuildAttempts.getOrDefault(sub.table, 0)
+                    if (attempts >= REALTIME_MAX_REBUILD_ATTEMPTS) {
+                        // Realtime is not enabled for this table server-side.
+                        // Stop re-joining (and stop the per-attempt ERROR spam);
+                        // remote changes still arrive via the manual/periodic pull.
+                        Log.w(
+                            TAG,
+                            "realtime ${sub.table}: join rejected $attempts times — " +
+                                "giving up; add the table to the supabase_realtime " +
+                                "publication to enable live sync"
+                        )
+                        realtimeSubscriptions.remove(sub)
+                        sub.collectorJob.cancel()
+                        runCatching { sub.channel.unsubscribe() }
+                        _realtimeStatus.value = "unavailable"
+                        _realtimeChannelCount.value = realtimeSubscriptions.size
+                        continue
+                    }
                     // Only rebuild genuinely DEAD channels. UNSUBSCRIBED is
                     // the terminal state a kicked/errored channel is left in.
                     // SUBSCRIBING/UNSUBSCRIBING are transient in-flight states
@@ -1305,6 +1341,7 @@ object SupabaseSync {
                     if (sub.channel.status.value ==
                         io.github.jan.supabase.realtime.RealtimeChannel.Status.UNSUBSCRIBED
                     ) {
+                        realtimeRebuildAttempts[sub.table] = attempts + 1
                         try {
                             Log.w(TAG, "realtime channel ${sub.channel.topic} is UNSUBSCRIBED; rebuilding")
                             _realtimeStatus.value = "rebuilding ${sub.table}"
@@ -1319,6 +1356,9 @@ object SupabaseSync {
                         } catch (t: Throwable) {
                             CrashReporter.recordNonFatal(t, mapOf("source" to "realtime_resubscribe"))
                         }
+                    } else {
+                        // Healthy join: reset the table's failure budget.
+                        realtimeRebuildAttempts.remove(sub.table)
                     }
                 }
                 if (repaired) {
@@ -1474,4 +1514,8 @@ object SupabaseSync {
     // joined and resubscribes the dead ones. 15s: a dropped channel is
     // repaired well inside the "user noticed nothing synced" window.
     private const val REALTIME_HEALTH_CHECK_MS = 15_000L
+
+    /// Rebuild attempts per table before realtime is treated as unavailable
+    /// for it (see [realtimeRebuildAttempts]).
+    private const val REALTIME_MAX_REBUILD_ATTEMPTS = 3
 }

@@ -174,6 +174,12 @@ class TmdbRepository private constructor(context: Context) {
 
     private val imdbResolutionMemoryCache =
         ConcurrentHashMap<String, Pair<Long, String?>>()
+
+    /** Reverse of [imdbResolutionMemoryCache]: the TMDB id for an IMDB id,
+     *  keyed "<type>::<imdb>". Same TTL and persistence table. */
+    private val tmdbResolutionMemoryCache =
+        ConcurrentHashMap<String, Pair<Long, Int?>>()
+
     private val imdbResolutionTtlMs = 30L * 24L * 60L * 60L * 1000L
 
     private var movieGenresCache: List<TmdbGenre>? = null
@@ -375,6 +381,68 @@ class TmdbRepository private constructor(context: Context) {
         }
 
         return imdbId
+    }
+
+    /**
+     * Resolves the IMDB id of a title back to its TMDB id (the reverse of
+     * [resolveImdbId]), caching both in memory and in the resolution table so
+     * a later [resolveImdbId] is free too.
+     *
+     * Needed by callers that only ever hold the "tt..." form (playback
+     * history, the watched-override twins) and still have to name the same
+     * title's "tmdb:<n>" flavor.
+     */
+    suspend fun resolveTmdbId(imdbId: String, type: String): Int? {
+        val trimmedId = imdbId.trim()
+        if (apiKey.isBlank() || !trimmedId.startsWith("tt")) return null
+
+        val normalizedType = normalizeType(type)
+        val cacheKey = "$normalizedType::$trimmedId"
+        val now = System.currentTimeMillis()
+
+        tmdbResolutionMemoryCache[cacheKey]?.let { (cachedAt, tmdbId) ->
+            if (now - cachedAt < imdbResolutionTtlMs) {
+                return tmdbId
+            }
+        }
+
+        val diskCached = runCatching { imdbResolutionDao.getByImdbId(trimmedId, normalizedType) }
+            .getOrNull()
+        if (diskCached != null && now - diskCached.updatedAt < imdbResolutionTtlMs) {
+            tmdbResolutionMemoryCache[cacheKey] = diskCached.updatedAt to diskCached.tmdbId
+            imdbResolutionMemoryCache[
+                imdbResolutionKey(diskCached.tmdbId, normalizedType)
+            ] = diskCached.updatedAt to diskCached.imdbId
+            return diskCached.tmdbId
+        }
+
+        val tmdbId = runCatching {
+            val found = api.find(trimmedId, apiKey, "imdb_id")
+            if (normalizedType == "series") {
+                found.tvResults.firstOrNull()?.id
+            } else {
+                found.movieResults.firstOrNull()?.id
+            }
+        }.getOrNull()?.takeIf { it > 0 } ?: return null
+
+        tmdbResolutionMemoryCache[cacheKey] = now to tmdbId
+        imdbResolutionMemoryCache[
+            imdbResolutionKey(tmdbId, normalizedType)
+        ] = now to trimmedId
+
+        runCatching {
+            imdbResolutionDao.upsert(
+                ImdbResolutionEntity(
+                    key = imdbResolutionKey(tmdbId, normalizedType),
+                    tmdbId = tmdbId,
+                    mediaType = normalizedType,
+                    imdbId = trimmedId,
+                    updatedAt = now
+                )
+            )
+        }
+
+        return tmdbId
     }
 
     suspend fun getPerson(personId: Int): TmdbPersonDetail? {

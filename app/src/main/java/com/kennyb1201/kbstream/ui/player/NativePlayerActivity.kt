@@ -105,6 +105,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -1274,6 +1275,10 @@ class NativePlayerActivity : ComponentActivity() {
     /// the actor overlay (fromActorReturn).
     private var hasPlayedOnce = false
     private var historyId = ""
+
+    /// Cached canonical id for the playback-history row (see
+    /// [canonicalHistoryParentId]); null until first resolved.
+    private var historyParentIdOverride: String? = null
     private var simklScrobbleSent = false
     private var simklSyncJob: kotlinx.coroutines.Job? = null
     private var simklScrobbleActive = false
@@ -4721,6 +4726,11 @@ class NativePlayerActivity : ComponentActivity() {
             stallWatchdogToken++
             return
         }
+        // Measure the quiet window BEFORE resetting the progress stamp: the
+        // log used to print it after the reset and so always read
+        // "No data for 0ms", which made every stall look like a zero-second
+        // hiccup and hid how long the source had actually gone silent.
+        val quietMs = now - stallLastProgressAtMs
         stallRecoveries++
         stallLastProgressAtMs = now
         stallLastPositionMs = positionMs
@@ -4728,7 +4738,7 @@ class NativePlayerActivity : ComponentActivity() {
         val targetMs = if (bufferedMs > positionMs) bufferedMs + 250 else positionMs + 250
         Log.w(
             "PLAYER_STALL",
-            "No data for ${now - stallLastProgressAtMs}ms (pos=${positionMs}ms buf=${bufferedMs}ms) — seeking to ${targetMs}ms to force a fresh read (recovery $stallRecoveries/$stallMaxRecoveries)"
+            "No data for ${quietMs}ms (pos=${positionMs}ms buf=${bufferedMs}ms) — seeking to ${targetMs}ms to force a fresh read (recovery $stallRecoveries/$stallMaxRecoveries)"
         )
         player.seekTo(targetMs)
         handler.postDelayed({ tickStallWatchdog(token) }, stallTickMs)
@@ -7117,8 +7127,11 @@ class NativePlayerActivity : ComponentActivity() {
             runCatching {
                 val dao = WatchHistoryDatabase.getInstanceScoped(this@NativePlayerActivity).watchHistoryDao()
                 val existing = dao.getById(historyId)
+                // Same title, same canonical parent id, whichever id flavor
+                // launched this playback (see canonicalHistoryParentId).
+                val entryParentId = canonicalHistoryParentId()
                 val entry = WatchHistoryEntity(
-                    id = historyId, parentId = parentId, type = parentType,
+                    id = historyId, parentId = entryParentId, type = parentType,
                     name = itemName, episodeTitle = episodeTitle, overview = overview,
                     clearLogo = clearLogoUrl, totalEpisodesInSeason = totalEpisodesInSeason,
                     poster = itemPoster, streamUrl = currentUrl,
@@ -7148,6 +7161,54 @@ class NativePlayerActivity : ComponentActivity() {
      * only match shows/movies by imdb or tmdb id, so TVDB-sourced titles
      * scrobble via this resolved id instead of being silently dropped.
      */
+    /**
+     * The parent id the playback-history row should be stored under.
+     *
+     * A title is reachable as "tt..." (add-on catalogs, Continue Watching)
+     * and as "tmdb:<n>" (TMDB search rows, the kids rails), and a history row
+     * was written under whichever flavor started playback. Continue Watching
+     * groups rows by parentId in SQL, so the SAME title ended up as TWO
+     * cards - one per flavor - with progress on only one of them. Rows are
+     * canonicalized to the IMDB id when it can be resolved; anything
+     * unresolvable (no TMDB key, a timeout) stays as the route's own id.
+     */
+    private suspend fun canonicalHistoryParentId(): String {
+        historyParentIdOverride?.let { return it }
+
+        val raw = parentId.trim()
+
+        val resolved = when {
+            raw.isBlank() || raw.startsWith("tt") -> raw
+
+            else -> {
+                val tmdbRepository = TmdbRepository.getInstance(this)
+                val tmdbId = when {
+                    raw.startsWith("tmdb:") || raw.all(Char::isDigit) ->
+                        raw.removePrefix("tmdb:").toIntOrNull()
+
+                    else -> resolveParentTmdbId()
+                }
+
+                if (tmdbId == null || tmdbId <= 0) {
+                    raw
+                } else {
+                    // Bounded: this runs on the NonCancellable exit path, so a
+                    // slow resolve must never hold the history write hostage.
+                    withTimeoutOrNull(2500L) {
+                        runCatching {
+                            tmdbRepository.resolveImdbId(tmdbId, parentType)
+                                ?.trim()
+                                ?.takeIf { it.startsWith("tt") }
+                        }.getOrNull()
+                    } ?: raw
+                }
+            }
+        }
+
+        historyParentIdOverride = resolved
+        return resolved
+    }
+
     private suspend fun resolveParentTmdbId(): Int? {
         if (resolvedParentTmdbId == null && parentId.isNotBlank()) {
             resolvedParentTmdbId = withContext(Dispatchers.IO) {

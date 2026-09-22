@@ -23,11 +23,25 @@ object WatchedEpisodeState {
     ): Set<String> {
         val merged = linkedSetOf<String>()
 
+        /*
+         * Anchor every local row to the id the CURRENT screen is keyed by,
+         * not to the row's own parentId.
+         *
+         * The same show can be opened under two id flavors (TMDB search /
+         * kids rails use "tmdb:<n>", add-on catalogs and Continue Watching
+         * use "tt..."), and a completed row is stored under whichever flavor
+         * played it. Anchoring to the row's own flavor produced keys like
+         * "tt123:2:5" while the episode cards compare against
+         * "tmdb:456:2:5" - so every episode read as unwatched on the other
+         * flavor even though the local history already had it. Callers only
+         * hand in rows for this show, so re-anchoring them is safe and makes
+         * the local state flavor-independent.
+         */
         localCompletedEntries.forEach { entry ->
             merged += entry.id
 
             val key = buildEpisodeKey(
-                parentId = entry.parentId.ifBlank { parentId },
+                parentId = parentId,
                 season = entry.season,
                 episode = entry.episode
             )

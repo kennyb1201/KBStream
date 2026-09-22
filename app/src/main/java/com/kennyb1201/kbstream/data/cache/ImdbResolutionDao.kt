@@ -10,6 +10,16 @@ interface ImdbResolutionDao {
     @Query("SELECT * FROM imdb_resolution_cache WHERE key = :key LIMIT 1")
     suspend fun getByKey(key: String): ImdbResolutionEntity?
 
+    /**
+     * Reverse of [getByKey]: the cached TMDB id for an IMDB id. Lets callers
+     * that only hold the IMDB form name the same title's TMDB id without a
+     * network lookup (see WatchedStatusRepository's flavor twins).
+     */
+    @Query(
+        "SELECT * FROM imdb_resolution_cache WHERE imdbId = :imdbId AND mediaType = :mediaType LIMIT 1"
+    )
+    suspend fun getByImdbId(imdbId: String, mediaType: String): ImdbResolutionEntity?
+
     @Query("SELECT * FROM imdb_resolution_cache WHERE key IN (:keys)")
     suspend fun getByKeys(keys: List<String>): List<ImdbResolutionEntity>
 

@@ -170,6 +170,10 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
     internal var imdbId: String = ""
     private var latestEpisodeSeasonRequest: Int? = null
 
+    /** Normalized media type of the loaded detail ("movie"/"series"), used
+     *  to resolve the title's IMDB twin for local-history lookups. */
+    private var mediaType: String = "movie"
+
     // Hot reactive StateFlow checking if stream addons are configured and present globally
     val hasStreamAddons: StateFlow<Boolean> = addonManager.streamAddons
         .map { addons -> addons.isNotEmpty() }
@@ -182,6 +186,44 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
     fun watchedKey(id: String, type: String): String = "${type.lowercase()}::$id"
 
     fun posterLookupKey(tmdbId: Int, mediaType: String): String = "${mediaType.lowercase()}::$tmdbId"
+
+    /**
+     * Local-history parent ids that describe THIS title: the id the screen was
+     * opened with plus the twin named by the resolved TMDB record.
+     *
+     * The same title arrives under more than one id flavor - TMDB search
+     * results and the hardcoded kids rails carry "tmdb:<n>", add-on catalogs
+     * and Continue Watching carry "tt..." - and playback history is written
+     * under whichever flavor started it. Reading (and clearing) only the
+     * route's own flavor is what made a half-watched title look untouched
+     * when opened from its other flavor, so every local history lookup goes
+     * through this list.
+     */
+    private suspend fun localHistoryParentIds(parentId: String): List<String> {
+        if (parentId.isBlank()) return emptyList()
+
+        val ids = linkedSetOf(parentId)
+
+        // Synthetic addon-videos details carry a -1 sentinel instead of a
+        // real TMDB id and must not be turned into a fake "tmdb:-1" key.
+        val tmdbId = _tmdbDetail.value?.id?.takeIf { it > 0 }
+        if (tmdbId != null) {
+            ids += "tmdb:$tmdbId"
+
+            // The IMDB twin. The TMDB detail payload carries no external ids,
+            // so this resolves them (memory + disk cached after the first
+            // lookup) - without it a "tmdb:<n>" route could never see history
+            // written under the title's "tt..." id.
+            runCatching {
+                tmdbRepository.resolveImdbId(tmdbId, mediaType)
+            }.getOrNull()
+                ?.trim()
+                ?.takeIf { it.startsWith("tt") }
+                ?.let { ids += it }
+        }
+
+        return ids.toList()
+    }
 
     private fun normalizeMediaType(type: String): String = when (type.lowercase()) {
         "tv", "show" ->
@@ -316,12 +358,11 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
 
             try {
                 val normalizedType = normalizeMediaType(type)
+                mediaType = normalizedType
                 Log.e("KBStream", "detail load start type=$normalizedType id=$id initialSeason=$initialSeason")
 
                 val addonsDeferred = async { addonManager.getEnabledAddons() }
                 val tmdbDeferred = async { runCatching { tmdbRepository.fetchEnrichedMeta(id, normalizedType) } }
-                val resumeDeferred = async { runCatching { historyDao.getResumeForParent(id) } }
-                val completedDeferred = async { runCatching { historyDao.getCompletedForParent(id) } }
 
                 // 1. Await structural and history components first so watched data is guaranteed ready
                 val tmdbDetailResult = tmdbDeferred.await()
@@ -371,7 +412,21 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 // external-ids lookup resolves.
                 fetchMdbListRatings(normalizedType)
 
-                val localResume = resumeDeferred.await().getOrNull()
+                /*
+                 * Ids this title is reachable under: the route's own flavor
+                 * plus the twin the TMDB detail just resolved ("tmdb:<n>" for
+                 * an imdb route, the imdb id for a tmdb route). Playback
+                 * history is written under whichever flavor started it, so
+                 * reading only the route's flavor hid progress, resume rows
+                 * and episode checkmarks made from the other one - the same
+                 * show opened from Search ("tmdb:<n>") looked untouched next
+                 * to the copy opened from an add-on catalog ("tt...").
+                 */
+                val historyParentIds = localHistoryParentIds(id)
+
+                val localResume = runCatching {
+                    historyDao.getResumeForParents(historyParentIds)
+                }.getOrNull()
 
                 // Simkl cloud-session fallback: when local history has no
                 // in-progress position for this title, derive a display-only
@@ -395,17 +450,33 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 // card derives its own progress bar / time left from its
                 // episodeStreamId instead of only the single latest row.
                 _inProgressByStreamId.value = runCatching {
-                    historyDao.getInProgressForParent(id)
+                    historyDao.getInProgressForParents(historyParentIds)
                 }.getOrDefault(emptyList())
                     // Rows arrive newest-first and toMap keeps the LAST entry
                     // per key — reverse so the newest row wins per streamId.
                     .reversed()
-                    .mapNotNull { row ->
-                        row.episodeStreamId?.takeIf { it.isNotBlank() }?.let { it to row }
+                    .flatMap { row ->
+                        // Index each row by its own streamId AND by the
+                        // route-flavored episode id: a row written under the
+                        // title's other id flavor carries "tt123:2:5" while
+                        // this screen's cards compare "tmdb:456:2:5".
+                        buildList {
+                            row.episodeStreamId
+                                ?.takeIf { it.isNotBlank() }
+                                ?.let { add(it to row) }
+
+                            val season = row.season
+                            val episode = row.episode
+                            if (season != null && episode != null) {
+                                add("$id:$season:$episode" to row)
+                            }
+                        }
                     }
                     .toMap()
 
-                val localCompletedEntries = completedDeferred.await().getOrDefault(emptyList())
+                val localCompletedEntries = runCatching {
+                    historyDao.getCompletedForParents(historyParentIds)
+                }.getOrDefault(emptyList())
                 _completedEpisodeIds.value = localCompletedEntries.map { it.id }.toSet()
 
                 // 2. Fetch Simkl watch states utilizing the resolved TMDB show ID safely
@@ -1343,10 +1414,12 @@ for (metaAddon in metaAddons) {
             val showTmdbId =
                 _tmdbDetail.value?.id?.takeIf { it > 0 }
 
-            // 1. Local: drop every completed row for this season.
+            // 1. Local: drop every completed row for this season, under every
+            // id flavor this title is reachable by - a season marked watched
+            // from the other flavor would otherwise survive the unmark.
             runCatching {
-                historyDao.deleteCompletedForParentSeason(
-                    parentId = parentId,
+                historyDao.deleteCompletedForParentsSeason(
+                    parentIds = localHistoryParentIds(parentId),
                     season = season
                 )
             }.onFailure { e ->
@@ -1472,8 +1545,8 @@ for (metaAddon in metaAddons) {
         // minus the episodes just unmarked.
         val localPairs =
             runCatching {
-                historyDao.getCompletedForParent(
-                    parentId
+                historyDao.getCompletedForParents(
+                    localHistoryParentIds(parentId)
                 )
             }.getOrDefault(
                 emptyList()
@@ -1710,8 +1783,8 @@ for (metaAddon in metaAddons) {
             // the in-memory copies the hero / episode chips read, so the page
             // stops offering "Resume S5E3" on an episode that is now watched.
             runCatching {
-                historyDao.deleteResumeRowsForParent(
-                    parentId
+                historyDao.deleteResumeRowsForParents(
+                    localHistoryParentIds(parentId)
                 )
             }.onFailure { e ->
                 Log.e(
@@ -1796,8 +1869,8 @@ for (metaAddon in metaAddons) {
             // 1. Local: every completed row for this show, whatever season or
             // episode numbers they were written with.
             runCatching {
-                historyDao.deleteCompletedForParent(
-                    parentId
+                historyDao.deleteCompletedForParents(
+                    localHistoryParentIds(parentId)
                 )
             }.onFailure { e ->
                 Log.e(
@@ -1928,8 +2001,8 @@ for (metaAddon in metaAddons) {
             // 1. Local: drop the completed row(s) for each targeted episode.
             validEpisodes.forEach { episode ->
                 runCatching {
-                    historyDao.deleteCompletedForParentSeasonEpisode(
-                        parentId = parentId,
+                    historyDao.deleteCompletedForParentsSeasonEpisode(
+                        parentIds = localHistoryParentIds(parentId),
                         season = season,
                         episode = episode
                     )
