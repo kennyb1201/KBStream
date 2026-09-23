@@ -52,6 +52,41 @@ internal object PlayerTrackBridge {
         "Russian" to "ru"
     )
 
+    /**
+     * The in-player Auto choice inherits the global language. Name that
+     * inheritance in the pill so Auto is not mistaken for ignoring the global
+     * English (or other language) preference.
+     */
+    fun playerLanguageOptions(globalLanguage: String): List<Pair<String, String>> {
+        if (globalLanguage.isBlank()) return LANGUAGE_OPTIONS
+        val globalName = languageName(globalLanguage)
+        return LANGUAGE_OPTIONS.mapIndexed { index, (label, code) ->
+            if (index == 0) "Auto · $globalName" to code else label to code
+        }
+    }
+
+    fun languageName(language: String): String =
+        LANGUAGE_OPTIONS.firstOrNull { (_, code) ->
+            code.isNotBlank() && LanguageMatch.matches(code, language)
+        }?.first ?: language.trim().uppercase().ifBlank { "Auto" }
+
+    fun inheritedLanguageSummary(): String {
+        val inherited = buildList {
+            if (audioLanguage.isBlank()) {
+                add("Audio ${languageName(globalAudioLanguage)}")
+            }
+            if (subtitleLanguage.isBlank()) {
+                add("Subtitles ${languageName(globalSubtitleLanguage)}")
+            }
+        }
+        return when {
+            inherited.isEmpty() -> "Using this title's remembered languages"
+            globalAudioLanguage.isBlank() && globalSubtitleLanguage.isBlank() ->
+                "Auto uses each file's default tracks"
+            else -> "Auto follows global: ${inherited.joinToString(" · ")}"
+        }
+    }
+
     /** Identity of the title playing now; null for live channels (no memory). */
     @Volatile
     var titleKey: String? = null

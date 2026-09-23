@@ -67,6 +67,8 @@ import com.kennyb1201.kbstream.ui.iptv.GuideScreen
 import com.kennyb1201.kbstream.ui.iptv.IptvViewModel
 import com.kennyb1201.kbstream.ui.onboarding.OnboardingPrefs
 import com.kennyb1201.kbstream.ui.onboarding.OnboardingScreen
+import com.kennyb1201.kbstream.data.player.PlayerEngine
+import com.kennyb1201.kbstream.ui.player.MpvPlayerActivity
 import com.kennyb1201.kbstream.ui.player.NativePlayerActivity
 import com.kennyb1201.kbstream.ui.player.NextEpisodeResult
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
@@ -1836,7 +1838,17 @@ fun AppRoot() {
             }
 
             LaunchedEffect(current.url) {
-                val intent = Intent(context, NativePlayerActivity::class.java).apply {
+                // Settings → Playback engine. "MPV" opens the backup player
+                // directly; the default keeps ExoPlayer here and lets it fall
+                // over to MPV by itself when a stream is unplayable (see
+                // NativePlayerActivity.handOffToMpv). Both take the same
+                // extras, so nothing below has to know which one it got.
+                val playerActivity = if (PlayerEngine.prefersMpv(context)) {
+                    MpvPlayerActivity::class.java
+                } else {
+                    NativePlayerActivity::class.java
+                }
+                val intent = Intent(context, playerActivity).apply {
                     putExtra("stream_url", current.url)
                     current.audioUrl?.let { putExtra("audio_url", it) }
                     putExtra("parent_id", current.parentId)

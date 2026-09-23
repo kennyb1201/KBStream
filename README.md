@@ -15,7 +15,12 @@ EPG).
   (genres, keywords, services, networks, studios, collections, decades).
 - **Player** — native player with stream ranking, auto-select, resume,
   next-episode autoplay, Dolby Vision compat layer, and custom subtitle
-  styling.
+  styling. A second engine (MPV/libmpv, Settings → Playback engine) backs it
+  up: it is used as the fallback when ExoPlayer cannot play a stream at all —
+  the box has no decoder left to hand out, or the codec has no decoder — and
+  can be selected outright for files only libmpv handles (including fansub
+  ASS/SSA typesetting). Both engines write the same watch history, scrobbles
+  and Continue Watching rows.
 - **Profiles** — multiple per-device profiles with avatars, optional PIN
   locks, and full cross-device sync (history, watched state, addons,
   settings) via Supabase with row-level security.

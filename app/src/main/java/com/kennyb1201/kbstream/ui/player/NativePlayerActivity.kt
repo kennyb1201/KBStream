@@ -76,6 +76,7 @@ import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
 import com.kennyb1201.kbstream.ui.player.PickerAdapter.Companion.bindBadgeRow
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
@@ -530,6 +531,139 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var btnNextPlay: TextView
     private lateinit var btnNextDismiss: TextView
     private lateinit var nextUpCountdown: TextView
+
+    /**
+     * Turns the end-of-episode Up Next card into a small one in the bottom-right
+     * corner.
+     *
+     * `activity_player.xml` defines it 640dp wide, centered, with a 288x162
+     * still - a full-screen takeover that buries the credits. That tail of the
+     * layout sits past the tooling's edit window (the same reason the settings
+     * panel's language and track rows are built in code), so the card is
+     * restyled here instead: narrower box, smaller still, tighter leading, and
+     * a bottom-right gravity. Nothing is hidden - thumbnail, show title,
+     * season/episode label, episode title, PLAY NEXT / EXIT and the countdown
+     * all stay, just smaller - so no information is lost.
+     *
+     * Called from [prepareEndOfEpisodePanels], which runs after `bindViews()`
+     * has inflated the card and bound these fields. Idempotent, so an activity
+     * recreate simply restates it.
+     */
+    private fun compactNextUpCard() {
+        val density = resources.displayMetrics.density
+        fun dp(value: Int): Int = (value * density).toInt()
+        fun tighten(view: View, topDp: Int) {
+            (view.layoutParams as? LinearLayout.LayoutParams)?.topMargin = dp(topDp)
+        }
+
+        (nextUpPanel.layoutParams as? android.widget.FrameLayout.LayoutParams)?.let { params ->
+            params.width = dp(440)
+            params.height = ViewGroup.LayoutParams.WRAP_CONTENT
+            params.gravity = android.view.Gravity.BOTTOM or android.view.Gravity.END
+            // Sits clear of the control bar when it is up (seekbar row, time
+            // row, button row and the overlay's own padding), so it never
+            // covers the playback buttons; the right edge lines up with that
+            // bar's own 48dp inset, which is what makes it read as part of the
+            // screen rather than dropped on top of it.
+            params.setMargins(dp(24), dp(24), dp(48), dp(152))
+        }
+        nextUpPanel.setPadding(dp(14), dp(14), dp(14), dp(14))
+        nextUpPanel.requestLayout()
+
+        // The still keeps its 16:9 shape, at the width the smaller card leaves.
+        nextUpThumb.layoutParams = LinearLayout.LayoutParams(dp(150), dp(84))
+
+        // The text column follows the narrower card: less gap to the still,
+        // smaller type, and tighter leading between the lines.
+        (nextUpPanel.getChildAt(1) as? LinearLayout)?.let { column ->
+            (column.layoutParams as? LinearLayout.LayoutParams)?.marginStart = dp(14)
+        }
+        nextUpShowTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+        nextUpEpisodeLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+        nextUpEpisodeTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        nextUpCountdown.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+        nextUpPanel.findViewById<TextView>(R.id.next_up_kicker)
+            ?.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+        tighten(nextUpShowTitle, 2)
+        tighten(nextUpEpisodeLabel, 3)
+        tighten(nextUpEpisodeTitle, 2)
+        tighten(nextUpCountdown, 6)
+        // Episode names are longer than the narrower column, so they wrap to a
+        // second line rather than getting cut off.
+        nextUpEpisodeTitle.maxLines = 2
+
+        listOf(btnNextPlay, btnNextDismiss).forEach { button ->
+            button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            button.setPadding(dp(14), dp(6), dp(14), dp(6))
+        }
+        (btnNextPlay.parent as? LinearLayout)?.let { row ->
+            tighten(row, 10)
+            (btnNextDismiss.layoutParams as? LinearLayout.LayoutParams)?.marginStart = dp(8)
+        }
+    }
+
+    /**
+     * Finishing touches for both end-of-episode panels - the Up Next card and
+     * the because-you-watched credits recommendations. Both live in the tail of
+     * `activity_player.xml` (and of this file's row builders) that the tooling's
+     * edit window does not reach, so they are applied from code.
+     *
+     * The Up Next card is restyled once, by [compactNextUpCard]. The credits
+     * panel rebuilds its cards on every show, so its artwork is polished from a
+     * layout listener instead - which is also what runs after
+     * [applyPlayerPanelTheme] has re-tinted those very views.
+     *
+     * Called once from [PlayerPanelSection.attach], after `bindViews()`.
+     */
+    internal fun prepareEndOfEpisodePanels() {
+        compactNextUpCard()
+        val onLayout = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            if (becauseYouWatchedPanel.visibility == View.VISIBLE) polishCreditsArtwork()
+        }
+        becauseYouWatchedPanel.addOnLayoutChangeListener(onLayout)
+        bywRow.addOnLayoutChangeListener(onLayout)
+    }
+
+    /**
+     * Cleans up the credits panel's artwork: rounded corners on the pick posters
+     * and on the featured backdrop, and no clear logo stacked on the posters.
+     *
+     * Poster art from TMDB already carries the title, so the clear logo the row
+     * overlaid on each card drew a second title over the first - the doubled
+     * logo. The featured backdrop is a 16:9 still with no title on it, so its
+     * logo stays.
+     */
+    private fun polishCreditsArtwork() {
+        bywViews.values.forEach { refs ->
+            val frame = (refs.cardView as? ViewGroup)?.getChildAt(0) as? ViewGroup ?: return@forEach
+            roundArtwork(frame)
+            // Frame children, in order: the poster, then the logo overlay.
+            (frame.getChildAt(1) as? ImageView)?.visibility = View.GONE
+        }
+        becauseYouWatchedPanel.findViewWithTag<View>("byw_featured_backdrop")
+            ?.let { roundArtwork(it) }
+    }
+
+    /** Clips one piece of artwork - poster or backdrop - to rounded corners. */
+    private fun roundArtwork(view: View) {
+        if (view.outlineProvider !is RoundedArtworkOutline) {
+            view.outlineProvider = RoundedArtworkOutline(12f * resources.displayMetrics.density)
+        }
+        view.clipToOutline = true
+    }
+
+    /**
+     * A rounded outline rather than a rounded background: the panels re-tint
+     * their artwork's background from [applyPlayerPanelTheme], which would wipe
+     * a background-carried radius on the next show, and the clip is what makes
+     * the corners round in the first place.
+     */
+    private class RoundedArtworkOutline(private val radiusPx: Float) :
+        android.view.ViewOutlineProvider() {
+        override fun getOutline(view: View, outline: android.graphics.Outline) {
+            outline.setRoundRect(0, 0, view.width, view.height, radiusPx)
+        }
+    }
 
     // Because-you-watched (end-credits recommendations)
     private lateinit var becauseYouWatchedPanel: LinearLayout
@@ -1352,6 +1486,28 @@ class NativePlayerActivity : ComponentActivity() {
     private var simklScrobblePaused = false
     private var simklScrobbleJob: kotlinx.coroutines.Job? = null
 
+    /// True once this session has been handed to the MPV backup engine. One
+    /// handoff per session: a second one would start a second player on top of
+    /// the first.
+    private var mpvHandoffStarted = false
+
+    /**
+     * Result of an MPV handoff (see [handOffToMpv]).
+     *
+     * Started FOR RESULT rather than with startActivity so this activity stays
+     * in the chain and forwards what MPV decides: MainActivity's player-result
+     * callback then fires exactly as it would have for a normal exit, which is
+     * what keeps "next episode" working after a mid-title engine switch.
+     */
+    private val mpvFallbackLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (!isFinishing && !isDestroyed) {
+            setResult(result.resultCode, result.data)
+            finish()
+        }
+    }
+
     // IntroDB
     private var introDbStamps = emptyList<IntroDbStamp>()
 
@@ -2018,6 +2174,12 @@ class NativePlayerActivity : ComponentActivity() {
         fromActorReturn = intent.getBooleanExtra("from_actor_return", false)
         startFromBeginning = intent.getBooleanExtra("from_beginning", false)
         randomEpisodes = intent.getBooleanExtra("random_episodes", false)
+        // A launch handed over by another engine carries the parent id that
+        // engine already canonicalized, so both sessions write the same
+        // Continue Watching row instead of one card per id flavor.
+        historyParentIdOverride = intent
+            .getStringExtra(MpvPlayerActivity.EXTRA_HISTORY_PARENT_ID)
+            ?.takeIf { it.isNotBlank() }
         carryPositionMs = startPositionMs
         streamHeaders = parseHeaders(intent.getStringExtra(EXTRA_HEADERS).orEmpty())
         drmLicenseUrl = intent.getStringExtra(EXTRA_DRM_LICENSE_URL)
@@ -2232,11 +2394,12 @@ class NativePlayerActivity : ComponentActivity() {
             }
         }
 
-        historyId = when {
-            !episodeStreamId.isNullOrBlank() -> episodeStreamId!!
-            season != null && episode != null -> "$parentId:${season}:${episode}"
-            else -> parentId
-        }
+        historyId = PlaybackHistoryIds.historyId(
+            parentId = parentId,
+            season = season,
+            episode = episode,
+            episodeStreamId = episodeStreamId
+        )
 
         sources.firstOrNull { it.url == currentUrl }?.let { first ->
             currentSourceLabel = first.displayLabel()
@@ -4214,6 +4377,10 @@ class NativePlayerActivity : ComponentActivity() {
                     "Decoder resources exhausted with no source left to try — failing fast " +
                         "instead of the six-attempt rebuild ladder, which cannot get a decoder back"
                 )
+                // Nothing left to try on this box: every remaining source
+                // needs a decoder it will not hand out, and mpv's decoder
+                // path can fall back to software instead. Take that.
+                if (handOffToMpv(MpvPlayerActivity.FALLBACK_REASON_DECODER)) return
                 retryExhausted = true
                 errorMessageStr =
                     "This TV has run out of video decoder resources.\n" +
@@ -4237,7 +4404,11 @@ class NativePlayerActivity : ComponentActivity() {
             errorMessageStr = msg
             if (isLikelyRetryable(error)) {
                 scheduleRetry()
-            } else {
+            } else if (!handOffToMpv(MpvPlayerActivity.FALLBACK_REASON_ERROR)) {
+                // Reached only when the backup engine is switched off,
+                // unavailable on this device, or this launch cannot be
+                // handed over (live TV, DRM): the stream really is
+                // unplayable here.
                 retryExhausted = true
                 updateUIError()
             }
@@ -7394,38 +7565,84 @@ class NativePlayerActivity : ComponentActivity() {
      * canonicalized to the IMDB id when it can be resolved; anything
      * unresolvable (no TMDB key, a timeout) stays as the route's own id.
      */
+    /**
+     * Hands this session over to the MPV backup engine (Settings → Playback
+     * engine, and the default: ExoPlayer, fall back when it cannot play).
+     *
+     * Returns false when that must not happen, so the caller falls through to
+     * its own error handling:
+     *
+     *  - the user chose "ExoPlayer only", or this device has no libmpv
+     *    (below Android 8 — see PlayerEngine);
+     *  - LIVE TV has its own flow (guide, EPG write gates, zapping UI) that
+     *    this player does not duplicate;
+     *  - a DRM session cannot move: MPV has no Widevine path, so handing it
+     *    over would turn "this box cannot decode it" into "this never plays".
+     *
+     * Everything else travels with the handoff: the source actually playing
+     * (which may differ from the launch intent after an in-player switch),
+     * its headers, the separate audio track, the playhead, and the canonical
+     * parent id the watch-history row is keyed by.
+     */
+    private fun handOffToMpv(reason: String): Boolean {
+        if (mpvHandoffStarted) return false
+        if (isLiveChannel || drmLicenseUrl != null) return false
+        if (currentUrl.isBlank()) return false
+        if (isFinishing || isDestroyed) return false
+        if (!PlayerEngine.mpvFallbackEnabled(this)) return false
+        // Re-play the ORIGINAL launch (source list, cast, badges, return-to)
+        // with the stream-specific extras replaced below, so the backup
+        // engine inherits the whole context of this session.
+        val baseIntent = intent ?: return false
+        mpvHandoffStarted = true
+
+        val position = runCatching {
+            exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs
+        }.getOrDefault(carryPositionMs)
+
+        val launch = Intent(baseIntent).apply {
+            putExtra("stream_url", currentUrl)
+            putExtra("audio_url", currentAudioUrl)
+            putExtra("start_position_ms", position)
+            // The new session resumes where this one stopped; "from the
+            // beginning" would restart the title mid-episode.
+            putExtra("from_beginning", false)
+            putExtra(
+                EXTRA_HEADERS,
+                streamHeaders.entries.joinToString("\n") { "${it.key}: ${it.value}" }
+            )
+            putExtra(MpvPlayerActivity.EXTRA_MPV_FALLBACK, true)
+            putExtra(MpvPlayerActivity.EXTRA_MPV_FALLBACK_REASON, reason)
+            // Only when it has already been resolved: otherwise the MPV
+            // session resolves it with the same rules (PlaybackHistoryIds).
+            historyParentIdOverride?.let {
+                putExtra(MpvPlayerActivity.EXTRA_HISTORY_PARENT_ID, it)
+            }
+        }
+
+        Log.w(
+            "PLAYER_RETRY",
+            "handing playback to the MPV backup engine ($reason) from ${position}ms"
+        )
+        errorMessageStr = null
+        reconnectingContainer.visibility = View.VISIBLE
+        bufferingSpinner.visibility = View.GONE
+        reconnectingText.text = "Continuing in the MPV backup engine…"
+        mpvFallbackLauncher.launch(launch)
+        return true
+    }
+
     private suspend fun canonicalHistoryParentId(): String {
         historyParentIdOverride?.let { return it }
 
-        val raw = parentId.trim()
-
-        val resolved = when {
-            raw.isBlank() || raw.startsWith("tt") -> raw
-
-            else -> {
-                val tmdbRepository = TmdbRepository.getInstance(this)
-                val tmdbId = when {
-                    raw.startsWith("tmdb:") || raw.all(Char::isDigit) ->
-                        raw.removePrefix("tmdb:").toIntOrNull()
-
-                    else -> resolveParentTmdbId()
-                }
-
-                if (tmdbId == null || tmdbId <= 0) {
-                    raw
-                } else {
-                    // Bounded: this runs on the NonCancellable exit path, so a
-                    // slow resolve must never hold the history write hostage.
-                    withTimeoutOrNull(2500L) {
-                        runCatching {
-                            tmdbRepository.resolveImdbId(tmdbId, parentType)
-                                ?.trim()
-                                ?.takeIf { it.startsWith("tt") }
-                        }.getOrNull()
-                    } ?: raw
-                }
-            }
-        }
+        // Shared with the MPV engine (PlaybackHistoryIds): both write this
+        // row, so both must derive its id the same way.
+        val resolved = PlaybackHistoryIds.canonicalParentId(
+            context = this,
+            rawParentId = parentId,
+            parentType = parentType,
+            resolvedTmdbId = resolveParentTmdbId()
+        )
 
         historyParentIdOverride = resolved
         return resolved
@@ -7433,13 +7650,11 @@ class NativePlayerActivity : ComponentActivity() {
 
     private suspend fun resolveParentTmdbId(): Int? {
         if (resolvedParentTmdbId == null && parentId.isNotBlank()) {
-            resolvedParentTmdbId = withContext(Dispatchers.IO) {
-                runCatching {
-                    TmdbRepository.getInstance(this@NativePlayerActivity)
-                        .fetchEnrichedMetaCached(parentId, parentType)
-                        ?.id
-                }.getOrNull()
-            }
+            resolvedParentTmdbId = PlaybackHistoryIds.resolveTmdbId(
+                context = this,
+                parentId = parentId,
+                parentType = parentType
+            )
         }
         return resolvedParentTmdbId
     }

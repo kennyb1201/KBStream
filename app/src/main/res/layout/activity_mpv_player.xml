@@ -1,0 +1,276 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- MPV backup player. Same visual language as activity_player.xml (kb palette,
+     Oswald for titles), but only the controls this engine actually has: the
+     main player's panel (sources, tracks, DV, audio tuning, intro skip) is
+     ExoPlayer-only and would be a lie here.
+
+     D-pad first: buttons are focusable and the activity shows this overlay on
+     any key press, then hides it again on its own. The SeekBar is a readout,
+     not a slider — scrubbing is the seek buttons, which stay reachable with a
+     remote's arrow keys alone. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/mpv_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black">
+
+    <com.kennyb1201.kbstream.ui.player.MpvPlayerView
+        android:id="@+id/mpv_surface"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@android:color/black"
+        android:focusable="false"
+        android:focusableInTouchMode="false" />
+
+    <!-- Whole-screen buffering spinner for mid-playback stalls (mpv paused for
+         cache). The initial load uses the splash below instead. -->
+    <ProgressBar
+        android:id="@+id/mpv_buffering"
+        style="?android:attr/progressBarStyleLarge"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:indeterminateTint="@color/kb_accent"
+        android:visibility="gone" />
+
+    <!-- Load splash: which title is opening, and on which engine. -->
+    <LinearLayout
+        android:id="@+id/mpv_loading"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@android:color/black"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:paddingStart="64dp"
+        android:paddingEnd="64dp">
+
+        <ProgressBar
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:indeterminateTint="@color/kb_accent" />
+
+        <TextView
+            android:id="@+id/mpv_loading_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:fontFamily="@font/oswald_semibold"
+            android:gravity="center"
+            android:maxLines="2"
+            android:ellipsize="end"
+            android:textColor="@color/kb_text_hi"
+            android:textSize="26sp" />
+
+        <TextView
+            android:id="@+id/mpv_loading_subtitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:gravity="center"
+            android:textColor="@color/kb_text_lo"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+    <!-- Fatal: the stream never opened, or mpv gave up on it. -->
+    <LinearLayout
+        android:id="@+id/mpv_error"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/kb_void"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:paddingStart="80dp"
+        android:paddingEnd="80dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/mpv_error_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="@font/oswald_semibold"
+            android:gravity="center"
+            android:textColor="@color/kb_text_hi"
+            android:textSize="22sp" />
+
+        <TextView
+            android:id="@+id/mpv_error_hint"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="center"
+            android:textColor="@color/kb_text_lo"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+    <!-- Transient feedback for the engine buttons ("Subtitles off"). -->
+    <TextView
+        android:id="@+id/mpv_toast"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="150dp"
+        android:background="@drawable/info_panel_bg"
+        android:paddingStart="16dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="8dp"
+        android:textColor="@color/kb_text_hi"
+        android:textSize="14sp"
+        android:visibility="gone" />
+
+    <FrameLayout
+        android:id="@+id/mpv_controls"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone">
+
+        <!-- Scrubs the video instead of eating clicks meant for a button. -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@color/kb_overlay_scrim"
+            android:clickable="false"
+            android:focusable="false" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top"
+            android:orientation="vertical"
+            android:paddingStart="40dp"
+            android:paddingTop="28dp"
+            android:paddingEnd="40dp">
+
+            <TextView
+                android:id="@+id/mpv_control_title"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="@font/oswald_semibold"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:textColor="@color/kb_text_hi"
+                android:textSize="24sp" />
+
+            <TextView
+                android:id="@+id/mpv_control_subtitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:textColor="@color/kb_text_lo"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom"
+            android:orientation="vertical"
+            android:paddingStart="40dp"
+            android:paddingEnd="40dp"
+            android:paddingBottom="28dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/mpv_position"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:minWidth="70dp"
+                    android:textColor="@color/kb_text_hi"
+                    android:textSize="14sp" />
+
+                <SeekBar
+                    android:id="@+id/mpv_seekbar"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:clickable="false"
+                    android:focusable="false"
+                    android:progressTint="@color/kb_accent"
+                    android:thumbTint="@color/kb_accent" />
+
+                <TextView
+                    android:id="@+id/mpv_duration"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:minWidth="70dp"
+                    android:gravity="end"
+                    android:textColor="@color/kb_text_lo"
+                    android:textSize="14sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/mpv_btn_play_pause"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/mpv_control_bg"
+                    android:focusable="true"
+                    android:minWidth="120dp"
+                    android:text="Pause"
+                    android:textColor="@color/kb_text_hi" />
+
+                <Button
+                    android:id="@+id/mpv_btn_back_10"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:background="@drawable/mpv_control_bg"
+                    android:focusable="true"
+                    android:text="- 10s"
+                    android:textColor="@color/kb_text_hi" />
+
+                <Button
+                    android:id="@+id/mpv_btn_fwd_10"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:background="@drawable/mpv_control_bg"
+                    android:focusable="true"
+                    android:text="+ 10s"
+                    android:textColor="@color/kb_text_hi" />
+
+                <Button
+                    android:id="@+id/mpv_btn_subs"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:background="@drawable/mpv_control_bg"
+                    android:focusable="true"
+                    android:text="Subtitles"
+                    android:textColor="@color/kb_text_hi" />
+
+                <Button
+                    android:id="@+id/mpv_btn_audio"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:background="@drawable/mpv_control_bg"
+                    android:focusable="true"
+                    android:text="Audio"
+                    android:textColor="@color/kb_text_hi" />
+
+                <Button
+                    android:id="@+id/mpv_btn_decode"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:background="@drawable/mpv_control_bg"
+                    android:focusable="true"
+                    android:text="Decode: HW"
+                    android:textColor="@color/kb_text_hi" />
+            </LinearLayout>
+        </LinearLayout>
+    </FrameLayout>
+</FrameLayout>

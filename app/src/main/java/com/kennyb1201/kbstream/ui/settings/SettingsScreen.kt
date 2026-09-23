@@ -49,12 +49,14 @@ import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.backup.BackupManager
+import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.player.PlayerAudioTuning
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -177,6 +179,9 @@ fun SettingsScreen(
     var showClearHistoryConfirm by remember { mutableStateOf(false) }
     var dvCompatMode by remember { mutableIntStateOf(AppPreferences.getDvCompatMode(context)) }
     var convertP5To81 by remember { mutableStateOf(AppPreferences.getConvertP5To81(context)) }
+    // Coerced read: a stored "MPV" on a device without libmpv reports as
+    // ExoPlayer, which is what this row then shows and highlights.
+    var playerEngine by remember { mutableIntStateOf(PlayerEngine.selected(context)) }
 
     // True when this device advertises no Dolby Vision decoder, so Profile 5
     // must be stripped and color-corrected on the GPU: the conversion (and its
@@ -760,7 +765,66 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.labelSmall
                 )
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Text(
+                    text = "Playback engine",
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+                Text(
+                    text = "Which engine opens a title. ExoPlayer drives the full player panel, this " +
+                        "app's Dolby Vision layer and its audio chain. MPV (libmpv) is the backup: it " +
+                        "plays files this TV's decoders cannot handle at all, and renders ASS/SSA " +
+                        "subtitles the way the fansub styled them.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(
+                        AppPreferences.PLAYER_ENGINE_EXO to "ExoPlayer",
+                        AppPreferences.PLAYER_ENGINE_EXO_ONLY to "ExoPlayer only",
+                        AppPreferences.PLAYER_ENGINE_MPV to "MPV"
+                    ).forEach { (value, label) ->
+                        KBCard(onClick = {
+                            playerEngine = value
+                            AppPreferences.setPlayerEngine(context, value)
+                        }) {
+                            PillChip(label, playerEngine == value)
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = when (playerEngine) {
+                        AppPreferences.PLAYER_ENGINE_EXO ->
+                            "ExoPlayer, switching to MPV on its own when a stream cannot be decoded at " +
+                                "all \u2014 out of decoder resources, or a codec this TV has no decoder for."
+                        AppPreferences.PLAYER_ENGINE_EXO_ONLY ->
+                            "ExoPlayer only. A stream it cannot decode shows the error instead of " +
+                                "changing engine mid-title."
+                        else ->
+                            "MPV (libmpv) plays anything: its decoders fall back to software when the " +
+                                "hardware ones refuse, so \"no decoder resources\" and unsupported codecs " +
+                                "still play. The in-player panel (sources, Dolby Vision, audio tuning, " +
+                                "remembered tracks) is ExoPlayer-only and is not available here."
+                    },
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall
+                )
+                if (!PlayerEngine.isMpvAvailable()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "This device runs Android ${Build.VERSION.RELEASE}. The MPV engine " +
+                            "needs Android 8 or newer, so ExoPlayer is what plays here.",
+                        color = KBDanger,
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
 
                 Text(
                     text = "Dolby Vision",

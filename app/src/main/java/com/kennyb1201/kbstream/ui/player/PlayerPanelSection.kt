@@ -40,6 +40,12 @@ internal class PlayerPanelSection(
 
     private val audioPills = mutableListOf<Pair<TextView, String>>()
     private val subtitlePills = mutableListOf<Pair<TextView, String>>()
+    private val audioLanguageEntries = PlayerTrackBridge.playerLanguageOptions(
+        AppPreferences.getPreferredAudioLanguage(context)
+    )
+    private val subtitleLanguageEntries = PlayerTrackBridge.playerLanguageOptions(
+        AppPreferences.getPreferredSubtitleLanguage(context)
+    )
     private val trackPills = mutableListOf<Pair<TextView, String>>()
     private val audioDelayPills = mutableListOf<Pair<TextView, Int>>()
     private val subtitleOffsetPills = mutableListOf<Pair<TextView, Int>>()
@@ -55,12 +61,18 @@ internal class PlayerPanelSection(
         val column = (panel as? ViewGroup)?.getChildAt(0) as? LinearLayout ?: return
         if (trackColumn != null) return
 
+        // The end-of-episode panels (the Up Next card and the credits
+        // recommendations) are in the same past-the-window XML tail, so their
+        // finish is applied from code here - this is the first point after
+        // bindViews() has inflated and bound both of them.
+        activity.prepareEndOfEpisodePanels()
+
         // ── LANGUAGE ───────────────────────────────────────────────────
         column.addView(header("LANGUAGE", topMarginDp = 16))
         memory = label("", topMarginDp = 0).also { column.addView(it) }
 
         column.addView(label("Audio", topMarginDp = 8))
-        addPillGrid(column, 4, PlayerTrackBridge.LANGUAGE_OPTIONS, audioPills) { code ->
+        addPillGrid(column, 4, audioLanguageEntries, audioPills) { code ->
             PlayerTrackBridge.chooseAudioLanguage(context, code)
             refresh()
         }
@@ -76,7 +88,7 @@ internal class PlayerPanelSection(
         }.also { column.addView(it) }
 
         column.addView(label("Subtitles", topMarginDp = 10))
-        addPillGrid(column, 4, PlayerTrackBridge.LANGUAGE_OPTIONS, subtitlePills) { code ->
+        addPillGrid(column, 4, subtitleLanguageEntries, subtitlePills) { code ->
             PlayerTrackBridge.chooseSubtitleLanguage(context, code)
             refresh()
         }
@@ -141,13 +153,13 @@ internal class PlayerPanelSection(
         try {
             PlayerTrackBridge.refreshAudioTracks()
 
-            memory?.text = if (PlayerTrackBridge.titleKey == null) {
-                "Follows your global Language settings"
-            } else {
-                "Remembered for this show"
+            memory?.text = PlayerTrackBridge.inheritedLanguageSummary()
+            audioPills.forEach { (view, code) ->
+                stylePill(view, PlayerTrackBridge.audioLanguage == code)
             }
-            audioPills.forEach { (view, code) -> stylePill(view, PlayerTrackBridge.audioLanguage == code) }
-            subtitlePills.forEach { (view, code) -> stylePill(view, PlayerTrackBridge.subtitleLanguage == code) }
+            subtitlePills.forEach { (view, code) ->
+                stylePill(view, PlayerTrackBridge.subtitleLanguage == code)
+            }
 
             audioDelayZeroPill?.let { stylePill(it, PlayerTrackBridge.audioDelayMs == 0) }
             subtitleOffsetZeroPill?.let { stylePill(it, activity.subtitleOffsetMs == 0) }

@@ -38,6 +38,7 @@ object AppPreferences {
     private const val KEY_FORCE_SOFTWARE_DECODER = "force_software_decoder"
     private const val KEY_ENABLE_TUNNELING = "enable_tunneling"
     private const val KEY_ENABLE_PIP = "enable_pip"
+    private const val KEY_PLAYER_ENGINE = "player_engine" // see PLAYER_ENGINE_* / PlayerEngine
     private const val KEY_DECODER_MODE = "decoder_mode" // legacy toggle, migrated below
     private const val KEY_DECODER_PRIORITY = "decoder_priority" // combined (one release), migrated below
     private const val KEY_VIDEO_DECODER = "video_decoder" // legacy key, removed on migration
@@ -331,6 +332,23 @@ object AppPreferences {
         syncDisplayPrefsBlob(context)
     }
 
+    // ── Playback engine ───────────────────────────────────────────────
+    /**
+     * Which engine plays a title, plus what happens when it fails. Read
+     * through [com.kennyb1201.kbstream.data.player.PlayerEngine], which also
+     * accounts for whether this device has the backup engine at all.
+     *
+     * Deliberately NOT part of syncDisplayPrefsBlob: whether a box can decode
+     * a file is a property of that box, not of the account. Syncing this would
+     * flip a Fire TV Stick onto MPV because a Shield was set to it.
+     */
+    fun getPlayerEngine(context: Context): Int =
+        readIntPref(context, KEY_PLAYER_ENGINE, PLAYER_ENGINE_EXO)
+
+    fun setPlayerEngine(context: Context, engine: Int) {
+        prefs(context).edit().putInt(KEY_PLAYER_ENGINE, engine).apply()
+    }
+
     // ── Decoder priority (KB-style) ───────────────────────────────
     // Audio decoder priority (KB-style): position of the FFmpeg audio
     // extension relative to MediaCodec.
@@ -449,6 +467,15 @@ object AppPreferences {
     // are never 8.1-converted; they follow the mode (Strip All strips them to
     // HDR10, otherwise they pass through as native DV).
     // HDR10+ (ST 2094-40) stripping is a separate toggle: getStripHdr10Plus.
+    /**
+     * Playback engines. EXO is the default and still falls back to MPV when a
+     * stream cannot be opened; EXO_ONLY exists for a box with good decoders, so
+     * "it failed" stays "it failed" instead of changing player mid-title.
+     */
+    const val PLAYER_ENGINE_EXO = 0
+    const val PLAYER_ENGINE_EXO_ONLY = 1
+    const val PLAYER_ENGINE_MPV = 2
+
     const val DV_COMPAT_AUTO = 0
     const val DV_COMPAT_OFF = 1
     // Legacy value of the old "Auto + strip HDR10+" mode. Kept so prefs from

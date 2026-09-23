@@ -242,6 +242,25 @@ dependencies {
     implementation("androidx.media3:media3-session:1.9.0")
     implementation("androidx.media3:media3-datasource-okhttp:1.9.0")
     implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.9.0+1")
+
+    // Backup playback engine (MPV): what plays a title when ExoPlayer cannot
+    // — decoder-resource exhaustion on Realtek/TCL boxes, containers/codecs
+    // MediaCodec has no decoder for, and fansub ASS/SSA typesetting (mpv
+    // renders it with libass). It bundles its own FFmpeg + mpv + libass as
+    // native libraries for all four ABIs, so it needs no other dependency and
+    // no app-side extraction.
+    //
+    // Pinned to 0.5.1 deliberately: that release is a plain Java artifact.
+    // 1.0.0 is compiled with Kotlin 2.2.10, and this project builds with Kotlin
+    // 2.0.21, which cannot read that metadata ("compiled with an incompatible
+    // version of Kotlin"). 0.5.1 also carries the same static MPVLib API the
+    // reference mpv-android player uses, which is what MpvPlayerView drives.
+    //
+    // NOTE: the artifact declares minSdk 26 while this app ships minSdk 23.
+    // The manifest carries the matching tools:overrideLibrary, and
+    // PlayerEngine refuses to select MPV below API 26 rather than loading the
+    // native libraries on a device they were not built for.
+    implementation("dev.jdtech.mpv:libmpv:0.5.1")
     implementation("androidx.recyclerview:recyclerview:1.3.2")
 implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.26.4")
 
