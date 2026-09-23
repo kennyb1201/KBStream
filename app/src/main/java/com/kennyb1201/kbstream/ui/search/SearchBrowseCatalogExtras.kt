@@ -124,5 +124,35 @@ val KIDS_COLLECTION_NAMES_EXTRA: List<String> = listOf(
     "Pokémon Collection",
     "Monster High Collection",
     // Live-action family staples
-    "Casper Collection"
+    "Casper Collection",
+    // 2026-09 — kid franchises: modern animation, TV-brand favourites, anime
+    // features, and the family franchises that moved out of the adult
+    // collections list (Honey, I Shrunk the Kids was the only one of them not
+    // already in the main kids list). Every name verified live against
+    // /search/collection to resolve EXACTLY.
+    "Honey, I Shrunk the Kids Collection",
+    "Minions Collection",
+    "Space Jam Collection",
+    "The NeverEnding Story Collection",
+    "Free Willy Collection",
+    "The Brave Little Toaster Collection",
+    "Spirit Collection",
+    "Thomas & Friends Collection",
+    "Power Rangers Collection",
+    "Teen Titans Collection",
+    "Ben 10 Collection",
+    "Yu-Gi-Oh! Collection",
+    "Dragon Ball Collection",
+    "Naruto Collection",
+    "One Piece Collection",
+    "Sailor Moon Collection",
+    "Detective Conan Collection",
+    "Crayon Shin-chan Collection",
+    "Stand by Me Doraemon Collection",
+    "Franklin Collection",
+    "Planes Collection",
+    "Tinker Bell Collection",
+    "How the Grinch Stole Christmas Collection",
+    "The Cheetah Girls Collection",
+    "Minecraft Movie Collection"
 )

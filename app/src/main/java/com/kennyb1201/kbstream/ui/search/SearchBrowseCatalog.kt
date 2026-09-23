@@ -1107,7 +1107,6 @@ val BROWSE_COLLECTION_NAMES = listOf(
     "Harry Potter Collection",
     "The Avengers Collection",
     "Spider-Man Collection",
-    "Toy Story Collection",
     "The Dark Knight Collection",
     "Jurassic Park Collection",
     "The Terminator Collection",
@@ -1121,8 +1120,6 @@ val BROWSE_COLLECTION_NAMES = listOf(
     "X-Men Collection",
     "Transformers Collection",
     "Back to the Future Collection",
-    "Despicable Me Collection",
-    "How to Train Your Dragon Collection",
     "Saw Collection",
     "Alien Collection",
     "Predator Collection",
@@ -1158,14 +1155,6 @@ val BROWSE_COLLECTION_NAMES = listOf(
     "Godzilla Collection",
     "Monsterverse Collection",
     "Planet of the Apes (Original) Collection",
-    "Ice Age Collection",
-    "Madagascar Collection",
-    "Shrek Collection",
-    "Kung Fu Panda Collection",
-    "Finding Nemo Collection",
-    "Monsters, Inc. Collection",
-    "The Incredibles Collection",
-    "Cars Collection",
     "Fantastic Four Collection",
     "Deadpool Collection",
     "Venom Collection",
@@ -1191,31 +1180,15 @@ val BROWSE_COLLECTION_NAMES = listOf(
     "Star Trek: Alternate Reality Collection",
     "Prometheus Collection",
     "AVP Collection",
-    // Fourth wave (2026-09) — family franchises, every name verified to
-    // resolve EXACTLY via /search/collection; misses were skipped (e.g.
-    // "The Smurfs Collection" only resolves to '(Animated)', "PAW Patrol
-    // Collection" to '(Theatrical)', "Night at the Museum Collection"
-    // resolves to a creation-museum page — all left out).
-    "The Land Before Time Collection",
-    "Alvin and the Chipmunks Collection",
-    "The Secret Life of Pets Collection",
-    "Hotel Transylvania Collection",
-    "Cloudy with a Chance of Meatballs Collection",
-    "Paddington Collection",
-    "Diary of a Wimpy Kid Collection",
-    "Scooby-Doo Collection",
-    "The LEGO Movie Collection", // TMDB canonical: 'The Lego Movie Collection'
-    "The Boss Baby Collection",
-    "The Croods Collection",
-    "Sing Collection",
     // Fifth wave (2026-09). Every name below was re-verified against
     // /search/collection and resolves EXACTLY (the resolver prefers an
     // exact-name hit, so an inexact name silently loses the chip). Names
     // that returned no exact match were left out entirely — The Texas
-    // Chainsaw Massacre, Dollars Trilogy, The Twilight Saga, Blade, Hulk,
-    // Ouija, RED, 300, Night at the Museum, Sleeping Beauty, Snow White,
-    // Tarzan, Winnie the Pooh and Inside Out only exist under unrelated
-    // same-ish titles. Where TMDB's canonical page carries a slightly
+    // Chainsaw Massacre, Dollars Trilogy, Hulk, Ouija, RED, 300, Sleeping
+    // Beauty, Snow White, Tarzan, Winnie the Pooh and Inside Out only exist
+    // under unrelated same-ish titles (the sixth wave later found canonical
+    // pages for Twilight and Blade; Night at the Museum lives in the kids
+    // collections). Where TMDB's canonical page carries a slightly
     // different name, the canonical spelling is used:
     //   'Spider-Man: Spider-Verse', 'The Gremlins', 'The Jack Ryan',
     //   '28 Days/Weeks/Years Later', 'Has Fallen', 'The Amityville'.
@@ -1280,7 +1253,6 @@ val BROWSE_COLLECTION_NAMES = listOf(
     "Dumb and Dumber Collection",
     "Meet the Parents Collection",
     "Police Academy Collection",
-    "Honey, I Shrunk the Kids Collection",
     // Superhero solos + spy sagas
     "Iron Man Collection",
     "Thor Collection",
@@ -1292,16 +1264,94 @@ val BROWSE_COLLECTION_NAMES = listOf(
     "Fantastic Beasts Collection",
     "The Jack Ryan Collection",
     "Has Fallen Collection",
-    // Animation / family franchises not already listed above
-    "Chicken Run Collection",
-    "Wallace & Gromit Collection",
-    "Shaun the Sheep Collection",
-    "Open Season Collection",
-    "Surf's Up Collection",
-    "Pokémon Collection",
-    "The Swan Princess Collection",
-    "Casper Collection",
-    "Monster High Collection"
+    // Sixth wave (2026-09) — adult-leaning franchises, and the answer to the
+    // family ones that used to sit in this list: Toy Story, Shrek, Despicable
+    // Me, Madagascar and friends are the kids catalog's now, so an adult
+    // profile stops being offered a wall of animation. Every name below was
+    // verified live against /search/collection to resolve EXACTLY (see
+    // scripts/tmdb_collections.py); where TMDB's page carries a different
+    // spelling, the canonical one is used:
+    //   'Mechanic Collection', 'Death Race (2008) Collection',
+    //   'The Chronicles of Riddick Collection', 'Jump Street Collection',
+    //   'Ong Bak Collection', 'Twilight Collection',
+    //   'King Kong (1933) Collection', 'King Kong (1976) Collection',
+    //   'The Pink Panther (Original) Collection', 'Addams Family Collection'.
+    // Crime / action / heist
+    "Sicario Collection",
+    "Jack Reacher Collection",
+    "Den of Thieves Collection",
+    "Extraction Collection",
+    "xXx Collection",
+    "Escape Plan Collection",
+    "The Hitman's Bodyguard Collection",
+    "Universal Soldier Collection",
+    "Mechanic Collection",
+    "Death Race (2008) Collection",
+    "The Chronicles of Riddick Collection",
+    "Jump Street Collection",
+    "Ong Bak Collection",
+    "Ip Man Collection",
+    "The Raid Collection",
+    "Infernal Affairs Collection",
+    "Train to Busan Collection",
+    "Taxi Collection",
+    "48 Hrs. Collection",
+    "Coming to America Collection",
+    "The Nutty Professor Collection",
+    "Big Momma's House Collection",
+    "Madea Collection",
+    "Barbershop Collection",
+    "Ride Along Collection",
+    "Ted Collection",
+    "Horrible Bosses Collection",
+    "Neighbors Collection",
+    "Ace Ventura Collection",
+    "Shanghai Noon Collection",
+    // Horror
+    "Terrifier Collection",
+    "Hatchet Collection",
+    "Hostel Collection",
+    "Wolf Creek Collection",
+    "The Collector Collection",
+    "Candyman Collection",
+    "The Omen Collection",
+    "Poltergeist Collection",
+    "Pet Sematary Collection",
+    "Sinister Collection",
+    "It Collection",
+    "I Know What You Did Last Summer Collection",
+    "Urban Legend Collection",
+    "Piranha Collection",
+    "Anaconda Collection",
+    "Lake Placid Collection",
+    // Sci-fi / fantasy / adventure / comedy sagas
+    "Knives Out Collection",
+    "Twister Collection",
+    "Speed Collection",
+    "Starship Troopers Collection",
+    "The Thing Collection",
+    "Sherlock Holmes Collection",
+    "Conan the Barbarian Collection",
+    "G.I. Joe Collection",
+    "Silent Hill Collection",
+    "Hitman Collection",
+    "Tomb Raider Collection",
+    "Mortal Kombat Collection",
+    "Kick-Ass Collection",
+    "Hellboy Collection",
+    "Blade Collection",
+    "The Magnificent Seven Collection",
+    "Young Guns Collection",
+    "King Kong (1933) Collection",
+    "King Kong (1976) Collection",
+    "The Pink Panther (Original) Collection",
+    "Addams Family Collection",
+    "Twilight Collection",
+    "After Collection",
+    "Step Up Collection",
+    "Bring It On Collection",
+    "Grease Collection",
+    "Mamma Mia! Collection"
 )
 
 /**
@@ -1334,11 +1384,12 @@ val BROWSE_CATEGORIES: List<BrowseCategory> = listOf(
 // and networks, kid-friendly keywords, family/animation studios) so the
 // chips themselves never point a child at adult slates.
 //
-// KIDS_* name lists are STRICT SUBSETS of the standard BROWSE_* name lists.
-// That matters because keyword/collection ids are runtime-resolved and
-// disk-cached per profile namespace: a subset guarantees the standard-mode
-// cache already holds every kids chip, so switching profiles renders both
-// modes instantly without a second resolve pass (see SearchViewModel).
+// The KIDS_* name lists need not be subsets of the standard BROWSE_* ones:
+// SearchViewModel resolves the UNION of both and disk-caches ids by name, so
+// one pass serves both modes and a kids-only name (a kids collection, a kids
+// network) still resolves. That matters twice over for the collections — a
+// kid-facing franchise is the kids catalog's, not a chip an adult profile has
+// to scroll past, while the resolver still hands it an id.
 // ---------------------------------------------------------------------------
 
 /**

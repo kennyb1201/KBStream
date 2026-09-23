@@ -1187,7 +1187,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     var isKidsMode: Boolean = false
         private set
 
-    /** Chip name lists for the current mode (kids lists are strict subsets). */
+    /** Chip name lists for the current mode (the resolver unions both). */
     private fun activeKeywordNames(): List<String> =
         if (isKidsMode) KIDS_KEYWORD_NAMES else BROWSE_KEYWORD_NAMES
 
@@ -1225,10 +1225,9 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     /**
      * Re-evaluate kids mode after a profile (or its kids setting) changed:
      * swap the browse chip base and re-apply the profile-scoped disk cache
-     * onto it. Cached keyword/collection ids are keyed by NAME, and the
-     * kids name lists are strict subsets of the standard ones, so a cache
-     * resolved in either mode fully serves both — a mode flip never needs
-     * a second resolve pass.
+     * onto it. Cached keyword/collection ids are keyed by NAME and one
+     * resolve pass covers the union of both modes' lists, so a mode flip
+     * never needs a second resolve pass.
      */
     private fun refreshKidsMode() {
         val kids = com.kennyb1201.kbstream.data.sync.ProfileManager
@@ -1526,27 +1525,32 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             val collections = collectionsJson?.let(::parse).orEmpty()
             if (keywords.isEmpty() && collections.isEmpty()) return
 
+            // The cache is keyed by name and holds the union of both modes'
+            // lists, so a mode flip just re-filters it onto the active chips.
+            val activeKeywords = activeKeywordNames().toSet()
+            val activeCollections = activeCollectionNames().toSet()
+            val keywordsForMode = keywords.filter { it.name in activeKeywords }
+            val collectionsForMode = collections.filter { it.name in activeCollections }
+
             // "Fresh" means recent AND substantially complete (>= 90% of the
             // name lists resolved): a cache written while TMDB was
             // throttling could be missing a chunk of chips, and trusting it
             // for a full TTL would pin that gap. A partial cache still
             // renders instantly below — it just doesn't skip the background
             // refresh that repairs it.
+            //
+            // Completeness is measured on the slice actually rendered. The
+            // raw cache also holds the other mode's names and any name a
+            // catalog edit dropped, so counting it whole called a cache
+            // "complete" that was missing chips the active list asks for, and
+            // a newly added collection stayed invisible for the whole TTL.
             val ageOk =
                 savedAt > 0 && System.currentTimeMillis() - savedAt < BROWSE_CACHE_TTL_MS
             val keywordsComplete =
-                keywords.size * 10 >= activeKeywordNames().size * 9
+                keywordsForMode.size * 10 >= activeKeywordNames().size * 9
             val collectionsComplete =
-                collections.size * 10 >= activeCollectionNames().size * 9
+                collectionsForMode.size * 10 >= activeCollectionNames().size * 9
             browseCacheFresh = ageOk && keywordsComplete && collectionsComplete
-
-            // The cache is keyed by name; a mode flip re-filters it onto the
-            // active chip list (kids lists are strict subsets of the
-            // standard ones, so one cache serves both directions).
-            val activeKeywords = activeKeywordNames().toSet()
-            val activeCollections = activeCollectionNames().toSet()
-            val keywordsForMode = keywords.filter { it.name in activeKeywords }
-            val collectionsForMode = collections.filter { it.name in activeCollections }
 
             publishBrowseCategories(
                 baseBrowseCategories().map { category ->

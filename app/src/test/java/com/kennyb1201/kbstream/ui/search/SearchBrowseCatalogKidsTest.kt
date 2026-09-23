@@ -133,4 +133,64 @@ class SearchBrowseCatalogKidsTest {
         val kids = KIDS_DECADES.map { it.id }
         assertTrue("kids decades must be a subset of standard", kids.all { it in standard })
     }
+
+    // ── the kids/adult split of the collections list ─────────────────────
+
+    @Test
+    fun `kid-facing franchises are not offered to an adult profile`() {
+        // Reported: the adult Collections submenu was a wall of animation -
+        // Toy Story, Shrek, Despicable Me and friends. Those franchises are
+        // the kids catalog's now. This is a deliberate split, not "everything
+        // on the kids list": the tentpoles an adult also watches (Avengers,
+        // Jurassic Park, Batman, Harry Potter) stay on both lists.
+        val kidFacing = listOf(
+            "Toy Story Collection",
+            "Shrek Collection",
+            "Despicable Me Collection",
+            "How to Train Your Dragon Collection",
+            "Ice Age Collection",
+            "Madagascar Collection",
+            "Kung Fu Panda Collection",
+            "Finding Nemo Collection",
+            "Monsters, Inc. Collection",
+            "The Incredibles Collection",
+            "Cars Collection",
+            "Sing Collection",
+            "The Boss Baby Collection",
+            "The Croods Collection",
+            "The Secret Life of Pets Collection",
+            "Hotel Transylvania Collection",
+            "Cloudy with a Chance of Meatballs Collection",
+            "Paddington Collection",
+            "Diary of a Wimpy Kid Collection",
+            "Scooby-Doo Collection",
+            "The LEGO Movie Collection",
+            "Chicken Run Collection",
+            "Wallace & Gromit Collection",
+            "Shaun the Sheep Collection",
+            "Open Season Collection",
+            "Surf's Up Collection",
+            "Pokémon Collection",
+            "The Swan Princess Collection",
+            "Casper Collection",
+            "Monster High Collection",
+            "Honey, I Shrunk the Kids Collection",
+            "Alvin and the Chipmunks Collection",
+            "The Land Before Time Collection"
+        )
+
+        val leaked = kidFacing.filter { it in BROWSE_COLLECTION_NAMES }
+        assertTrue(
+            "kid-facing franchises still in the adult collection list: $leaked",
+            leaked.isEmpty()
+        )
+
+        // The move only counts if a kids profile can still reach them.
+        val kids = KIDS_COLLECTION_NAMES + KIDS_COLLECTION_NAMES_EXTRA
+        val missing = kidFacing.filterNot { it in kids }
+        assertTrue(
+            "kid-facing franchises missing from the kids collection list: $missing",
+            missing.isEmpty()
+        )
+    }
 }
