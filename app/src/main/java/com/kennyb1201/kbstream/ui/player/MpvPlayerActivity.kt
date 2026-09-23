@@ -22,6 +22,7 @@ import android.widget.TextView
 import coil3.load
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
 import androidx.lifecycle.lifecycleScope
 import com.kennyb1201.kbstream.R
@@ -96,10 +97,32 @@ class MpvPlayerActivity : ComponentActivity() {
     private var seekBar: SeekBar? = null
     private var playPauseButton: ImageView? = null
     private var nextButton: TextView? = null
+    private var playerSwitchButton: TextView? = null
     private var speedButton: TextView? = null
     private var aspectButton: TextView? = null
     private var settingsContainer: View? = null
     private var settingsSection: MpvSettingsSection? = null
+
+    /**
+     * Result of a manual handoff back to ExoPlayer (see [switchToExoPlayer]).
+     *
+     * Started FOR RESULT rather than with startActivity so this activity stays
+     * in the chain and forwards whatever the other engine decides: whoever
+     * started the player then gets its result exactly as if this session had
+     * been that engine all along, which is what keeps "next episode" (and the
+     * watch-history handoff behind it) working across the switch.
+     */
+    private val exoSwitchLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (!isFinishing && !isDestroyed) {
+            setResult(result.resultCode, result.data)
+            finish()
+        }
+    }
+
+    /** One handoff at a time: a second press must not stack a second ExoPlayer. */
+    private var playerSwitchStarted = false
 
     /** True while the settings side panel is up (BACK closes it first). */
     private var settingsOpen = false
@@ -341,10 +364,11 @@ class MpvPlayerActivity : ComponentActivity() {
             )
         )
         showLoading(
-            if (isFallbackSession) {
-                "ExoPlayer could not play this stream \u2014 continuing in MPV"
-            } else {
-                "MPV engine"
+            when {
+                fallbackReason == FALLBACK_REASON_MANUAL -> "Switching to the MPV engine"
+                isFallbackSession ->
+                    "ExoPlayer could not play this stream \u2014 continuing in MPV"
+                else -> "MPV engine"
             }
         )
     }
@@ -415,6 +439,7 @@ class MpvPlayerActivity : ComponentActivity() {
         seekBar = findViewById(R.id.mpv_seekbar)
         playPauseButton = findViewById(R.id.mpv_btn_play_pause)
         nextButton = findViewById(R.id.mpv_btn_next)
+        playerSwitchButton = findViewById(R.id.mpv_btn_player_switch)
         speedButton = findViewById(R.id.mpv_btn_speed)
         aspectButton = findViewById(R.id.mpv_btn_aspect)
         nextUpPanel = findViewById(R.id.mpv_next_up_panel)
@@ -492,6 +517,10 @@ class MpvPlayerActivity : ComponentActivity() {
             if (showSeason != null && showEpisode != null) {
                 launchNextEpisode(showSeason, showEpisode + 1)
             }
+        }
+        playerSwitchButton?.setOnClickListener {
+            keepControlsVisible()
+            switchToExoPlayer()
         }
         findViewById<TextView>(R.id.mpv_btn_audio).setOnClickListener {
             showToast(surface?.cycleAudioTrack() ?: "Audio")
@@ -603,7 +632,14 @@ class MpvPlayerActivity : ComponentActivity() {
      */
     private fun updateControlsInfo() {
         engineNoteView?.text = buildString {
-            append(if (isFallbackSession) "MPV backup engine" else "MPV engine")
+            append(
+                when {
+                    !isFallbackSession -> "MPV engine"
+                    fallbackReason == FALLBACK_REASON_MANUAL ->
+                        "MPV engine  \u00b7  switched from ExoPlayer on the remote"
+                    else -> "MPV backup engine"
+                }
+            )
             if (isFallbackSession && fallbackReason == FALLBACK_REASON_DECODER) {
                 append("  \u00b7  ExoPlayer had run out of video decoders")
             }
@@ -1412,7 +1448,10 @@ class MpvPlayerActivity : ComponentActivity() {
             scrobbleStarted = true
             scrobble("start")
         }
-        if (isFallbackSession) {
+        // A hand switch needs no notice - the button press said it, and the
+        // engine note above the control bar now reads "switched from
+        // ExoPlayer" - so this stays the automatic handoff's announcement.
+        if (isFallbackSession && fallbackReason != FALLBACK_REASON_MANUAL) {
             val hint = if (fallbackReason == FALLBACK_REASON_DECODER) {
                 "\u2014 if it stutters, open the gear and set Decoding to Software"
             } else {
@@ -1609,6 +1648,54 @@ class MpvPlayerActivity : ComponentActivity() {
      * when ExoPlayer already resolved it (so both engines agree), otherwise
      * resolved here with the same rules the main player uses.
      */
+    /**
+     * The control bar's SWITCH button in this engine: hand the session back to
+     * ExoPlayer and carry on from where it is.
+     *
+     * The mirror of the main player's button - same glyph, same place in the
+     * bar, same resumed position - and deliberately NOT remembered: switching
+     * is a decision about this session, not a change to Settings. A file that
+     * only libmpv can play therefore just comes back here through the automatic
+     * fallback, which is the honest answer to "does ExoPlayer handle this?".
+     */
+    private fun switchToExoPlayer() {
+        if (playerSwitchStarted) return
+        if (isFinishing || isDestroyed) return
+        if (currentUrl.isBlank()) return
+        val baseIntent = intent ?: return
+        playerSwitchStarted = true
+
+        val position = runCatching {
+            surface?.positionMs()?.coerceAtLeast(0L) ?: positionMs
+        }.getOrDefault(positionMs)
+
+        val launch = Intent(baseIntent).apply {
+            // Extras that describe THIS engine, not the session: ExoPlayer has
+            // no use for them, and a leftover "this is a fallback" flag would
+            // only mislabel the new session's notices.
+            removeExtra(EXTRA_MPV_FALLBACK)
+            removeExtra(EXTRA_MPV_FALLBACK_REASON)
+            putExtra("stream_url", currentUrl)
+            putExtra("audio_url", currentAudioUrl)
+            putExtra("start_position_ms", position)
+            // Resume, never restart: the file is already part-way through.
+            putExtra("from_beginning", false)
+            putExtra(
+                "stream_headers",
+                streamHeaders.entries.joinToString("\n") { "${it.key}: ${it.value}" }
+            )
+            // Only when it is already resolved; otherwise the ExoPlayer session
+            // canonicalizes it with the same rules (PlaybackHistoryIds).
+            historyParentIdOverride?.let {
+                putExtra(EXTRA_HISTORY_PARENT_ID, it)
+            }
+        }
+
+        Log.i(TAG, "switching playback to the ExoPlayer engine from ${position}ms")
+        showToast("Switching to the ExoPlayer engine\u2026")
+        exoSwitchLauncher.launch(launch)
+    }
+
     private suspend fun canonicalParentId(): String {
         canonicalParent?.let { return it }
         val resolved = PlaybackHistoryIds.canonicalParentId(
@@ -1984,6 +2071,13 @@ class MpvPlayerActivity : ComponentActivity() {
 
         /** Set when the handoff reason was any other unrecoverable error. */
         const val FALLBACK_REASON_ERROR = "error"
+
+        /**
+         * Set when the viewer pressed the control bar's SWITCH button: the
+         * same handoff, but nothing failed - so the notices must not call
+         * this the backup engine.
+         */
+        const val FALLBACK_REASON_MANUAL = "manual"
 
         private const val EXTRA_STREAM_URL = "stream_url"
 

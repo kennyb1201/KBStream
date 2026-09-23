@@ -446,6 +446,7 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var btnPlayPause: ImageView
     private lateinit var btnNext: TextView
     private lateinit var btnSource: TextView
+    private lateinit var btnPlayerSwitch: TextView
     private lateinit var btnAudio: TextView
     private lateinit var btnSubtitle: TextView
     private lateinit var btnSpeed: TextView
@@ -2549,6 +2550,7 @@ class NativePlayerActivity : ComponentActivity() {
         btnPlayPause = findViewById(R.id.btn_play_pause)
         btnNext = findViewById(R.id.btn_next)
         btnSource = findViewById(R.id.btn_source)
+        btnPlayerSwitch = findViewById(R.id.btn_player_switch)
         btnAudio = findViewById(R.id.btn_audio)
         btnSubtitle = findViewById(R.id.btn_subtitle)
         btnSpeed = findViewById(R.id.btn_speed)
@@ -2684,6 +2686,16 @@ class NativePlayerActivity : ComponentActivity() {
         // Static UI
         liveBadge.visibility = if (isLiveChannel) View.VISIBLE else View.GONE
         btnSource.visibility = View.VISIBLE
+        // SWITCH is offered only where a press can actually land: this device
+        // has libmpv at all, and the backup takes this kind of session (it
+        // refuses live TV and DRM outright). Shown anywhere else it would be a
+        // button whose only outcome is "nothing happened".
+        btnPlayerSwitch.visibility =
+            if (PlayerEngine.isMpvAvailable() && !isLiveChannel && drmLicenseUrl == null) {
+                View.VISIBLE
+            } else {
+                View.GONE
+            }
         renderSourceBadges()
 
         // Populate header info
@@ -2751,6 +2763,10 @@ class NativePlayerActivity : ComponentActivity() {
         // Overlay control buttons
         btnNext.setOnClickListener { advanceToNextEpisode() }
         btnSource.setOnClickListener { showPicker(PickerMode.SOURCE) }
+        btnPlayerSwitch.setOnClickListener { switchPlayerManually() }
+        btnPlayerSwitch.setOnFocusChangeListener { _, focused ->
+            if (focused) removeAutoHide() else scheduleAutoHide()
+        }
 
         // "Up next" popup buttons
         btnNextPlay.setOnClickListener {
@@ -6992,7 +7008,9 @@ class NativePlayerActivity : ComponentActivity() {
      * its own error handling:
      *
      *  - the user chose "ExoPlayer only", or this device has no libmpv
-     *    (below Android 8 — see PlayerEngine);
+     *    (below Android 8 — see PlayerEngine); [manual] bypasses the setting
+     *    only, since a press on the control bar's SWITCH button is the viewer
+     *    asking for the change;
      *  - LIVE TV has its own flow (guide, EPG write gates, zapping UI) that
      *    this player does not duplicate;
      *  - a DRM session cannot move: MPV has no Widevine path, so handing it
@@ -7003,12 +7021,17 @@ class NativePlayerActivity : ComponentActivity() {
      * its headers, the separate audio track, the playhead, and the canonical
      * parent id the watch-history row is keyed by.
      */
-    private fun handOffToMpv(reason: String): Boolean {
+    private fun handOffToMpv(reason: String, manual: Boolean = false): Boolean {
         if (mpvHandoffStarted) return false
         if (isLiveChannel || drmLicenseUrl != null) return false
         if (currentUrl.isBlank()) return false
         if (isFinishing || isDestroyed) return false
-        if (!PlayerEngine.mpvFallbackEnabled(this)) return false
+        // [mpvFallbackEnabled] answers "may the engine change WITHOUT being
+        // asked?" - the automatic handoff on a dead decoder. A press on the
+        // control bar's SWITCH button IS the asking, so it is allowed even
+        // when the setting is ExoPlayer-only; the guards above still apply,
+        // because the backup cannot open live TV or a DRM session either.
+        if (!manual && !PlayerEngine.mpvFallbackEnabled(this)) return false
         // Re-play the ORIGINAL launch (source list, cast, badges, return-to)
         // with the stream-specific extras replaced below, so the backup
         // engine inherits the whole context of this session.
@@ -7046,9 +7069,29 @@ class NativePlayerActivity : ComponentActivity() {
         errorMessageStr = null
         reconnectingContainer.visibility = View.VISIBLE
         bufferingSpinner.visibility = View.GONE
-        reconnectingText.text = "Continuing in the MPV backup engine…"
+        reconnectingText.text =
+            if (manual) {
+                "Switching to the MPV player…"
+            } else {
+                "Continuing in the MPV backup engine…"
+            }
         mpvFallbackLauncher.launch(launch)
         return true
+    }
+
+    /**
+     * The control bar's SWITCH button: move this session to the other engine
+     * on purpose, exactly as the automatic fallback would.
+     *
+     * Everything expensive is shared with [handOffToMpv] - the original launch
+     * replayed with the stream extras replaced, the carried position, the
+     * result forwarded back to whoever started the player - which is what keeps
+     * next-episode, watch history and scrobbling working across a hand switch
+     * just as they do across an automatic one. Only the "why" differs, and the
+     * wording with it.
+     */
+    private fun switchPlayerManually() {
+        handOffToMpv(MpvPlayerActivity.FALLBACK_REASON_MANUAL, manual = true)
     }
 
     private suspend fun canonicalHistoryParentId(): String {

@@ -601,20 +601,48 @@
                     android:layout_height="0dp"
                     android:layout_weight="1" />
 
-                <!-- Source -->
+                <!-- Source: pick a different stream for this title. The
+                     up/down swap arrows: the same "switching" mark the player
+                     button below uses, turned across the list it switches
+                     through, so the two swaps read as a pair instead of the
+                     same glyph twice. -->
                 <TextView
                     android:id="@+id/btn_source"
                     android:layout_width="40dp"
                     android:layout_height="40dp"
                     android:layout_marginEnd="8dp"
+                    android:contentDescription="Change source"
                     android:background="@drawable/control_button_bg"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
                     android:gravity="center"
-                    android:text="⇄"
+                    android:text="⇅"
                     android:textColor="@color/kb_text_hi"
                     android:textSize="18sp"
                     android:visibility="visible" />
+
+                <!-- Switch player: hand this session to the other playback
+                     engine and pick up where it is. The left/right swap arrows
+                     - the glyph the source button used to carry, because this
+                     is the button that swaps the player itself. Shown only
+                     when there is another engine on this device and this
+                     stream can actually be handed over (the backup refuses
+                     live TV and DRM), so a press never dead-ends. -->
+                <TextView
+                    android:id="@+id/btn_player_switch"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/control_button_bg"
+                    android:contentDescription="Switch player"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:gravity="center"
+                    android:nextFocusUp="@id/seekbar"
+                    android:text="⇄"
+                    android:textColor="@color/kb_text_hi"
+                    android:textSize="18sp"
+                    android:visibility="gone" />
 
                 <!-- Audio -->
                 <TextView

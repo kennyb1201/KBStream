@@ -347,6 +347,26 @@
                     android:textSize="16sp"
                     android:visibility="gone" />
 
+                <!-- Switch player: the same button, the same glyph, the same
+                     place in the bar as the main player's - it hands this
+                     session back to ExoPlayer and resumes where it is. MPV has
+                     no source picker of its own, so this is the only swap in
+                     this bar and the left/right arrows are unambiguous here. -->
+                <TextView
+                    android:id="@+id/mpv_btn_player_switch"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginStart="10dp"
+                    android:background="@drawable/control_button_bg"
+                    android:contentDescription="Switch player"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:gravity="center"
+                    android:nextFocusUp="@id/mpv_seekbar"
+                    android:text="⇄"
+                    android:textColor="@color/kb_text_hi"
+                    android:textSize="18sp" />
+
                 <View
                     android:layout_width="0dp"
                     android:layout_height="0dp"
