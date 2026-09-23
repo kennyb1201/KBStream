@@ -214,12 +214,15 @@ internal const val NEXT_UP_HOLD_THRESHOLD_MS = 6_000L
 // When IntroDB does carry a credits row, open this long *before* it: the panel
 // is then settled on screen as the credits start instead of appearing with
 // them (the marker is the first frame of the credits, not an early warning).
-private const val END_PANEL_CREDITS_LEAD_MS = 12_000L
+// Shared with the MPV engine, which reads the same IntroDB rows, so the two
+// cannot disagree about where a title's credits begin.
+internal const val END_PANEL_CREDITS_LEAD_MS = 12_000L
 
 // Floor for the credits-marker trigger: even when a crowd-sourced credits row
 // points way back, never raise the panel more than "end minus this" - a bad
-// row must not interrupt the last minutes of the episode.
-private const val END_PANEL_MIN_REMAINING_MS = 15_000L
+// row must not interrupt the last minutes of the episode. Shared with MPV for
+// the same reason as the lead above.
+internal const val END_PANEL_MIN_REMAINING_MS = 15_000L
 
 // How long a duplicate of a confirm press that skipped a segment keeps being
 // absorbed as that press's own trailing event - see [dispatchKeyEvent].

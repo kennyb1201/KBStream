@@ -439,6 +439,32 @@
         </LinearLayout>
     </LinearLayout>
 
+    <!-- Skip prompt, the same button the main player shows: an IntroDB segment
+         (intro, recap, outro, credits, preview, post-credits scene) the viewer
+         is inside right now, with the label that segment's type asks for. It
+         sits above the control bar, unmissable but out of its way, and OK
+         skips the segment while the chrome is down - so an intro can be
+         skipped without opening the overlay first. -->
+    <TextView
+        android:id="@+id/mpv_skip_intro"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="start|bottom"
+        android:layout_marginStart="48dp"
+        android:layout_marginBottom="96dp"
+        android:background="@drawable/pill_chip_selected_bg"
+        android:elevation="6dp"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
+        android:fontFamily="@font/oswald_semibold"
+        android:paddingHorizontal="18dp"
+        android:paddingVertical="8dp"
+        android:textColor="@color/kb_void"
+        android:textSize="13sp"
+        android:textAllCaps="true"
+        android:translationZ="4dp"
+        android:visibility="gone" />
+
     <!-- Up Next (shown as the episode's credits roll) - the same compact card
          the main player was reduced to, in the same bottom-right corner: clear
          of the control bar, right-aligned with it, and every field kept. -->

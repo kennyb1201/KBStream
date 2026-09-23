@@ -177,6 +177,30 @@ class MpvPlayerActivity : ComponentActivity() {
     /** The panel's XML layout params, restored when credits mode ends. */
     private var creditsModePanelParams: FrameLayout.LayoutParams? = null
 
+    // --- IntroDB: the skip prompt, and the credits marker the end-of-episode
+    // panel times itself against -------------------------------------------------
+    //
+    // The rows themselves and the rules for using them are shared with the main
+    // player ([fetchIntroDbStamps], [AutoSkipRules]); what lives here is only
+    // this engine's side of it - following mpv's playhead and seeking with mpv.
+    // Having the rows at all is what lets the panel open as the credits start
+    // here just as it does in the main player.
+    private var skipButton: TextView? = null
+    private var introDbStamps = emptyList<IntroDbStamp>()
+
+    /** The segment the playhead is inside, as last offered by [updateSkipPrompt]. */
+    private var activeSkipStamp: IntroDbStamp? = null
+
+    /**
+     * Segments already skipped with no press, so an automatic skip happens at
+     * most once per session - seeking back into an intro on purpose must not be
+     * fought. Keys come from [AutoSkipRules.key].
+     */
+    private val autoSkippedSegments = mutableSetOf<String>()
+
+    /** True once the file is open: the prompt must never appear over the splash. */
+    private var fileLoaded = false
+
     // --- Session state, read from the launch intent -------------------------
     private var currentUrl = ""
     private var currentAudioUrl: String? = null
@@ -273,6 +297,9 @@ class MpvPlayerActivity : ComponentActivity() {
         }
 
         setupControls()
+        // IntroDB rows for this session: the skip prompt and the end-of-episode
+        // panel's credits marker both come from them.
+        setupIntroDb()
         onBackPressedDispatcher.addCallback(
             this,
             object : OnBackPressedCallback(true) {
@@ -408,6 +435,16 @@ class MpvPlayerActivity : ComponentActivity() {
         bywTitle = findViewById(R.id.mpv_byw_title)
         bywRow = findViewById(R.id.mpv_byw_row)
         setupBecauseYouWatched()
+
+        // The skip prompt is an accent-filled pill - the one control that acts
+        // on the video rather than changing a setting, so it reads as the same
+        // button the main player shows.
+        skipButton = findViewById(R.id.mpv_skip_intro)
+        skipButton?.setOnClickListener { performSkip() }
+        skipButton?.setOnFocusChangeListener { view, focused ->
+            applyPillBackground(view as TextView, selected = true, focused = focused)
+        }
+        skipButton?.let { applyPillBackground(it, selected = true, focused = false) }
 
         seekBar?.max = 1000
     }
@@ -837,9 +874,8 @@ class MpvPlayerActivity : ComponentActivity() {
      * Raises the end-of-episode panel as the credits roll rather than waiting
      * for the file to end, at the point the user set for the panel this session
      * will raise - the Up Next card for a series episode, the credits
-     * recommendations for anything else. The main player's trigger also knows
-     * the title's own credits marker; this engine has no IntroDB, so the point
-     * is the whole story here.
+     * recommendations for anything else - or at the title's own credits marker
+     * when IntroDB has one, exactly as the main player times it.
      */
     private fun maybeTriggerEndPanels(position: Long, duration: Long) {
         if (endPanelsShown || endedHandled || duration <= 0L) return
@@ -862,6 +898,12 @@ class MpvPlayerActivity : ComponentActivity() {
      *
      * The percentage is picked for the panel this session will actually raise,
      * so setting one panel's point earlier cannot drag the other's earlier too.
+     *
+     * A title's own credits marker beats that percentage: it is a fact about the
+     * file, and it is what makes the panel land as the credits start rather than
+     * at a percentage that happens to fall mid-scene. Same two constants the
+     * main player uses, so the engines cannot disagree about where the credits
+     * begin.
      */
     private fun endPanelTriggerMs(durationMs: Long): Long {
         val isEpisode = season != null && episode != null
@@ -870,7 +912,20 @@ class MpvPlayerActivity : ComponentActivity() {
         } else {
             AppPreferences.getBecauseYouWatchedPercent(this)
         }
-        return (durationMs - durationMs * (100 - percent) / 100L).coerceAtLeast(0L)
+        val percentTrigger =
+            (durationMs - durationMs * (100 - percent) / 100L).coerceAtLeast(0L)
+        val creditsStart = introDbStamps
+            .filter {
+                (it.type == IntroDbMarkerType.Credits ||
+                    it.type == IntroDbMarkerType.Outro) &&
+                    AutoSkipRules.isSkippableSegment(it)
+            }
+            .minByOrNull { it.startMs }
+            ?.startMs
+            ?: return percentTrigger
+        val markerTrigger = (creditsStart - END_PANEL_CREDITS_LEAD_MS)
+            .coerceAtMost(durationMs - END_PANEL_MIN_REMAINING_MS)
+        return markerTrigger.coerceAtLeast(0L)
     }
 
     /**
@@ -1215,9 +1270,132 @@ class MpvPlayerActivity : ComponentActivity() {
         }
     }
 
+    // --- IntroDB: the skip prompt ---
+
+    /**
+     * Starts the segment lookup for this session. Called once from onCreate,
+     * where the ids and the episode numbers are already known; the rows only
+     * matter once the file is open, so there is nothing to wait for.
+     *
+     * The fetcher handles both id shapes itself - an IMDb id directly, a numeric
+     * TMDB id through the secondary source - so this engine hands it what the
+     * intent carried and nothing more.
+     */
+    private fun setupIntroDb() {
+        lifecycleScope.launch {
+            val stamps = withContext(Dispatchers.IO) {
+                runCatching { fetchIntroDbStamps(parentId, season, episode) }
+                    .getOrElse { error ->
+                        Log.w(TAG, "IntroDB lookup failed", error)
+                        emptyList()
+                    }
+            }
+            introDbStamps = stamps
+            if (stamps.isNotEmpty()) {
+                Log.i(TAG, "IntroDB: ${stamps.size} segments for ${itemTitle()}")
+            }
+        }
+    }
+
+    /**
+     * Offers the skip prompt for whatever segment the playhead is inside, and
+     * skips it outright when the Settings prefs ask for that. Driven from the
+     * progress callback rather than a timer of its own: mpv reports the playhead
+     * continuously while the file is open, which is exactly the input this needs.
+     *
+     * Nothing is offered while a panel owns the screen or the seekbar is being
+     * dragged: a raised panel already has the credits in hand (it is showing
+     * what comes next), it draws over the prompt, and it owns OK - so the prompt
+     * there would be a button with no way to press it.
+     */
+    private fun updateSkipPrompt(positionMs: Long, durationMs: Long) {
+        val button = skipButton ?: return
+        // Only while the file is actually playing. A segment starting at 0 (a
+        // recap, usually) would otherwise match during the load splash, when the
+        // playhead is still 0 - the prompt must never appear before the first
+        // frame. Staying up while paused would fight the pause.
+        val offers = fileLoaded &&
+            surface?.isPaused() != true &&
+            !scrubbing &&
+            !settingsOpen &&
+            nextUpPanel?.visibility != View.VISIBLE &&
+            bywUi?.isVisible != true
+        val matching = if (offers) {
+            introDbStamps.firstOrNull { stamp ->
+                positionMs >= stamp.startMs && positionMs < stamp.endMs &&
+                    AutoSkipRules.isSkippableSegment(stamp)
+            }
+        } else {
+            null
+        }
+        if (matching == activeSkipStamp) return
+        activeSkipStamp = matching
+        if (matching == null) {
+            hideSkipPrompt()
+            return
+        }
+        // Auto-skip before showing anything, so a skipped segment never flashes
+        // its prompt up: the playhead is past it by the next tick.
+        if (autoSkipSegment(matching, durationMs)) return
+        button.text = matching.type.buttonLabel
+        button.visibility = View.VISIBLE
+    }
+
+    /**
+     * The one place the playhead moves with no press. The rules are the shared
+     * [AutoSkipRules], so this engine skips exactly what the main player skips -
+     * including its refusal to skip a low-confidence crowd-sourced row, and its
+     * never-touch list (post-credits scenes and next-episode previews are
+     * content the viewer is waiting for, not filler).
+     */
+    private fun autoSkipSegment(stamp: IntroDbStamp, durationMs: Long): Boolean {
+        val settings = AutoSkipRules.Settings(
+            AppPreferences.getAutoSkipIntro(this),
+            AppPreferences.getAutoSkipCredits(this)
+        )
+        if (!AutoSkipRules.shouldAutoSkip(stamp, settings)) return false
+        if (!autoSkippedSegments.add(AutoSkipRules.key(stamp))) return false
+        seekPastSegment(stamp, durationMs)
+        Log.i(TAG, "auto-skipped ${stamp.type.name} ${stamp.startMs}..${stamp.endMs}")
+        // Take the prompt down with it: the segment is behind the playhead now,
+        // and the button would otherwise linger over the scene after it.
+        hideSkipPrompt()
+        return true
+    }
+
+    /** The prompt's own press: skip the segment the playhead is inside. */
+    private fun performSkip() {
+        val stamp = activeSkipStamp ?: return
+        seekPastSegment(stamp, durationMs)
+        hideSkipPrompt()
+    }
+
+    /**
+     * Where a skip lands. The shared rule stops *at* a post-credits scene rather
+     * than at the end of the file, so skipping the credits never eats the scene
+     * the viewer is waiting for.
+     */
+    private fun seekPastSegment(stamp: IntroDbStamp, durationMs: Long) {
+        val target = AutoSkipRules.targetMs(stamp, introDbStamps, durationMs)
+        surface?.seekTo(target)
+    }
+
+    /**
+     * Takes the prompt down, handing focus back to the control bar when it held
+     * it: a hidden view cannot keep focus, and without a new target the next
+     * D-pad press would go nowhere at all.
+     */
+    private fun hideSkipPrompt() {
+        val button = skipButton ?: return
+        val wasFocused = button.isFocused
+        button.visibility = View.GONE
+        if (wasFocused && controlsVisible) playPauseButton?.requestFocus()
+    }
+
     // --- Playback callbacks ------------------------------------------------
 
     private fun onFileLoaded(mediaTitle: String?) {
+        fileLoaded = true
         runOnUiThread {
             loadingContainer?.visibility = View.GONE
             updateNowPlayingText()
@@ -1265,6 +1443,10 @@ class MpvPlayerActivity : ComponentActivity() {
             // The card opens as the credits roll, exactly as it does in the main
             // player, instead of waiting for the file to end.
             maybeTriggerEndPanels(positionMs, durationMs)
+
+            // ...and the skip prompt follows the playhead through whatever
+            // IntroDB segment it is inside.
+            updateSkipPrompt(positionMs, durationMs)
 
             // Completion is a watch-history fact, not an end-of-file event: a
             // title watched to 96% and then backed out of counts as watched,
@@ -1606,6 +1788,23 @@ class MpvPlayerActivity : ComponentActivity() {
         // focus system owns the D-pad (BACK still reaches the activity, which
         // closes the panel), exactly as it does in the main player.
         if (settingsOpen) return super.dispatchKeyEvent(event)
+        // A visible skip prompt owns OK while the chrome is down: pressing OK
+        // during an intro should skip it, not pause underneath the prompt (the
+        // same rule the main player uses). With the overlay up the prompt is an
+        // ordinary focusable, so OK reaches it through the focus system instead.
+        if (skipButton?.visibility == View.VISIBLE && !controlsVisible &&
+            event.action == KeyEvent.ACTION_DOWN
+        ) {
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_DPAD_CENTER,
+                KeyEvent.KEYCODE_ENTER,
+                KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                    // One press, one skip: autorepeat must not skip twice.
+                    if (event.repeatCount == 0) skipButton?.performClick()
+                    return true
+                }
+            }
+        }
         // The end-of-episode card owns the remote while it is up: OK is its
         // buttons, not play/pause - the same as in the main player.
         if (nextUpPanel?.visibility == View.VISIBLE) return super.dispatchKeyEvent(event)
