@@ -471,7 +471,13 @@ private fun ItemGrid(
     // pane, so every poster is fully visible and nothing is left half cut.
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = posterSize.width),
-        contentPadding = PaddingValues(bottom = 24.dp),
+        // The top gap is not decoration: a focused KBCard scales to 1.03 and
+        // throws a 12.dp glow, and a lazy grid clips its viewport — with
+        // bottom-only padding the FIRST row was sliced flat along its top edge
+        // the moment it took focus (poster, focus border and glow all cut).
+        // Every other poster grid in the app leaves this room; this one was
+        // added last and did not, which is why only the Library clipped.
+        contentPadding = PaddingValues(top = 16.dp, bottom = 24.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
         modifier = modifier
