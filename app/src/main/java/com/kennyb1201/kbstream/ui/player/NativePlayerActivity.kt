@@ -1751,15 +1751,13 @@ class NativePlayerActivity : ComponentActivity() {
      * prompt is up - see [dispatchKeyEvent] - because a skippable segment is
      * the prompt's alone. Nothing else loses anything by it: UP/DOWN only ever
      * reach the overlay or the live channel zap (and a live channel never
-     * offers a prompt), and LEFT/RIGHT only reach the overlay too, since the
-     * direct-scrub branch of the player's key handling requires no visible
-     * prompt in the first place.
+     * offers a prompt). LEFT/RIGHT are deliberately NOT in this set: they seek
+     * the video directly and raise nothing - not even the prompt - while the
+     * overlay is down. See [handleSurfaceScrubKey].
      */
     private fun isOverlayRaisingKey(keyCode: Int): Boolean =
         keyCode == KeyEvent.KEYCODE_DPAD_UP ||
-            keyCode == KeyEvent.KEYCODE_DPAD_DOWN ||
-            keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
-            keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
+            keyCode == KeyEvent.KEYCODE_DPAD_DOWN
 
     /**
      * While a segment is skippable, the controls overlay cannot be raised and
@@ -1785,6 +1783,21 @@ class NativePlayerActivity : ComponentActivity() {
      * The guard keeps every panel, picker and popup working normally.
      */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // LEFT/RIGHT seek the video directly while nothing but the video (or a
+        // skip prompt) is on screen, and raise nothing while doing it. This
+        // hangs off the activity rather than the video surface's key listener
+        // because the focused view is not always the surface: a skip prompt
+        // holds focus while it is up, and a key it does not consume is never
+        // re-offered to the surface's listener from there. Only an item that
+        // can actually seek takes the key - live TV and a stream without a
+        // duration fall through to whatever handled them before.
+        if (plainPlaybackForeground() &&
+            (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
+                event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) &&
+            handleSurfaceScrubKey(event.keyCode, event)
+        ) {
+            return true
+        }
         if (plainPlaybackForeground()) {
             if (btnSkipIntro.visibility == View.VISIBLE) {
                 if (isConfirmKey(event.keyCode)) {
@@ -3047,9 +3060,12 @@ class NativePlayerActivity : ComponentActivity() {
                     if (errorContainer.visibility == View.VISIBLE) {
                         focusErrorButtons()
                         true
-                    } else if (controlsVisible || btnSkipIntro.visibility == View.VISIBLE) {
-                        // Overlay (or skip prompt) is up: normal focus
-                        // navigation — open it and park focus appropriately.
+                    } else if (controlsVisible) {
+                        // The overlay is up, so it owns LEFT/RIGHT: these move
+                        // focus inside it (the skip prompt is its first stop
+                        // when the prompt is up, and a visible seek bar is the
+                        // overlay's own scrub target). Seeking straight off the
+                        // surface belongs to the overlay-down case below.
                         showControls()
                         if (btnSkipIntro.visibility == View.VISIBLE) {
                             btnSkipIntro.requestFocus()
@@ -3057,30 +3073,14 @@ class NativePlayerActivity : ComponentActivity() {
                             controlsOverlay.requestFocus()
                         }
                         true
-                    } else if (event.action == KeyEvent.ACTION_DOWN) {
-                        // Netflix-style direct scrub while the overlay is
-                        // hidden: quick press = 10s jump, hold = accelerated
-                        // scrubbing. UP/DOWN or OK still open the overlay.
-                        val hasDuration = exoPlayer?.duration?.takeIf { it > 0 } != null
-                        if (!hasDuration) return@setOnKeyListener false
-                        if (event.repeatCount == 0 && scrubDirection == 0) {
-                            scrubDirection = if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1
-                            stepSeekBy(10_000L * scrubDirection)
-                            showScrubHint()
-                            scrubHandler.removeCallbacks(scrubHoldStarter)
-                            scrubHandler.postDelayed(scrubHoldStarter, 400L)
-                        } else if (scrubDirection != 0) {
-                            showScrubHint()
-                        }
-                        true
                     } else {
-                        // ACTION_UP / ACTION_CANCEL: stop scrubbing, fade hint
-                        val wasScrubbing = scrubDirection != 0
-                        scrubDirection = 0
-                        scrubHandler.removeCallbacks(scrubHoldStarter)
-                        scrubHandler.removeCallbacks(scrubRunnable)
-                        if (wasScrubbing) scheduleScrubHintHide()
-                        wasScrubbing
+                        // Overlay down: LEFT/RIGHT seek the video directly and
+                        // raise nothing — quick press = 10s jump, hold =
+                        // accelerated scrubbing, bubble = where you landed.
+                        // The activity's key dispatch runs this first, so the
+                        // press behaves the same whichever view holds focus;
+                        // this stays as the surface's own fallback.
+                        handleSurfaceScrubKey(keyCode, event)
                     }
                 }
                 KeyEvent.KEYCODE_BACK -> {
@@ -3269,6 +3269,41 @@ class NativePlayerActivity : ComponentActivity() {
     private fun scheduleScrubHintHide() {
         scrubHintHandler.removeCallbacks(scrubHintHider)
         scrubHintHandler.postDelayed(scrubHintHider, 700L)
+    }
+
+    /**
+     * One LEFT/RIGHT press against the video surface, overlay down: a quick
+     * press jumps 10 seconds, holding past the threshold switches to
+     * accelerated scrubbing, and the bubble reports the new position. Returns
+     * true when the press was consumed, which is the caller's cue to swallow
+     * it - so LEFT/RIGHT never reach the overlay while the overlay is down.
+     *
+     * The one case not consumed is an item that cannot seek (live TV, or a
+     * stream that reports no duration); those presses keep whatever meaning
+     * they had.
+     */
+    private fun handleSurfaceScrubKey(keyCode: Int, event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            val hasDuration = exoPlayer?.duration?.takeIf { it > 0 } != null
+            if (!hasDuration) return false
+            if (event.repeatCount == 0 && scrubDirection == 0) {
+                scrubDirection = if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1
+                stepSeekBy(10_000L * scrubDirection)
+                showScrubHint()
+                scrubHandler.removeCallbacks(scrubHoldStarter)
+                scrubHandler.postDelayed(scrubHoldStarter, 400L)
+            } else if (scrubDirection != 0) {
+                showScrubHint()
+            }
+            return true
+        }
+        // ACTION_UP / ACTION_CANCEL: stop scrubbing and fade the bubble out.
+        val wasScrubbing = scrubDirection != 0
+        scrubDirection = 0
+        scrubHandler.removeCallbacks(scrubHoldStarter)
+        scrubHandler.removeCallbacks(scrubRunnable)
+        if (wasScrubbing) scheduleScrubHintHide()
+        return wasScrubbing
     }
 
     /** Full stop: cancel scrub timers and hide the hint immediately. */
