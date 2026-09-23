@@ -945,8 +945,11 @@ for (metaAddon in metaAddons) {
                     .maxWithOrNull(compareBy<Pair<Int, Int>> { it.first }.thenBy { it.second })
                     ?.first
 
+                // No history at all: the show's FIRST season, so the screen
+                // opens on S1E1 rather than on whatever TMDB happened to list
+                // first (its seasons array is not sorted by contract).
                 val latestWatched =
-                    listOfNotNull(latestLocal, latestSimkl).maxOrNull() ?: seasons.first()
+                    listOfNotNull(latestLocal, latestSimkl).maxOrNull() ?: seasons.min()
 
                 advancePastWatchedSeasons(
                     startSeason = latestWatched,
@@ -965,14 +968,10 @@ for (metaAddon in metaAddons) {
     }
 
     /**
-     * When the "latest watched" season is already fully watched, a newly
-     * released season would never become the default target (the episode
-     * picker inside a finished season falls back to its episode 1): e.g. a
-     * show whose S2 just dropped opens S1E1 for users who finished S1.
-     * Instead, walk forward from the latest watched season and open the
-     * first RELEASED season that still has unwatched episodes - announced
-     * but unreleased seasons (future air_date) are skipped and can never
-     * become the default target.
+     * Picks the season to open, from the season the history points at. The rule
+     * itself — leave a season only once it is FINISHED — lives in
+     * [DetailSeasonTarget], where it can be tested without a repository or a
+     * running coroutine; this supplies it with the live watched state.
      */
     private fun advancePastWatchedSeasons(
         startSeason: Int,
@@ -1009,24 +1008,13 @@ for (metaAddon in metaAddons) {
             return if (count > 0) (1..count).toList() else emptyList()
         }
 
-        for (next in seasons.filter { it > startSeason }.sorted()) {
-            if (!isSeasonReleased(next)) continue
-
-            val eps = seasonEpisodeNumbers(next)
-            if (eps.isEmpty()) {
-                // No reliable episode list: opening the season directly is
-                // still better than replaying a finished one.
-                return next
-            }
-
-            if (eps.any { !isWatched(next, it) }) {
-                return next
-            }
-        }
-
-        // Everything after the watched season is either fully watched or
-        // unreleased: stay on the latest watched season.
-        return startSeason
+        return DetailSeasonTarget.pick(
+            startSeason = startSeason,
+            seasons = seasons,
+            episodeNumbers = { season -> seasonEpisodeNumbers(season) },
+            isWatched = { season, episode -> isWatched(season, episode) },
+            isReleased = { season -> isSeasonReleased(season) }
+        )
     }
 
     /**
