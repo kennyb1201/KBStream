@@ -5,7 +5,6 @@ import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.reddit.RedditDiscussionsClient
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
-import com.kennyb1201.kbstream.data.trakt.TraktCommentsClient
 import kotlinx.coroutines.launch
 
 /**
@@ -81,10 +80,10 @@ internal object DetailRatingEnrichment {
      * 1 of reviews (often just a handful); the standalone endpoint paginates
      * the full list. Fetch pages 2..totalPages (bounded) in the background
      * and merge, de-duped, after the bundled page so the UI paints
-     * immediately. Trakt's public comments (same IMDb id, sorted by likes)
-     * are then appended as a supplementary source — most titles carry only
-     * a handful of written TMDB reviews, so this is where the volume comes
-     * from. Everything fails soft: reviews must never block the detail UI.
+     * immediately. Reddit discussions are then appended as the supplementary
+     * source — most titles carry only a handful of written TMDB reviews, so
+     * this is where the volume comes from. Everything fails soft: reviews
+     * must never block the detail UI.
      */
     fun extraReviews(vm: DetailViewModel, normalizedType: String) {
         val detail = vm.tmdbDetail.value ?: return
@@ -122,27 +121,13 @@ internal object DetailRatingEnrichment {
             }
 
             // Publish TMDB pages immediately so the row grows as fast as the
-            // network allows, then merge Trakt comments on top when they land.
+            // network allows, then merge the Reddit discussions on top when
+            // they land.
             vm.setAllReviews((bundled + extras).distinctBy { it.id })
 
-            // Trakt supplementary comments by IMDb id (same id the OMDb flow
-            // already resolves). Sorted by likes server-side, so the first
-            // page carries the substantive reviews.
-            val rawImdb = vm.meta.value?.id ?: vm.imdbId
-            val resolved = rawImdb.takeIf { it.startsWith("tt") }
-                ?: vm.tmdbRepository.resolveImdbId(tmdbId, normalizedType)
-            if (!resolved.isNullOrBlank()) {
-                val traktReviews = runCatching {
-                    TraktCommentsClient.fetchReviews(resolved, normalizedType)
-                }.getOrDefault(emptyList())
-                if (traktReviews.isNotEmpty()) {
-                    vm.setAllReviews((vm.allReviews.value + traktReviews).distinctBy { it.id })
-                }
-            }
-
-            // Keyless Reddit backfill — the volume source now that Trakt
-            // rejects most bundled client ids. Top-upvoted title+year
-            // discussion posts, gated so only real write-ups qualify.
+            // Keyless Reddit backfill — the volume source of written
+            // discussion. Top title+year posts, gated so only real write-ups
+            // qualify.
             runCatching {
                 val detailNow = vm.tmdbDetail.value
                 val title = detailNow?.title ?: detailNow?.name
@@ -157,7 +142,10 @@ internal object DetailRatingEnrichment {
                     )
                     if (redditReviews.isNotEmpty()) {
                         vm.setAllReviews((vm.allReviews.value + redditReviews).distinctBy { it.id })
-                        Log.d(
+                        // Log.i, not Log.d: -assumenosideeffects strips Log.d
+                        // from release builds — exactly the build a "reviews
+                        // show nothing from Reddit" report comes from.
+                        Log.i(
                             "KBStream",
                             "reddit reviews merged: ${redditReviews.size} " +
                                 "for \"$title\" ($year)"

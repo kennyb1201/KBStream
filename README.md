@@ -26,7 +26,7 @@ EPG).
   toggles: hide addon management, kid-safe Live TV channel filter, PIN to
   leave the profile, daily watch-time limit, and a bedtime lock — each with
   parent-PIN override where relevant.
-- **Integrations** — Simkl (watch history sync + live scrobbling), Trakt,
+- **Integrations** — Simkl (watch history sync + live scrobbling),
   MDBList ratings, IPTV (M3U + XMLTV EPG), YouTube trailers, Reddit discussions.
 
 ## Building
@@ -74,7 +74,7 @@ and signed release APKs on every push to `main`.
 
 ```
 app/src/main/java/com/kennyb1201/kbstream/
-  data/            # TMDB, addons, Simkl, Trakt, IPTV, Supabase sync,
+  data/            # TMDB, addons, Simkl, IPTV, Supabase sync,
                    # profile management, watch history (Room)
   domain/          # stream engine (ranking, auto-select)
   ui/              # Compose for Android TV screens (home, detail, player,

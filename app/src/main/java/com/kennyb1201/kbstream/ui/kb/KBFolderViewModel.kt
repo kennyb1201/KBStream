@@ -397,8 +397,8 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    // Only TMDB-backed rails (discover / list) paginate; trakt and addon
-    // sources render their first page.
+    // Only TMDB-backed rails (discover / list) paginate; addon sources render
+    // their first page.
     private val tmdbRailSources = mutableMapOf<String, TmdbRailPageSource>()
     private var currentFolderId: String? = null
 

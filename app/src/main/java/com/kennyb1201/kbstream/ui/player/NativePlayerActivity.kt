@@ -7351,8 +7351,8 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     /**
-     * Mirror the current scrobble action to MDBList. Its API behaves like
-     * Trakt's: start/pause/stop sessions, with pause & stop marking the item
+     * Mirror the current scrobble action to MDBList. Its API is
+     * session-based: start/pause/stop, with pause & stop marking the item
      * watched at >= 80% progress server-side. Runs alongside the Simkl
      * scrobble; failures are logged, never thrown.
      */

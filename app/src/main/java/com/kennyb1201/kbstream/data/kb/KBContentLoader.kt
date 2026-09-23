@@ -11,21 +11,19 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import java.util.concurrent.TimeUnit
 
 /**
  * Loads the content behind KB folder sources and normalizes it to
- * [KBContentItem] rows. The three source providers map to:
+ * [KBContentItem] rows. The two source providers map to:
  *
  *  - "tmdb": KB's TMDB catalog filter builder. [KBSource.tmdbSourceType]
  *    disambiguates DISCOVER (filters dict -> /discover), LIST (tmdbId ->
  *    /list/{id}), COLLECTION (tmdbId -> /collection/{id} parts), COMPANY and
  *    NETWORK (tmdbId -> with_companies / with_networks discover).
- *  - "trakt": public list by [KBSource.traktListId] via the public API
- *    (no auth, app API key). Skipped when no key is configured.
  *  - "addon": an installed Stremio addon catalog (addonId + catalogId + type).
+ *
+ * Any other provider (KB exports also carry "trakt" list sources, which need a
+ * paid Trakt API app) degrades to an empty rail.
  *
  * All source kinds for a folder load in parallel; a failing source degrades
  * to an empty rail instead of failing the folder.
@@ -36,18 +34,7 @@ class KBContentLoader(context: android.content.Context) {
     private val tmdbRepository = TmdbRepository.getInstance(appContext)
     private val addonRepository = AddonRepository.getInstance()
 
-    private val traktClient = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .build()
-
     companion object {
-        private const val TRAKT_API_BASE = "https://api.trakt.tv"
-        // KB's own bundled Trakt app client id — the same key the KB
-        // client ships for its unauthenticated public-list browsing.
-        private const val TRAKT_CLIENT_ID =
-            "0183a5b53aef4c46b1b42a4cb1f9afc0e68a1e4f13b78017e5b3a26c8b63f57c"
-
         private const val TMDB_POSTER_BASE = "https://image.tmdb.org/t/p/w500"
         private const val TMDB_BACKDROP_BASE = "https://image.tmdb.org/t/p/w1280"
         private const val MAX_ITEMS_PER_SOURCE = 40
@@ -83,7 +70,7 @@ class KBContentLoader(context: android.content.Context) {
      * render as literally identical rails side by side, which reads as
      * "this collection isn't working". Key on every field that addresses
      * the content: provider + tmdb id/source type, addon id/catalog id,
-     * trakt list id, plus name/title/sortBy/filters so differently-tuned
+     * plus name/title/sortBy/filters so differently-tuned
      * discover rows ("Recent" vs "Popular") stay distinct.
      */
     private fun dedupeSources(sources: List<KBSource>): List<KBSource> {
@@ -100,7 +87,6 @@ class KBContentLoader(context: android.content.Context) {
                     append(source.type?.lowercase()).append('|')
                     append(source.genre).append('|')
                     append(source.mediaType?.uppercase()).append('|')
-                    append(source.traktListId).append('|')
                     append(source.name).append('|')
                     append(source.title).append('|')
                     append(source.sortBy).append('|')
@@ -175,7 +161,6 @@ class KBContentLoader(context: android.content.Context) {
         runCatching {
             when (source.provider?.lowercase()) {
                 "tmdb" -> loadTmdbSource(source)
-                "trakt" -> loadTraktSource(source)
                 "addon" -> loadAddonSource(source)
                 else -> emptyList()
             }
@@ -261,7 +246,7 @@ class KBContentLoader(context: android.content.Context) {
 
     private fun TmdbDiscoverItem.toContentItem(mediaType: String?): KBContentItem {
         // Normalize to the app's item vocabulary: TMDB calls it "tv" but
-        // every other source kind (addon, trakt, credits, collections) and
+        // every other source kind (addon, credits, collections) and
         // the rail-type display use "series". Without this, discover rails
         // showed "Tv" while addon rails showed "Series".
         val resolvedType = when (mediaType?.lowercase()) {
@@ -317,97 +302,6 @@ class KBContentLoader(context: android.content.Context) {
             tmdbId = id,
             overview = null
         )
-
-    // ------------------------------------------------------------------
-    // Trakt sources
-    // ------------------------------------------------------------------
-
-    /**
-     * Public Trakt list by numeric list id. KB stores a "rank" sort on
-     * these; the public API always returns list order (rank) for /lists/{id}/items,
-     * so sortHow is best-effort via the client-side ordering below.
-     */
-    private suspend fun loadTraktSource(source: KBSource): List<KBContentItem> {
-        val listId = source.traktListId ?: return emptyList()
-        // /lists/{id}/items/{type} — the type path segment filters movie/show.
-        val url = buildString {
-            append(TRAKT_API_BASE)
-            append("/lists/")
-            append(listId)
-            append("/items")
-            when (source.mediaType?.uppercase()) {
-                "MOVIE" -> append("/movie")
-                "TV" -> append("/show")
-            }
-        }
-
-        val request = Request.Builder()
-            .url(url)
-            .header("trakt-api-key", TRAKT_CLIENT_ID)
-            .header("trakt-api-version", "2")
-            .header("Accept", "application/json")
-            .build()
-
-        val body = withContext(Dispatchers.IO) {
-            traktClient.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    return@use null
-                }
-                response.body?.string()
-            }
-        } ?: return emptyList()
-
-        return parseTraktListItems(body, source.sortHow)
-    }
-
-    /**
-     * Minimal Trakt list-items parser: entries are {"type": "movie"|"show",
-     * "movie": {ids:{tmdb:..}, title, year}, "show": {...}}. Parsed with
-     * org.json (already on Android) to avoid widening the model surface.
-     */
-    private fun parseTraktListItems(
-        body: String,
-        sortHow: String?
-    ): List<KBContentItem> {
-        val rows = runCatching {
-            val array = org.json.JSONArray(body)
-            (0 until array.length()).mapNotNull { i ->
-                val entry = array.optJSONObject(i) ?: return@mapNotNull null
-                val type = entry.optString("type")
-                val obj = entry.optJSONObject(
-                    when (type) {
-                        "movie" -> "movie"
-                        "show" -> "show"
-                        else -> return@mapNotNull null
-                    }
-                ) ?: return@mapNotNull null
-                val ids = obj.optJSONObject("ids")
-                val tmdbId = ids?.optInt("tmdb", -1)?.takeIf { it > 0 }
-                val slug = ids?.optString("slug")?.takeIf { it.isNotBlank() }
-                    ?: obj.optString("slug").takeIf { it.isNotBlank() }
-                KBContentItem(
-                    // Trakt rows without a TMDB id still need a stable id:
-                    // fall back to the trakt slug.
-                    id = tmdbId?.toString() ?: (slug ?: "$type-${obj.optString("title")}"),
-                    type = if (type == "show") "series" else "movie",
-                    title = obj.optString("title").ifBlank { null },
-                    posterUrl = null,
-                    backdropUrl = null,
-                    year = obj.optInt("year", 0).takeIf { it > 0 }?.toString(),
-                    rating = null,
-                    tmdbId = tmdbId,
-                    overview = obj.optString("overview").ifBlank { null }
-                )
-            }
-        }.getOrDefault(emptyList())
-
-        // KB's rank sort is list order; "released" / "popularity" reorder
-        // client-side using the fields the payload carries.
-        return when (sortHow) {
-            "desc" -> rows.asReversed()
-            else -> rows
-        }.take(MAX_ITEMS_PER_SOURCE)
-    }
 
     // ------------------------------------------------------------------
     // Stremio addon catalog sources

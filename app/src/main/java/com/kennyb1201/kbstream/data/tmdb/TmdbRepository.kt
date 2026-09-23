@@ -285,7 +285,7 @@ class TmdbRepository private constructor(context: Context) {
                 api.getMovie(tmdbId, apiKey)
             }.getOrNull()
         }
-        // Unknown type (anime, trakt collection, ...): try series first,
+        // Unknown type (anime, custom collection, ...): try series first,
         // fall back to movie. Both failures are silently swallowed.
         return runCatching {
             api.getTv(tmdbId, apiKey)

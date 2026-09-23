@@ -214,7 +214,7 @@ private fun RailTitle(
 ) {
     // A rail mixes provider kinds rarely; the dominant item type names the
     // row. Normalized before counting so "tv" (TMDB discover rows) and
-    // "series" (addon/trakt rows) read identically — the type suffix only
+    // "series" (addon rows) read identically — the type suffix only
     // ever displays "Movie" or "Series", matching the rest of the app.
     val type = rail.items
         .groupingBy { normalizeItemType(it) }

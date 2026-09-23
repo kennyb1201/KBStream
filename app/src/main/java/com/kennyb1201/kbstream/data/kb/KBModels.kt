@@ -71,11 +71,13 @@ data class KBCatalogSource(
 
 /**
  * One content source inside a folder. KB keeps every field present in
- * the export (nulls included), and mixes three providers:
+ * the export (nulls included), and mixes two providers:
  *  - tmdb: discover filters, a TMDB list, a TMDB collection, a company or a
  *    network (disambiguated by [tmdbSourceType], and by [tmdbId] being set)
- *  - trakt: a public list ([traktListId])
  *  - addon: an installed Stremio addon's catalog ([addonId] + [catalogId])
+ *
+ * KB exports also carry "trakt" list sources; the app no longer reads them
+ * (they need a paid Trakt API app), so such a source loads as an empty rail.
  */
 @JsonClass(generateAdapter = true)
 data class KBSource(
@@ -92,7 +94,6 @@ data class KBSource(
     val provider: String? = null,
     val catalogId: String? = null,
     val mediaType: String? = null,
-    val traktListId: Int? = null,
     val tmdbSourceType: String? = null
 ) {
     /** Source label: KB falls back through source name -> title -> provider. */
@@ -104,7 +105,6 @@ data class KBSource(
     fun providerLabel(): String =
         when (provider?.lowercase()) {
             "tmdb" -> "TMDB"
-            "trakt" -> "Trakt"
             "addon" -> "Add-on"
             else -> provider ?: "Source"
         }
@@ -177,7 +177,7 @@ internal fun kbMostVotedSort(sortBy: String?): String? =
         else -> sortBy
     }
 
-/** A normalized row of items loaded from any source kind (tmdb/trakt/addon). */
+/** A normalized row of items loaded from any source kind (tmdb/addon). */
 data class KBContentItem(
     val id: String,
     val type: String,
