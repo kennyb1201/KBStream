@@ -81,7 +81,10 @@ app/src/main/java/com/kennyb1201/kbstream/
                    # search, profiles, settings, addons, IPTV, streams)
   work/            # background workers (EPG refresh, Simkl sync, addons)
 scripts/           # TMDB id-verification probes used while curating the
-                   # search catalog (read TMDB_API_KEY from the environment)
+                   # search catalog (read TMDB_API_KEY from the environment),
+                   # plus the dev tools behind the rating chips' vector marks
+                   # (font_glyphs.py draws a wordmark from a bundled TTF,
+                   # svg_preview.py renders a drawable's path as ASCII)
 supabase_profiles.sql  # optional dashboard table for inspecting profiles
 docs/              # Supabase RLS policy reference
 ```
