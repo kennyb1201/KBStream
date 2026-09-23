@@ -834,18 +834,43 @@ class MpvPlayerActivity : ComponentActivity() {
     // --- End of episode: the Up Next card ----------------------------------
 
     /**
-     * Raises the card as the credits roll rather than waiting for the file to
-     * end, on the same timing the main player uses for a source that carries no
-     * credits marker: [END_PANEL_LEAD_MS] before the declared duration.
+     * Raises the end-of-episode panel as the credits roll rather than waiting
+     * for the file to end, at the point the user set for the panel this session
+     * will raise - the Up Next card for a series episode, the credits
+     * recommendations for anything else. The main player's trigger also knows
+     * the title's own credits marker; this engine has no IntroDB, so the point
+     * is the whole story here.
      */
     private fun maybeTriggerEndPanels(position: Long, duration: Long) {
         if (endPanelsShown || endedHandled || duration <= 0L) return
-        val triggerAt = (duration - END_PANEL_LEAD_MS).coerceAtLeast(0L)
-        // A clip shorter than the lead would otherwise pop the card the moment
+        // Both panels switched off: nothing to raise, so the file runs to its
+        // own end instead. Acting on the point anyway would cut the last minutes
+        // off with nothing to show for them.
+        if (!AppPreferences.getNextEpisodePopup(this) &&
+            !AppPreferences.getBecauseYouWatched(this)
+        ) return
+        val triggerAt = endPanelTriggerMs(duration)
+        // A clip shorter than the point would otherwise pop the panel the moment
         // playback starts: onPlaybackEnded covers that case instead.
         if (triggerAt <= 0L) return
         if (position < triggerAt) return
         showEndPanels()
+    }
+
+    /**
+     * When the end-of-episode panel opens, in milliseconds into the file.
+     *
+     * The percentage is picked for the panel this session will actually raise,
+     * so setting one panel's point earlier cannot drag the other's earlier too.
+     */
+    private fun endPanelTriggerMs(durationMs: Long): Long {
+        val isEpisode = season != null && episode != null
+        val percent = if (isEpisode && AppPreferences.getNextEpisodePopup(this)) {
+            AppPreferences.getNextEpisodePopupPercent(this)
+        } else {
+            AppPreferences.getBecauseYouWatchedPercent(this)
+        }
+        return (durationMs - durationMs * (100 - percent) / 100L).coerceAtLeast(0L)
     }
 
     /**
@@ -855,6 +880,9 @@ class MpvPlayerActivity : ComponentActivity() {
      * because-you-watched credits recommendations instead. Raised once per
      * session; the air-date gate is the shared helper, so both engines chain to
      * the same place.
+     *
+     * Either panel can be switched off in Settings, and then it is simply not
+     * raised: the session runs out instead.
      */
     private fun showEndPanels() {
         if (endPanelsShown) return
@@ -866,10 +894,15 @@ class MpvPlayerActivity : ComponentActivity() {
                 tmdbId = runCatching { tmdbId() }.getOrNull(),
                 showId = parentId
             )
-            if (target != null) {
-                showNextUpPanel(target.first, target.second)
-            } else {
-                showBecauseYouWatchedPanel()
+            when {
+                target != null && AppPreferences.getNextEpisodePopup(this@MpvPlayerActivity) ->
+                    showNextUpPanel(target.first, target.second)
+
+                target == null && AppPreferences.getBecauseYouWatched(this@MpvPlayerActivity) ->
+                    showBecauseYouWatchedPanel()
+
+                // Otherwise that panel is switched off, or there is nothing to
+                // suggest: nothing is raised, and the credits play out.
             }
         }
     }

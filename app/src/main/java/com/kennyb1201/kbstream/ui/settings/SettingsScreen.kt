@@ -97,6 +97,18 @@ fun SettingsScreen(
     var subtitleBg by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleBackground(context)) }
     var subtitlePosition by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitlePosition(context)) }
     var autoPlayNext by remember { mutableStateOf(AppPreferences.getAutoPlayNext(context)) }
+    var nextEpisodePopup by remember {
+        mutableStateOf(AppPreferences.getNextEpisodePopup(context))
+    }
+    var nextEpisodePopupPercent by remember {
+        mutableIntStateOf(AppPreferences.getNextEpisodePopupPercent(context))
+    }
+    var becauseYouWatched by remember {
+        mutableStateOf(AppPreferences.getBecauseYouWatched(context))
+    }
+    var becauseYouWatchedPercent by remember {
+        mutableIntStateOf(AppPreferences.getBecauseYouWatchedPercent(context))
+    }
     var autoSkipIntro by remember { mutableStateOf(AppPreferences.getAutoSkipIntro(context)) }
     var autoSkipCredits by remember { mutableStateOf(AppPreferences.getAutoSkipCredits(context)) }
     var bingeGroupPrefer by remember { mutableStateOf(AppPreferences.getBingeGroupPrefer(context)) }
@@ -958,6 +970,58 @@ fun SettingsScreen(
                     onToggle = {
                         autoPlayNext = it
                         AppPreferences.setAutoPlayNext(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                ToggleRow(
+                    label = "Next Episode Popup",
+                    description = "Show the Up Next card as an episode's credits roll: the next episode, its still, and the countdown to it. Off ends the episode with no card \u2014 and, because that card is where Auto-play Next counts down and where the still-there prompt asks, with no auto-advance either.",
+                    checked = nextEpisodePopup,
+                    onToggle = {
+                        nextEpisodePopup = it
+                        AppPreferences.setNextEpisodePopup(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                EndPanelPointRow(
+                    label = "Next Episode Popup Point",
+                    hint = "How far into the episode the card opens, as a percentage of its runtime. A title that carries its own credits marker opens as the credits start instead.",
+                    selected = nextEpisodePopupPercent,
+                    enabled = nextEpisodePopup,
+                    chip = { text, isSelected -> PillChip(text, isSelected) },
+                    onPick = { percent ->
+                        nextEpisodePopupPercent = percent
+                        AppPreferences.setNextEpisodePopupPercent(context, percent)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                ToggleRow(
+                    label = "Because You Watched",
+                    description = "When there is no next episode \u2014 a movie, or a finished finale \u2014 recommend what to watch instead as the credits roll, with PLAY and DETAILS on each pick.",
+                    checked = becauseYouWatched,
+                    onToggle = {
+                        becauseYouWatched = it
+                        AppPreferences.setBecauseYouWatched(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                EndPanelPointRow(
+                    label = "Because You Watched Point",
+                    hint = "How far into the title the picks open.",
+                    selected = becauseYouWatchedPercent,
+                    enabled = becauseYouWatched,
+                    chip = { text, isSelected -> PillChip(text, isSelected) },
+                    onPick = { percent ->
+                        becauseYouWatchedPercent = percent
+                        AppPreferences.setBecauseYouWatchedPercent(context, percent)
                     }
                 )
 

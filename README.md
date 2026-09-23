@@ -20,7 +20,10 @@ EPG).
   the box has no decoder left to hand out, or the codec has no decoder — and
   can be selected outright for files only libmpv handles (including fansub
   ASS/SSA typesetting). Both engines write the same watch history, scrobbles
-  and Continue Watching rows.
+  and Continue Watching rows, and both raise the same two end-of-episode
+  panels — the Up Next card, and the because-you-watched recommendations when
+  there is no next episode — each with its own on/off switch and pop-up point
+  (a percentage of the runtime) in Settings → Playback.
 - **Profiles** — multiple per-device profiles with avatars, optional PIN
   locks, and full cross-device sync (history, watched state, addons,
   settings) via Supabase with row-level security.

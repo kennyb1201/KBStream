@@ -126,6 +126,10 @@ object PrefsPayloadBuilder {
         "binge_group_fallback",
         "still_there_prompt",                // binge watchdog, not device-specific
         "still_there_episodes",
+        "next_episode_popup",                // end-of-episode panels: how a title ends is a
+        "next_episode_popup_percent",        //   viewing preference, not a device capability,
+        "because_you_watched_popup",         //   so both the switches and the pop-up points
+        "because_you_watched_popup_percent", //   follow the profile
         "new_episode_notifications",         // new-episode alerts: behavior, not device-specific
         "live_reminder_notifications",       // live TV reminder alerts: same reasoning
         "amoled_black",                      // AMOLED theme toggle (pure display pref)

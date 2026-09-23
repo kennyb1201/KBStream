@@ -168,6 +168,88 @@ object AppPreferences {
         syncDisplayPrefsBlob(context)
     }
 
+    // ── End-of-episode panels ────────────────────────────────────────
+    //
+    // Two panels can open as a title's credits roll: the Up Next card (there is
+    // an aired next episode to chain into) and the Because-you-watched row
+    // (there is not, so it recommends something else instead). Each has its own
+    // switch and its own point in the runtime, stored as a percentage of the
+    // file, so a viewer can keep one and not the other - and decide how early
+    // either lands.
+    //
+    // Worth knowing when the Up Next switch is off: that card is where the
+    // Auto-play Next countdown lives and where the "Are you still there?" binge
+    // watchdog asks, so switching it off ends an episode without chaining to the
+    // next one.
+    private const val KEY_NEXT_EPISODE_POPUP = "next_episode_popup"
+    private const val KEY_NEXT_EPISODE_POPUP_PERCENT = "next_episode_popup_percent"
+    private const val KEY_BECAUSE_YOU_WATCHED_POPUP = "because_you_watched_popup"
+    private const val KEY_BECAUSE_YOU_WATCHED_POPUP_PERCENT = "because_you_watched_popup_percent"
+
+    /** The points the settings screen offers, closest to the end of the file first. */
+    val END_PANEL_PERCENT_OPTIONS = listOf(99, 98, 97, 95, 90)
+
+    /**
+     * Roughly the last half-minute of a typical episode, which is where these
+     * panels have always opened.
+     */
+    const val DEFAULT_END_PANEL_PERCENT = 98
+
+    /**
+     * The band a stored point is clamped into: at 100 the panel would have no
+     * runtime left to appear in, and below [MIN_END_PANEL_PERCENT] it is
+     * mid-episode, which is not what "as the credits roll" means. A value
+     * synced from a build with different options still lands somewhere sane.
+     */
+    const val MIN_END_PANEL_PERCENT = 80
+    const val MAX_END_PANEL_PERCENT = 99
+
+    /** The Up Next card: the next episode, shown as the credits roll. */
+    fun getNextEpisodePopup(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_NEXT_EPISODE_POPUP, true)
+
+    fun setNextEpisodePopup(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_NEXT_EPISODE_POPUP, enabled).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
+    fun getNextEpisodePopupPercent(context: Context): Int =
+        readIntPref(context, KEY_NEXT_EPISODE_POPUP_PERCENT, DEFAULT_END_PANEL_PERCENT)
+            .coerceIn(MIN_END_PANEL_PERCENT, MAX_END_PANEL_PERCENT)
+
+    fun setNextEpisodePopupPercent(context: Context, percent: Int) {
+        prefs(context).edit()
+            .putInt(
+                KEY_NEXT_EPISODE_POPUP_PERCENT,
+                percent.coerceIn(MIN_END_PANEL_PERCENT, MAX_END_PANEL_PERCENT)
+            )
+            .apply()
+        syncDisplayPrefsBlob(context)
+    }
+
+    /** Because you watched: recommendations, when there is no next episode. */
+    fun getBecauseYouWatched(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_BECAUSE_YOU_WATCHED_POPUP, true)
+
+    fun setBecauseYouWatched(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_BECAUSE_YOU_WATCHED_POPUP, enabled).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
+    fun getBecauseYouWatchedPercent(context: Context): Int =
+        readIntPref(context, KEY_BECAUSE_YOU_WATCHED_POPUP_PERCENT, DEFAULT_END_PANEL_PERCENT)
+            .coerceIn(MIN_END_PANEL_PERCENT, MAX_END_PANEL_PERCENT)
+
+    fun setBecauseYouWatchedPercent(context: Context, percent: Int) {
+        prefs(context).edit()
+            .putInt(
+                KEY_BECAUSE_YOU_WATCHED_POPUP_PERCENT,
+                percent.coerceIn(MIN_END_PANEL_PERCENT, MAX_END_PANEL_PERCENT)
+            )
+            .apply()
+        syncDisplayPrefsBlob(context)
+    }
+
     // ── Auto-select top stream on streams screen
     fun getAutoSelectStream(context: Context): Boolean =
         prefs(context).getBoolean(KEY_AUTO_SELECT_STREAM, false)

@@ -204,10 +204,12 @@ internal const val NEXT_UP_COUNTDOWN_SECONDS = 5
 internal const val NEXT_UP_HOLD_THRESHOLD_MS = 6_000L
 
 // How early the Up Next / Because-you-watched panel appears when the source
-// carries no credits marker: this long before the declared duration. End
-// credits usually run a minute or two, so the fallback has to sit back far
-// enough to land with the credits rather than after them.
-internal const val END_PANEL_LEAD_MS = 75_000L
+// carries no credits marker is a SETTING now: the "pop-up point" rows in
+// Settings → Playback, as a percentage of the runtime, so it scales with the
+// title instead of sitting at a fixed 75 seconds - which meant a different
+// moment for a sitcom than for a film. Both players read it through the same
+// two AppPreferences accessors, so the engines cannot disagree about when a
+// title's credits count as rolling.
 
 // When IntroDB does carry a credits row, open this long *before* it: the panel
 // is then settled on screen as the credits start instead of appearing with
@@ -6090,16 +6092,26 @@ class NativePlayerActivity : ComponentActivity() {
 
     /**
      * Raises the end-of-episode panel as the credits roll instead of waiting
-     * for playback to fully end. The trigger is the title's credits marker
-     * (IntroDB) when there is one, pulled [END_PANEL_CREDITS_LEAD_MS] early so
-     * the panel is already up as the credits start; a source with no marker
-     * falls back to [END_PANEL_LEAD_MS] before the declared duration. A marker
+     * for playback to fully end, at the point the user set for the panel this
+     * session will raise (Settings → Playback: Next Episode Popup Point /
+     * Because You Watched Point, a percentage of the runtime).
+     *
+     * A title that carries a credits marker (IntroDB) never uses that point:
+     * the marker is a fact about the file, pulled
+     * [END_PANEL_CREDITS_LEAD_MS] early so the panel is already up as the
+     * credits start. A marker
      * pointing implausibly early is clamped to [END_PANEL_MIN_REMAINING_MS]
      * before the end.
      */
     private fun maybeTriggerEndPanels(pos: Long, dur: Long) {
         if (endPanelsShown || playbackEndedHandled || isLiveChannel) return
         if (dur <= 0L || dur == C.TIME_UNSET) return
+        // Both panels switched off: nothing to raise, so playback runs to its
+        // own end instead of this trigger cutting the last minutes off with
+        // nothing to show for them.
+        if (!AppPreferences.getNextEpisodePopup(this) &&
+            !AppPreferences.getBecauseYouWatched(this)
+        ) return
         val creditsStart = introDbStamps
             .filter {
                 (it.type == IntroDbMarkerType.Credits ||
@@ -6112,14 +6124,37 @@ class NativePlayerActivity : ComponentActivity() {
             (creditsStart - END_PANEL_CREDITS_LEAD_MS)
                 .coerceAtMost(dur - END_PANEL_MIN_REMAINING_MS)
         } else {
-            dur - END_PANEL_LEAD_MS
+            endPanelPercentTriggerMs(dur)
         }).coerceAtLeast(0L)
-        // A non-positive trigger means the clip is shorter than the lead (or a
+        // A non-positive trigger means the clip is shorter than the point (or a
         // bad marker sits at 0): leave it to onPlaybackEnded instead of
         // popping the panel the moment playback starts.
         if (triggerAt <= 0L) return
         if (pos < triggerAt) return
         showEndPanels()
+    }
+
+    /**
+     * The panel's point when the title carries no credits marker, in
+     * milliseconds into the file: the user's setting (Settings → Playback,
+     * Next Episode Popup Point / Because You Watched Point) as a percentage of
+     * the runtime. The percentage is picked for the panel this session will
+     * actually raise - the Up Next card for a series episode, the credits
+     * recommendations for anything else - so setting one panel's point earlier
+     * cannot drag the other's earlier too.
+     *
+     * A title that DOES carry a credits marker never reaches this: its marker
+     * is a fact about the file and beats any percentage, which is what makes
+     * the panel land as the credits start.
+     */
+    private fun endPanelPercentTriggerMs(dur: Long): Long {
+        val isEpisode = season != null && episode != null
+        val percent = if (isEpisode && AppPreferences.getNextEpisodePopup(this)) {
+            AppPreferences.getNextEpisodePopupPercent(this)
+        } else {
+            AppPreferences.getBecauseYouWatchedPercent(this)
+        }
+        return (dur - dur * (100 - percent) / 100L).coerceAtLeast(0L)
     }
 
     /**
@@ -6147,10 +6182,18 @@ class NativePlayerActivity : ComponentActivity() {
                     this@NativePlayerActivity, it, resolveParentTmdbId(), parentId
                 )
             }
-            if (target != null) {
-                showNextUpPanel(target.first, target.second)
-            } else {
-                showBecauseYouWatchedPanel()
+            when {
+                target != null && AppPreferences.getNextEpisodePopup(this@NativePlayerActivity) ->
+                    showNextUpPanel(target.first, target.second)
+
+                target == null &&
+                    AppPreferences.getBecauseYouWatched(this@NativePlayerActivity) ->
+                    showBecauseYouWatchedPanel()
+
+                // Otherwise that panel is switched off in Settings, or there is
+                // nothing to suggest: nothing is raised, and the credits play
+                // out. endPanelsShown stays set, so the file's own end does not
+                // try the same decision again.
             }
         }
     }
