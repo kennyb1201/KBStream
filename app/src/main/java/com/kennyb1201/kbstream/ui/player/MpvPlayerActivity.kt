@@ -907,13 +907,13 @@ class MpvPlayerActivity : ComponentActivity() {
      */
     private fun endPanelTriggerMs(durationMs: Long): Long {
         val isEpisode = season != null && episode != null
-        val percent = if (isEpisode && AppPreferences.getNextEpisodePopup(this)) {
-            AppPreferences.getNextEpisodePopupPercent(this)
+        val point = if (isEpisode && AppPreferences.getNextEpisodePopup(this)) {
+            AppPreferences.getNextEpisodePopupPointTenths(this)
         } else {
-            AppPreferences.getBecauseYouWatchedPercent(this)
+            AppPreferences.getBecauseYouWatchedPointTenths(this)
         }
         val percentTrigger =
-            (durationMs - durationMs * (100 - percent) / 100L).coerceAtLeast(0L)
+            (durationMs - durationMs * (1_000 - point) / 1_000L).coerceAtLeast(0L)
         val creditsStart = introDbStamps
             .filter {
                 (it.type == IntroDbMarkerType.Credits ||

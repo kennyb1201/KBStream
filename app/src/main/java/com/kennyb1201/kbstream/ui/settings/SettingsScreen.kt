@@ -100,14 +100,15 @@ fun SettingsScreen(
     var nextEpisodePopup by remember {
         mutableStateOf(AppPreferences.getNextEpisodePopup(context))
     }
-    var nextEpisodePopupPercent by remember {
-        mutableIntStateOf(AppPreferences.getNextEpisodePopupPercent(context))
+    // Tenths of a percent: the point moves in 0.5 steps.
+    var nextEpisodePopupPoint by remember {
+        mutableIntStateOf(AppPreferences.getNextEpisodePopupPointTenths(context))
     }
     var becauseYouWatched by remember {
         mutableStateOf(AppPreferences.getBecauseYouWatched(context))
     }
-    var becauseYouWatchedPercent by remember {
-        mutableIntStateOf(AppPreferences.getBecauseYouWatchedPercent(context))
+    var becauseYouWatchedPoint by remember {
+        mutableIntStateOf(AppPreferences.getBecauseYouWatchedPointTenths(context))
     }
     var autoSkipIntro by remember { mutableStateOf(AppPreferences.getAutoSkipIntro(context)) }
     var autoSkipCredits by remember { mutableStateOf(AppPreferences.getAutoSkipCredits(context)) }
@@ -989,13 +990,13 @@ fun SettingsScreen(
 
                 EndPanelPointRow(
                     label = "Next Episode Popup Point",
-                    hint = "How far into the episode the card opens, as a percentage of its runtime. A title that carries its own credits marker opens as the credits start instead.",
-                    selected = nextEpisodePopupPercent,
+                    hint = "How far into the episode the card opens, as a percentage of its runtime. The -0.5 / +0.5 chips nudge it in half-percent steps. A title that carries its own credits marker opens as the credits start instead.",
+                    selected = nextEpisodePopupPoint,
                     enabled = nextEpisodePopup,
                     chip = { text, isSelected -> PillChip(text, isSelected) },
-                    onPick = { percent ->
-                        nextEpisodePopupPercent = percent
-                        AppPreferences.setNextEpisodePopupPercent(context, percent)
+                    onPick = { point ->
+                        nextEpisodePopupPoint = point
+                        AppPreferences.setNextEpisodePopupPointTenths(context, point)
                     }
                 )
 
@@ -1015,13 +1016,13 @@ fun SettingsScreen(
 
                 EndPanelPointRow(
                     label = "Because You Watched Point",
-                    hint = "How far into the title the picks open.",
-                    selected = becauseYouWatchedPercent,
+                    hint = "How far into the title the picks open. The -0.5 / +0.5 chips nudge it in half-percent steps.",
+                    selected = becauseYouWatchedPoint,
                     enabled = becauseYouWatched,
                     chip = { text, isSelected -> PillChip(text, isSelected) },
-                    onPick = { percent ->
-                        becauseYouWatchedPercent = percent
-                        AppPreferences.setBecauseYouWatchedPercent(context, percent)
+                    onPick = { point ->
+                        becauseYouWatchedPoint = point
+                        AppPreferences.setBecauseYouWatchedPointTenths(context, point)
                     }
                 )
 

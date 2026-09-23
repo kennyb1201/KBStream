@@ -6141,10 +6141,10 @@ class NativePlayerActivity : ComponentActivity() {
      * The panel's point when the title carries no credits marker, in
      * milliseconds into the file: the user's setting (Settings → Playback,
      * Next Episode Popup Point / Because You Watched Point) as a percentage of
-     * the runtime. The percentage is picked for the panel this session will
-     * actually raise - the Up Next card for a series episode, the credits
-     * recommendations for anything else - so setting one panel's point earlier
-     * cannot drag the other's earlier too.
+     * the runtime, movable in half-percent steps. The point is picked for the
+     * panel this session will actually raise - the Up Next card for a series
+     * episode, the credits recommendations for anything else - so setting one
+     * panel's point earlier cannot drag the other's earlier too.
      *
      * A title that DOES carry a credits marker never reaches this: its marker
      * is a fact about the file and beats any percentage, which is what makes
@@ -6152,12 +6152,12 @@ class NativePlayerActivity : ComponentActivity() {
      */
     private fun endPanelPercentTriggerMs(dur: Long): Long {
         val isEpisode = season != null && episode != null
-        val percent = if (isEpisode && AppPreferences.getNextEpisodePopup(this)) {
-            AppPreferences.getNextEpisodePopupPercent(this)
+        val point = if (isEpisode && AppPreferences.getNextEpisodePopup(this)) {
+            AppPreferences.getNextEpisodePopupPointTenths(this)
         } else {
-            AppPreferences.getBecauseYouWatchedPercent(this)
+            AppPreferences.getBecauseYouWatchedPointTenths(this)
         }
-        return (dur - dur * (100 - percent) / 100L).coerceAtLeast(0L)
+        return (dur - dur * (1_000 - point) / 1_000L).coerceAtLeast(0L)
     }
 
     /**

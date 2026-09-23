@@ -186,23 +186,65 @@ object AppPreferences {
     private const val KEY_BECAUSE_YOU_WATCHED_POPUP = "because_you_watched_popup"
     private const val KEY_BECAUSE_YOU_WATCHED_POPUP_PERCENT = "because_you_watched_popup_percent"
 
-    /** The points the settings screen offers, closest to the end of the file first. */
+    /**
+     * The quick jumps the settings screen offers above the fine control,
+     * closest to the end of the file first.
+     */
     val END_PANEL_PERCENT_OPTIONS = listOf(99, 98, 97, 95, 90)
 
     /**
-     * Roughly the last half-minute of a typical episode, which is where these
-     * panels have always opened.
+     * The point is stored in TENTHS of a percent rather than whole percents, so
+     * it can be nudged in 0.5 steps ([END_PANEL_POINT_STEP_TENTHS] tenths at a
+     * time). Staying an Int keeps it safe everywhere the pref travels: the sync
+     * applier writes every number back as a Long, so a fractional percent would
+     * be dropped by the cloud merge instead of syncing.
      */
-    const val DEFAULT_END_PANEL_PERCENT = 98
+    const val END_PANEL_POINT_STEP_TENTHS = 5
 
     /**
-     * The band a stored point is clamped into: at 100 the panel would have no
-     * runtime left to appear in, and below [MIN_END_PANEL_PERCENT] it is
+     * Roughly the last half-minute of a typical episode (98.0%), which is where
+     * these panels have always opened.
+     */
+    const val DEFAULT_END_PANEL_POINT_TENTHS = 980
+
+    /**
+     * The band a stored point is clamped into: at 100% the panel would have no
+     * runtime left to appear in, and below [MIN_END_PANEL_POINT_TENTHS] it is
      * mid-episode, which is not what "as the credits roll" means. A value
      * synced from a build with different options still lands somewhere sane.
      */
-    const val MIN_END_PANEL_PERCENT = 80
-    const val MAX_END_PANEL_PERCENT = 99
+    const val MIN_END_PANEL_POINT_TENTHS = 800
+    const val MAX_END_PANEL_POINT_TENTHS = 990
+
+    /** The point as the settings screen shows it: "98%" / "98.5%". */
+    fun endPanelPointLabel(tenths: Int): String {
+        val point = tenths.coerceIn(MIN_END_PANEL_POINT_TENTHS, MAX_END_PANEL_POINT_TENTHS)
+        return if (point % 10 == 0) "${point / 10}%" else "${point / 10}.${point % 10}%"
+    }
+
+    /** One 0.5-step move from [tenths] (negative = earlier), kept in the band. */
+    fun stepEndPanelPoint(tenths: Int, steps: Int): Int =
+        (tenths + steps * END_PANEL_POINT_STEP_TENTHS).coerceIn(
+            MIN_END_PANEL_POINT_TENTHS,
+            MAX_END_PANEL_POINT_TENTHS
+        )
+
+    /**
+     * A stored point as tenths of a percent. Older builds wrote a whole percent
+     * (90..99) under the same key, and a tenths value never falls below
+     * [MIN_END_PANEL_POINT_TENTHS] — so anything under 100 is one of those, and
+     * scaling it by ten keeps the exact point that user had chosen. Pure, so the
+     * migration is unit-tested rather than only exercised on a real upgrade.
+     */
+    internal fun endPanelPointTenthsFromStored(raw: Int): Int {
+        val tenths = if (raw < 100) raw * 10 else raw
+        return tenths.coerceIn(MIN_END_PANEL_POINT_TENTHS, MAX_END_PANEL_POINT_TENTHS)
+    }
+
+    private fun readEndPanelPointTenths(context: Context, key: String): Int =
+        endPanelPointTenthsFromStored(
+            readIntPref(context, key, DEFAULT_END_PANEL_POINT_TENTHS)
+        )
 
     /** The Up Next card: the next episode, shown as the credits roll. */
     fun getNextEpisodePopup(context: Context): Boolean =
@@ -213,15 +255,14 @@ object AppPreferences {
         syncDisplayPrefsBlob(context)
     }
 
-    fun getNextEpisodePopupPercent(context: Context): Int =
-        readIntPref(context, KEY_NEXT_EPISODE_POPUP_PERCENT, DEFAULT_END_PANEL_PERCENT)
-            .coerceIn(MIN_END_PANEL_PERCENT, MAX_END_PANEL_PERCENT)
+    fun getNextEpisodePopupPointTenths(context: Context): Int =
+        readEndPanelPointTenths(context, KEY_NEXT_EPISODE_POPUP_PERCENT)
 
-    fun setNextEpisodePopupPercent(context: Context, percent: Int) {
+    fun setNextEpisodePopupPointTenths(context: Context, tenths: Int) {
         prefs(context).edit()
             .putInt(
                 KEY_NEXT_EPISODE_POPUP_PERCENT,
-                percent.coerceIn(MIN_END_PANEL_PERCENT, MAX_END_PANEL_PERCENT)
+                tenths.coerceIn(MIN_END_PANEL_POINT_TENTHS, MAX_END_PANEL_POINT_TENTHS)
             )
             .apply()
         syncDisplayPrefsBlob(context)
@@ -236,15 +277,14 @@ object AppPreferences {
         syncDisplayPrefsBlob(context)
     }
 
-    fun getBecauseYouWatchedPercent(context: Context): Int =
-        readIntPref(context, KEY_BECAUSE_YOU_WATCHED_POPUP_PERCENT, DEFAULT_END_PANEL_PERCENT)
-            .coerceIn(MIN_END_PANEL_PERCENT, MAX_END_PANEL_PERCENT)
+    fun getBecauseYouWatchedPointTenths(context: Context): Int =
+        readEndPanelPointTenths(context, KEY_BECAUSE_YOU_WATCHED_POPUP_PERCENT)
 
-    fun setBecauseYouWatchedPercent(context: Context, percent: Int) {
+    fun setBecauseYouWatchedPointTenths(context: Context, tenths: Int) {
         prefs(context).edit()
             .putInt(
                 KEY_BECAUSE_YOU_WATCHED_POPUP_PERCENT,
-                percent.coerceIn(MIN_END_PANEL_PERCENT, MAX_END_PANEL_PERCENT)
+                tenths.coerceIn(MIN_END_PANEL_POINT_TENTHS, MAX_END_PANEL_POINT_TENTHS)
             )
             .apply()
         syncDisplayPrefsBlob(context)
