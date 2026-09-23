@@ -105,6 +105,7 @@ import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.tmdb.movieStatusTag
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.data.tmdb.director
+import com.kennyb1201.kbstream.data.tmdb.displaySeasonName
 import com.kennyb1201.kbstream.data.tmdb.list
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.tmdb.tmdbImageOriginal
@@ -515,6 +516,18 @@ fun DetailScreen(
                 ?: vmLoadedSeason?.takeIf { it in seasons }
                 ?: seasons.firstOrNull { !seasonUnavailable(it) }.takeIf { !isLoading }
         }
+    }
+
+    // A season can name itself: American Horror Story's "Coven", Monster's
+    // "The Jeffrey Dahmer Story". For an anthology the chip reading "SEASON 3"
+    // says nothing about what is underneath it, so the section heading borrows
+    // the season's own name and follows the chips as the selection moves.
+    // Shows whose seasons TMDB only numbers keep the old "EPISODES".
+    val episodesHeader = remember(tmdbDetail, effectiveSeason) {
+        effectiveSeason
+            ?.let { season -> tmdbDetail?.displaySeasonName(season) }
+            ?.uppercase(Locale.US)
+            ?: "EPISODES"
     }
 
     val hasExplicitSeasonSource = normalizedType == "series" && (
@@ -1903,7 +1916,10 @@ fun DetailScreen(
                         ) {
                             item(key = "episodesheader") {
                                 Text(
-                                    "EPISODES",
+                                    episodesHeader,
+                                    maxLines = 1,
+                                    overflow =
+                                        TextOverflow.Ellipsis,
                                     style =
                                         MaterialTheme.typography.titleSmall,
                                     color = KBTextLo,

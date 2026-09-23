@@ -1002,6 +1002,26 @@ fun TmdbDetail.displayCountry(): String? =
         ?.episodeCount
         ?.takeIf { it > 0 }
 
+/**
+ * The season's own name when the metadata carries one — American Horror
+ * Story's "Coven", Monster's "The Jeffrey Dahmer Story". Null when TMDB only
+ * repeats its generic auto-name ("Season 3", "Specials"), because a heading
+ * gains nothing from that. Anthology shows are the reason this exists: for
+ * them the season number is the one part of the season a viewer never uses.
+ */
+fun TmdbDetail.displaySeasonName(seasonNumber: Int): String? =
+    seasons
+        .firstOrNull { it.seasonNumber == seasonNumber }
+        ?.name
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() && !it.isGenericSeasonName(seasonNumber) }
+
+/** "Season 3" / "Specials" are TMDB placeholders, not a name the show chose. */
+private fun String.isGenericSeasonName(seasonNumber: Int): Boolean {
+    val normalized = lowercase(Locale.US).replace(Regex("\\s+"), " ")
+    return normalized == "specials" || normalized == "season $seasonNumber"
+}
+
        fun TmdbDetail.displaySeasonCount(): Int? =
     numberOfSeasons?.takeIf { it > 0 }
 
