@@ -350,22 +350,79 @@ private class SplitModeRenderersFactory(
      * Order matters: the delay runs first (it only inserts or drops leading
      * silence), then [AudioDownmixProcessor] folds the channels, applies the
      * dialogue/volume gain and limits the result.
+     *
+     * The sink is wrapped in [LiveDownmixAudioSink] so a *layout* change (the one
+     * knob the processors cannot apply from inside the sample stream, because the
+     * channel count is baked into the AudioTrack at configure time) is heard
+     * while the film keeps playing instead of on the next stream start.
      */
     override fun buildAudioSink(
         context: Context,
         enableFloatOutput: Boolean,
         enableAudioTrackPlaybackParams: Boolean
-    ): AudioSink =
-        DefaultAudioSink.Builder(context)
-            .setAudioProcessors(
-                arrayOf(
-                    AudioDelayProcessor.instance,
-                    AudioDownmixProcessor.instance
+    ): AudioSink {
+        // "Auto" folds a multichannel stream down to what this output can
+        // actually carry, so the fold needs to know the answer. Resolved per
+        // sink (one player build) and logged, because it is the one input to
+        // the downmix that comes from the device rather than the user.
+        PlayerAudioTuning.deviceMaxChannels = resolveDeviceMaxChannels(context)
+        Log.i(
+            "PLAYER_DOWNMIX",
+            "output carries up to ${PlayerAudioTuning.deviceMaxChannels} channels; " +
+                "Auto folds multichannel down to it"
+        )
+
+        return LiveDownmixAudioSink(
+            DefaultAudioSink.Builder(context)
+                .setAudioProcessors(
+                    arrayOf(
+                        AudioDelayProcessor.instance,
+                        AudioDownmixProcessor.instance
+                    )
+                )
+                .setEnableFloatOutput(enableFloatOutput)
+                .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                .build()
+        )
+    }
+}
+
+/**
+ * How many channels this device's audio output can carry — the number the
+ * downmix's "Auto" setting folds down to (see
+ * [AudioDownmix.desiredOutputChannels]): stereo folds a 5.1/7.1 film down, which
+ * is the TV-speaker case the dialogue lift exists for, while a six-channel
+ * output keeps 5.1 and only trims 7.1 to it.
+ *
+ * Read from the HDMI audio-plug broadcast, whose extra is the sink's own EDID
+ * channel count — the number the platform itself consults before handing an app
+ * surround audio. [androidx.media3.exoplayer.audio.AudioCapabilities] reports
+ * the same thing but falls back to a placeholder of 10 when the device says
+ * nothing, and 10 folds nothing down, so it cannot answer this question.
+ *
+ * Anything absent or implausible falls back to stereo on purpose: a viewer who
+ * really has six channels is one press from the 5.1 pill, while the opposite
+ * mistake (keeping 5.1 on a stereo output) silently leaves dialogue under the
+ * score — exactly what this feature is here to fix.
+ */
+@Suppress("DEPRECATION") // Sticky-broadcast query; the flags overload takes no null receiver.
+private fun resolveDeviceMaxChannels(context: Context): Int {
+    val fromSink = runCatching {
+        context
+            .registerReceiver(
+                null,
+                android.content.IntentFilter(
+                    android.media.AudioManager.ACTION_HDMI_AUDIO_PLUG
                 )
             )
-            .setEnableFloatOutput(enableFloatOutput)
-            .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-            .build()
+            ?.getIntExtra(
+                android.media.AudioManager.EXTRA_MAX_CHANNEL_COUNT,
+                0
+            )
+            ?: 0
+    }.getOrDefault(0)
+
+    return if (fromSink in 3..8) fromSink else 2
 }
 
 

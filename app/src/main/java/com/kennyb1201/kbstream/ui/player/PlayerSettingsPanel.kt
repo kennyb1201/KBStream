@@ -275,8 +275,9 @@ fun SettingsPanel(
                 onSelect = { PlayerTrackBridge.chooseAudioDownmix(context, it) }
             )
             Text(
-                text = "Stereo folds 5.1/7.1 into your TV's speakers with dialogue up front. " +
-                    "Layout changes apply from the next stream start.",
+                text = "Auto folds 5.1/7.1 down to what this device can carry; Stereo always " +
+                    "folds. Either way the centre (dialogue) is lifted. Every option here can " +
+                    "be changed while the film plays — pick one and listen for it.",
                 color = KBTextLo,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(bottom = 6.dp)

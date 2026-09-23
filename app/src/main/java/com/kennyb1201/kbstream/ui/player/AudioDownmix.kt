@@ -154,6 +154,49 @@ internal object AudioDownmix {
     }
 
     /**
+     * Per-channel gains for a stream that is NOT being folded: the same layout in
+     * and out, with the centre channel (dialogue) lifted and the surrounds that
+     * carry score and effects trimmed. Fronts and LFE are left exactly where the
+     * mixer put them.
+     *
+     * This is what makes the dialogue knob worth something with the downmix set
+     * to "Auto", which is the default and the case the feature exists for: the
+     * device still folds the 5.1/7.1 stream, but it now folds one whose centre is
+     * already lifted, instead of the untouched mix whose speech sits under the
+     * music. Trimming the surrounds matters as much as the lift — it is what
+     * stops "louder dialogue" from also meaning "louder explosions".
+     *
+     * Note the surrounds are scaled by [surroundScale] itself rather than the
+     * standard fold coefficient: nothing is being folded away here, so the
+     * figure is a balance between channels that all survive, not a share of a
+     * summed output.
+     *
+     * Returns null when every gain is 1 — i.e. with the dialogue boost off — so
+     * the default path stays a byte-for-byte pass-through.
+     */
+    fun gainMatrix(
+        inputChannels: Int,
+        centerGain: Float,
+        surroundScale: Float
+    ): FloatArray? {
+        val roles = rolesFor(inputChannels) ?: return null
+
+        var changed = false
+        val matrix = FloatArray(inputChannels * inputChannels)
+        for (index in roles.indices) {
+            val gain =
+                when (roles[index]) {
+                    FC -> centerGain
+                    BL, BR, BC, SL, SR -> surroundScale
+                    else -> 1f
+                }
+            if (gain != 1f) changed = true
+            matrix[index * inputChannels + index] = gain
+        }
+        return if (changed) matrix else null
+    }
+
+    /**
      * Output layout requested by the current setting for a stream decoded as
      * [inputChannels] channels. Never upmixes: a stereo stream asked to become
      * "5.1" stays stereo (inventing channels would only add silence).
@@ -166,8 +209,55 @@ internal object AudioDownmix {
             PlayerAudioTuning.DOWNMIX_SURROUND ->
                 if (inputChannels > 6) 6 else inputChannels
 
-            else -> inputChannels
+            else -> autoOutputChannels(inputChannels)
         }
+
+    /**
+     * "Auto": fold down only as far as the output actually needs. An output
+     * that can take six channels keeps 5.1 (7.1 folds into it); anything
+     * narrower gets the same 2.0 the platform's own downmix would have produced
+     * — except that it is made HERE, with the centre lifted, instead of by the
+     * device with nothing.
+     *
+     * Auto used to hand every multichannel stream to the device untouched. That
+     * is why the dialogue knob did nothing for the one stream a viewer actually
+     * complains about — a 5.1 film on the living-room TV — while it worked for
+     * the stereo tracks that needed it least. Layouts the fold matrix does not
+     * model (4-channel quad, 3-channel) are still left alone, so this never
+     * invents a mix, and 7.1 beyond a 6-channel output keeps its side pair
+     * folded into the rears exactly as the explicit 5.1 option does.
+     */
+    private fun autoOutputChannels(inputChannels: Int): Int {
+        if (inputChannels <= 2) return inputChannels
+        if (PlayerAudioTuning.deviceMaxChannels < 6) return 2
+        return if (inputChannels > 6) 6 else inputChannels
+    }
+
+    /**
+     * Whether the layout setting now asks for a different number of channels
+     * than the one the sink is carrying ([currentOutputChannels]) for a stream
+     * decoded as [inputChannels] channels — i.e. whether the sink has to be
+     * reconfigured to honour it.
+     *
+     * The sink builds its AudioTrack from the processed channel count, so the
+     * one thing that cannot be changed from inside an
+     * [androidx.media3.common.audio.AudioProcessor] is the number of channels:
+     * this is the test [LiveDownmixAudioSink] runs on every buffer on the audio
+     * thread before driving Media3's own reconfigure path. Everything else — the
+     * centre lift, the surround trim, the volume gain — is per-sample and needs
+     * no rebuild at all.
+     *
+     * Notably this is false for the common "nothing to fold" cases: a stereo
+     * stream stays stereo whichever option is picked, and asking 5.1 for a 5.1
+     * stream is the layout it already has, so those switches are free.
+     */
+    fun layoutChangeNeedsReconfigure(
+        inputChannels: Int,
+        currentOutputChannels: Int
+    ): Boolean {
+        if (inputChannels <= 0) return false
+        return desiredOutputChannels(inputChannels) != currentOutputChannels
+    }
 
     /**
      * Linked-channel peak limiter: ONE gain for every output channel, so the

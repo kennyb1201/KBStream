@@ -710,8 +710,9 @@ fun SettingsScreen(
                             "Keep 5.1 (7.1 folds into it). Use with an AVR or a device that really has " +
                                 "six channels."
                         else ->
-                            "Leave the layout to the device. Its own downmix is a plain fold with no " +
-                                "dialogue lift — the reason speech sits under the music."
+                            "Fold multichannel down to what this device can carry — stereo on a TV's " +
+                                "own speakers, 5.1 kept on an AVR — lifting the centre channel as it " +
+                                "folds."
                     },
                     options = PlayerAudioTuning.DOWNMIX_OPTIONS,
                     selected = audioDownmix,
@@ -752,8 +753,9 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = "Applies to the app's PCM audio path. Tunneled Playback is skipped while any of " +
-                        "these are on (a tunnel bypasses the audio chain), and a downmix layout change " +
-                        "lands on the next stream. Any title can override these from the player's own panel.",
+                        "these are on (a tunnel bypasses the audio chain). All three apply while a " +
+                        "film is playing, downmix included. Any title can override these from the " +
+                        "player's own panel.",
                     color = KBTextLo,
                     style = MaterialTheme.typography.labelSmall
                 )

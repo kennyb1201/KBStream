@@ -402,6 +402,18 @@ object MdbListClient {
     @Volatile private var cachedPlaybackAt = 0L
 
     /*
+     * The API key that produced [cachedPlayback] — the SAME trap
+     * [cachedSnapshotKey] closes for the watched snapshot, but here for the
+     * paused sessions that become Continue Watching cards. This object is
+     * process-wide while the key is PROFILE-scoped (scoped prefs), so without
+     * the stamp a profile switch inside the 5-minute TTL served the incoming
+     * profile the profile it just left's /sync/playback list: its kids'
+     * paused episodes appeared on the other profile's Continue Watching rail
+     * until the process restarted or the TTL happened to expire.
+     */
+    @Volatile private var cachedPlaybackKey = ""
+
+    /*
      * The API key that produced [cachedSnapshot]. This object is
      * process-wide while the key is PROFILE-scoped (scoped prefs), so the
      * cache used to outlive a profile switch and answer the incoming
@@ -1151,11 +1163,14 @@ object MdbListClient {
      * {episode:{ids,title,...}, show:{ids}} with season/episode numbers on
      * the episode node when present.
      */
-    suspend fun getPlaybackSessions(context: Context): List<MdbListPlaybackItem> {
+    suspend    fun getPlaybackSessions(context: Context): List<MdbListPlaybackItem> {
         val apiKey = apiKey(context)
         if (apiKey.isBlank()) return emptyList()
         cachedPlayback?.let { fresh ->
-            if (System.currentTimeMillis() - cachedPlaybackAt < PLAYBACK_TTL_MS) {
+            if (
+                cachedPlaybackKey == apiKey &&
+                System.currentTimeMillis() - cachedPlaybackAt < PLAYBACK_TTL_MS
+            ) {
                 return fresh
             }
         }
@@ -1218,6 +1233,7 @@ object MdbListClient {
                 if (result.isNotEmpty()) {
                     cachedPlayback = result
                     cachedPlaybackAt = System.currentTimeMillis()
+                    cachedPlaybackKey = apiKey
                 }
             }
         }
@@ -1352,14 +1368,32 @@ object MdbListClient {
     }
 
     /**
-     * Drops the cached watched snapshot so the next read re-downloads it.
-     * Called after every successful scrobble/mark/unmark, keeping badges
-     * honest without a TTL shorter than the network cost justifies.
+     * Drops the cached watched snapshot AND the cached paused-session list so
+     * the next read re-downloads both. Called after every successful
+     * scrobble/mark/unmark, keeping badges and Continue Watching honest
+     * without a TTL shorter than the network cost justifies.
      */
     fun invalidateWatchedSnapshot() {
         cachedSnapshot = null
         cachedSnapshotAt = 0L
         cachedSnapshotKey = ""
+        // Both blobs describe the WHOLE account, so a mark/unmark can move a
+        // title between them: the 99%-watched leftover that just became
+        // completed has to leave the paused-session list with it, otherwise
+        // the card lingers on Continue Watching for the rest of the TTL.
+        cachedPlayback = null
+        cachedPlaybackAt = 0L
+        cachedPlaybackKey = ""
+    }
+
+    /**
+     * Profile-switch isolation: MDBList auth is per-PROFILE (scoped prefs),
+     * so every process-wide snapshot here can belong to a different account
+     * once the user switches. [invalidateWatchedSnapshot] is the single drop
+     * point for both blobs, so this is an alias with the switch-time name.
+     */
+    fun clearTransientCaches() {
+        invalidateWatchedSnapshot()
     }
 
     // ------------------------------------------------------------------

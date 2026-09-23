@@ -24,6 +24,29 @@ import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 
+/**
+ * The profile whose Simkl token produced this repository's process-wide
+ * Continue Watching snapshot.
+ *
+ * Simkl auth is per-PROFILE (scoped simkl_auth prefs), so the feed belongs to
+ * exactly one profile. Clearing the cache on a profile switch is not enough
+ * on its own: a fetch that STARTED under the profile the user just left
+ * finishes afterwards and repopulates both the memory copy and the disk blob
+ * (whose key is resolved at write time, i.e. under the NEW profile). The
+ * incoming profile then served the previous profile's Continue Watching until
+ * the process restarted - the "kids profile's cards leaked onto my rail"
+ * report. Stamping the owner lets every read and publish notice that and
+ * refuse the entry.
+ */
+@Volatile
+private var cachedContinueWatchingOwner: String = ""
+
+/** Active profile id; "" is the legacy pre-profiles scope. */
+private fun activeOwner(): String =
+    com.kennyb1201.kbstream.data.sync.ProfileManager
+        .activeProfile.value?.id
+        ?: ""
+
 class SimklRepository(
     private val context: Context? = null
 ) {
@@ -1838,9 +1861,15 @@ class SimklRepository(
             false
     ): List<SimklContinueWatchingItem> {
 
+        // Captured up front: everything published below has to still belong
+        // to this profile when it lands (see [cachedContinueWatchingOwner]).
+        val ownerAtStart =
+            activeOwner()
+
         if (
             !forceRefresh &&
             cachedContinueWatching != null &&
+            cachedContinueWatchingOwner == ownerAtStart &&
             System.currentTimeMillis() -
                 cachedContinueWatchingFetchedAt <
                 CONTINUE_WATCHING_TTL_MS
@@ -1880,6 +1909,9 @@ class SimklRepository(
 
                     cachedContinueWatchingFetchedAt =
                         System.currentTimeMillis()
+
+                    cachedContinueWatchingOwner =
+                        ownerAtStart
 
                     return parsed
                 }
@@ -2352,11 +2384,22 @@ class SimklRepository(
                             }
                     )
 
+            // A switch mid-fetch cleared the cache above; publishing now
+            // would stamp THIS profile's feed under the NEW profile's memory
+            // slot and disk key. Return the result to the (already stale)
+            // caller without caching it.
+            if (activeOwner() != ownerAtStart) {
+                return result
+            }
+
             cachedContinueWatching =
                 result
 
             cachedContinueWatchingFetchedAt =
                 System.currentTimeMillis()
+
+            cachedContinueWatchingOwner =
+                ownerAtStart
 
             runCatching {
                 tmdbJsonCacheDao?.upsert(

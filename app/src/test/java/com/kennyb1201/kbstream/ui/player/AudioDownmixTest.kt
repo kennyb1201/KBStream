@@ -150,6 +150,68 @@ class AudioDownmixTest {
         assertNull(AudioDownmix.mixingMatrix(8, 3, PlayerAudioTuning.CENTER_BASE, 1f))
     }
 
+    /**
+     * The other half of the same idea: with the layout left to the device there
+     * is nothing to fold, and the dialogue knob used to do nothing at all for a
+     * 5.1/7.1 file in exactly that (default) configuration. It is a per-channel
+     * balance instead — the device then folds an already-lifted centre.
+     */
+    @Test
+    fun `a stream that keeps its layout is balanced in place`() {
+        val balance = AudioDownmix.gainMatrix(inputChannels = 6, centerGain = 1.7f, surroundScale = 0.8f)
+        assertNotNull(balance)
+
+        // Centre up...
+        assertEquals(1.7f, balance!![2 * 6 + 2], 1e-4f)
+        // ...the surrounds that carry score and explosions down...
+        assertEquals(0.8f, balance[4 * 6 + 4], 1e-4f)
+        assertEquals(0.8f, balance[5 * 6 + 5], 1e-4f)
+        // ...and the fronts and LFE exactly where the mixer put them.
+        assertEquals(1f, balance[0 * 6 + 0], 1e-4f)
+        assertEquals(1f, balance[1 * 6 + 1], 1e-4f)
+        assertEquals(1f, balance[3 * 6 + 3], 1e-4f)
+        // A gain, not a fold: nothing bleeds into another channel.
+        assertEquals(0f, balance[0 * 6 + 1], 1e-4f)
+
+        // 7.1's sides are trimmed too, and its back centre is not a surround.
+        val sevenOne = AudioDownmix.gainMatrix(8, 1.7f, 0.6f)!!
+        assertEquals(0.6f, sevenOne[6 * 8 + 6], 1e-4f)
+        assertEquals(0.6f, sevenOne[7 * 8 + 7], 1e-4f)
+        val sixOne = AudioDownmix.gainMatrix(7, 1.7f, 0.6f)!!
+        assertEquals(0.6f, sixOne[4 * 7 + 4], 1e-4f)
+    }
+
+    @Test
+    fun `nothing is balanced while the dialogue boost is off`() {
+        PlayerAudioTuning.apply(PlayerAudioTuning.DOWNMIX_AUTO, 0, 0)
+        try {
+            // 1.0 everywhere means no matrix at all: the default path stays a
+            // byte-for-byte pass-through.
+            assertEquals(1f, PlayerAudioTuning.inPlaceCenterGain, 1e-4f)
+            assertNull(AudioDownmix.gainMatrix(6, PlayerAudioTuning.inPlaceCenterGain, 1f))
+            assertNull(AudioDownmix.gainMatrix(8, PlayerAudioTuning.inPlaceCenterGain, 1f))
+            assertNull(AudioDownmix.gainMatrix(1, PlayerAudioTuning.inPlaceCenterGain, 1f))
+        } finally {
+            PlayerAudioTuning.apply(PlayerAudioTuning.DOWNMIX_AUTO, 0, 0)
+        }
+
+        // Stereo has no centre channel: it is lifted through mid/side instead.
+        assertNull(AudioDownmix.gainMatrix(2, 1.7f, 0.6f))
+        // An unmodelled layout is left alone rather than guessed at.
+        assertNull(AudioDownmix.gainMatrix(9, 1.7f, 0.6f))
+
+        // And with the boost on, the in-place centre gain really is a lift.
+        PlayerAudioTuning.apply(PlayerAudioTuning.DOWNMIX_AUTO, 2, 0)
+        try {
+            assertTrue(PlayerAudioTuning.inPlaceCenterGain > 1f)
+            assertNotNull(
+                AudioDownmix.gainMatrix(6, PlayerAudioTuning.inPlaceCenterGain, 0.6f)
+            )
+        } finally {
+            PlayerAudioTuning.apply(PlayerAudioTuning.DOWNMIX_AUTO, 0, 0)
+        }
+    }
+
     // ── Which layout a setting asks for ────────────────────────────────────
 
     @Test
@@ -189,11 +251,78 @@ class AudioDownmixTest {
     }
 
     @Test
-    fun `auto leaves the decoded layout alone`() {
+    fun `auto folds to the width the output can actually carry`() {
         PlayerAudioTuning.apply(PlayerAudioTuning.DOWNMIX_AUTO, 0, 0)
-        assertEquals(6, AudioDownmix.desiredOutputChannels(6))
-        assertEquals(2, AudioDownmix.desiredOutputChannels(2))
+        try {
+            // A stereo output — the default until a sink has reported its
+            // width, and what a TV's own speakers are: multichannel folds
+            // down there. It is done HERE rather than left to the device, so
+            // the centre lift comes with it (the whole point of Auto).
+            PlayerAudioTuning.deviceMaxChannels = 2
+            assertEquals(2, AudioDownmix.desiredOutputChannels(6))
+            assertEquals(2, AudioDownmix.desiredOutputChannels(8))
+            assertEquals(2, AudioDownmix.desiredOutputChannels(2))
+
+            // An AVR that really carries six channels keeps 5.1, and 7.1
+            // trims into it instead of being handed over untouched.
+            PlayerAudioTuning.deviceMaxChannels = 6
+            assertEquals(6, AudioDownmix.desiredOutputChannels(6))
+            assertEquals(6, AudioDownmix.desiredOutputChannels(8))
+            assertEquals(2, AudioDownmix.desiredOutputChannels(2))
+        } finally {
+            PlayerAudioTuning.deviceMaxChannels = 2
+            PlayerAudioTuning.apply(PlayerAudioTuning.DOWNMIX_AUTO, 0, 0)
+        }
         assertTrue(PlayerAudioTuning.isNeutral)
+    }
+
+    /**
+     * The one knob that cannot be applied from inside the sample stream: the sink
+     * carries a fixed channel count, so switching layouts means reconfiguring it
+     * ([LiveDownmixAudioSink]). These are the cases where that is — and is not —
+     * worth tearing the running output down for.
+     */
+    @Test
+    fun `the sink is reconfigured only when the setting really changes the width`() {
+        try {
+            // A 5.1 stream, asked for stereo while it is still carrying six
+            // channels: the fold needs the output rebuilt.
+            PlayerAudioTuning.apply(PlayerAudioTuning.DOWNMIX_STEREO, 0, 0)
+            assertTrue(AudioDownmix.layoutChangeNeedsReconfigure(6, 6))
+            assertTrue(AudioDownmix.layoutChangeNeedsReconfigure(8, 8))
+            // Already folded: nothing would change, so nothing is rebuilt.
+            assertFalse(AudioDownmix.layoutChangeNeedsReconfigure(6, 2))
+            // A stereo (or mono) source stays as it is whichever option is
+            // picked, so those switches are free.
+            assertFalse(AudioDownmix.layoutChangeNeedsReconfigure(2, 2))
+            assertFalse(AudioDownmix.layoutChangeNeedsReconfigure(1, 1))
+
+            // Driving the other way: back to Auto. Auto follows the width the
+            // OUTPUT can carry, so whether the sink has to be rebuilt depends
+            // on the device, not only on the stream.
+            PlayerAudioTuning.apply(PlayerAudioTuning.DOWNMIX_AUTO, 0, 0)
+            PlayerAudioTuning.deviceMaxChannels = 2
+            // A stereo output with the fold already in place: nothing to do.
+            assertFalse(AudioDownmix.layoutChangeNeedsReconfigure(6, 2))
+            // The same stereo output while the sink still carries 5.1: now it
+            // has to fold.
+            assertTrue(AudioDownmix.layoutChangeNeedsReconfigure(6, 6))
+            // A six-channel output already carrying 5.1 keeps it as it is.
+            PlayerAudioTuning.deviceMaxChannels = 6
+            assertFalse(AudioDownmix.layoutChangeNeedsReconfigure(6, 6))
+
+            // 7.1 to 5.1 is a real fold too, and 5.1 is already there.
+            PlayerAudioTuning.apply(PlayerAudioTuning.DOWNMIX_SURROUND, 0, 0)
+            assertTrue(AudioDownmix.layoutChangeNeedsReconfigure(8, 8))
+            assertFalse(AudioDownmix.layoutChangeNeedsReconfigure(8, 6))
+            assertFalse(AudioDownmix.layoutChangeNeedsReconfigure(6, 6))
+
+            // No decoded width to reason about (the processor stands aside).
+            assertFalse(AudioDownmix.layoutChangeNeedsReconfigure(0, 0))
+        } finally {
+            PlayerAudioTuning.deviceMaxChannels = 2
+            PlayerAudioTuning.apply(PlayerAudioTuning.DOWNMIX_AUTO, 0, 0)
+        }
     }
 
     // ── Gains ─────────────────────────────────────────────────────────────

@@ -30,10 +30,10 @@ internal object PlayerAudioTuning {
      * Every option list the UI shows lives here, so the settings screen and the
      * player panel cannot drift apart.
      *
-     * "Auto" is the behaviour the app had before this existed: the decoded
-     * layout goes to the sink untouched and the device (its HAL, or Android
-     * AudioTrack) downmixes if it has to — a plain matrix with no centre lift,
-     * which is exactly why dialogue sits under the music on a TV's own speakers.
+     * "Auto" folds down only as far as this device's output needs (see
+     * [deviceMaxChannels]): stereo on a TV's own speakers, 5.1 kept on an AVR,
+     * and 7.1 trimmed to 5.1 either way — always with the centre lift, which is
+     * the part leaving the layout to the device could never give us.
      */
     val DOWNMIX_OPTIONS: List<Pair<String, Int>> =
         listOf(
@@ -65,6 +65,21 @@ internal object PlayerAudioTuning {
     @Volatile
     var downmixTarget: Int = DOWNMIX_AUTO
 
+    /**
+     * How many channels this device's audio output can actually carry — what
+     * "Auto" folds down to (see [AudioDownmix.desiredOutputChannels]). Written
+     * once per player build from the sink's own audio capabilities, and 2 until
+     * then.
+     *
+     * 2 is the deliberate default rather than the platform's optimistic "10":
+     * a TV's own speakers are this app's audience, and the mistake on the other
+     * side (keeping 5.1 on a stereo output) is the one that leaves dialogue
+     * under the score — the thing this feature exists to fix. Anyone with six
+     * real channels says so with the 5.1 pill.
+     */
+    @Volatile
+    var deviceMaxChannels: Int = 2
+
     /** Dialogue / centre-channel lift. */
     @Volatile
     var dialogueBoost: Int = 0
@@ -78,9 +93,22 @@ internal object PlayerAudioTuning {
      * coefficient (centre at the same perceived level as a front channel);
      * the boost multiplies on top of it, and the centre channel is where
      * dialogue lives in every film/TV mix.
+     *
+     * Applies to a fold only: a stream that is not being folded keeps this as a
+     * *balance* instead — see [inPlaceCenterGain].
      */
     val centerGain: Float
         get() = CENTER_BASE * (1f + 0.5f * dialogueBoost)
+
+    /**
+     * Centre-channel gain for a stream that keeps its layout (Downmix = Auto),
+     * i.e. the one the device folds itself. 1.0 at Off, so the default state is
+     * the untouched mix, and the same step as [midGain] — the phantom-centre lift
+     * an already-stereo track gets — so the two halves of the dialogue boost feel
+     * alike.
+     */
+    val inPlaceCenterGain: Float
+        get() = 1f + 0.35f * dialogueBoost
 
     /**
      * Mid-channel lift for STEREO sources. A 2.0 track has no centre channel:

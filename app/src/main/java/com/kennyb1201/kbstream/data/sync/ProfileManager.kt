@@ -136,6 +136,11 @@ object ProfileManager {
         runCatching { com.kennyb1201.kbstream.data.watched.WatchedStatusRepository.invalidateAllCaches() }
         runCatching { com.kennyb1201.kbstream.data.addon.AddonManager.getInstance(appContextForSwitch()).refreshAddons() }
         runCatching { com.kennyb1201.kbstream.data.simkl.SimklRepository.clearTransientCaches() }
+        // MDBList's key is per-profile too: its process-wide watched
+        // snapshot and paused-session (Continue Watching) caches otherwise
+        // answered the incoming profile with the profile just left's
+        // /sync/playback list for the rest of each TTL.
+        runCatching { com.kennyb1201.kbstream.data.mdblist.MdbListClient.clearTransientCaches() }
         com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
             SupabaseSync.onProfileSwitched(appContext)
             // The TV-launcher Watch Next channel is a GLOBAL OS surface but

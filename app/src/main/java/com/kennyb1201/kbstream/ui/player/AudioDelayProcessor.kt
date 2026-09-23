@@ -45,6 +45,23 @@ internal class AudioDelayProcessor : BaseAudioProcessor() {
     private var appliedMs = 0
 
     /**
+     * True from [beginInPlaceReconfigure] until the next buffer reaches
+     * [queueInput] — the window in which the sink is being reconfigured under us
+     * and its configure/flush hooks must NOT re-insert the offset.
+     *
+     * Reconfiguring a running sink (which is how a downmix *layout* change is
+     * applied — see [LiveDownmixAudioSink]) makes Media3 replay those hooks, the
+     * very hooks that put the shift into the stream. The audio already carries
+     * its shift, and the media clock is re-based on the buffer being handled, so
+     * inserting it a second time would move the audio later by the whole offset.
+     * Closing the window on the next [queueInput] — always reached in the same
+     * renderer iteration — keeps a genuine seek (its own flush, no reconfigure)
+     * re-applying the offset exactly as before.
+     */
+    @Volatile
+    private var inPlaceReconfigure = false
+
+    /**
      * Bytes still to shift in this stream: > 0 emits silence, < 0 drops audio.
      * Only touched on the audio thread apart from the small synchronized
      * updates from [setDelayMs] on the main thread.
@@ -59,6 +76,17 @@ internal class AudioDelayProcessor : BaseAudioProcessor() {
     /** Current offset in ms (0 = untouched audio). */
     val delayMs: Int
         get() = targetMs
+
+    /**
+     * Marks the start of an in-place sink reconfigure (a live audio-setting
+     * change, not a new playback position): the offset already in the stream
+     * must not be inserted again. Callers are the sink wrapper's
+     * [LiveDownmixAudioSink.applyPendingLayoutChange]; the window closes itself
+     * on the next buffer.
+     */
+    fun beginInPlaceReconfigure() {
+        inPlaceReconfigure = true
+    }
 
     /**
      * Sets the offset. The *difference* is applied from the next buffer on, so
@@ -80,24 +108,36 @@ internal class AudioDelayProcessor : BaseAudioProcessor() {
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
         bytesPerFrame = inputAudioFormat.bytesPerFrame.coerceAtLeast(1)
         bytesPerMs = (bytesPerFrame * inputAudioFormat.sampleRate / 1000).coerceAtLeast(1)
-        synchronized(this) { pendingBytes = bytesFor(appliedMs) }
+        synchronized(this) {
+            if (!inPlaceReconfigure) pendingBytes = bytesFor(appliedMs)
+        }
         return inputAudioFormat
     }
 
     override fun onFlush() {
         // A seek/track change starts a fresh stream: re-apply the whole offset
-        // so it stays constant for the session.
-        synchronized(this) { pendingBytes = bytesFor(appliedMs) }
+        // so it stays constant for the session. A reconfigure of the running
+        // sink is not a fresh stream - see [inPlaceReconfigure].
+        synchronized(this) {
+            if (!inPlaceReconfigure) pendingBytes = bytesFor(appliedMs)
+        }
     }
 
     override fun onReset() {
-        synchronized(this) { pendingBytes = 0 }
+        synchronized(this) {
+            inPlaceReconfigure = false
+            pendingBytes = 0
+        }
     }
 
     /** Always true — see the class doc; the 0 ms path is a pass-through. */
     override fun isActive(): Boolean = true
 
     override fun queueInput(inputBuffer: ByteBuffer) {
+        // Whatever the sink needed to reconfigure has now been replayed: the
+        // window is over, so the next flush is a real one again.
+        inPlaceReconfigure = false
+
         var pending: Int
         synchronized(this) { pending = pendingBytes }
 

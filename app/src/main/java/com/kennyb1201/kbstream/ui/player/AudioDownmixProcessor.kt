@@ -23,8 +23,12 @@ import kotlin.math.roundToInt
  *  1. **Fold** a multichannel stream to the requested layout (5.1/7.1 → stereo),
  *     lifting the centre channel — dialogue — and trimming the surrounds that
  *     carry score and effects (see [AudioDownmix]).
- *  2. **Lift the phantom centre** of an already-stereo stream (mid/side), the
- *     same idea for a 2.0 track: voices up, wide effects left alone.
+ *  2. **Balance in place** when nothing is folded. This is what makes the
+ *     dialogue knob work at all with the downmix left on "Auto" (the default):
+ *     a stereo stream has its phantom centre lifted (mid/side — voices up, wide
+ *     effects untouched), and a multichannel stream keeps its layout but has the
+ *     real centre channel lifted and its surrounds trimmed, so the device's own
+ *     fold then works on an already-balanced mix rather than the untouched one.
  *  3. **Gain** by the configured volume boost, so content mixed too quietly is
  *     audible without the TV's volume rocker pinned and the amp clipping.
  *  4. **Limit** the result with a linked-channel peak limiter, which is what
@@ -35,9 +39,12 @@ import kotlin.math.roundToInt
  * what the decoder hands us — this is decoder-agnostic, so it behaves the same
  * whether the audio came from the bundled FFmpeg decoder or a hardware codec.
  *
- * The output channel count is fixed for the session when the sink configures:
- * a *layout* change made while playing lands on the next stream start, while the
- * dialogue/volume knobs always apply immediately.
+ * The dialogue and volume knobs need nothing but the next buffer. The *layout*
+ * cannot be changed from in here — the sink builds its AudioTrack from the
+ * channel count declared in [onConfigure] — so a layout change is applied by
+ * re-configuring the sink, which [LiveDownmixAudioSink] watches for and drives
+ * (using [inputChannelCount]/[outputChannelCount] to notice the change). Either
+ * way the viewer hears it while the film keeps playing.
  */
 internal class AudioDownmixProcessor : BaseAudioProcessor() {
 
@@ -64,6 +71,29 @@ internal class AudioDownmixProcessor : BaseAudioProcessor() {
 
     /** False for layouts/encodings we do not model: the processor stays out of the way. */
     private var processable = false
+
+    /**
+     * Decoded channel count of the stream in the pipeline (0 before the first
+     * [onConfigure]). Read by [LiveDownmixAudioSink] on the same audio thread.
+     */
+    val inputChannelCount: Int
+        get() = inputChannels
+
+    /**
+     * Channel count the sink is carrying for this stream (0 before the first
+     * [onConfigure]). Equal to [inputChannelCount] unless a fold is in place.
+     */
+    val outputChannelCount: Int
+        get() = outputChannels
+
+    /**
+     * True only while the processor is really folding/gaining this stream — i.e.
+     * a layout it models, in an encoding it can rewrite. A stream in passthrough
+     * or offload never reaches us, and one with an unmodelled channel count is
+     * left untouched, so a caller must not try to re-fold either.
+     */
+    val isFoldingChannels: Boolean
+        get() = processable
 
     private var limiter = AudioDownmix.Limiter(sampleRate = 48_000)
 
@@ -95,24 +125,18 @@ internal class AudioDownmixProcessor : BaseAudioProcessor() {
 
         processable = true
 
-        // The layout is decided here, once per stream: the sink builds its
-        // AudioTrack from this output format, so the channel count cannot change
-        // under it mid-stream.
+        // The layout is decided here, once per stream — and again whenever the
+        // sink is reconfigured because the setting changed mid-playback (see
+        // [LiveDownmixAudioSink]): the sink builds its AudioTrack from this
+        // output format, so the channel count can only change under it through
+        // another configure() call, never from inside the sample stream.
         val desired = AudioDownmix.desiredOutputChannels(inputChannels)
-        val built =
-            AudioDownmix.mixingMatrix(
-                inputChannels = inputChannels,
-                outputChannels = desired,
-                centerGain = PlayerAudioTuning.centerGain,
-                surroundScale = surroundScale()
-            )
-
-        matrix = built
-        outputChannels = if (built != null) desired else inputChannels
-        matrixSignature = signature()
+        val foldable = desired != inputChannels
+        outputChannels = if (foldable) desired else inputChannels
 
         channelScratch = FloatArray(inputChannels)
         mixScratch = FloatArray(outputChannels)
+        rebuildCoefficients()
 
         return if (outputChannels == inputChannels) {
             inputAudioFormat
@@ -215,26 +239,56 @@ internal class AudioDownmixProcessor : BaseAudioProcessor() {
         output.flip()
     }
 
+    /**
+     * Re-pins the pipeline to [channels] output channels after the sink refused a
+     * live layout change (see [LiveDownmixAudioSink]).
+     *
+     * Media3 configures the audio processors before it checks the output layout,
+     * so a rejected reconfigure leaves this processor already producing the
+     * rejected width while the sink keeps writing the old one — buffers whose
+     * frame size disagrees with the track. This puts the matrix, the scratch
+     * buffer and the declared width back on what the sink is carrying. Must be
+     * called on the audio thread.
+     */
+    fun rePinOutputChannels(channels: Int) {
+        outputChannels = if (channels in 1..inputChannels) channels else inputChannels
+        mixScratch = FloatArray(outputChannels)
+        rebuildCoefficients()
+    }
+
     /** Rebuilds the mix coefficients when a dialogue knob moved (buffer granularity). */
     private fun refreshMatrixIfNeeded() {
         val current = signature()
         if (current == matrixSignature) return
-        matrixSignature = current
+        rebuildCoefficients()
+    }
 
-        val desiredLayout =
-            if (matrix == null) inputChannels else outputChannels
-
+    /**
+     * The coefficients for the layout the sink is carrying: the fold matrix when
+     * the output width differs from the decoded one, otherwise the in-place
+     * balance (see [AudioDownmix.gainMatrix]) — which is what carries the
+     * dialogue lift when the layout is left to the device.
+     *
+     * Must not change [outputChannels]: the sink is already built for that width,
+     * so only a configure() may move it (see [LiveDownmixAudioSink]).
+     */
+    private fun rebuildCoefficients() {
         matrix =
-            if (desiredLayout == inputChannels) {
-                null
-            } else {
+            if (outputChannels != inputChannels) {
                 AudioDownmix.mixingMatrix(
                     inputChannels = inputChannels,
-                    outputChannels = desiredLayout,
+                    outputChannels = outputChannels,
                     centerGain = PlayerAudioTuning.centerGain,
                     surroundScale = surroundScale()
                 )
+            } else {
+                AudioDownmix.gainMatrix(
+                    inputChannels = inputChannels,
+                    centerGain = PlayerAudioTuning.inPlaceCenterGain,
+                    surroundScale = surroundScale()
+                )
             }
+        matrixSignature = signature()
     }
 
     /** Surround trim that lets a lifted centre read as dialogue rather than as volume. */
