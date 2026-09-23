@@ -961,6 +961,17 @@ class SimklRepository(
     ): SimklWatchingShowsResponse = getWatchingShowsImpl(accessToken)
 
     /**
+     * Shows the account is caught up on while episodes it knows are still
+     * unaired remain - the Upcoming rail's "what is coming next" candidates,
+     * whether that is a new season or the next episode of one already airing.
+     * Body lives in SimklReads.kt; never throws (an unreachable Simkl just
+     * yields no cards).
+     */
+    suspend fun getCaughtUpUnreleasedShows():
+        List<SimklContinueWatchingItem> =
+        getCaughtUpUnreleasedShowsImpl()
+
+    /**
      * Library totals for the connect screen: how many distinct shows and
      * movies the Simkl account has any watch history for. Shows come from
      * the cached all-shows library (the same source Continue Watching
@@ -2023,6 +2034,28 @@ class SimklRepository(
                                 return@mapNotNull null
                             }
 
+                            // Same rule the episode sessions get below: a
+                            // movie session this far along is finished, not a
+                            // resume point (the player marks a title complete
+                            // at 95%), so the card it produced was a
+                            // "99% watched" ghost.
+                            if (
+                                ShowCompletionRules.isFinishedPlaybackSession(
+                                    item.progress
+                                )
+                            ) {
+                                Log.d(
+                                    "SIMKL_REPO",
+                                    "continueWatching: dropping finished " +
+                                        "movie session movie=$simklId " +
+                                        "progress=${item.progress}"
+                                )
+
+                                deletePlaybackSession(item.id)
+
+                                return@mapNotNull null
+                            }
+
                             SimklContinueWatchingItem(
                                 id =
                                     "movie-$simklId",
@@ -2091,15 +2124,46 @@ class SimklRepository(
                                         ?.toString()
                                     ?: return@mapNotNull null
 
+                            /*
+                             * A session is no longer a resume point once the
+                             * show is caught up on everything aired (there is
+                             * nothing left to pick up - the resume card for a
+                             * caught-up show is always stale, at any
+                             * progress) or once the session itself sits at the
+                             * finished mark: the player marks a title complete
+                             * at 95%, so a session that late belongs to an
+                             * episode the user is done with, whatever Simkl's
+                             * watched tally still says. Either way the record
+                             * is deleted, so the next feed refresh cannot put
+                             * the card back - this is the "episode I never
+                             * started shows 99% watched" ghost.
+                             */
                             if (
                                 isTrulyCompleted(
                                     simklId
-                                ) &&
-                                (
+                                ) ||
+                                ShowCompletionRules.isFinishedPlaybackSession(
                                     item.progress
-                                        ?: 0f
-                                    ) >= 95f
+                                )
                             ) {
+                                Log.d(
+                                    "SIMKL_REPO",
+                                    "continueWatching: dropping stale show " +
+                                        "session show=$simklId " +
+                                        "progress=${item.progress} " +
+                                        if (
+                                            isTrulyCompleted(
+                                                simklId
+                                            )
+                                        ) {
+                                            "(nothing aired left)"
+                                        } else {
+                                            "(session finished)"
+                                        }
+                                )
+
+                                deletePlaybackSession(item.id)
+
                                 return@mapNotNull null
                             }
 
@@ -2253,9 +2317,38 @@ class SimklRepository(
                         // even when Simkl's list status still says
                         // "completed" (whole-show mark, then a season
                         // unmarked), and a caught-up show does not.
-                        isContinueWatchingCandidate(
-                            item
-                        )
+                        val candidate =
+                            isContinueWatchingCandidate(
+                                item
+                            )
+
+                        // A caught-up show leaves this rail BY DESIGN (there
+                        // is nothing to resume), so the reason is worth
+                        // logging: the usual one is a perfectly healthy show
+                        // whose card now comes from the Upcoming rail instead.
+                        // See UPCOMING_DIAGNOSTICS.
+                        if (
+                            !candidate &&
+                            UPCOMING_DIAGNOSTICS
+                        ) {
+
+                            val total =
+                                item.totalEpisodesCount ?: 0
+
+                            val notAired =
+                                item.notAiredEpisodesCount ?: 0
+
+                            Log.d(
+                                "UPCOMING_DIAG",
+                                "cw skip title='${item.show?.title}' " +
+                                    "status=${item.status} " +
+                                    "watched=${item.watchedEpisodesCount ?: 0} " +
+                                    "aired=${if (total > 0) total - notAired else 0} " +
+                                    "nextToWatch=${item.nextToWatch}"
+                            )
+                        }
+
+                        candidate
                     }
                     .mapNotNull { item ->
 

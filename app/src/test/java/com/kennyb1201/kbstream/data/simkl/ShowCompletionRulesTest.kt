@@ -187,4 +187,104 @@ class ShowCompletionRulesTest {
             )
         )
     }
+
+    /**
+     * Reported bug: an episode the user never started showed up on Continue
+     * Watching at "99% watched". A tracker session that late is a finished
+     * record (the player treats 95% as complete), not a resume point.
+     */
+    @Test
+    fun `a tracker session at the finished mark is not a resume point`() {
+        assertTrue(
+            ShowCompletionRules.isFinishedPlaybackSession(99f)
+        )
+        assertTrue(
+            ShowCompletionRules.isFinishedPlaybackSession(
+                ShowCompletionRules.FINISHED_PLAYBACK_PERCENT
+            )
+        )
+        assertTrue(
+            ShowCompletionRules.isFinishedPlaybackSession(100f)
+        )
+
+        // Below the mark there is still something to resume.
+        assertFalse(
+            ShowCompletionRules.isFinishedPlaybackSession(94.9f)
+        )
+
+        // No progress reported at all is not "finished".
+        assertFalse(
+            ShowCompletionRules.isFinishedPlaybackSession(null)
+        )
+    }
+
+    /**
+     * Reported gap: a show the user is caught up on (American Horror Story)
+     * showed in other apps' Upcoming but not ours. Its card comes from this
+     * rule: following, caught up, and something still unaired.
+     */
+    @Test
+    fun `a caught up show with unaired episodes has an upcoming card`() {
+        assertTrue(
+            ShowCompletionRules.isCaughtUpUpcomingCandidate(
+                status = "watching",
+                watchedEpisodesCount = 20,
+                totalEpisodesCount = 30,
+                notAiredEpisodesCount = 10
+            )
+        )
+
+        // Simkl casing/spacing is not guaranteed.
+        assertTrue(
+            ShowCompletionRules.isCaughtUpUpcomingCandidate(
+                status = " Watching ",
+                watchedEpisodesCount = 20,
+                totalEpisodesCount = 30,
+                notAiredEpisodesCount = 10
+            )
+        )
+    }
+
+    @Test
+    fun `a show with aired episodes left is not an upcoming catch-up card`() {
+        // Mid-season with an episode to resume: that belongs on Continue
+        // Watching, not here.
+        assertFalse(
+            ShowCompletionRules.isCaughtUpUpcomingCandidate(
+                status = "watching",
+                watchedEpisodesCount = 19,
+                totalEpisodesCount = 30,
+                notAiredEpisodesCount = 10
+            )
+        )
+    }
+
+    @Test
+    fun `a caught up show with nothing unaired has no upcoming card`() {
+        // Every episode aired and watched, nothing announced: nothing to
+        // put on a schedule.
+        assertFalse(
+            ShowCompletionRules.isCaughtUpUpcomingCandidate(
+                status = "watching",
+                watchedEpisodesCount = 30,
+                totalEpisodesCount = 30,
+                notAiredEpisodesCount = 0
+            )
+        )
+    }
+
+    @Test
+    fun `only shows on the watching list become upcoming catch-up cards`() {
+        for (status in listOf("dropped", "completed", "hold", null)) {
+            assertFalse(
+                status.orEmpty(),
+                ShowCompletionRules.isCaughtUpUpcomingCandidate(
+                    status = status,
+                    watchedEpisodesCount = 20,
+                    totalEpisodesCount = 30,
+                    notAiredEpisodesCount = 10
+                )
+            )
+        }
+    }
 }

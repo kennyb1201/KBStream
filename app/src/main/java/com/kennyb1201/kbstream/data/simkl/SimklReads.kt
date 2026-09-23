@@ -11,6 +11,17 @@ package com.kennyb1201.kbstream.data.simkl
  * unchanged.
  */
 
+/**
+ * Upcoming-rail diagnostics. On, the repository says why a following show was
+ * kept off Continue Watching and the Home rail reports what it made of each
+ * caught-up candidate - enough to tell a show that never qualifies from one
+ * whose next episode TMDB has no date for. One line per show per feed build
+ * (the feed itself is cached), so the cost is a log write, not a request.
+ * Flip to false to silence.
+ */
+internal const val UPCOMING_DIAGNOSTICS =
+    true
+
 suspend fun SimklRepository.getPlaybackItemsImpl(
     accessToken: String =
         trackedAccessToken()
@@ -288,6 +299,78 @@ object ShowCompletionRules {
         return airedTotal > 0 &&
             watched >= airedTotal
     }
+
+    /**
+     * A paused tracker session this far along is not a resume point.
+     *
+     * The player itself treats 95% as finished ([FINISHED_PLAYBACK_PERCENT]
+     * mirrors NativePlayerActivity's COMPLETION_THRESHOLD_RATIO): an episode
+     * played to that point is marked complete locally, so a tracker session
+     * still reporting it - and Simkl marks watched on a stop at 80%, so a
+     * session that late which is still OPEN was never closed - is a leftover
+     * record rather than somewhere to resume. This is the card that showed an
+     * episode the user never started as "99% watched".
+     */
+    fun isFinishedPlaybackSession(
+        progressPercent: Float?
+    ): Boolean =
+        (progressPercent ?: 0f) >=
+            FINISHED_PLAYBACK_PERCENT
+
+    /** Progress at/above which a tracker playback session counts as finished. */
+    const val FINISHED_PLAYBACK_PERCENT =
+        95f
+
+    /**
+     * The Upcoming rail's caught-up rule: a show the account is CAUGHT UP
+     * on, still on the watching list, with episodes Simkl already knows are
+     * UNAIRED.
+     *
+     * Caught-up shows are deliberately kept off Continue Watching (there is
+     * nothing to resume), which used to mean they surfaced nowhere - a
+     * returning show's new season never showed up in Upcoming either. This is
+     * that gap closed: ANY next unaired episode qualifies, whether it opens a
+     * season or lands mid-season, because a show the user has watched
+     * everything aired of and is still following has upcoming content either
+     * way.
+     */
+    fun isCaughtUpUpcomingCandidate(
+        status: String?,
+        watchedEpisodesCount: Int?,
+        totalEpisodesCount: Int?,
+        notAiredEpisodesCount: Int?
+    ): Boolean {
+
+        // Only shows the user is following: "dropped" is off the list on
+        // purpose, and anything never started is not caught up on anything.
+        if (
+            status
+                ?.trim()
+                ?.lowercase() != "watching"
+        ) {
+            return false
+        }
+
+        // Nothing unaired means nothing to announce. Cheap pre-filter too:
+        // the rail looks the show up on TMDB, so unaired episodes Simkl
+        // already knows about are what justify that call.
+        if (
+            (notAiredEpisodesCount ?: 0) <= 0
+        ) {
+            return false
+        }
+
+        return isCaughtUpOnAiredEpisodes(
+            watchedEpisodesCount =
+                watchedEpisodesCount,
+
+            totalEpisodesCount =
+                totalEpisodesCount,
+
+            notAiredEpisodesCount =
+                notAiredEpisodesCount
+        )
+    }
 }
 
 internal fun SimklRepository.isCaughtUpOnAiredEpisodes(
@@ -340,6 +423,156 @@ internal fun SimklRepository.isContinueWatchingCandidate(
         nextToWatch =
             item.nextToWatch
     )
+
+/**
+ * The Upcoming rail's caught-up candidates: shows the account is caught up on
+ * while Simkl still knows of UNAIRED episodes.
+ *
+ * Returned in the same wire shape the Continue Watching feed uses, so the
+ * rail enriches them through the exact path it already has (TMDB detail,
+ * artwork, next-episode-to-air) instead of a second one. These cards are
+ * Upcoming-only: a caught-up show is never a Continue Watching card.
+ *
+ * Costs no request of its own - the all-shows library is the blob the
+ * watched-state resolution already reads, cached for 15 minutes in memory
+ * and half a day on disk.
+ */
+suspend fun SimklRepository.getCaughtUpUnreleasedShowsImpl():
+    List<SimklContinueWatchingItem> {
+
+    if (
+        clientId.isBlank()
+    ) {
+        return emptyList()
+    }
+
+    val accessToken =
+        runCatching {
+            trackedAccessToken()
+        }.getOrNull()
+            ?.takeIf {
+                it.isNotBlank()
+            }
+            ?: return emptyList()
+
+    val body =
+        runCatching {
+            getAllShowItemsCached(
+                accessToken =
+                    accessToken
+            )
+        }.getOrNull()
+            ?: return emptyList()
+
+    return body.shows
+        .asSequence()
+        .filter { item ->
+
+            val show =
+                item.show
+                    ?: return@filter false
+
+            // An id the rail can navigate and ask TMDB about.
+            val hasId =
+                !show.ids
+                    ?.imdb
+                    .isNullOrBlank() ||
+                    (show.ids?.tmdb ?: 0) > 0
+
+            hasId &&
+                ShowCompletionRules.isCaughtUpUpcomingCandidate(
+                    status =
+                        item.status,
+
+                    watchedEpisodesCount =
+                        item.watchedEpisodesCount,
+
+                    totalEpisodesCount =
+                        item.totalEpisodesCount,
+
+                    notAiredEpisodesCount =
+                        item.notAiredEpisodesCount
+                )
+        }
+        .mapNotNull { item ->
+
+            val show =
+                item.show
+                    ?: return@mapNotNull null
+
+            val imdbId =
+                show.ids
+                    ?.imdb
+                    ?.takeIf {
+                        it.isNotBlank()
+                    }
+
+            SimklContinueWatchingItem(
+                id =
+                    "caught-up-" +
+                        (
+                            show.ids
+                                ?.simkl
+                                ?.toString()
+                                ?: imdbId
+                                ?: show.ids
+                                    ?.tmdb
+                                    ?.toString()
+                                ?: return@mapNotNull null
+                            ),
+
+                imdbId =
+                    imdbId,
+
+                tmdbId =
+                    show.ids
+                        ?.tmdb,
+
+                simklId =
+                    show.ids
+                        ?.simkl,
+
+                title =
+                    show.title
+                        ?: "Untitled show",
+
+                year =
+                    show.year,
+
+                // No poster here on purpose: the rail's builder replaces
+                // this from the TMDB detail it has to fetch anyway (the
+                // next-episode-to-air that decides whether the show even
+                // belongs on the rail), so a Simkl poster path would only be
+                // a second source of the same artwork.
+                posterUrl =
+                    null,
+
+                lastWatchedAt =
+                    item.lastWatchedAt,
+
+                // No paused session behind these: the rail only needs the
+                // show, its next episode comes from TMDB.
+                progress =
+                    null,
+
+                upNextText =
+                    null,
+
+                mediaType =
+                    "series",
+
+                source =
+                    "watching",
+
+                season =
+                    null,
+
+                episode =
+                    null
+            )
+        }
+        .toList()
+}
 
 internal fun SimklRepository.isShowFullyWatched(
     item: SimklWatchingShowDetailedItem

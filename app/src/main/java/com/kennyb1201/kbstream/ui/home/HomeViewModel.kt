@@ -21,6 +21,7 @@ import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.data.simkl.SimklContinueWatchingItem
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
+import com.kennyb1201.kbstream.data.simkl.UPCOMING_DIAGNOSTICS
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbEpisodeAirInfo
 import com.kennyb1201.kbstream.data.tmdb.TmdbHeroArtworkRepository
@@ -78,6 +79,24 @@ import org.json.JSONObject
 
 private const val PREFS_DISMISSED_UPNEXT =
     "continue_watching_dismissals"
+
+/**
+ * Ceiling on how many caught-up shows one Upcoming refresh looks up on TMDB.
+ * The candidate list is already narrowed to "watching" shows Simkl knows have
+ * unaired episodes; this only keeps a huge library from turning one refresh
+ * into dozens of lookups.
+ */
+private const val MAX_CAUGHT_UP_UPCOMING_ITEMS =
+    25
+
+/**
+ * How long a loaded set of caught-up Upcoming cards is reused. The Upcoming
+ * schedule re-derives on every Continue Watching publish (two of those per
+ * refresh, plus one per watched-state change), and the candidates behind it
+ * are network work: within this window the previous answer stands.
+ */
+private const val CAUGHT_UP_UPCOMING_TTL_MS =
+    60_000L
 
 /** Sync bookkeeping key inside the dismissals prefs store. */
 private const val DISMISSALS_SYNCED_AT = "dismissals_synced_at"
@@ -531,15 +550,25 @@ class HomeViewModel(
         _upNext.asStateFlow()
 
     /**
-     * Upcoming episodes derived from Continue Watching enrichment: one
-     * entry per in-progress show whose TMDB detail carries a future
-     * "next episode to air", sorted by air date. Re-published whenever
-     * [upNext] changes (enrichment, Simkl merge, dismissals).
+     * Upcoming episodes: one entry per in-progress show whose TMDB detail
+     * carries a future "next episode to air", plus the next UNAIRED episode
+     * of every show this profile is caught up on
+     * ([loadCaughtUpUpcomingItems]) - a caught-up show has nothing to resume,
+     * so it never reaches Continue Watching and this is the only rail that
+     * can surface what it has coming, whether that is a new season or the
+     * next episode of one already airing. Sorted by air date.
+     *
+     * Re-published whenever [upNext] changes, which is also when the watch
+     * state behind both sources is freshest.
      */
     val upcomingSchedule: StateFlow<List<UpcomingEpisode>> =
         _upNext
             .asStateFlow()
-            .map { items -> buildUpcomingSchedule(items) }
+            .map { items ->
+                buildUpcomingSchedule(
+                    items + loadCaughtUpUpcomingItems()
+                )
+            }
             .stateIn(
                 scope = viewModelScope,
                 started = SharingStarted.Eagerly,
@@ -1416,6 +1445,185 @@ Log.d(
         }
 
         return filtered
+    }
+
+    /**
+     * Last successfully loaded set of caught-up Upcoming cards. Served when
+     * the next load fails, so a flaky Simkl call cannot blink the cards off
+     * the rail.
+     */
+    private var lastCaughtUpUpcomingItems:
+        List<UpNextItem> =
+        emptyList()
+
+    /** When [lastCaughtUpUpcomingItems] was built, for [CAUGHT_UP_UPCOMING_TTL_MS]. */
+    private var caughtUpUpcomingLoadedAt =
+        0L
+
+    /**
+     * Profile [lastCaughtUpUpcomingItems] belongs to. Simkl auth is
+     * per-profile while the feed is account-wide, so the cached list must
+     * never outlive a switch: without the stamp, a switch inside the TTL
+     * painted the profile the user just left's cards onto the incoming one
+     * (including a kids profile on a shared account).
+     */
+    private var caughtUpUpcomingProfileId:
+        String? =
+        null
+
+    /**
+     * The Upcoming rail's caught-up cards: the next UNAIRED episode of every
+     * show this profile is caught up on - a season premiere when a new season
+     * is what is coming, and a mid-season episode when the show is still
+     * airing and the user is simply waiting on the next one.
+     *
+     * Caught-up shows are deliberately kept off Continue Watching (there is
+     * nothing to resume) and because the Upcoming rail is derived from that
+     * rail they used to be absent from it too - a returning show's next
+     * episode surfaced nowhere. These cards close that gap, so "everything
+     * upcoming of what I'm watching" actually reaches the rail; the rule is
+     * any next unaired episode, and buildUpcomingSchedule keeps just the
+     * future air dates (the NEW SEASON chip is still driven by a genuine
+     * S01E01, so a mid-season entry reads as a plain dated card).
+     *
+     * The returned cards are Upcoming-only - they are handed straight to the
+     * schedule builder below and never published to [upNext], which is what
+     * keeps a caught-up show off the Continue Watching rail.
+     *
+     * Kids Mode and the rail's dismissals apply to these cards exactly as
+     * they do to the Continue Watching ones (one shared gate).
+     */
+    private suspend fun loadCaughtUpUpcomingItems(): List<UpNextItem> {
+
+        if (
+            !simklRepository.isConfigured() ||
+            !simklRepository.hasToken()
+        ) {
+            lastCaughtUpUpcomingItems = emptyList()
+            return emptyList()
+        }
+
+        val profileId =
+            com.kennyb1201.kbstream.data.sync.ProfileManager
+                .activeProfile.value?.id
+                ?: ""
+
+        if (
+            profileId == caughtUpUpcomingProfileId &&
+            System.currentTimeMillis() -
+            caughtUpUpcomingLoadedAt <
+            CAUGHT_UP_UPCOMING_TTL_MS
+        ) {
+            return lastCaughtUpUpcomingItems
+        }
+
+        val candidates =
+            runCatching {
+                simklRepository.getCaughtUpUnreleasedShows()
+            }.getOrElse { e ->
+                Log.w(
+                    "UPCOMING_DIAG",
+                    "caught-up candidates failed: ${e.message}",
+                    e
+                )
+                return lastCaughtUpUpcomingItems
+            }
+
+        if (
+            UPCOMING_DIAGNOSTICS
+        ) {
+            val capped =
+                candidates.take(
+                    MAX_CAUGHT_UP_UPCOMING_ITEMS
+                )
+
+            Log.d(
+                "UPCOMING_DIAG",
+                "caught-up candidates=${candidates.size} " +
+                    capped.joinToString {
+                        "'${it.title}'"
+                    }
+            )
+        }
+
+        // Reuse the Continue Watching builder: it is what resolves the TMDB
+        // detail (artwork, next episode to air) for a Simkl item, so these
+        // cards get the same look and the same cached lookups.
+        val built =
+            coroutineScope {
+                candidates
+                    .take(MAX_CAUGHT_UP_UPCOMING_ITEMS)
+                    .map { candidate ->
+                        async {
+                            runCatching {
+                                buildSimklUpNextItem(candidate)
+                            }.getOrNull()
+                        }
+                    }
+                    .awaitAll()
+                    .filterNotNull()
+            }
+
+        // The decisive step for a show the user expects to see: Simkl says an
+        // episode is still to air, but only TMDB knows WHEN - and an entry it
+        // has no dated next episode for is dropped by
+        // buildUpcomingSchedule, not here.
+        if (
+            UPCOMING_DIAGNOSTICS
+        ) {
+            val startOfToday =
+                LocalDate.now(ZoneId.systemDefault())
+                    .atStartOfDay(ZoneId.systemDefault())
+                    .toInstant()
+                    .toEpochMilli()
+
+            val airing =
+                built.filter { item ->
+
+                    val air =
+                        item.nextEpisodeAir
+                        ?: return@filter false
+
+                    (
+                        parseTmdbAirDate(
+                            air.airDate
+                        ) ?: 0L
+                        ) >= startOfToday
+                }
+
+            Log.d(
+                "UPCOMING_DIAG",
+                "caught-up enriched=${built.size} " +
+                    "future-dated=${airing.size} " +
+                    "no-dated-tmdb-episode=" + built.filterNot {
+                        airing.contains(
+                            it
+                        )
+                    }.joinToString {
+                        "'${it.title}'"
+                    }
+            )
+        }
+
+        val upcomingCards =
+            applyContinueWatchingDismissals(built)
+
+        if (
+            UPCOMING_DIAGNOSTICS
+        ) {
+            Log.d(
+                "UPCOMING_DIAG",
+                "caught-up cards=${upcomingCards.size} " +
+                    "(after kids mode + dismissals)"
+            )
+        }
+
+        lastCaughtUpUpcomingItems = upcomingCards
+        caughtUpUpcomingProfileId = profileId
+        caughtUpUpcomingLoadedAt =
+            System.currentTimeMillis()
+
+        return upcomingCards
     }
 
     /**
