@@ -454,15 +454,8 @@ internal object PlayerTrackBridge {
         ).joinToString("|")
     }
 
-    /** Panel label: "ENG • E-AC3 • 6ch • 640 kbps". */
-    fun labelFor(format: Format): String {
-        val parts = mutableListOf<String>()
-        format.language?.uppercase()?.takeIf { it.isNotBlank() }?.let { parts.add(it) }
-        format.codecs?.uppercase()?.takeIf { it.isNotBlank() }?.let { parts.add(it) }
-        if (format.channelCount > 0) parts.add("${format.channelCount}ch")
-        if (format.bitrate > 0) parts.add("${format.bitrate / 1_000} kbps")
-        return if (parts.isEmpty()) "Track" else parts.joinToString(" • ")
-    }
+    /** Panel label for one audio track — see [audioTrackLabel]. */
+    fun labelFor(format: Format): String = audioTrackLabel(format)
 
     fun chooseSubtitleLanguage(context: Context, code: String) {
         subtitleLanguage = code
@@ -585,4 +578,28 @@ internal object PlayerTrackBridge {
         Log.i(TAG, "applied language '$language' to track type $type")
         return true
     }
+}
+
+/**
+ * One audio track as the player's pickers list it: language, codec, channel
+ * count and bitrate, e.g. "ENG • EAC3 • 6ch • 640 kbps".
+ *
+ * The codec is the field a viewer picks *between* — the same film often ships
+ * twice in one file (5.1 and stereo, or a dub and a commentary) — so it must
+ * not go missing. Language alone was all this used to show, because it read
+ * [Format.codecs] and nothing fills that in for container audio: media3's
+ * Matroska and FFmpeg paths leave it empty for essentially every audio track.
+ * The format's sample MIME type carries the same information ("audio/eac3"),
+ * so it is the fallback and the codec field is always populated.
+ */
+internal fun audioTrackLabel(format: Format): String {
+    val parts = mutableListOf<String>()
+    format.language?.uppercase()?.takeIf { it.isNotBlank() }?.let { parts.add(it) }
+
+    val codec = normalizeCodec(format.codecs?.takeIf { it.isNotBlank() } ?: format.sampleMimeType)
+    if (codec != "—") parts.add(codec.uppercase())
+
+    if (format.channelCount > 0) parts.add("${format.channelCount}ch")
+    if (format.bitrate > 0) parts.add("${format.bitrate / 1_000} kbps")
+    return if (parts.isEmpty()) "Track" else parts.joinToString(" • ")
 }

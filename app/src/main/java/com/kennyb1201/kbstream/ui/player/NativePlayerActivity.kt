@@ -5001,8 +5001,12 @@ class NativePlayerActivity : ComponentActivity() {
                 if (group.type == C.TRACK_TYPE_AUDIO && group.isTrackSelected(i)) {
                     val f = group.getTrackFormat(i)
                     val parts = mutableListOf<String>()
-                    f.language?.uppercase()?.let { parts.add("Language: $it") }
-                    normalizeCodec(f.codecs?.ifBlank { null })
+                    f.language?.uppercase()?.takeIf { it.isNotBlank() }
+                        ?.let { parts.add("Language: $it") }
+                    // Same MIME-type fallback as the picker's labels: an audio
+                    // track's Format.codecs is empty for most containers, and
+                    // "Codec: —" is no answer to "what is this stream".
+                    normalizeCodec(f.codecs?.ifBlank { null } ?: f.sampleMimeType)
                         .takeIf { it != "—" }?.let { parts.add("Codec: $it") }
                     if (f.channelCount > 0) parts.add("Channels: ${f.channelCount}")
                     if (f.sampleRate > 0) parts.add("Sample rate: ${f.sampleRate} Hz")
@@ -5701,8 +5705,15 @@ class NativePlayerActivity : ComponentActivity() {
                 audioGroups.flatMapIndexed { groupIdx, group ->
                     (0 until group.length).map { trackIdx ->
                         val format = group.getTrackFormat(trackIdx)
+                        // Language AND format, via the same label the settings
+                        // panel's track rows use: one language is often listed
+                        // several times in one file (5.1 vs stereo, dub vs
+                        // commentary), and the codec, channels and bitrate are
+                        // what separate those rows. "Track" means the format
+                        // carried neither a language nor a codec.
                         PickerItem(
-                            label = format.language?.uppercase() ?: "Track ${groupIdx + 1}",
+                            label = audioTrackLabel(format)
+                                .takeIf { it != "Track" } ?: "Track ${groupIdx + 1}",
                             isSelected = group.isTrackSelected(trackIdx),
                             onClick = {
                                 exoPlayer?.let { player ->
@@ -7871,12 +7882,27 @@ internal fun normalizeCodec(
         lower.startsWith("vp09") || lower.startsWith("vp9") -> "VP9"
         lower.startsWith("vp08") || lower.startsWith("vp8") -> "VP8"
         lower.startsWith("av01") || lower.startsWith("av1") -> "AV1"
-        lower.startsWith("mp4a") || lower.startsWith("mp3") || lower.contains("aac") -> "AAC"
+        lower.contains("mp4a") || lower.startsWith("mp3") || lower.contains("aac") -> "AAC"
+        // E-AC3 first: "audio/eac3" contains "ac3", so testing AC-3 here
+        // first labelled every E-AC3 track as AC-3 — the one difference a
+        // viewer choosing between two Dolby tracks is looking for.
+        lower.contains("eac3") || lower.contains("ec-3") -> "EAC3"
         lower.contains("ac-3") || lower.contains("ac3") -> "AC-3"
-        lower.contains("ec-3") || lower.contains("eac3") -> "EAC3"
         lower.contains("opus") -> "Opus"
         lower.contains("vorbis") -> "Vorbis"
         lower.contains("flac") -> "FLAC"
+        // Audio reached through its MIME type rather than a codec string (see
+        // audioTrackLabel): container audio tracks leave Format.codecs empty,
+        // so these names come from "audio/<something>" instead.
+        lower == "audio/mpeg" || lower == "audio/mp3" -> "MP3"
+        lower == "audio/mpeg-l1" -> "MP1"
+        lower == "audio/mpeg-l2" -> "MP2"
+        lower == "audio/raw" -> "PCM"
+        lower == "audio/alac" -> "ALAC"
+        lower.contains("dts.hd") || lower.contains("dts-hd") || lower.contains("dtshd") -> "DTS-HD"
+        lower.contains("dts") -> "DTS"
+        lower.contains("true-hd") || lower.contains("truehd") || lower.contains("mlp") -> "TrueHD"
+        lower.contains("ac-4") || lower.contains("ac4") -> "AC-4"
         lower.contains("video/h264") || lower.contains("video/avc") -> "H.264"
         lower.contains("video/hevc") || lower.contains("video/h265") -> "H.265"
         lower.contains("video/vp9") -> "VP9"

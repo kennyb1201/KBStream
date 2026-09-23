@@ -176,6 +176,16 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    testOptions {
+        // Unit tests build real media3 Formats (the audio track label reads
+        // Format.language / codecs / sampleMimeType), and Format's constructor
+        // normalizes the language through Util.normalizeLanguageCode, which
+        // calls android.text.TextUtils. Without this the stub jar throws
+        // "Method isEmpty in android.text.TextUtils not mocked" from every
+        // such test.
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 
