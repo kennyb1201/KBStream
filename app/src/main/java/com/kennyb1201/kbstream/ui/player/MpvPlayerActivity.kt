@@ -9,24 +9,34 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
-import android.widget.Button
+import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
+import coil3.load
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.annotation.RequiresApi
 import androidx.lifecycle.lifecycleScope
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.player.LanguageMatch
+import com.kennyb1201.kbstream.data.player.PlayerTitlePrefs
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
+import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import kotlinx.coroutines.withContext
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.ui.streams.StreamsViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -46,11 +56,20 @@ import kotlinx.coroutines.launch
  *
  * What is deliberately NOT here, because it belongs to ExoPlayer: the source
  * picker and stream ranking, the Dolby Vision compat layer, the P5 GPU
- * correction, tracks remembered per title (PlayerTrackMemory), the audio
- * tuning chain, intro/credits skip, and the media session. This engine's job is
- * to get a picture on screen for a file the main player could not open at all —
- * the controls it does have (pause, ±10s, subtitle track, audio track,
- * hardware/software decoding) are the ones that matter when that happens.
+ * correction, the audio tuning chain, intro/credits skip, and the media
+ * session. This engine's job is to get a picture on screen for a file the main
+ * player could not open at all — and the chrome it does have mirrors the main
+ * player's (play/pause, next episode, audio, subtitles, speed, aspect, stream
+ * info, and a settings panel holding the engine-specific controls), so a
+ * session that lands here does not feel like a different app. ±10s seeking is
+ * the D-pad while the overlay is down, and the hardware/software decoding
+ * switch lives in that settings panel.
+ *
+ * Two things the engines genuinely share rather than mirror: the per-title
+ * memory (languages, A/V offsets, chosen track - kept under the main player's
+ * own key, so a title remembers itself whichever engine played it last) and the
+ * end-of-playback panels, which are the same Up Next card and the same
+ * Because-you-watched row, built by the same shared code.
  */
 class MpvPlayerActivity : ComponentActivity() {
 
@@ -64,13 +83,99 @@ class MpvPlayerActivity : ComponentActivity() {
     private var bufferingView: View? = null
     private var toastView: TextView? = null
     private var controlsContainer: View? = null
-    private var controlTitle: TextView? = null
-    private var controlSubtitle: TextView? = null
+    private var loadingBackdropView: ImageView? = null
+    private var loadingLogoView: ImageView? = null
+    private var clearLogoView: ImageView? = null
+    private var itemNameView: TextView? = null
+    private var episodeLabelView: TextView? = null
+    private var episodeTitleView: TextView? = null
+    private var overviewView: TextView? = null
+    private var engineNoteView: TextView? = null
     private var positionView: TextView? = null
     private var durationView: TextView? = null
     private var seekBar: SeekBar? = null
-    private var playPauseButton: Button? = null
-    private var decodeButton: Button? = null
+    private var playPauseButton: ImageView? = null
+    private var nextButton: TextView? = null
+    private var speedButton: TextView? = null
+    private var aspectButton: TextView? = null
+    private var settingsContainer: View? = null
+    private var settingsSection: MpvSettingsSection? = null
+
+    /** True while the settings side panel is up (BACK closes it first). */
+    private var settingsOpen = false
+
+    /** True while the seekbar is being dragged, so progress cannot fight it. */
+    private var scrubbing = false
+
+    // --- Playback shape, and what this title remembers ----------------------
+    private var playbackSpeed = 1f
+    private var resizeModeIndex = 0
+    private var subtitleSize = 1
+    private var subtitleBackground = 0
+    private var subtitlePosition = 0
+
+    /** The main player's per-title key, so both engines recall the same thing. */
+    private var titleKey: String? = null
+    private var audioLanguage = ""
+    private var subtitleLanguage = ""
+    private var audioDelayMs = 0
+    private var subtitleOffsetMs = 0
+    private var audioTrackSignature = ""
+
+    // --- End of episode, mirroring the main player ---------------------------
+    private var nextUpPanel: LinearLayout? = null
+    private var nextUpThumb: ImageView? = null
+    private var nextUpShowTitle: TextView? = null
+    private var nextUpEpisodeLabel: TextView? = null
+    private var nextUpEpisodeTitle: TextView? = null
+    private var nextUpCountdown: TextView? = null
+    private var btnNextPlay: TextView? = null
+    private var btnNextDismiss: TextView? = null
+
+    /** True once the end-of-episode card has been raised (once per session). */
+    private var endPanelsShown = false
+    private var pendingNextSeason: Int? = null
+    private var pendingNextEpisode: Int? = null
+    private var pendingNextEpisodeName: String? = null
+    private var nextUpCountdownRemaining = 0
+    private var nextUpCountdownHeld = false
+    private val nextUpCountdownHandler = Handler(Looper.getMainLooper())
+    private val nextUpCountdownRunnable = object : Runnable {
+        override fun run() {
+            nextUpCountdownRemaining--
+            if (nextUpCountdownRemaining <= 0) {
+                // The countdown fired unattended: count this as an auto-advanced
+                // episode for the "Are you still there?" binge watchdog.
+                if (AppPreferences.getStillTherePrompt(this@MpvPlayerActivity)) {
+                    val count = AppPreferences.getConsecutiveAutoplays(this@MpvPlayerActivity) + 1
+                    AppPreferences.setConsecutiveAutoplays(this@MpvPlayerActivity, count)
+                }
+                advanceToPendingNext()
+                return
+            }
+            nextUpCountdown?.text = "Playing next in $nextUpCountdownRemaining"
+            nextUpCountdownHandler.postDelayed(this, 1_000L)
+        }
+    }
+
+    // --- Because you watched (end-credits recommendations) ------------------
+    //
+    // The row itself is the shared [BecauseYouWatchedUi], the same one the main
+    // player raises: the picks, the featured strip and the pill focus rules can
+    // not drift between the engines. Only the handoff differs - this engine
+    // hands the pick back to MainActivity with the same result extras the main
+    // player uses, so the navigation side needs no engine-specific branch.
+    private var becauseYouWatchedPanel: LinearLayout? = null
+    private var bywTitle: TextView? = null
+    private var bywRow: LinearLayout? = null
+    private var bywUi: BecauseYouWatchedUi? = null
+    private var bywDismissed = false
+
+    /** True while the panel is up over a shrunk (corner) video. */
+    private var creditsModeActive = false
+
+    /** The panel's XML layout params, restored when credits mode ends. */
+    private var creditsModePanelParams: FrameLayout.LayoutParams? = null
 
     // --- Session state, read from the launch intent -------------------------
     private var currentUrl = ""
@@ -117,6 +222,32 @@ class MpvPlayerActivity : ComponentActivity() {
         bindViews()
         historyId = PlaybackHistoryIds.historyId(parentId, season, episode, episodeStreamId)
 
+        // The same per-title memory the main player keeps, under the same key,
+        // so a title remembers its languages, A/V offsets and audio track
+        // whichever engine played it last.
+        titleKey = PlayerTitlePrefs.titleKeyFor(parentId, historyId)
+        loadTitlePreferences()
+
+        // Splash art, the same shape as the main player's: backdrop with the
+        // clear logo over it, or the name when there is no logo art.
+        (backdropUrl ?: itemPoster)?.takeIf { it.isNotBlank() }?.let { art ->
+            runCatching { loadingBackdropView?.load(art) }
+        }
+        clearLogoUrl?.takeIf { it.isNotBlank() }?.let { logo ->
+            runCatching {
+                loadingLogoView?.load(logo)
+                loadingLogoView?.visibility = View.VISIBLE
+                loadingTitle?.visibility = View.GONE
+            }
+        }
+
+        // The settings panel is built in code from the same helpers the main
+        // player's panel section uses.
+        settingsContainer = findViewById(R.id.mpv_settings_container)
+        settingsSection = settingsContainer?.let { container ->
+            MpvSettingsSection(this, container).also { section -> section.attach() }
+        }
+
         val view = findViewById<MpvPlayerView>(R.id.mpv_surface)
         surface = view
         view.onEngineFailed = { message ->
@@ -146,12 +277,33 @@ class MpvPlayerActivity : ComponentActivity() {
             this,
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
-                    exitPlayer()
+                    // BACK closes the panel first, exactly like the main player.
+                    if (settingsOpen) hideSettingsPanel() else exitPlayer()
                 }
             }
         )
 
+        // Languages for this session: what the title remembers, else the global
+        // Settings preference. Set BEFORE initialize(), because `alang`/`slang`
+        // are options the demuxer honours at open time - the fast path, with no
+        // flicker of the wrong track.
+        //
+        // The subtitle look is deliberately not set from here: it is a global
+        // display preference rather than a per-title one, and MpvPlayerView
+        // applies it inside applyOptions() from those same preferences. Setting
+        // it here would also be a call against an mpv instance that mpv does not
+        // create until initialize().
+        view.setLanguagePreferences(effectiveAudioLanguage(), effectiveSubtitleLanguage())
+
         if (!view.initialize()) return
+
+        // These are runtime properties, so they only take effect after
+        // initialize(): the A/V offsets this title remembers, the speed and the
+        // aspect ratio.
+        view.setAudioDelayMs(audioDelayMs)
+        view.setSubtitleDelayMs(subtitleOffsetMs)
+        view.setSpeed(playbackSpeed.toDouble())
+        view.setAspectMode(resizeModeIndex)
 
         view.load(
             MpvPlayerView.LoadRequest(
@@ -222,52 +374,811 @@ class MpvPlayerActivity : ComponentActivity() {
         errorHint = findViewById(R.id.mpv_error_hint)
         bufferingView = findViewById(R.id.mpv_buffering)
         toastView = findViewById(R.id.mpv_toast)
+        loadingBackdropView = findViewById(R.id.mpv_loading_backdrop)
+        loadingLogoView = findViewById(R.id.mpv_loading_logo)
         controlsContainer = findViewById(R.id.mpv_controls)
-        controlTitle = findViewById(R.id.mpv_control_title)
-        controlSubtitle = findViewById(R.id.mpv_control_subtitle)
+        clearLogoView = findViewById(R.id.mpv_clear_logo)
+        itemNameView = findViewById(R.id.mpv_item_name)
+        episodeLabelView = findViewById(R.id.mpv_episode_label)
+        episodeTitleView = findViewById(R.id.mpv_episode_title)
+        overviewView = findViewById(R.id.mpv_overview)
+        engineNoteView = findViewById(R.id.mpv_engine_note)
         positionView = findViewById(R.id.mpv_position)
         durationView = findViewById(R.id.mpv_duration)
         seekBar = findViewById(R.id.mpv_seekbar)
         playPauseButton = findViewById(R.id.mpv_btn_play_pause)
-        decodeButton = findViewById(R.id.mpv_btn_decode)
+        nextButton = findViewById(R.id.mpv_btn_next)
+        speedButton = findViewById(R.id.mpv_btn_speed)
+        aspectButton = findViewById(R.id.mpv_btn_aspect)
+        nextUpPanel = findViewById(R.id.mpv_next_up_panel)
+        nextUpThumb = findViewById(R.id.mpv_next_up_thumb)
+        nextUpShowTitle = findViewById(R.id.mpv_next_up_show_title)
+        nextUpEpisodeLabel = findViewById(R.id.mpv_next_up_episode_label)
+        nextUpEpisodeTitle = findViewById(R.id.mpv_next_up_episode_title)
+        nextUpCountdown = findViewById(R.id.mpv_next_up_countdown)
+        btnNextPlay = findViewById(R.id.mpv_next_play)
+        btnNextDismiss = findViewById(R.id.mpv_next_dismiss)
+
+        // Same pill treatment the main player's card buttons get: PLAY NEXT is
+        // the accent-filled one, EXIT the neutral one.
+        btnNextPlay?.let { pillBackground(it, selected = true) }
+        btnNextDismiss?.let { pillBackground(it, selected = false) }
+
+        becauseYouWatchedPanel = findViewById(R.id.mpv_byw_panel)
+        bywTitle = findViewById(R.id.mpv_byw_title)
+        bywRow = findViewById(R.id.mpv_byw_row)
+        setupBecauseYouWatched()
+
         seekBar?.max = 1000
     }
 
+    /** Same focus / selection look the main player's pills use. */
+    private fun pillBackground(view: TextView, selected: Boolean) {
+        applyPillBackground(view, selected, view.isFocused)
+    }
+
+    /**
+     * The same pill treatment with focus passed in explicitly: the shared
+     * end-credits row re-tints its pills from its own focus listeners, so it
+     * cannot wait for the view's own flag to be current.
+     */
+    private fun applyPillBackground(view: TextView, selected: Boolean, focused: Boolean) {
+        view.setBackgroundResource(
+            when {
+                selected && focused -> R.drawable.pill_chip_selected_focused_bg
+                selected -> R.drawable.pill_chip_selected_bg
+                focused -> R.drawable.pill_chip_focused_bg
+                else -> R.drawable.pill_chip_bg
+            }
+        )
+        view.setTextColor(getColor(if (selected) R.color.kb_void else R.color.kb_text_hi))
+    }
+
+    /**
+     * The main player's control bar, driven by mpv instead: play / pause with
+     * the same two icons, next episode when this session knows its episode, then
+     * audio / subtitles / speed / aspect / info / settings on the right. LEFT and
+     * RIGHT reach the same places they do there, and the overlay hides itself
+     * after the same six seconds without input.
+     */
     private fun setupControls() {
-        controlTitle?.text = itemTitle()
-        controlSubtitle?.text = if (isFallbackSession) {
-            "MPV backup engine \u2014 ExoPlayer could not play this stream"
-        } else {
-            "MPV engine"
-        }
+        updateNowPlayingText()
+        updateControlsInfo()
 
         playPauseButton?.setOnClickListener {
             surface?.togglePause()
             keepControlsVisible()
         }
-        findViewById<Button>(R.id.mpv_btn_back_10).setOnClickListener {
-            surface?.seekBy(-SEEK_STEP_MS)
-            keepControlsVisible()
+        nextButton?.setOnClickListener {
+            val showSeason = season
+            val showEpisode = episode
+            if (showSeason != null && showEpisode != null) {
+                launchNextEpisode(showSeason, showEpisode + 1)
+            }
         }
-        findViewById<Button>(R.id.mpv_btn_fwd_10).setOnClickListener {
-            surface?.seekBy(SEEK_STEP_MS)
-            keepControlsVisible()
-        }
-        findViewById<Button>(R.id.mpv_btn_subs).setOnClickListener {
-            showToast(surface?.cycleSubtitleTrack() ?: "Subtitles")
-            keepControlsVisible()
-        }
-        findViewById<Button>(R.id.mpv_btn_audio).setOnClickListener {
+        findViewById<TextView>(R.id.mpv_btn_audio).setOnClickListener {
             showToast(surface?.cycleAudioTrack() ?: "Audio")
+            refreshSettings()
             keepControlsVisible()
         }
-        decodeButton?.setOnClickListener {
-            val view = surface ?: return@setOnClickListener
-            val hardware = !view.isHardwareDecoding()
-            view.setHardwareDecoding(hardware)
-            decodeButton?.text = if (hardware) "Decode: HW" else "Decode: SW"
-            showToast(if (hardware) "Hardware decoding" else "Software decoding (smoother on files this box can't decode)")
+        findViewById<TextView>(R.id.mpv_btn_subtitle).setOnClickListener {
+            showToast(surface?.cycleSubtitleTrack() ?: "Subtitles")
+            refreshSettings()
             keepControlsVisible()
+        }
+        speedButton?.setOnClickListener {
+            cycleSpeed()
+            keepControlsVisible()
+        }
+        aspectButton?.setOnClickListener {
+            cycleAspect()
+            keepControlsVisible()
+        }
+        findViewById<TextView>(R.id.mpv_btn_info).setOnClickListener {
+            showToast(surface?.diagnostics() ?: "Stream info", 4_000L)
+            keepControlsVisible()
+        }
+        findViewById<TextView>(R.id.mpv_btn_settings).setOnClickListener {
+            showSettingsPanel()
+        }
+
+        // The end-of-episode card's own buttons, guarded exactly like the main
+        // player's: PLAY NEXT restarts the binge watchdog (a manual press means
+        // a human is there), EXIT leaves the player.
+        btnNextPlay?.setOnClickListener {
+            AppPreferences.resetConsecutiveAutoplays(this)
+            advanceToPendingNext()
+        }
+        btnNextDismiss?.setOnClickListener { exitPlayer() }
+        listOf(btnNextPlay to true, btnNextDismiss to false).forEach { (button, selected) ->
+            button?.setOnFocusChangeListener { view, _ ->
+                pillBackground(view as TextView, selected)
+            }
+        }
+
+        // Focus holds the overlay open, the same rule the main player uses.
+        listOfNotNull(playPauseButton, nextButton, speedButton, aspectButton).forEach { button ->
+            button.setOnFocusChangeListener { _, focused ->
+                if (focused) removeAutoHide() else keepControlsVisible()
+            }
+        }
+
+        // The seekbar scrubs, it is not a readout: the same as the main
+        // player's. Seeking happens on release - mpv seeks by keyframe, and a
+        // remote fires a lot of progress changes on the way.
+        seekBar?.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (!fromUser || durationMs <= 0L) return
+                positionView?.text = formatClock(durationMs * progress / 1000L)
+            }
+
+            override fun onStartTrackingTouch(bar: SeekBar?) {
+                scrubbing = true
+                removeAutoHide()
+            }
+
+            override fun onStopTrackingTouch(bar: SeekBar?) {
+                scrubbing = false
+                if (durationMs > 0L) {
+                    surface?.seekTo(durationMs * (bar?.progress ?: 0) / 1000L)
+                }
+                keepControlsVisible()
+            }
+        })
+    }
+
+    // --- Chrome, matched to the main player's -----------------------------
+
+    /**
+     * Fills the top block: clear logo or name, episode row, synopsis, and the
+     * next-episode button when this session knows which episode it is on.
+     */
+    private fun updateNowPlayingText() {
+        val logoUrl = clearLogoUrl
+        val logo = clearLogoView
+        if (logo != null && !logoUrl.isNullOrBlank()) {
+            runCatching { logo.load(logoUrl) }
+            logo.visibility = View.VISIBLE
+            itemNameView?.visibility = View.GONE
+        } else {
+            logo?.setImageDrawable(null)
+            logo?.visibility = View.GONE
+            itemNameView?.visibility = View.VISIBLE
+        }
+        itemNameView?.text = itemName
+
+        val showSeason = season
+        val showEpisode = episode
+        val hasEpisode = showSeason != null && showEpisode != null
+        episodeLabelView?.text = if (hasEpisode) "S$showSeason\u2009E$showEpisode" else null
+        episodeLabelView?.visibility = if (hasEpisode) View.VISIBLE else View.GONE
+        episodeTitleView?.text = episodeTitle
+        episodeTitleView?.visibility =
+            if (!episodeTitle.isNullOrBlank()) View.VISIBLE else View.GONE
+        overviewView?.text = overview
+        overviewView?.visibility = if (!overview.isNullOrBlank()) View.VISIBLE else View.GONE
+        nextButton?.visibility = if (hasEpisode) View.VISIBLE else View.GONE
+    }
+
+    /**
+     * The engine note that stands where the main player's source badges sit, and
+     * the two buttons that read out state instead of opening a picker.
+     */
+    private fun updateControlsInfo() {
+        engineNoteView?.text = buildString {
+            append(if (isFallbackSession) "MPV backup engine" else "MPV engine")
+            if (isFallbackSession && fallbackReason == FALLBACK_REASON_DECODER) {
+                append("  \u00b7  ExoPlayer had run out of video decoders")
+            }
+            val parsed = surface?.diagnostics().orEmpty()
+            if (parsed.isNotBlank()) append("  \u00b7  $parsed")
+        }
+        engineNoteView?.visibility = View.VISIBLE
+        speedButton?.text = "${playbackSpeed}x"
+        aspectButton?.text = ASPECT_MODES.getOrElse(resizeModeIndex) { "Fit" }
+    }
+
+    /** Cycles the same speeds the panel lists (the main player opens a picker). */
+    private fun cycleSpeed() {
+        val index = SPEED_OPTIONS.indexOfFirst { it == playbackSpeed }
+        val next = SPEED_OPTIONS[(index + 1).mod(SPEED_OPTIONS.size)]
+        chooseSpeed(next)
+        showToast("Speed: ${next}x")
+    }
+
+    /** Cycles the aspect modes and remembers the choice, like the main player. */
+    private fun cycleAspect() {
+        val next = (resizeModeIndex + 1) % ASPECT_MODES.size
+        chooseAspect(next)
+        showToast("Aspect: ${ASPECT_MODES[next]}")
+    }
+
+    /** Opens the settings side panel and puts focus inside it. */
+    private fun showSettingsPanel() {
+        val container = settingsContainer ?: return
+        settingsOpen = true
+        removeAutoHide()
+        settingsSection?.refresh()
+        container.visibility = View.VISIBLE
+        focusFirstPill(container)
+    }
+
+    /** Closes the panel and hands focus back to the control bar. */
+    private fun hideSettingsPanel() {
+        settingsOpen = false
+        settingsContainer?.visibility = View.GONE
+        controlsContainer?.visibility = View.VISIBLE
+        playPauseButton?.requestFocus()
+        keepControlsVisible()
+    }
+
+    private fun refreshSettings() {
+        settingsSection?.refresh()
+    }
+
+    /** First focusable descendant, so a D-pad press lands inside the panel. */
+    private fun focusFirstPill(container: View): Boolean {
+        val queue = ArrayDeque<View>()
+        queue.add(container)
+        while (queue.isNotEmpty()) {
+            val view = queue.removeFirst()
+            if (view !== container && view.isFocusable && view.visibility == View.VISIBLE) {
+                return view.requestFocus()
+            }
+            if (view is ViewGroup) {
+                for (index in 0 until view.childCount) queue.add(view.getChildAt(index))
+            }
+        }
+        return false
+    }
+
+    // --- What this title remembers ------------------------------------------
+
+    /** The language in force: this title's choice, else the global preference. */
+    private fun effectiveAudioLanguage(): String =
+        audioLanguage.ifBlank { AppPreferences.getPreferredAudioLanguage(this) }
+
+    private fun effectiveSubtitleLanguage(): String =
+        subtitleLanguage.ifBlank { AppPreferences.getPreferredSubtitleLanguage(this) }
+
+    /**
+     * Restores this title's remembered choices, plus the global display and
+     * playback preferences - the same split the main player makes: languages,
+     * A/V offsets and the specific track are per title, the subtitle look, the
+     * aspect and the speed are global.
+     */
+    private fun loadTitlePreferences() {
+        val remembered = PlayerTitlePrefs.get(this, titleKey)
+        // Canonicalized on the way in, exactly as in the main player: a language
+        // remembered from a track tag ("eng") has to come back as the code the
+        // pills and the global setting use ("en").
+        audioLanguage = LanguageMatch.canonical(remembered?.audioLang).orEmpty()
+        subtitleLanguage = LanguageMatch.canonical(remembered?.subtitleLang).orEmpty()
+        audioDelayMs = remembered?.audioDelayMs ?: 0
+        subtitleOffsetMs = remembered?.subtitleOffsetMs ?: 0
+        audioTrackSignature = remembered?.audioTrackSignature.orEmpty()
+
+        playbackSpeed = 1f
+        resizeModeIndex = AppPreferences.getDefaultAspectRatio(this)
+        subtitleSize = AppPreferences.getDefaultSubtitleSize(this)
+        subtitleBackground = AppPreferences.getDefaultSubtitleBackground(this)
+        subtitlePosition = AppPreferences.getDefaultSubtitlePosition(this)
+    }
+
+    private fun persistTitlePreferences() {
+        val key = titleKey ?: return
+        PlayerTitlePrefs.remember(
+            context = this,
+            key = key,
+            prefs = PlayerTitlePrefs.Prefs(
+                audioLang = audioLanguage,
+                subtitleLang = subtitleLanguage,
+                subtitleOffsetMs = subtitleOffsetMs,
+                audioDelayMs = audioDelayMs,
+                audioTrackSignature = audioTrackSignature
+            )
+        )
+    }
+
+    /** Re-states the remembered track and languages once the file is open. */
+    private fun applyRememberedTracks() {
+        val view = surface ?: return
+        if (audioTrackSignature.isNotBlank()) {
+            view.applyRememberedAudioTrack(audioTrackSignature)
+        } else {
+            view.selectAudioLanguage(effectiveAudioLanguage())
+        }
+        view.selectSubtitleLanguage(effectiveSubtitleLanguage())
+        refreshSettings()
+    }
+
+    // --- State the settings panel reads and writes --------------------------
+    //
+    // Same shape as PlayerTrackBridge, which is what the main player's panel
+    // talks to, so the two panels read the same way even though one drives
+    // mpv and the other drives ExoPlayer.
+
+    internal fun audioLanguage(): String = audioLanguage
+    internal fun subtitleLanguage(): String = subtitleLanguage
+    internal fun audioDelayMs(): Int = audioDelayMs
+    internal fun subtitleOffsetMs(): Int = subtitleOffsetMs
+    internal fun audioTrackSignature(): String = audioTrackSignature
+    internal fun playbackSpeed(): Float = playbackSpeed
+    internal fun aspectModeIndex(): Int = resizeModeIndex
+    internal fun subtitleSize(): Int = subtitleSize
+    internal fun subtitleBackground(): Int = subtitleBackground
+    internal fun subtitlePosition(): Int = subtitlePosition
+    internal fun hardwareDecoding(): Boolean = surface?.isHardwareDecoding() != false
+    internal fun hasTitleMemory(): Boolean = titleKey != null
+
+    internal fun diagnosticsText(): String =
+        surface?.diagnostics().orEmpty().ifBlank { "Waiting for the file to open" }
+
+    internal fun languageMemoryNote(): String = PlayerTrackBridge.languageSummary(
+        audioLanguage = audioLanguage,
+        subtitleLanguage = subtitleLanguage,
+        globalAudioLanguage = AppPreferences.getPreferredAudioLanguage(this),
+        globalSubtitleLanguage = AppPreferences.getPreferredSubtitleLanguage(this)
+    )
+
+    /** The file's audio tracks as (label, signature), for the panel's list. */
+    internal fun audioTrackOptions(): List<Pair<String, String>> =
+        surface?.audioTracks().orEmpty().map { it.label to it.signature }
+
+    internal fun chooseAudioLanguage(code: String) {
+        audioLanguage = code
+        // A language choice means "any track in this language": drop the more
+        // specific track choice so the two cannot disagree.
+        audioTrackSignature = ""
+        persistTitlePreferences()
+        val effective = effectiveAudioLanguage()
+        surface?.selectAudioLanguage(effective)
+        surface?.setLanguagePreferences(effective, effectiveSubtitleLanguage())
+        refreshSettings()
+    }
+
+    internal fun chooseSubtitleLanguage(code: String) {
+        subtitleLanguage = code
+        persistTitlePreferences()
+        val effective = effectiveSubtitleLanguage()
+        surface?.setLanguagePreferences(effectiveAudioLanguage(), effective)
+        surface?.selectSubtitleLanguage(effective)
+        refreshSettings()
+    }
+
+    internal fun chooseAudioTrack(signature: String) {
+        audioTrackSignature = signature
+        persistTitlePreferences()
+        if (signature.isBlank()) {
+            surface?.selectAudioLanguage(effectiveAudioLanguage())
+        } else {
+            surface?.applyRememberedAudioTrack(signature)
+        }
+        refreshSettings()
+    }
+
+    internal fun chooseAudioDelay(ms: Int) {
+        audioDelayMs = ms.coerceIn(-5_000, 5_000)
+        persistTitlePreferences()
+        surface?.setAudioDelayMs(audioDelayMs)
+        refreshSettings()
+    }
+
+    internal fun chooseSubtitleOffset(ms: Int) {
+        subtitleOffsetMs = ms.coerceIn(-5_000, 5_000)
+        persistTitlePreferences()
+        surface?.setSubtitleDelayMs(subtitleOffsetMs)
+        refreshSettings()
+    }
+
+    internal fun chooseSubtitleSize(size: Int) {
+        subtitleSize = size
+        AppPreferences.setDefaultSubtitleSize(this, size)
+        surface?.applySubtitleAppearance(subtitleSize, subtitleBackground, subtitlePosition)
+        refreshSettings()
+    }
+
+    internal fun chooseSubtitleBackground(background: Int) {
+        subtitleBackground = background
+        AppPreferences.setDefaultSubtitleBackground(this, background)
+        surface?.applySubtitleAppearance(subtitleSize, subtitleBackground, subtitlePosition)
+        refreshSettings()
+    }
+
+    internal fun chooseSubtitlePosition(position: Int) {
+        subtitlePosition = position
+        AppPreferences.setDefaultSubtitlePosition(this, position)
+        surface?.applySubtitleAppearance(subtitleSize, subtitleBackground, subtitlePosition)
+        refreshSettings()
+    }
+
+    internal fun chooseAspect(index: Int) {
+        resizeModeIndex = index
+        surface?.setAspectMode(index)
+        AppPreferences.setDefaultAspectRatio(this, index)
+        updateControlsInfo()
+        refreshSettings()
+    }
+
+    internal fun chooseSpeed(speed: Float) {
+        playbackSpeed = speed
+        surface?.setSpeed(speed.toDouble())
+        updateControlsInfo()
+        refreshSettings()
+    }
+
+    internal fun chooseHardwareDecoding(enabled: Boolean) {
+        surface?.setHardwareDecoding(enabled)
+        refreshSettings()
+    }
+
+    /** Drops this title's remembered choices and goes back to the defaults. */
+    internal fun forgetThisTitle() {
+        PlayerTitlePrefs.forget(this, titleKey)
+        audioLanguage = ""
+        subtitleLanguage = ""
+        audioTrackSignature = ""
+        audioDelayMs = 0
+        subtitleOffsetMs = 0
+        surface?.setAudioDelayMs(0)
+        surface?.setSubtitleDelayMs(0)
+        surface?.setLanguagePreferences(
+            AppPreferences.getPreferredAudioLanguage(this),
+            AppPreferences.getPreferredSubtitleLanguage(this)
+        )
+        surface?.selectAudioLanguage(effectiveAudioLanguage())
+        surface?.selectSubtitleLanguage(effectiveSubtitleLanguage())
+        refreshSettings()
+    }
+
+    // --- End of episode: the Up Next card ----------------------------------
+
+    /**
+     * Raises the card as the credits roll rather than waiting for the file to
+     * end, on the same timing the main player uses for a source that carries no
+     * credits marker: [END_PANEL_LEAD_MS] before the declared duration.
+     */
+    private fun maybeTriggerEndPanels(position: Long, duration: Long) {
+        if (endPanelsShown || endedHandled || duration <= 0L) return
+        val triggerAt = (duration - END_PANEL_LEAD_MS).coerceAtLeast(0L)
+        // A clip shorter than the lead would otherwise pop the card the moment
+        // playback starts: onPlaybackEnded covers that case instead.
+        if (triggerAt <= 0L) return
+        if (position < triggerAt) return
+        showEndPanels()
+    }
+
+    /**
+     * The same decision the main player makes when an episode ends: a next
+     * episode that has actually aired raises the Up Next card, and anything else
+     * - a movie, a finished finale, an episode that is not out yet - gets the
+     * because-you-watched credits recommendations instead. Raised once per
+     * session; the air-date gate is the shared helper, so both engines chain to
+     * the same place.
+     */
+    private fun showEndPanels() {
+        if (endPanelsShown) return
+        endPanelsShown = true
+        lifecycleScope.launch {
+            val target = airedNextEpisodeTarget(
+                context = this@MpvPlayerActivity,
+                target = nextEpisodeTarget(),
+                tmdbId = runCatching { tmdbId() }.getOrNull(),
+                showId = parentId
+            )
+            if (target != null) {
+                showNextUpPanel(target.first, target.second)
+            } else {
+                showBecauseYouWatchedPanel()
+            }
+        }
+    }
+
+    /**
+     * The episode the end of a session should chain into: the next one, or the
+     * first of the next season when this was the season's last. Mirrors
+     * NativePlayerActivity.nextEpisodeTarget() so both engines chain alike.
+     */
+    private fun nextEpisodeTarget(): Pair<Int, Int>? {
+        val showSeason = season ?: return null
+        val showEpisode = episode ?: return null
+        val nextEpisode = showEpisode + 1
+        val maxEpisodes = totalEpisodesInSeason
+        return if (maxEpisodes != null && nextEpisode > maxEpisodes) {
+            (showSeason + 1) to 1
+        } else {
+            showSeason to nextEpisode
+        }
+    }
+
+    /** Fills and shows the card, then arms its countdown. */
+    private fun showNextUpPanel(targetSeason: Int, targetEpisode: Int) {
+        val panel = nextUpPanel ?: return
+        pendingNextSeason = targetSeason
+        pendingNextEpisode = targetEpisode
+        pendingNextEpisodeName = null
+
+        nextUpShowTitle?.text = itemName
+        nextUpEpisodeLabel?.text = "Season $targetSeason \u2022 Episode $targetEpisode"
+        nextUpEpisodeTitle?.text = "S${targetSeason}E$targetEpisode"
+        nextUpCountdown?.text = ""
+
+        // The show's art first, swapped for the episode's own still when TMDB
+        // answers - the same order the main player's card uses.
+        val initialThumb = backdropUrl ?: itemPoster
+        if (!initialThumb.isNullOrBlank()) {
+            runCatching { nextUpThumb?.load(initialThumb) }
+        } else {
+            nextUpThumb?.setImageDrawable(null)
+        }
+
+        panel.visibility = View.VISIBLE
+        btnNextPlay?.requestFocus()
+
+        if (AppPreferences.getAutoPlayNext(this)) {
+            val threshold = AppPreferences.getStillThereEpisodes(this).toInt()
+            val autoAdvanced = AppPreferences.getConsecutiveAutoplays(this)
+            if (AppPreferences.getStillTherePrompt(this) && autoAdvanced >= threshold) {
+                // Binge watchdog: this many unattended episodes in a row, so hold
+                // here and make the viewer confirm they are awake.
+                nextUpCountdownHeld = false
+                nextUpCountdownRemaining = 0
+                nextUpCountdown?.text = "Are you still there? Press PLAY NEXT to continue"
+                nextUpCountdown?.setTextColor(getColor(R.color.kb_accent))
+                nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
+                return
+            }
+            armNextUpAutoAdvance(remainingMs = (durationMs - positionMs).coerceAtLeast(0L))
+        } else {
+            nextUpCountdownHeld = false
+            nextUpCountdownRemaining = 0
+            nextUpCountdown?.text = "PLAY NEXT to continue, or press BACK to exit"
+        }
+
+        fetchNextEpisodeDetails(targetSeason, targetEpisode)
+    }
+
+    /**
+     * Arms the auto-advance. Held while the episode still has more than
+     * [NEXT_UP_HOLD_THRESHOLD_MS] to run, so the countdown cannot cut the last
+     * minute off it - the card is already up during the credits.
+     */
+    private fun armNextUpAutoAdvance(remainingMs: Long) {
+        nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
+        if (remainingMs > NEXT_UP_HOLD_THRESHOLD_MS) {
+            nextUpCountdownHeld = true
+            nextUpCountdown?.text = "Playing next when this episode ends"
+            nextUpCountdown?.setTextColor(getColor(R.color.kb_text_lo))
+            return
+        }
+        nextUpCountdownHeld = false
+        nextUpCountdownRemaining = NEXT_UP_COUNTDOWN_SECONDS
+        nextUpCountdown?.text = "Playing next in $nextUpCountdownRemaining"
+        nextUpCountdown?.setTextColor(getColor(R.color.kb_text_lo))
+        nextUpCountdownHandler.postDelayed(nextUpCountdownRunnable, 1_000L)
+    }
+
+    /** Hands the pending episode to MainActivity, the way the main player does. */
+    private fun advanceToPendingNext() {
+        val showSeason = pendingNextSeason ?: return
+        val showEpisode = pendingNextEpisode ?: return
+        launchNextEpisode(showSeason, showEpisode)
+    }
+
+    /**
+     * Best effort: the next episode's real name and still from TMDB, so the card
+     * offers something concrete instead of just S#E#. Same source and same
+     * fields the main player's card uses; a miss leaves the episode code in
+     * place, which is what that card shows while it is still fetching.
+     */
+    private fun fetchNextEpisodeDetails(targetSeason: Int, targetEpisode: Int) {
+        lifecycleScope.launch {
+            val tmdb = withContext(Dispatchers.IO) {
+                runCatching { tmdbId() }.getOrNull()
+            } ?: return@launch
+            val nextEp = withContext(Dispatchers.IO) {
+                runCatching {
+                    TmdbRepository.getInstance(this@MpvPlayerActivity)
+                        .getSeasonEpisodes(tmdb, targetSeason, parentId)
+                }.getOrNull()?.firstOrNull { it.episodeNumber == targetEpisode }
+            } ?: return@launch
+            if (nextUpPanel?.visibility != View.VISIBLE) return@launch
+            pendingNextEpisodeName = nextEp.name
+            nextUpEpisodeTitle?.text = nextEp.name ?: "S${targetSeason}E$targetEpisode"
+            nextEp.thumbnail?.takeIf { it.isNotBlank() }?.let { still ->
+                runCatching { nextUpThumb?.load(still) }
+            }
+        }
+    }
+
+    // --- Because you watched (end credits) ---
+
+    /**
+     * Raises the credits recommendations: TMDB picks for the title that just
+     * finished, each with PLAY (resolve the top stream, straight into the next
+     * playback) and DETAILS (deep-link into the catalog detail screen). Runs
+     * only when there is no aired episode to chain, so the Up Next card keeps
+     * owning the series flow, and the row comes from the shared
+     * [BecauseYouWatchedUi] so it looks and drives like the main player's.
+     */
+    private fun showBecauseYouWatchedPanel() {
+        val ui = bywUi
+        // Never bound, or already answered: nothing to raise. Deliberately not
+        // an exit - the panel opens while the credits are still rolling, and
+        // closing the session there would cut them short.
+        if (ui == null || bywDismissed) return
+        ui.show(itemName)
+        // The credits themselves are still rolling: shrink the video into the
+        // corner so the picks get the screen, and take the chrome down with it -
+        // the panel owns the remote while it is up.
+        removeAutoHide()
+        controlsContainer?.visibility = View.GONE
+        enterCreditsMode()
+
+        lifecycleScope.launch {
+            val picks: List<BywPick> = withContext(Dispatchers.IO) {
+                val tmdb = runCatching { tmdbId() }.getOrNull()
+                    ?: return@withContext emptyList()
+                buildBecauseYouWatchedPicks(
+                    this@MpvPlayerActivity,
+                    tmdb,
+                    bywMediaType(parentType)
+                )
+            }
+
+            if (picks.isEmpty() || !ui.isVisible) {
+                // Nothing to recommend: put the video back full screen and let
+                // the session run its course, exactly as the main player does.
+                withContext(Dispatchers.Main) {
+                    ui.hide()
+                    exitCreditsMode()
+                }
+                return@launch
+            }
+
+            withContext(Dispatchers.Main) {
+                ui.build(picks)
+            }
+        }
+    }
+
+    /**
+     * Builds the row once the panel views exist. The cards, the featured strip
+     * and the focus rules are the shared panel UI's; this supplies only what is
+     * this engine's own - its theme colours, its pill styling, and where PLAY /
+     * DETAILS go.
+     */
+    private fun setupBecauseYouWatched() {
+        val panel = becauseYouWatchedPanel ?: return
+        val title = bywTitle ?: return
+        val row = bywRow ?: return
+        bywUi = BecauseYouWatchedUi(
+            host = this,
+            panel = panel,
+            title = title,
+            row = row,
+            surfaceColor = { playerPanelSurfaceColor(this) },
+            raisedColor = { playerPanelRaisedColor(this) },
+            applyPill = { pill, selected, focused ->
+                applyPillBackground(pill, selected, focused)
+            },
+            scope = { lifecycleScope },
+            onPlay = { pick, imdbId -> bywPlayPick(pick, imdbId) },
+            onDetails = { pick, imdbId -> bywOpenDetails(pick, imdbId) }
+        )
+    }
+
+    /** PLAY: resolve streams for the pick and hand the top one back. */
+    private fun bywPlayPick(pick: BywPick, imdbId: String) {
+        lifecycleScope.launch {
+            val vm = StreamsViewModel(application = application)
+            val streams = withContext(Dispatchers.IO) {
+                runCatching { vm.resolve(pick.type, imdbId) }.getOrNull()
+            }.orEmpty()
+
+            val top = streams.firstOrNull { !it.url.isNullOrBlank() }
+            bywDismissed = true
+            finishWithBywResult(
+                action = if (top != null) "play_now" else "go_details",
+                pick = pick,
+                imdbId = imdbId,
+                streamUrl = top?.url,
+                streamName = top?.name ?: top?.title
+            )
+        }
+    }
+
+    /** DETAILS: hand the pick back for the catalog's detail screen. */
+    private fun bywOpenDetails(pick: BywPick, imdbId: String) {
+        bywDismissed = true
+        finishWithBywResult(
+            action = "go_details",
+            pick = pick,
+            imdbId = imdbId,
+            streamUrl = null,
+            streamName = null
+        )
+    }
+
+    /**
+     * The result contract MainActivity already understands from the main
+     * player: "play_now" reopens the player on the resolved stream,
+     * "go_details" opens the detail screen.
+     */
+    private fun finishWithBywResult(
+        action: String,
+        pick: BywPick,
+        imdbId: String,
+        streamUrl: String?,
+        streamName: String?
+    ) {
+        surface?.setPaused(true)
+        setResult(
+            RESULT_OK,
+            Intent().apply {
+                putExtra("player_result_action", action)
+                putExtra("byw_type", pick.type)
+                putExtra("byw_id", imdbId)
+                putExtra("byw_name", pick.name)
+                putExtra("byw_poster", pick.posterUrl)
+                putExtra("byw_backdrop", pick.backdropUrl)
+                putExtra("byw_stream_url", streamUrl)
+                putExtra("byw_stream_name", streamName)
+            }
+        )
+        finish()
+    }
+
+    /**
+     * The credits-recommendations arrangement, the same as the main player's:
+     * shrink the video (the credits themselves) into the bottom-right corner so
+     * the picks get the screen, and move the panel into the space that leaves on
+     * the left so it never covers them.
+     */
+    private fun enterCreditsMode() {
+        if (creditsModeActive) return
+        val panel = becauseYouWatchedPanel ?: return
+        val view = surface ?: return
+        creditsModeActive = true
+        val density = resources.displayMetrics.density
+        val screenW = resources.displayMetrics.widthPixels
+        val pipW = (screenW * 0.32f).toInt()
+        val pipH = pipW * 9 / 16
+        val margin = (24 * density).toInt()
+        (view.layoutParams as? FrameLayout.LayoutParams)?.apply {
+            width = pipW
+            height = pipH
+            gravity = Gravity.BOTTOM or Gravity.END
+            setMargins(margin, margin, margin, margin)
+        }
+        view.requestLayout()
+
+        creditsModePanelParams = panel.layoutParams as? FrameLayout.LayoutParams
+        panel.layoutParams = FrameLayout.LayoutParams(
+            (screenW - pipW - margin * 3).coerceAtLeast(screenW / 2),
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            setMargins(margin, margin, margin, margin)
+        }
+        panel.requestLayout()
+    }
+
+    /** Restores the video to full screen and the panel to its XML box. */
+    private fun exitCreditsMode() {
+        if (!creditsModeActive) return
+        creditsModeActive = false
+        (surface?.layoutParams as? FrameLayout.LayoutParams)?.apply {
+            width = ViewGroup.LayoutParams.MATCH_PARENT
+            height = ViewGroup.LayoutParams.MATCH_PARENT
+            gravity = Gravity.TOP or Gravity.START
+            setMargins(0, 0, 0, 0)
+        }
+        surface?.requestLayout()
+        creditsModePanelParams?.let { saved ->
+            becauseYouWatchedPanel?.layoutParams = saved
+            creditsModePanelParams = null
+            becauseYouWatchedPanel?.requestLayout()
         }
     }
 
@@ -276,9 +1187,14 @@ class MpvPlayerActivity : ComponentActivity() {
     private fun onFileLoaded(mediaTitle: String?) {
         runOnUiThread {
             loadingContainer?.visibility = View.GONE
-            controlTitle?.text = itemTitle()
-            updatePlayPauseLabel(false)
+            updateNowPlayingText()
+            updateControlsInfo()
+            updatePlayPauseLabel(surface?.isPaused() == true)
         }
+        // The tracks exist now, so the remembered ones can actually be selected:
+        // the option pass at open time picked a language, this picks the exact
+        // track this title was left on.
+        applyRememberedTracks()
         // Scrobble once the file is really open — a stream that never loads
         // must not appear on a tracker as started.
         if (!scrobbleStarted) {
@@ -287,7 +1203,7 @@ class MpvPlayerActivity : ComponentActivity() {
         }
         if (isFallbackSession) {
             val hint = if (fallbackReason == FALLBACK_REASON_DECODER) {
-                "\u2014 if it stutters, press Decode to switch to software decoding"
+                "\u2014 if it stutters, open the gear and set Decoding to Software"
             } else {
                 ""
             }
@@ -303,12 +1219,20 @@ class MpvPlayerActivity : ComponentActivity() {
         positionMs = position
         durationMs = duration
         runOnUiThread {
-            positionView?.text = formatClock(positionMs)
             durationView?.text = if (durationMs > 0L) formatClock(durationMs) else "--:--"
-            if (durationMs > 0L) {
-                val progress = ((positionMs * 1000L) / durationMs).toInt().coerceIn(0, 1000)
-                seekBar?.progress = progress
-            }
+            // While the seekbar is being dragged it owns the readout, so a
+            // progress tick cannot yank the thumb back out from under it.
+            if (!scrubbing) {
+                positionView?.text = formatClock(positionMs)
+                if (durationMs > 0L) {
+                    val progress = ((positionMs * 1000L) / durationMs).toInt().coerceIn(0, 1000)
+                    seekBar?.progress = progress
+                }            }
+
+            // The card opens as the credits roll, exactly as it does in the main
+            // player, instead of waiting for the file to end.
+            maybeTriggerEndPanels(positionMs, durationMs)
+
             // Completion is a watch-history fact, not an end-of-file event: a
             // title watched to 96% and then backed out of counts as watched,
             // exactly as it does in the main player.
@@ -329,8 +1253,11 @@ class MpvPlayerActivity : ComponentActivity() {
         }
     }
 
+    /** The same two icons the main player's play/pause button swaps between. */
     private fun updatePlayPauseLabel(paused: Boolean) {
-        playPauseButton?.text = if (paused) "Play" else "Pause"
+        playPauseButton?.setImageResource(
+            if (paused) R.drawable.ic_player_play else R.drawable.ic_player_pause
+        )
     }
 
     /**
@@ -346,11 +1273,14 @@ class MpvPlayerActivity : ComponentActivity() {
             saveProgress(reason = "ended", forceCompleted = true)
             scrobble("stop", progressOverride = 100.0)
 
-            if (AppPreferences.getAutoPlayNext(this) && season != null && episode != null) {
-                launchNextEpisode(season!!, episode!! + 1)
-            } else {
-                finish()
-            }
+            // The card is normally already up from the credits trigger, with its
+            // countdown held because the episode had not ended yet. Playback is
+            // over now, so let the countdown run.
+            if (nextUpCountdownHeld) armNextUpAutoAdvance(remainingMs = 0L)
+
+            // Either the Up Next card or the credits recommendations, decided
+            // exactly as the main player decides it.
+            showEndPanels()
         }
     }
 
@@ -611,7 +1541,15 @@ class MpvPlayerActivity : ComponentActivity() {
     }
 
     private val hideControlsRunnable = Runnable {
+        // The settings panel is its own screen: hiding the chrome under it would
+        // strand the user in the panel with nothing to go back to.
+        if (settingsOpen) return@Runnable
         controlsContainer?.visibility = View.GONE
+    }
+
+    /** Holds the overlay open while one of its buttons has focus. */
+    private fun removeAutoHide() {
+        handler.removeCallbacks(hideControlsRunnable)
     }
 
     private val controlsVisible: Boolean
@@ -631,6 +1569,27 @@ class MpvPlayerActivity : ComponentActivity() {
      * is what a TV remote expects.
      */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // The settings panel is a side panel, not a takeover: while it is up the
+        // focus system owns the D-pad (BACK still reaches the activity, which
+        // closes the panel), exactly as it does in the main player.
+        if (settingsOpen) return super.dispatchKeyEvent(event)
+        // The end-of-episode card owns the remote while it is up: OK is its
+        // buttons, not play/pause - the same as in the main player.
+        if (nextUpPanel?.visibility == View.VISIBLE) return super.dispatchKeyEvent(event)
+        // Same rule for the credits recommendations: LEFT/RIGHT step the picks
+        // (parking focus on the first one if it is not inside the panel yet) and
+        // every other key goes to the focused pill, so OK activates PLAY /
+        // DETAILS instead of toggling playback underneath them.
+        if (bywUi?.isVisible == true) {
+            val horizontal = event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
+                event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
+            if (event.action == KeyEvent.ACTION_DOWN && horizontal &&
+                bywUi?.hasFocus() == false && bywUi?.focusFirst() == true
+            ) {
+                return true
+            }
+            return super.dispatchKeyEvent(event)
+        }
         if (event.action == KeyEvent.ACTION_DOWN && errorContainer?.visibility != View.VISIBLE) {
             when (event.keyCode) {
                 KeyEvent.KEYCODE_MEDIA_REWIND -> {
@@ -745,6 +1704,7 @@ class MpvPlayerActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacksAndMessages(null)
+        nextUpCountdownHandler.removeCallbacksAndMessages(null)
         surface?.release()
         surface = null
     }

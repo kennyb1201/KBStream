@@ -183,41 +183,8 @@ private const val DECODER_RESOURCE_RETRY_DELAY_MS = 6_000L
  * landing 4ms after the previous player was released, on a plain HDR10 HEVC
  * file the box decodes natively.
  */
-private const val SOURCE_SWITCH_SETTLE_MS = 3_000L
-
-/**
- * Weighted-rating rank (IMDB-style) for one credit of a person: the rating
- * blended toward a 6.5 prior worth 200 votes. The because-you-watched cast
- * tier used to sort by `popularity`, which is why "Because you watched Ted
- * Lasso" filled up with talk shows — a guest spot on a nightly show is very
- * popular but rates ~5-6, so it outranked the scripted work the actor is
- * actually known for. This ranks a well-reviewed credit of theirs first and
- * makes a single 9.5 from a dozen voters unable to jump the queue.
- */
-private fun personCreditRank(credit: TmdbPersonCredit): Double {
-    val votes = (credit.voteCount ?: 0).coerceAtLeast(0).toDouble()
-    val average = credit.voteAverage ?: 0.0
-    return (average * votes + 6.5 * 200.0) / (votes + 200.0)
-}
-
-/**
- * True when a credit is the person appearing as themselves rather than
- * playing a role: talk and award shows, documentaries, archive-footage
- * cameos. TMDB credits these as "Himself" / "Herself" / "Self - Guest" /
- * "(1998) (archive footage)". Without this the cast tier spends one of its
- * four slots per person on a guest appearance — a suggestion for a show
- * rather than for the actor's work.
- */
-private fun isSelfAppearance(character: String?): Boolean {
-    val role = character?.lowercase()?.trim().orEmpty()
-    if (role.isEmpty()) return false
-    if (role.contains("archive footage")) return true
-    return role.startsWith("self") ||
-        role.startsWith("himself") ||
-        role.startsWith("herself") ||
-        role.startsWith("themselves")
-}
-private val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
+private const val SOURCE_SWITCH_SETTLE_MS = 3_000L// Shared with the MPV player's panel: same speeds, same labels, one list.
+internal val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 
 // Aspect ratio modes. 0-2 map to the Media3 resize modes (see
 // applyResizeMode); 3-4 pin the video frame to a fixed 16:9 / 4:3 ratio
@@ -227,19 +194,20 @@ val ASPECT_MODES = listOf("Fit", "Zoom", "Fill", "16:9", "4:3")
 private const val ASPECT_MODE_FORCE_16_9 = 3
 private const val ASPECT_MODE_FORCE_4_3 = 4
 private const val CONTROLS_HIDE_DELAY_MS = 6_000L
-private const val NEXT_UP_COUNTDOWN_SECONDS = 5
+// Shared with the MPV player, which raises the same card with the same timing.
+internal const val NEXT_UP_COUNTDOWN_SECONDS = 5
 
 // The Up Next panel now opens before the episode ends, so its auto-advance
 // countdown is held until this close to the end. A touch longer than
 // [NEXT_UP_COUNTDOWN_SECONDS] keeps the handoff on the end of the episode
 // instead of cutting the last minute off it.
-private const val NEXT_UP_HOLD_THRESHOLD_MS = 6_000L
+internal const val NEXT_UP_HOLD_THRESHOLD_MS = 6_000L
 
 // How early the Up Next / Because-you-watched panel appears when the source
 // carries no credits marker: this long before the declared duration. End
 // credits usually run a minute or two, so the fallback has to sit back far
 // enough to land with the credits rather than after them.
-private const val END_PANEL_LEAD_MS = 75_000L
+internal const val END_PANEL_LEAD_MS = 75_000L
 
 // When IntroDB does carry a credits row, open this long *before* it: the panel
 // is then settled on screen as the credits start instead of appearing with
@@ -609,66 +577,46 @@ class NativePlayerActivity : ComponentActivity() {
      * edit window does not reach, so they are applied from code.
      *
      * The Up Next card is restyled once, by [compactNextUpCard]. The credits
-     * panel rebuilds its cards on every show, so its artwork is polished from a
-     * layout listener instead - which is also what runs after
-     * [applyPlayerPanelTheme] has re-tinted those very views.
+     * panel's own finishing touches - rounded artwork, the featured strip and
+     * the pill focus rules - live with the panel UI in BecauseYouWatched.kt,
+     * shared with the MPV engine, so both engines' rows cannot drift apart.
      *
      * Called once from [PlayerPanelSection.attach], after `bindViews()`.
      */
     internal fun prepareEndOfEpisodePanels() {
         compactNextUpCard()
-        val onLayout = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
-            if (becauseYouWatchedPanel.visibility == View.VISIBLE) polishCreditsArtwork()
-        }
-        becauseYouWatchedPanel.addOnLayoutChangeListener(onLayout)
-        bywRow.addOnLayoutChangeListener(onLayout)
-    }
-
-    /**
-     * Cleans up the credits panel's artwork: rounded corners on the pick posters
-     * and on the featured backdrop, and no clear logo stacked on the posters.
-     *
-     * Poster art from TMDB already carries the title, so the clear logo the row
-     * overlaid on each card drew a second title over the first - the doubled
-     * logo. The featured backdrop is a 16:9 still with no title on it, so its
-     * logo stays.
-     */
-    private fun polishCreditsArtwork() {
-        bywViews.values.forEach { refs ->
-            val frame = (refs.cardView as? ViewGroup)?.getChildAt(0) as? ViewGroup ?: return@forEach
-            roundArtwork(frame)
-            // Frame children, in order: the poster, then the logo overlay.
-            (frame.getChildAt(1) as? ImageView)?.visibility = View.GONE
-        }
-        becauseYouWatchedPanel.findViewWithTag<View>("byw_featured_backdrop")
-            ?.let { roundArtwork(it) }
-    }
-
-    /** Clips one piece of artwork - poster or backdrop - to rounded corners. */
-    private fun roundArtwork(view: View) {
-        if (view.outlineProvider !is RoundedArtworkOutline) {
-            view.outlineProvider = RoundedArtworkOutline(12f * resources.displayMetrics.density)
-        }
-        view.clipToOutline = true
-    }
-
-    /**
-     * A rounded outline rather than a rounded background: the panels re-tint
-     * their artwork's background from [applyPlayerPanelTheme], which would wipe
-     * a background-carried radius on the next show, and the clip is what makes
-     * the corners round in the first place.
-     */
-    private class RoundedArtworkOutline(private val radiusPx: Float) :
-        android.view.ViewOutlineProvider() {
-        override fun getOutline(view: View, outline: android.graphics.Outline) {
-            outline.setRoundRect(0, 0, view.width, view.height, radiusPx)
-        }
+        // The pick row's builder, shared with the MPV engine: focus sits on the
+        // PLAY / DETAILS pills only - never the card - and both pills drive the
+        // featured strip, so stepping through the row updates the info under it.
+        // Built here rather than in bindViews because the credits panel's own
+        // fields are bound in this file's XML tail, and this runs right after
+        // them (PlayerPanelSection.attach, at the end of onCreate).
+        bywUi = BecauseYouWatchedUi(
+            host = this,
+            panel = becauseYouWatchedPanel,
+            title = bywTitle,
+            row = bywRow,
+            surfaceColor = { panelSurfaceColor() },
+            raisedColor = { panelRaisedColor() },
+            applyPill = { pill, selected, focused ->
+                applyPillBackground(pill, selected, focused)
+            },
+            scope = { scope },
+            onPlay = { pick, imdbId -> bywPlayPick(pick, imdbId) },
+            onDetails = { pick, imdbId -> bywOpenDetails(pick, imdbId) }
+        )
     }
 
     // Because-you-watched (end-credits recommendations)
     private lateinit var becauseYouWatchedPanel: LinearLayout
     private lateinit var bywTitle: TextView
     private lateinit var bywRow: LinearLayout
+
+    /**
+     * The pick row itself: built, themed and focused by the shared panel UI, so
+     * the credits recommendations look and drive the same in both engines.
+     */
+    private lateinit var bywUi: BecauseYouWatchedUi
     private var bywDismissed = false
 
     // Player
@@ -1976,8 +1924,8 @@ class NativePlayerActivity : ComponentActivity() {
                 // first pick so the press steps through them instead of
                 // scrubbing the credits they are recommending over.
                 if (event.action == KeyEvent.ACTION_DOWN &&
-                    !becauseYouWatchedPanel.hasFocus() &&
-                    focusFirstBywPick()
+                    !bywUi.hasFocus() &&
+                    bywUi.focusFirst()
                 ) {
                     return true
                 }
@@ -6223,12 +6171,10 @@ class NativePlayerActivity : ComponentActivity() {
         // Left alone they keep the XML's fixed @color/kb_surface, which is
         // what made the popups ignore the AMOLED / pure-black toggles.
         nextUpThumb.setBackgroundColor(surfaceColor)
-        bywViews.values.forEach { refs ->
-            (refs.cardView as? ViewGroup)?.getChildAt(0)?.setBackgroundColor(surfaceColor)
-        }
-        becauseYouWatchedPanel.findViewWithTag<View>("byw_featured_backdrop")
-            ?.setBackgroundColor(surfaceColor)
         applyPillBackground(btnNextDismiss, selected = false, focused = btnNextDismiss.isFocused)
+        // The credits panel re-tints its own artwork and pills through the
+        // shared panel UI.
+        if (::bywUi.isInitialized) bywUi.applyTheme()
     }
 
     /** AMOLED-aware stand-in for @color/kb_surface (card / artwork fills). */
@@ -6506,629 +6452,56 @@ class NativePlayerActivity : ComponentActivity() {
     // --- Because You Watched (end credits) ---
 
     /**
-     * One recommendation card inside the because-you-watched row: poster +
-     * name, with the ids the result handoff needs. Built as views (not
-     * Compose) because this panel lives in the player's view hierarchy.
-     */
-    private data class BywPick(
-        val tmdbId: Int,
-        val type: String,
-        val name: String,
-        val posterUrl: String?,
-        val backdropUrl: String?,
-        val logoUrl: String?,
-        val overview: String?,
-        var imdbId: String? = null
-    )
-
-    /**
      * Shows the "Because you watched" panel during the end credits: TMDB
      * recommendations for the title that just finished, each with PLAY
-     * (auto-resolve top stream, straight into the next playback) and
-     * DETAILS (deep-link into the catalog detail screen). Runs only when
-     * there is no next episode to chain (movies, or a finished finale);
-     * the Up Next panel owns the series flow.
+     * (auto-resolve top stream, straight into the next playback) and DETAILS
+     * (deep-link into the catalog detail screen). Runs only when there is no
+     * next episode to chain (movies, or a finished finale); the Up Next panel
+     * owns the series flow.
+     *
+     * The row itself - cards, featured strip, focus rules - is the shared
+     * [BecauseYouWatchedUi], the same one the MPV engine raises, and the lineup
+     * comes from the shared [buildBecauseYouWatchedPicks]: one implementation,
+     * so the two engines' credits rows cannot drift apart.
      */
     private fun showBecauseYouWatchedPanel() {
         if (bywDismissed || isLiveChannel) return
-        val ctx = this
-        bywTitle.text = itemName ?: "This title"
-        applyPlayerPanelTheme()
-        becauseYouWatchedPanel.visibility = View.VISIBLE
+        bywUi.show(itemName)
         // Credits are rolling: shrink the video into the corner so the picks
         // own the screen while the credits keep playing.
         enterCreditsMode()
 
         scope?.launch {
             val picks: List<BywPick> = withContext(Dispatchers.IO) {
-                buildBecauseYouWatchedPicks(ctx)
+                val tmdbId = resolveParentTmdbId() ?: return@withContext emptyList()
+                buildBecauseYouWatchedPicks(
+                    this@NativePlayerActivity,
+                    tmdbId,
+                    bywMediaType(parentType)
+                )
             }
 
-            if (picks.isEmpty() ||
-                becauseYouWatchedPanel.visibility != View.VISIBLE
-            ) {
-                becauseYouWatchedPanel.visibility = View.GONE
+            if (picks.isEmpty() || !bywUi.isVisible) {
                 // Nothing to recommend: put the video back full screen.
+                bywUi.hide()
                 exitCreditsMode()
                 return@launch
             }
 
-            withContext(kotlinx.coroutines.Dispatchers.Main) {
-                buildBecauseYouWatchedRow(picks)
-            }
-
-        }
-    }
-
-    /**
-     * Builds the because-you-watched lineup as a weighted blend of four
-     * signals, then de-dupes against what this profile already watched:
-     *
-     *  1. SAME FRANCHISE (weight 100) — the TMDB collection the finished
-     *     title belongs to, minus its own entry. "You finished Fast Five ->
-     *     here's Fast & Furious 6" is the single most-wanted next watch.
-     *  2. SAME KEY CREATIVES (weight 60) — other works by the director(s)
-     *     and top-billed cast via combined credits, ranked by rating
-     *     weight (personCreditRank) rather than popularity. People are the
-     *     strongest taste signal in the data.
-     *  3. TMDB RECOMMENDATIONS (weight 30) — the content engine; good
-     *     genre-adjacent fill but generic on its own.
-     *  4. SAME KEYWORDS (weight 25) — TMDB keywords ("heist", "space
-     *     western") sharpen the theme match when they exist.
-     *
-     * Earlier tiers win ties; within a tier the source order stands (TMDB
-     * sorts by its own relevance). Already-watched titles, the finished
-     * title itself, and unposter-ed entries are dropped.
-     */
-    private suspend fun buildBecauseYouWatchedPicks(ctx: android.content.Context): List<BywPick> {
-        val repo = TmdbRepository.getInstance(ctx)
-        val tmdbId = resolveParentTmdbId() ?: return emptyList()
-        val mediaType = when (parentType.lowercase()) {
-            "series", "show", "tv" -> "series"
-            else -> "movie"
-        }
-        val detail = runCatching {
-            repo.getDetailByTmdbId(tmdbId, mediaType)
-        }.getOrNull() ?: return emptyList()
-
-        // "Because you watched Ted Lasso" came back all talk shows: the cast
-        // tier takes each person's top works by popularity, and a guest spot
-        // on a nightly talk show out-popularises every scripted credit they
-        // have. Same for TMDB's own recommendation blob now and then. Drop
-        // the unscripted formats — unless the title being watched IS one, in
-        // which case they are exactly the right suggestion.
-        val parentIsUnscripted = detail.genres.any { it.id in UNSCRIPTED_TV_GENRES }
-        val keepScripted: (List<Int>?) -> Boolean = { genreIds ->
-            keepRecommendedGenre(genreIds, parentIsUnscripted)
-        }
-
-        // What this profile has already watched (any parent id, completed or
-        // started): the ids come back as imdb ids / raw stream ids, so the
-        // filter below normalizes through the same tmdb->imdb resolution.
-        val watchedParentIds = runCatching {
-            WatchHistoryDatabase.getInstanceScoped(ctx)
-                .watchHistoryDao()
-                .getAll()
-                .map { it.parentId }
-                .toHashSet()
-        }.getOrNull() ?: HashSet()
-
-        data class Candidate(
-            val pick: BywPick,
-            val score: Int,
-            val order: Int
-        )
-
-        val candidates = LinkedHashMap<Int, Candidate>()
-        var order = 0
-
-        fun addCandidate(
-            tmdbId: Int,
-            type: String,
-            name: String,
-            poster: String?,
-            backdrop: String?,
-            overview: String?,
-            score: Int
-        ) {
-            if (tmdbId <= 0) return
-            if (tmdbId == detail.id) return
-            if (poster.isNullOrBlank()) return
-            val existing = candidates[tmdbId]
-            if (existing != null) {
-                // Keep the higher score but original position.
-                if (score > existing.score) {
-                    candidates[tmdbId] = existing.copy(score = score)
-                }
-                return
-            }
-            candidates[tmdbId] = Candidate(
-                BywPick(
-                    tmdbId = tmdbId,
-                    type = type,
-                    name = name,
-                    posterUrl = poster?.let { TmdbRepository.POSTER_BASE + it },
-                    backdropUrl = backdrop?.let { TmdbRepository.BACKDROP_BASE + it },
-                    logoUrl = null,
-                    overview = overview?.takeIf { it.isNotBlank() },
-                    imdbId = null
-                ),
-                score = score,
-                order = order++
-            )
-        }
-
-        // T1: franchise — same collection, ordered by release date so the
-        // "next" entry of the saga is the first suggestion.
-        val collectionId = detail.belongsToCollection?.id
-        if (collectionId != null) {
-            runCatching {
-                repo.getKBCollectionItems(collectionId)
-            }.getOrNull().orEmpty()
-                .sortedBy { it.releaseDate.orEmpty() }
-                .forEach { part ->
-                    addCandidate(
-                        tmdbId = part.id,
-                        type = "movie",
-                        name = part.title ?: part.name.orEmpty(),
-                        poster = part.posterPath,
-                        backdrop = null,
-                        overview = null,
-                        score = 100
-                    )
-                }
-        }
-
-        // T2: key creatives — directors first, then top-billed cast, using
-        // combined credits. Each person contributes their top few works.
-        val people = buildList {
-            addAll(
-                detail.credits?.crew.orEmpty()
-                    .filter { it.job.equals("Director", ignoreCase = true) }
-                    .map { it.id }
-            )
-            addAll(
-                detail.credits?.cast.orEmpty()
-                    .sortedBy { it.order }
-                    .take(3)
-                    .map { it.id }
-            )
-        }.distinct().take(4)
-
-        if (people.isNotEmpty()) {
-            coroutineScope {
-                people.map { personId ->
-                    async(Dispatchers.IO) {
-                        runCatching {
-                            repo.getPerson(personId)
-                        }.getOrNull()
-                    }
-                }.awaitAll()
-            }.filterNotNull().forEach { person ->
-                person.combinedCredits?.cast.orEmpty()
-                    .filter { credit ->
-                        val type = credit.mediaType.orEmpty()
-                        (type == "movie" || type == "tv") &&
-                            !credit.posterPath.isNullOrBlank() &&
-                            !isSelfAppearance(credit.character) &&
-                            keepScripted(credit.genreIds)
-                    }
-                    // Rank by rating weight, not popularity: a talk-show
-                    // guest spot is popular but rated ~5-6, so popularity
-                    // handed the row to The Tonight Show.
-                    .sortedByDescending { personCreditRank(it) }
-                    .take(4)
-                    .forEach { credit ->
-                        addCandidate(
-                            tmdbId = credit.id,
-                            type = if (credit.mediaType == "tv") "series" else "movie",
-                            name = credit.title ?: credit.name.orEmpty(),
-                            poster = credit.posterPath,
-                            backdrop = null,
-                            overview = null,
-                            score = 60
-                        )
-                    }
-            }
-        }
-
-        // T3: TMDB's own recommendation engine.
-        detail.recommendations?.results.orEmpty()
-            .filter { !it.posterPath.isNullOrBlank() && keepScripted(it.genreIds) }
-            .take(10)
-            .forEach { rec ->
-                addCandidate(
-                    tmdbId = rec.id,
-                    type = if (rec.name != null) "series" else "movie",
-                    name = (rec.title ?: rec.name).orEmpty(),
-                    poster = rec.posterPath,
-                    backdrop = rec.backdropPath,
-                    overview = rec.overview,
-                    score = 30
-                )
-            }
-
-        // T4: keyword neighbors when the title carries them.
-        val keywordIds = detail.keywords.list().map { it.id }.take(3)
-        if (keywordIds.isNotEmpty()) {
-            keywordIds.forEach { kw ->
-                runCatching {
-                    repo.getKeywordItems(kw, mediaType)
-                }.getOrNull().orEmpty()
-                    .take(6)
-                    .forEach { item ->
-                        addCandidate(
-                            tmdbId = item.id,
-                            type = if (mediaType == "series") "series" else "movie",
-                            name = item.name ?: item.title.orEmpty(),
-                            poster = item.posterPath,
-                            backdrop = item.backdropPath,
-                            overview = item.overview,
-                            score = 25
-                        )
-                    }
-            }
-        }
-
-        // Resolve imdb ids only for the survivors (the final ordering), so
-        // the stream resolution on PLAY doesn't burn a lookup burst.
-        val ranked = candidates.values
-            .sortedWith(compareByDescending<Candidate> { it.score }.thenBy { it.order })
-            .toList()
-            .take(10)
-
-        val filtered = ranked.filter { candidate ->
-            val pick = candidate.pick
-            // Cross-check watch history by tmdb id: history stores imdb ids,
-            // so resolve lazily (single lookup per finalist) — candidates
-            // whose imdb id matches a watched parent are dropped.
-            val imdb = runCatching {
-                repo.resolveImdbId(pick.tmdbId, pick.type)
-            }.getOrNull()
-            pick.imdbId = imdb
-            val seen = imdb != null && imdb in watchedParentIds
-            !seen
-        }.map { it.pick }
-
-        return filtered.take(6)
-    }
-
-    private val bywViews = mutableMapOf<Int, BywCardRefs>()
-    private var bywFeatured: Int? = null
-
-    /** Live view refs + mutable imdb id for one card in the row. */
-    private class BywCardRefs(
-        val cardView: View,
-        val nameView: TextView?,
-        val logoView: ImageView?,
-        val metaView: TextView?,
-        var imdbId: String?
-    )
-
-    /**
-     * Per-pick metadata fetched alongside the logo pass: the featured
-     * strip's meta line, the cards' compact line, and the description /
-     * backdrop the ranking tiers could not supply (franchise and credits
-     * candidates carry neither of their own).
-     */
-    private data class BywMeta(
-        val metaLine: String?,
-        val cardLine: String?,
-        val overview: String?,
-        val backdropUrl: String?
-    )
-
-    private val bywMetaCache = mutableMapOf<Int, BywMeta>()
-
-    /**
-     * Parks focus on the first pick in the credits row. The panel owns
-     * LEFT/RIGHT while it is up, but focus is not always inside it by then: the
-     * row is built a beat after the panel opens, and a skip prompt hands focus
-     * back to the video surface when it hides. [dispatchKeyEvent] calls this on
-     * the first horizontal press so the pick cards can actually be reached.
-     * False when there is nothing focusable yet (an empty or hidden row), which
-     * leaves the press alone.
-     */
-    private fun focusFirstBywPick(): Boolean {
-        val first = (0 until bywRow.childCount)
-            .map { bywRow.getChildAt(it) }
-            .firstOrNull { it.isFocusable && it.visibility == View.VISIBLE }
-            ?: return false
-        return first.requestFocus()
-    }
-
-    /** Renders the pick cards: poster / clear logo, name, PLAY + DETAILS. */
-    private fun buildBecauseYouWatchedRow(picks: List<BywPick>) {
-        bywRow.removeAllViews()
-        bywViews.clear()
-        val density = resources.displayMetrics.density
-        fun dp(v: Int): Int = (v * density).toInt()
-
-        picks.forEachIndexed { index, pick ->
-            val card = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = android.view.Gravity.CENTER_HORIZONTAL
-                setPadding(dp(6), dp(4), dp(6), dp(8))
-                isFocusable = true
-                isFocusableInTouchMode = true
-                descendantFocusability = ViewGroup.FOCUS_BEFORE_DESCENDANTS
-            }
-
-            // Poster with a clear-logo overlay, mirroring the app's
-            // rail-card look. The logo is best-effort: resolved below and
-            // swapped in only if TMDB has one (posters already carry the
-            // title for everything else).
-            val posterFrame = android.widget.FrameLayout(this).apply {
-                layoutParams = LinearLayout.LayoutParams(dp(108), dp(162))
-                clipToOutline = true
-                setBackgroundColor(panelSurfaceColor())
-            }
-            val poster = ImageView(this).apply {
-                layoutParams = android.widget.FrameLayout.LayoutParams(
-                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                    android.view.ViewGroup.LayoutParams.MATCH_PARENT
-                )
-                scaleType = ImageView.ScaleType.CENTER_CROP
-                pick.posterUrl?.let { load(it) }
-            }
-            posterFrame.addView(poster)
-            val logoView = ImageView(this).apply {
-                layoutParams = android.widget.FrameLayout.LayoutParams(
-                    dp(92), dp(34)
-                ).also {
-                    it.gravity = android.view.Gravity.CENTER_HORIZONTAL or
-                        android.view.Gravity.BOTTOM
-                    it.bottomMargin = dp(6)
-                }
-                scaleType = ImageView.ScaleType.FIT_CENTER
-            }
-            posterFrame.addView(logoView)
-            card.addView(posterFrame)
-
-            val name = TextView(this).apply {
-                text = pick.name
-                textSize = 11f
-                setTextColor(getColor(R.color.kb_text_hi))
-                maxWidth = dp(108)
-                maxLines = 1
-                ellipsize = android.text.TextUtils.TruncateAt.END
-                gravity = android.view.Gravity.CENTER_HORIZONTAL
-                setPadding(0, dp(4), 0, 0)
-                typeface = resources.getFont(R.font.oswald_medium)
-            }
-            card.addView(name)
-
-            // Year + length under the name: enough to compare picks
-            // without focusing each one. Filled by the metadata pass.
-            val cardMeta = TextView(this).apply {
-                textSize = 9f
-                setTextColor(getColor(R.color.kb_text_lo))
-                maxWidth = dp(108)
-                maxLines = 1
-                ellipsize = android.text.TextUtils.TruncateAt.END
-                gravity = android.view.Gravity.CENTER_HORIZONTAL
-                typeface = resources.getFont(R.font.oswald_medium)
-            }
-            bywMetaCache[pick.tmdbId]?.cardLine?.let { cardMeta.text = it }
-            card.addView(cardMeta)
-
-            val buttons = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = android.view.Gravity.CENTER
-            }
-            val play = TextView(this).apply {
-                text = "PLAY"
-                textSize = 10f
-                isFocusable = true
-                isFocusableInTouchMode = true
-                setPadding(dp(8), dp(4), dp(8), dp(4))
-                applyPillBackground(this, true, false)
-                setTextColor(getColor(R.color.kb_void))
-            }
-            val details = TextView(this).apply {
-                text = "DETAILS"
-                textSize = 10f
-                isFocusable = true
-                isFocusableInTouchMode = true
-                setPadding(dp(8), dp(4), dp(8), dp(4))
-                applyPillBackground(this, false, false)
-                setTextColor(getColor(R.color.kb_text_hi))
-            }
-            buttons.addView(play)
-            buttons.addView(details)
-            card.addView(buttons)
-
-            bywViews[pick.tmdbId] = BywCardRefs(
-                cardView = card,
-                nameView = name,
-                logoView = logoView,
-                metaView = cardMeta,
-                imdbId = null
-            )
-
-            play.setOnClickListener { bywPlayPick(pick) }
-            details.setOnClickListener { bywOpenDetails(pick) }
-            card.setOnClickListener { bywOpenDetails(pick) }
-
-            play.setOnFocusChangeListener { v, hasFocus ->
-                applyPillBackground(v as TextView, true, hasFocus)
-                if (hasFocus) featureBywPick(pick)
-            }
-            details.setOnFocusChangeListener { v, hasFocus ->
-                applyPillBackground(v as TextView, false, hasFocus)
-                if (hasFocus) featureBywPick(pick)
-            }
-            card.setOnFocusChangeListener { _, hasFocus ->
-                card.setBackgroundResource(
-                    if (hasFocus) R.drawable.pill_chip_focused_bg else 0
-                )
-            }
-
-            if (index == 0) {
-                card.post {
-                    play.requestFocus()
-                    featureBywPick(pick)
-                }
-            }
-            bywRow.addView(card)
-        }
-
-        // Clear-logo + description pass: fetch images/metadata per pick and
-        // fill the featured strip as answers land (cards render instantly
-        // with posters; logos/descriptions stream in).
-        scope?.launch {
-            val repo = TmdbRepository.getInstance(this@NativePlayerActivity)
-            picks.forEach { pick ->
-                val detail = withContext(Dispatchers.IO) {
-                    runCatching {
-                        repo.getDetailByTmdbId(pick.tmdbId, pick.type)
-                    }.getOrNull()
-                } ?: return@forEach
-                val logo = detail.images?.logos
-                    ?.filter { !it.filePath.isNullOrBlank() }
-                    ?.sortedWith(
-                        compareByDescending { it.iso6391 == "en" }
-                    )?.firstOrNull()?.filePath
-                val isMovie = pick.type != "series"
-                val meta = BywMeta(
-                    metaLine = detail.displayMetaLine(isMovie),
-                    cardLine = detail.displayCardMeta(isMovie),
-                    overview = pick.overview ?: detail.displayDescription(),
-                    // Franchise and credits candidates ship a poster only;
-                    // the fetched detail is what gives the strip a backdrop.
-                    backdropUrl = pick.backdropUrl
-                        ?: detail.backdropPath?.takeIf { it.isNotBlank() }
-                            ?.let { TmdbRepository.BACKDROP_BASE + it }
-                )
-                val imdb = withContext(Dispatchers.IO) {
-                    runCatching {
-                        repo.resolveImdbId(pick.tmdbId, pick.type)
-                    }.getOrNull()
-                }
-                withContext(Dispatchers.Main) {
-                    val refs = bywViews[pick.tmdbId] ?: return@withContext
-                    if (!logo.isNullOrBlank()) {
-                        bywLogoCache[pick.tmdbId] =
-                            TmdbRepository.LOGO_BASE + logo
-                        refs.logoView?.load(bywLogoCache[pick.tmdbId])
-                    }
-                    bywMetaCache[pick.tmdbId] = meta
-                    refs.metaView?.text = meta.cardLine.orEmpty()
-                    imdb?.let { refs.imdbId = it }
-                    if (bywFeatured == pick.tmdbId) {
-                        featureBywPick(pick)
-                    }
-                }
+            withContext(Dispatchers.Main) {
+                bywUi.build(picks)
             }
         }
     }
-
-    /**
-     * Featured strip under the row: focused pick's backdrop + clear logo +
-     * description ("looks nice" part). Uses the panel's own children so no
-     * extra layout resource is needed.
-     */
-    private fun featureBywPick(pick: BywPick) {
-        bywFeatured = pick.tmdbId
-        val panel = becauseYouWatchedPanel
-        // The panel is: kicker, title, [featured strip], row scroll, hint —
-        // the strip is inserted programmatically at index 2 when missing.
-        var strip = panel.findViewWithTag<LinearLayout>("byw_featured_strip")
-        if (strip == null) {
-            val density = resources.displayMetrics.density
-            fun dp(v: Int): Int = (v * density).toInt()
-            strip = LinearLayout(this).apply {
-                tag = "byw_featured_strip"
-                orientation = LinearLayout.HORIZONTAL
-                gravity = android.view.Gravity.CENTER_VERTICAL
-                setPadding(0, dp(12), 0, dp(4))
-            }
-            val backdrop = ImageView(this).apply {
-                tag = "byw_featured_backdrop"
-                layoutParams = LinearLayout.LayoutParams(dp(192), dp(108)).also {
-                    it.marginEnd = dp(14)
-                }
-                scaleType = ImageView.ScaleType.CENTER_CROP
-                setBackgroundColor(panelSurfaceColor())
-            }
-            strip.addView(backdrop)
-            val textCol = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-            }
-            val logo = ImageView(this).apply {
-                tag = "byw_featured_logo"
-                layoutParams = LinearLayout.LayoutParams(
-                    android.view.ViewGroup.LayoutParams.MATCH_PARENT, dp(40)
-                )
-                scaleType = ImageView.ScaleType.FIT_START
-            }
-            textCol.addView(logo)
-            // Full metadata (certification, year, length, genres, rating)
-            // between the logo and the synopsis. Two lines max so a series'
-            // longer scope string cannot push the description out of view.
-            val meta = TextView(this).apply {
-                tag = "byw_featured_meta"
-                textSize = 11f
-                setTextColor(getColor(R.color.kb_accent))
-                maxLines = 2
-                ellipsize = android.text.TextUtils.TruncateAt.END
-                setPadding(0, dp(5), 0, 0)
-                typeface = resources.getFont(R.font.oswald_medium)
-                visibility = View.GONE
-            }
-            textCol.addView(meta)
-            val desc = TextView(this).apply {
-                tag = "byw_featured_desc"
-                textSize = 12f
-                setTextColor(getColor(R.color.kb_text_lo))
-                maxLines = 3
-                ellipsize = android.text.TextUtils.TruncateAt.END
-                setPadding(0, dp(6), 0, 0)
-            }
-            textCol.addView(desc)
-            strip.addView(
-                textCol,
-                LinearLayout.LayoutParams(
-                    0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f
-                )
-            )
-            panel.addView(strip, 2)
-        }
-        val backdrop = strip.findViewWithTag<ImageView>("byw_featured_backdrop")
-        val logo = strip.findViewWithTag<ImageView>("byw_featured_logo")
-        val desc = strip.findViewWithTag<TextView>("byw_featured_desc")
-        val meta = strip.findViewWithTag<TextView>("byw_featured_meta")
-        // Metadata arrives with the same per-pick fetch as the logo, so the
-        // strip shows what it has and fills in when the answer lands
-        // (featureBywPick is called again for the still-focused card).
-        val fetched = bywMetaCache[pick.tmdbId]
-        meta.text = fetched?.metaLine.orEmpty()
-        meta.visibility =
-            if (fetched?.metaLine.isNullOrBlank()) View.GONE else View.VISIBLE
-        (fetched?.backdropUrl ?: pick.backdropUrl ?: pick.posterUrl)
-            ?.let { backdrop.load(it) }
-        desc.text = (fetched?.overview ?: pick.overview).orEmpty()
-        // Logo: from the per-pick logo pass if it landed already.
-        bywLogoCache[pick.tmdbId]?.let { logo.load(it) } ?: run { logo.setImageDrawable(null) }
-    }
-
-    private val bywLogoCache = mutableMapOf<Int, String>()
 
     /** PLAY: resolve streams for the pick and hand the top one back. */
-    private fun bywPlayPick(pick: BywPick) {
+    private fun bywPlayPick(pick: BywPick, imdbId: String) {
         val ctx = this
         scope?.launch {
-            val imdb = withContext(Dispatchers.IO) {
-                bywViews[pick.tmdbId]?.imdbId
-                    ?: runCatching {
-                        TmdbRepository.getInstance(ctx).resolveImdbId(pick.tmdbId, pick.type)
-                    }.getOrNull()
-            } ?: "tmdb:" + pick.tmdbId
-
             val vm = StreamsViewModel(application = ctx.application)
             val streams = withContext(Dispatchers.IO) {
                 runCatching {
-                    vm.resolve(pick.type, imdb)
+                    vm.resolve(pick.type, imdbId)
                 }.getOrNull()
             }.orEmpty()
 
@@ -7137,19 +6510,19 @@ class NativePlayerActivity : ComponentActivity() {
             finishWithBywResult(
                 action = if (top != null) "play_now" else "go_details",
                 pick = pick,
-                imdbId = imdb,
+                imdbId = imdbId,
                 streamUrl = top?.url,
                 streamName = top?.name ?: top?.title
             )
         }
     }
 
-    private fun bywOpenDetails(pick: BywPick) {
+    private fun bywOpenDetails(pick: BywPick, imdbId: String) {
         bywDismissed = true
         finishWithBywResult(
             action = "go_details",
             pick = pick,
-            imdbId = bywViews[pick.tmdbId]?.imdbId ?: "tmdb:" + pick.tmdbId,
+            imdbId = imdbId,
             streamUrl = null,
             streamName = null
         )

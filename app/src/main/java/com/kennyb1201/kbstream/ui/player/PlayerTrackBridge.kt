@@ -70,7 +70,25 @@ internal object PlayerTrackBridge {
             code.isNotBlank() && LanguageMatch.matches(code, language)
         }?.first ?: language.trim().uppercase().ifBlank { "Auto" }
 
-    fun inheritedLanguageSummary(): String {
+    fun inheritedLanguageSummary(): String =
+        languageSummary(
+            audioLanguage = audioLanguage,
+            subtitleLanguage = subtitleLanguage,
+            globalAudioLanguage = globalAudioLanguage,
+            globalSubtitleLanguage = globalSubtitleLanguage
+        )
+
+    /**
+     * The same wording, for a caller that holds these values itself: the MPV
+     * player mirrors this panel and has to say the same thing about the same
+     * stored preferences.
+     */
+    fun languageSummary(
+        audioLanguage: String,
+        subtitleLanguage: String,
+        globalAudioLanguage: String,
+        globalSubtitleLanguage: String
+    ): String {
         val inherited = buildList {
             if (audioLanguage.isBlank()) {
                 add("Audio ${languageName(globalAudioLanguage)}")

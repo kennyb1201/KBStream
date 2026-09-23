@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import com.kennyb1201.kbstream.data.player.LanguageMatch
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import dev.jdtech.mpv.MPVLib
 
@@ -49,8 +50,29 @@ class MpvPlayerView(context: Context) : SurfaceView(context), SurfaceHolder.Call
         val language: String?,
         val title: String?,
         val codec: String?,
+        val channels: Int?,
         val selected: Boolean
-    )
+    ) {
+        /**
+         * The same four fields the main player's picker lists and stores
+         * ("ENG • EAC3 • 6ch"), so a track remembered in one engine reads the
+         * same in the other.
+         */
+        val label: String
+            get() = listOfNotNull(
+                language?.uppercase()?.takeIf { it.isNotBlank() },
+                codec?.uppercase()?.takeIf { it.isNotBlank() },
+                channels?.takeIf { it > 0 }?.let { "${it}ch" }
+            ).joinToString(" • ").ifBlank { title ?: "Track #$id" }
+
+        /** `language|codec|channels`, the shape stored per title. */
+        val signature: String
+            get() = listOf(
+                language.orEmpty().lowercase(),
+                codec.orEmpty().lowercase(),
+                (channels ?: 0).toString()
+            ).joinToString("|")
+    }
 
     /** libmpv could not be loaded/created — the engine is unusable here. */
     var onEngineFailed: ((String) -> Unit)? = null
@@ -98,6 +120,14 @@ class MpvPlayerView(context: Context) : SurfaceView(context), SurfaceHolder.Call
 
     /** `mediacodec,mediacodec-copy` while hardware decoding is on, else `no`. */
     private var hwdecValue = HWDEC_HW
+
+    /**
+     * Languages this session wants, resolved by the activity (a title's
+     * remembered choice, else the global Settings preference) and applied at
+     * open time through `alang`/`slang`.
+     */
+    private var audioLanguage = ""
+    private var subtitleLanguage = ""
 
     /**
      * Creates the mpv instance. Returns false when the engine is unavailable
@@ -268,6 +298,241 @@ class MpvPlayerView(context: Context) : SurfaceView(context), SurfaceHolder.Call
         return "video=$video hwdec=$hwdec"
     }
 
+    // --- Settings the panel drives ------------------------------------------
+
+    /**
+     * The languages this session wants, in the app's own tag form ("en").
+     *
+     * Called before [initialize] so they land as the `alang`/`slang` options
+     * the demuxer honours at open time, and again later when the panel changes
+     * them, as runtime properties (which act on the next file).
+     */
+    fun setLanguagePreferences(audio: String?, subtitle: String?) {
+        audioLanguage = preferredLanguage(audio).orEmpty()
+        subtitleLanguage = preferredLanguage(subtitle).orEmpty()
+        if (!initialized) return
+        runCatching {
+            MPVLib.setPropertyString("alang", audioLanguage)
+            MPVLib.setPropertyString("slang", subtitleLanguage)
+        }
+    }
+
+    /** Playback speed; 1.0 is normal. */
+    fun setSpeed(speed: Double) {
+        if (!initialized) return
+        runCatching { MPVLib.setPropertyDouble("speed", speed) }
+    }
+
+    /** Audio delay in ms (`audio-delay` is kept in seconds). */
+    fun setAudioDelayMs(ms: Int) {
+        if (!initialized) return
+        runCatching { MPVLib.setPropertyDouble("audio-delay", ms / 1000.0) }
+    }
+
+    /** Subtitle delay in ms (`sub-delay`). */
+    fun setSubtitleDelayMs(ms: Int) {
+        if (!initialized) return
+        runCatching { MPVLib.setPropertyDouble("sub-delay", ms / 1000.0) }
+    }
+
+    /**
+     * Selects the first audio track in [language]; blank hands the choice back
+     * to mpv's `alang`. False when the file carries no such track, in which
+     * case the current track stands - the main player keeps the current audio
+     * in that case too.
+     */
+    fun selectAudioLanguage(language: String): Boolean {
+        if (!initialized) return false
+        if (language.isBlank()) {
+            runCatching { MPVLib.setPropertyString("aid", "auto") }
+            return true
+        }
+        val match = audioTracks().firstOrNull { LanguageMatch.matches(language, it.language) }
+            ?: return false
+        runCatching { MPVLib.setPropertyInt("aid", match.id) }
+        return true
+    }
+
+    /**
+     * Selects the first subtitle track in [language], or turns subtitles OFF
+     * when the file carries none: a language preference must never silently
+     * show the wrong track, which is what the main player does as well. Blank
+     * hands the choice back to mpv's `slang`.
+     */
+    fun selectSubtitleLanguage(language: String): Boolean {
+        if (!initialized) return false
+        if (language.isBlank()) {
+            runCatching { MPVLib.setPropertyString("sid", "auto") }
+            return true
+        }
+        val match = subtitleTracks().firstOrNull { LanguageMatch.matches(language, it.language) }
+        if (match == null) {
+            clearSubtitles()
+            return false
+        }
+        runCatching { MPVLib.setPropertyInt("sid", match.id) }
+        return true
+    }
+
+    /** Picks one specific audio track, for the panel's "this file" list. */
+    fun selectAudioTrack(id: Int) {
+        if (!initialized) return
+        runCatching { MPVLib.setPropertyInt("aid", id) }
+    }
+
+    fun selectSubtitleTrack(id: Int) {
+        if (!initialized) return
+        runCatching { MPVLib.setPropertyInt("sid", id) }
+    }
+
+    fun clearSubtitles() {
+        if (!initialized) return
+        runCatching { MPVLib.setPropertyString("sid", "no") }
+    }
+
+    /** True while a subtitle track is selected, for the panel's state. */
+    fun subtitlesOn(): Boolean = subtitleTracks().any { it.selected }
+
+    /** Signature of the audio track playing now, for the per-title memory. */
+    fun selectedAudioSignature(): String =
+        audioTracks().firstOrNull { it.selected }?.signature.orEmpty()
+
+    /**
+     * Applies a track signature remembered for this title
+     * ("language|codec|channels"), falling back to language + channel count.
+     * False when neither matches: the stored track may simply not be in this
+     * episode's file, and picking a different one is worse than leaving mpv's
+     * own choice alone.
+     */
+    fun applyRememberedAudioTrack(signature: String): Boolean {
+        if (!initialized || signature.isBlank()) return false
+        val tracks = audioTracks()
+        val parts = signature.split('|')
+        val language = parts.getOrNull(0).orEmpty()
+        val channels = parts.getOrNull(2)?.toIntOrNull() ?: 0
+        val match = tracks.firstOrNull { it.signature == signature }
+            ?: tracks.firstOrNull {
+                LanguageMatch.matches(language, it.language) &&
+                    (channels <= 0 || it.channels == channels)
+            }
+            ?: return false
+        runCatching { MPVLib.setPropertyInt("aid", match.id) }
+        return true
+    }
+
+    /**
+     * Aspect ratio, by the main player's own mode list (Fit / Zoom / Fill /
+     * 16:9 / 4:3), so the button and the panel read the same in both engines.
+     */
+    fun setAspectMode(index: Int) {
+        if (!initialized) return
+        runCatching {
+            when (index) {
+                // Zoom: keep the ratio, fill the frame, crop the overflow.
+                1 -> {
+                    MPVLib.setPropertyString("video-aspect-override", "no")
+                    MPVLib.setPropertyBoolean("keepaspect", true)
+                    MPVLib.setPropertyDouble("panscan", 1.0)
+                }
+                // Fill: stretch to the screen, ratio be damned.
+                2 -> {
+                    MPVLib.setPropertyString("video-aspect-override", "no")
+                    MPVLib.setPropertyBoolean("keepaspect", false)
+                    MPVLib.setPropertyDouble("panscan", 0.0)
+                }
+                // Forced ratios, for streams whose flagged size is wrong.
+                3 -> forceAspect("16:9")
+                4 -> forceAspect("4:3")
+                else -> {
+                    MPVLib.setPropertyString("video-aspect-override", "no")
+                    MPVLib.setPropertyBoolean("keepaspect", true)
+                    MPVLib.setPropertyDouble("panscan", 0.0)
+                }
+            }
+        }
+    }
+
+    private fun forceAspect(ratio: String) {
+        MPVLib.setPropertyBoolean("keepaspect", true)
+        MPVLib.setPropertyDouble("panscan", 0.0)
+        MPVLib.setPropertyString("video-aspect-override", ratio)
+    }
+
+    /**
+     * What mpv is playing and how, for the info button. Empty before the
+     * instance exists: reading a property off a handle that is not there yet is
+     * a native call, not a Kotlin one, and runCatching cannot catch that.
+     */
+    fun diagnostics(): String {
+        if (!initialized) return ""
+        val width = getPropertyIntOrNull("video-params/w") ?: 0
+        val height = getPropertyIntOrNull("video-params/h") ?: 0
+        val video = getPropertyStringOrNull("video-format")?.uppercase() ?: "AUDIO ONLY"
+        val hwdec = getPropertyStringOrNull("hwdec-current") ?: "none"
+        val audio = getPropertyStringOrNull("audio-codec")?.uppercase() ?: "—"
+        return buildString {
+            if (width > 0 && height > 0) append("${width}×$height  •  ")
+            append(video)
+            append("  •  decode: $hwdec")
+            append("  •  audio: $audio")
+        }
+    }
+
+    /**
+     * Subtitle size / background / position, the app's three-step controls.
+     * Text tracks only: an ASS track keeps the styling its author shipped (see
+     * [applyOptions]).
+     */
+    fun applySubtitleAppearance(size: Int, background: Int, position: Int) {
+        // --sub-font-size is mpv's own scale (55 is its default), so the three
+        // steps are that +/-20%.
+        val font = when (size) {
+            0 -> 44.0
+            2 -> 66.0
+            else -> 55.0
+        }
+        styleOption("sub-font-size", font.toString())
+        when (background) {
+            // Semi and Solid are a fill behind the text, with no outline.
+            1 -> {
+                styleOption("sub-back-color", "#80000000")
+                styleOption("sub-border-size", "0")
+            }
+            2 -> {
+                styleOption("sub-back-color", "#FF000000")
+                styleOption("sub-border-size", "0")
+            }
+            // Text: outlined text with no fill (the old DVD look).
+            3 -> {
+                styleOption("sub-back-color", "#00000000")
+                styleOption("sub-border-size", "2.4")
+            }
+            // None: no fill and no outline, just the shadow mpv already draws.
+            else -> {
+                styleOption("sub-back-color", "#00000000")
+                styleOption("sub-border-size", "0")
+            }
+        }
+        // 100 is mpv's bottom; the app's low / mid / high are those bands.
+        styleOption(
+            "sub-pos",
+            when (position) {
+                1 -> "72"
+                2 -> "50"
+                else -> "100"
+            }
+        )
+    }
+
+    /** A subtitle style option before init, the same thing as a property after. */
+    private fun styleOption(name: String, value: String) {
+        if (initialized) {
+            runCatching { MPVLib.setPropertyString(name, value) }
+        } else {
+            runCatching { MPVLib.setOptionString(name, value) }
+        }
+    }
+
     // --- mpv configuration --------------------------------------------------
 
     private fun applyOptions() {
@@ -320,13 +585,30 @@ class MpvPlayerView(context: Context) : SurfaceView(context), SurfaceHolder.Call
         MPVLib.setOptionString("save-position-on-quit", "no")
 
         // Preferred languages, so a multi-audio/multi-subtitle file opens on
-        // the right tracks without a press. ASS styling is deliberately left
-        // alone: no subtitle style option is set anywhere, which is what keeps
-        // a fansub's typesetting intact.
-        preferredLanguage(AppPreferences.getPreferredAudioLanguage(context))
-            ?.let { MPVLib.setOptionString("alang", it) }
-        preferredLanguage(AppPreferences.getPreferredSubtitleLanguage(context))
-            ?.let { MPVLib.setOptionString("slang", it) }
+        // the right tracks without a press: what the session asked for (a
+        // title's remembered choice, which [setLanguagePreferences] resolves),
+        // else the global Settings preference.
+        val wantedAudio = audioLanguage.ifBlank {
+            preferredLanguage(AppPreferences.getPreferredAudioLanguage(context)).orEmpty()
+        }
+        if (wantedAudio.isNotBlank()) MPVLib.setOptionString("alang", wantedAudio)
+        val wantedSubtitles = subtitleLanguage.ifBlank {
+            preferredLanguage(AppPreferences.getPreferredSubtitleLanguage(context)).orEmpty()
+        }
+        if (wantedSubtitles.isNotBlank()) MPVLib.setOptionString("slang", wantedSubtitles)
+
+        // Subtitle look, from the same global defaults the main player's
+        // settings pane edits.
+        applySubtitleAppearance(
+            size = AppPreferences.getDefaultSubtitleSize(context),
+            background = AppPreferences.getDefaultSubtitleBackground(context),
+            position = AppPreferences.getDefaultSubtitlePosition(context)
+        )
+
+        // ASS/SSA styling is deliberately left alone: none of the options that
+        // would let libass be overridden is set, which is what keeps a fansub's
+        // typesetting intact. The look controls above apply to text tracks;
+        // an ASS track keeps the styling its author shipped.
     }
 
     private fun observeProperties() {
@@ -540,6 +822,7 @@ class MpvPlayerView(context: Context) : SurfaceView(context), SurfaceHolder.Call
                 language = getPropertyStringOrNull("track-list/$index/lang"),
                 title = getPropertyStringOrNull("track-list/$index/title"),
                 codec = getPropertyStringOrNull("track-list/$index/codec"),
+                channels = getPropertyIntOrNull("track-list/$index/audio-channels"),
                 selected = getPropertyBooleanOrNull("track-list/$index/selected") == true
             )
         }
