@@ -2833,7 +2833,17 @@ Log.d(
                         // re-merge finished. applyContinueWatchingDismissals
                         // still filters anything the user removed, so a
                         // removed title cannot linger through the carry-over.
-                        if (localItems.isNotEmpty()) {
+                        // A profile switch clears the rail and bumps the
+                        // request version, so a build that was already past
+                        // its last suspension when the switch landed can
+                        // still be holding the rows of the profile the user
+                        // just left (its history DB stays readable through
+                        // the retire grace period). Gate this publish
+                        // exactly like the merged one below.
+                        if (
+                            localItems.isNotEmpty() &&
+                            isLatestUpNextRequest(requestVersion)
+                        ) {
                             _upNext.value =
                                 applyContinueWatchingDismissals(
                                     dedupeAndSortUpNext(
