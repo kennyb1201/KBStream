@@ -322,8 +322,22 @@ object ShowCompletionRules {
         95f
 
     /**
+     * The show statuses a caught-up Upcoming card may come from.
+     *
+     * "completed" has to be one of them. A show the user has finished
+     * everything aired of reads as COMPLETED on the tracker, and Simkl only
+     * moves it back to "watching" once the new season's first episode AIRS - so
+     * a watching-only rule hides exactly the case the rail exists for: a show
+     * whose new season is announced. A finished-and-staying-finished show is
+     * still kept out by the tally (it has nothing unaired), and the statuses
+     * that mean "not following" stay out below this list.
+     */
+    private val UPCOMING_FOLLOWED_STATUSES =
+        setOf("watching", "completed")
+
+    /**
      * The Upcoming rail's caught-up rule: a show the account is CAUGHT UP
-     * on, still on the watching list, with episodes Simkl already knows are
+     * on, still being followed, with episodes Simkl already knows are
      * UNAIRED.
      *
      * Caught-up shows are deliberately kept off Continue Watching (there is
@@ -341,12 +355,13 @@ object ShowCompletionRules {
         notAiredEpisodesCount: Int?
     ): Boolean {
 
-        // Only shows the user is following: "dropped" is off the list on
-        // purpose, and anything never started is not caught up on anything.
+        // Only shows the user is still following. "dropped" is off the list
+        // on purpose, "hold" is a deliberate pause, and anything never
+        // started is not caught up on anything.
         if (
             status
                 ?.trim()
-                ?.lowercase() != "watching"
+                ?.lowercase() !in UPCOMING_FOLLOWED_STATUSES
         ) {
             return false
         }

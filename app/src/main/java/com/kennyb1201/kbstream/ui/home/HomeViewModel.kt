@@ -82,12 +82,18 @@ private const val PREFS_DISMISSED_UPNEXT =
 
 /**
  * Ceiling on how many caught-up shows one Upcoming refresh looks up on TMDB.
- * The candidate list is already narrowed to "watching" shows Simkl knows have
+ * The candidate list is already narrowed to followed shows Simkl knows have
  * unaired episodes; this only keeps a huge library from turning one refresh
  * into dozens of lookups.
+ *
+ * Raised from 25 when a finished show started counting as a candidate too
+ * (a returning show reads as "completed" until its new season airs), which
+ * doubled the eligible set: at 25 a library with plenty of returning shows
+ * silently dropped the tail of them from the rail, which is the symptom the
+ * cap must never cause. Every candidate is one cached TMDB detail lookup.
  */
 private const val MAX_CAUGHT_UP_UPCOMING_ITEMS =
-    25
+    50
 
 /**
  * How long a loaded set of caught-up Upcoming cards is reused. The Upcoming
@@ -1117,6 +1123,14 @@ Log.d(
                     _upNext.value = emptyList()
                     publishInstantUpNextSnapshot()
 
+                    // Same for the caught-up Upcoming cards: they come from
+                    // the account-wide Simkl feed and are only kids-filtered
+                    // for the profile that built them, so nothing built for
+                    // the profile we just left may survive the switch.
+                    lastCaughtUpUpcomingItems = emptyList()
+                    caughtUpUpcomingProfileId = null
+                    caughtUpUpcomingLoadedAt = 0L
+
                     // Same for the addon rails: catalog rails for a NON-kids
                     // profile (adult content) visibly lingered for seconds
                     // after switching to a kids profile, until the kids
@@ -1472,6 +1486,29 @@ Log.d(
         null
 
     /**
+     * [lastCaughtUpUpcomingItems] only when it is THIS profile's, empty
+     * otherwise.
+     *
+     * The stamp makes the cache a hit only for the profile that built it, but
+     * the failure fallbacks below used to hand the list back unconditionally -
+     * so one flaky Simkl call right after a switch painted the previous
+     * profile's cards onto the incoming one, which is how an adult show showed
+     * up on a kids profile's Upcoming rail. Every read of the cache goes
+     * through here now; an unknown profile id is never a match.
+     */
+    private fun caughtUpUpcomingCache(
+        profileId: String
+    ): List<UpNextItem> =
+        if (
+            profileId.isNotBlank() &&
+            profileId == caughtUpUpcomingProfileId
+        ) {
+            lastCaughtUpUpcomingItems
+        } else {
+            emptyList()
+        }
+
+    /**
      * The Upcoming rail's caught-up cards: the next UNAIRED episode of every
      * show this profile is caught up on - a season premiere when a new season
      * is what is coming, and a mid-season episode when the show is still
@@ -1509,12 +1546,15 @@ Log.d(
                 ?: ""
 
         if (
+            profileId.isNotBlank() &&
             profileId == caughtUpUpcomingProfileId &&
             System.currentTimeMillis() -
             caughtUpUpcomingLoadedAt <
             CAUGHT_UP_UPCOMING_TTL_MS
         ) {
-            return lastCaughtUpUpcomingItems
+            return caughtUpUpcomingCache(
+                profileId
+            )
         }
 
         val candidates =
@@ -1526,7 +1566,11 @@ Log.d(
                     "caught-up candidates failed: ${e.message}",
                     e
                 )
-                return lastCaughtUpUpcomingItems
+                // The last good answer stands for a flaky call - but
+                // only this profile's. See [caughtUpUpcomingCache].
+                return caughtUpUpcomingCache(
+                    profileId
+                )
             }
 
         if (

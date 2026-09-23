@@ -273,9 +273,62 @@ class ShowCompletionRulesTest {
         )
     }
 
+    /**
+     * Reported gap: a show the user has finished a season of reads as
+     * "completed" on the tracker, and Simkl only moves it back to "watching"
+     * once the new season's first episode AIRS - so a returning show with an
+     * announced season was invisible in Upcoming while other apps showed it.
+     * The tally is what makes accepting "completed" safe: the show still has
+     * to be caught up with something unaired.
+     */
     @Test
-    fun `only shows on the watching list become upcoming catch-up cards`() {
-        for (status in listOf("dropped", "completed", "hold", null)) {
+    fun `a finished show with a new season coming is an upcoming card`() {
+        assertTrue(
+            ShowCompletionRules.isCaughtUpUpcomingCandidate(
+                status = "completed",
+                watchedEpisodesCount = 30,
+                totalEpisodesCount = 40,
+                notAiredEpisodesCount = 10
+            )
+        )
+
+        // Simkl casing/spacing is not guaranteed.
+        assertTrue(
+            ShowCompletionRules.isCaughtUpUpcomingCandidate(
+                status = " COMPLETED ",
+                watchedEpisodesCount = 30,
+                totalEpisodesCount = 40,
+                notAiredEpisodesCount = 10
+            )
+        )
+    }
+
+    @Test
+    fun `a completed show with nothing unaired stays off the rail`() {
+        assertFalse(
+            ShowCompletionRules.isCaughtUpUpcomingCandidate(
+                status = "completed",
+                watchedEpisodesCount = 30,
+                totalEpisodesCount = 30,
+                notAiredEpisodesCount = 0
+            )
+        )
+    }
+
+    @Test
+    fun `a show the user is not following never becomes an upcoming card`() {
+        // "hold" is a deliberate pause and "dropped" is off the list on
+        // purpose; blank/unknown statuses are not a following signal either.
+        for (
+            status in listOf(
+                "dropped",
+                "hold",
+                "plantowatch",
+                null,
+                "",
+                "   "
+            )
+        ) {
             assertFalse(
                 status.orEmpty(),
                 ShowCompletionRules.isCaughtUpUpcomingCandidate(
