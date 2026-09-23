@@ -1747,6 +1747,22 @@ class NativePlayerActivity : ComponentActivity() {
             !(::nextUpPanel.isInitialized && nextUpPanel.visibility == View.VISIBLE)
 
     /**
+     * True while the credits "Because you watched" panel owns the screen.
+     *
+     * Deliberately NOT folded into [plainPlaybackForeground]: that predicate
+     * also decides whether OK activates a skip prompt, and a "Skip Credits"
+     * prompt appearing over the recommendations must keep that press. What the
+     * panel does own is LEFT/RIGHT - its picks take focus precisely so the user
+     * can step between them - so [handleSurfaceScrubKey], the one function every
+     * direct scrub goes through, asks this before seeking the credits playing
+     * in the corner, and [dispatchKeyEvent] asks it before letting the press
+     * fall through to the view tree.
+     */
+    private fun creditsPanelForeground(): Boolean =
+        ::becauseYouWatchedPanel.isInitialized &&
+            becauseYouWatchedPanel.visibility == View.VISIBLE
+
+    /**
      * The D-pad keys that raise the controls overlay. Swallowed while a skip
      * prompt is up - see [dispatchKeyEvent] - because a skippable segment is
      * the prompt's alone. Nothing else loses anything by it: UP/DOWN only ever
@@ -1791,12 +1807,27 @@ class NativePlayerActivity : ComponentActivity() {
         // re-offered to the surface's listener from there. Only an item that
         // can actually seek takes the key - live TV and a stream without a
         // duration fall through to whatever handled them before.
-        if (plainPlaybackForeground() &&
-            (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
-                event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) &&
-            handleSurfaceScrubKey(event.keyCode, event)
-        ) {
-            return true
+        val horizontal = event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
+            event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
+        if (plainPlaybackForeground() && horizontal) {
+            if (creditsPanelForeground()) {
+                // The credits recommendations own LEFT/RIGHT for as long as
+                // they are up, so the press must never reach the scrub - which
+                // declines it for the same reason, see [handleSurfaceScrubKey].
+                // Focus is not guaranteed to be inside the panel yet: the row
+                // fills in a beat after the panel opens, and a skip prompt hands
+                // focus back to the video surface when it hides. Park it on the
+                // first pick so the press steps through them instead of
+                // scrubbing the credits they are recommending over.
+                if (event.action == KeyEvent.ACTION_DOWN &&
+                    !becauseYouWatchedPanel.hasFocus() &&
+                    focusFirstBywPick()
+                ) {
+                    return true
+                }
+            } else if (handleSurfaceScrubKey(event.keyCode, event)) {
+                return true
+            }
         }
         if (plainPlaybackForeground()) {
             if (btnSkipIntro.visibility == View.VISIBLE) {
@@ -3079,7 +3110,10 @@ class NativePlayerActivity : ComponentActivity() {
                         // accelerated scrubbing, bubble = where you landed.
                         // The activity's key dispatch runs this first, so the
                         // press behaves the same whichever view holds focus;
-                        // this stays as the surface's own fallback.
+                        // this stays as the surface's own fallback. It is also
+                        // where the press is declined while the credits
+                        // recommendations are up, so that rule lives in one
+                        // place - see handleSurfaceScrubKey.
                         handleSurfaceScrubKey(keyCode, event)
                     }
                 }
@@ -3283,6 +3317,14 @@ class NativePlayerActivity : ComponentActivity() {
      * they had.
      */
     private fun handleSurfaceScrubKey(keyCode: Int, event: KeyEvent): Boolean {
+        // The credits "Because you watched" panel owns LEFT/RIGHT for as long as
+        // it is up: its picks take focus precisely so the user can step between
+        // them, and every direct scrub - the activity's key dispatch and the
+        // video surface's own listener - arrives here, so the rule lives at this
+        // one choke point instead of at each call site. Only the press is
+        // declined; a release still lands so a scrub that was already in flight
+        // when the panel appeared is cleaned up.
+        if (event.action == KeyEvent.ACTION_DOWN && creditsPanelForeground()) return false
         if (event.action == KeyEvent.ACTION_DOWN) {
             val hasDuration = exoPlayer?.duration?.takeIf { it > 0 } != null
             if (!hasDuration) return false
@@ -6606,6 +6648,23 @@ class NativePlayerActivity : ComponentActivity() {
     )
 
     private val bywMetaCache = mutableMapOf<Int, BywMeta>()
+
+    /**
+     * Parks focus on the first pick in the credits row. The panel owns
+     * LEFT/RIGHT while it is up, but focus is not always inside it by then: the
+     * row is built a beat after the panel opens, and a skip prompt hands focus
+     * back to the video surface when it hides. [dispatchKeyEvent] calls this on
+     * the first horizontal press so the pick cards can actually be reached.
+     * False when there is nothing focusable yet (an empty or hidden row), which
+     * leaves the press alone.
+     */
+    private fun focusFirstBywPick(): Boolean {
+        val first = (0 until bywRow.childCount)
+            .map { bywRow.getChildAt(it) }
+            .firstOrNull { it.isFocusable && it.visibility == View.VISIBLE }
+            ?: return false
+        return first.requestFocus()
+    }
 
     /** Renders the pick cards: poster / clear logo, name, PLAY + DETAILS. */
     private fun buildBecauseYouWatchedRow(picks: List<BywPick>) {
