@@ -298,9 +298,26 @@ internal class AudioDownmixProcessor : BaseAudioProcessor() {
     private fun signature(): Int =
         PlayerAudioTuning.downmixTarget * 16 + PlayerAudioTuning.dialogueBoost
 
+    /**
+     * Copies [inputBuffer] through unchanged.
+     *
+     * The identity guard is not paranoia — it is the fix for a crash that killed
+     * playback on the first buffer of every stream. Media3 drains the pipeline
+     * before it feeds it (and feeds a stage `AudioProcessor.EMPTY_BUFFER` whenever
+     * the stage before it produced nothing), and [BaseAudioProcessor] starts both
+     * of a processor's buffers on that very same process-wide object. So an empty
+     * feed reaches here with `inputBuffer` *being* the output buffer
+     * [replaceOutputBuffer] just handed back — and `ByteBuffer.put(ByteBuffer)`
+     * throws `IllegalArgumentException` when source and destination are the same
+     * buffer. That is what `AudioDownmixProcessor.f(...:125)` in the crash log
+     * was; because the failed call never allocated, the alias persisted and every
+     * later attempt died the same way.
+     */
     private fun passThrough(inputBuffer: ByteBuffer) {
         val output = replaceOutputBuffer(inputBuffer.remaining())
-        output.put(inputBuffer)
+        if (output !== inputBuffer) {
+            output.put(inputBuffer)
+        }
         output.flip()
     }
 
