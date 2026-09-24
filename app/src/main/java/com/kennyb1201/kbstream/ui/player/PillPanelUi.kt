@@ -57,7 +57,10 @@ internal class PillPanelUi(private val context: Context) {
             LinearLayout.LayoutParams.WRAP_CONTENT
         )
         tag = false
-        setBackgroundResource(R.drawable.pill_chip_bg)
+        // The neutral fill, not the fixed @drawable/pill_chip_bg: its fill is
+        // @color/kb_surface, which the AMOLED / pure-black toggles have to be
+        // able to move (see neutralPillBackground).
+        background = neutralPillBackground()
         setTextColor(ContextCompat.getColor(context, R.color.kb_text_hi))
         // Same look as applyPillState() in the activity: selection colour plus a
         // distinct focused state, so a D-pad user can see where they are.
@@ -160,14 +163,19 @@ internal class PillPanelUi(private val context: Context) {
 
     fun stylePill(view: TextView, selected: Boolean) {
         view.tag = selected
-        view.setBackgroundResource(
-            when {
-                selected && view.isFocused -> R.drawable.pill_chip_selected_focused_bg
-                selected -> R.drawable.pill_chip_selected_bg
-                view.isFocused -> R.drawable.pill_chip_focused_bg
-                else -> R.drawable.pill_chip_bg
-            }
-        )
+        when {
+            selected && view.isFocused ->
+                view.setBackgroundResource(R.drawable.pill_chip_selected_focused_bg)
+
+            selected -> view.setBackgroundResource(R.drawable.pill_chip_selected_bg)
+            view.isFocused -> view.setBackgroundResource(R.drawable.pill_chip_focused_bg)
+            // The unselected fill is the theme's own surface rather than the
+            // fixed @drawable/pill_chip_bg: that drawable hard-codes
+            // @color/kb_surface, so a pure-black theme repainted #141A24 over
+            // every pill the moment a selection or a refresh moved off it -
+            // which is what kept the panels' unselected pills out of AMOLED.
+            else -> view.background = neutralPillBackground()
+        }
         view.setTextColor(
             ContextCompat.getColor(
                 context,
@@ -175,6 +183,15 @@ internal class PillPanelUi(private val context: Context) {
             )
         )
     }
+
+    /**
+     * The unselected pill fill: the same 6dp-cornered @color/kb_surface shape
+     * @drawable/pill_chip_bg carries, but resolved through the AMOLED /
+     * pure-black toggles so it tracks the theme like the rest of the player.
+     * Without AMOLED it is exactly the drawable's own colour.
+     */
+    private fun neutralPillBackground(): android.graphics.drawable.GradientDrawable =
+        roundedPanelDrawable(context, playerPanelSurfaceColor(context), 6f)
 
     fun isSelected(view: View): Boolean = view.tag == true
 }

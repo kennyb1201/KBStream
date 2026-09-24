@@ -52,6 +52,14 @@ import kotlinx.coroutines.launch
 import java.io.File
 
 /**
+ * The cast card's avatar circle fill, as fixed by its XML. A pure-black theme
+ * has to repaint it (see [MpvPlayerActivity.refillPlayerChromeView]) instead of
+ * leaving a grey circle behind every headshot - and the circle is all that shows
+ * for the cast members TMDB has no photo for. Matches the main player's.
+ */
+private val AVATAR_PLACEHOLDER_FILL: Int = 0xFF1D2530.toInt()
+
+/**
  * The MPV backup engine, as a playable activity.
  *
  * It takes the same launch extras as [NativePlayerActivity] on purpose: an
@@ -410,6 +418,10 @@ class MpvPlayerActivity : ComponentActivity() {
         settingsSection = settingsContainer?.let { container ->
             MpvSettingsSection(this, container).also { section -> section.attach() }
         }
+        // The MPV chrome is plain XML with fixed surface fills, so the AMOLED /
+        // pure-black toggles never reached it. Run the same re-tint pass the
+        // main player runs, now that the settings panel has been built.
+        applyPlayerChromeTheme()
 
         val view = findViewById<MpvPlayerView>(R.id.mpv_surface)
         surface = view
@@ -609,6 +621,20 @@ class MpvPlayerActivity : ComponentActivity() {
         pickerContainer = findViewById(R.id.mpv_picker_container)
         pickerTitle = findViewById(R.id.mpv_picker_title)
         pickerList = findViewById(R.id.mpv_picker_list)
+        // Picker rows are inflated on demand, long after the chrome above was
+        // themed, so each one is retinted as it attaches (a recycled row keeps
+        // whatever background it was themed with).
+        pickerList?.addOnChildAttachStateChangeListener(
+            object : RecyclerView.OnChildAttachStateChangeListener {
+                override fun onChildViewAttachedToWindow(view: View) {
+                    if (AppPreferences.getAmoledBlack(this@MpvPlayerActivity)) {
+                        refillPlayerChrome(view)
+                    }
+                }
+
+                override fun onChildViewDetachedFromWindow(view: View) = Unit
+            }
+        )
         badgeRow = findViewById(R.id.mpv_badge_row)
         castSection = findViewById(R.id.mpv_cast_section)
         castRow = findViewById(R.id.mpv_cast_row)
@@ -656,16 +682,160 @@ class MpvPlayerActivity : ComponentActivity() {
      * cannot wait for the view's own flag to be current.
      */
     private fun applyPillBackground(view: TextView, selected: Boolean, focused: Boolean) {
-        view.setBackgroundResource(
-            when {
-                selected && focused -> R.drawable.pill_chip_selected_focused_bg
-                selected -> R.drawable.pill_chip_selected_bg
-                focused -> R.drawable.pill_chip_focused_bg
-                else -> R.drawable.pill_chip_bg
-            }
-        )
+        view.background = when {
+            selected && focused -> getDrawable(R.drawable.pill_chip_selected_focused_bg)
+            selected -> getDrawable(R.drawable.pill_chip_selected_bg)
+            focused -> getDrawable(R.drawable.pill_chip_focused_bg)
+            // The neutral pill's fill is the theme's own surface, exactly like
+            // the main player's applyPillBackground: the fixed
+            // @drawable/pill_chip_bg would repaint #141A24 over a pure-black
+            // theme every time a selection moved off a pill.
+            else -> roundedPanelDrawable(this, playerPanelSurfaceColor(this), 6f)
+        }
         view.setTextColor(getColor(if (selected) R.color.kb_void else R.color.kb_text_hi))
     }
+
+    /**
+     * The MPV chrome is plain XML with fixed @color/kb_surface /
+     * @color/kb_surface_raised fills, so the AMOLED / pure-black toggles never
+     * reached it: a pure-black theme still painted #141A24 buttons and #1D2530
+     * panels. The main player re-resolves the same fills at runtime; this is
+     * that pass, so both engines' chrome follows the theme together.
+     */
+    private fun applyPlayerChromeTheme() {
+        // Without AMOLED the XML fills are already exactly right.
+        if (!AppPreferences.getAmoledBlack(this)) return
+        // getColor()/getCornerRadius() on a drawable are API 24+; older devices
+        // simply keep the (dark, not pure-black) XML fills.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
+        // The end-of-episode popups carry their own fills on top of the chrome
+        // walk below.
+        applyPlayerPanelTheme()
+        // The fatal-error card is a full-screen @color/kb_void fill - a plain
+        // ColorDrawable, which the chrome walk (GradientDrawables only) cannot
+        // reach - so AMOLED left it the fixed #0A0E14. Paint the theme's void,
+        // the same pure black the rest of the app turns to.
+        errorContainer?.setBackgroundColor(0xFF000000.toInt())
+        refillPlayerChrome(findViewById(android.R.id.content))
+    }
+
+    /**
+     * The end-of-episode popups - the Up Next card and the credits
+     * recommendations - carry their own fills on top of the chrome walk. This
+     * is the MPV engine's copy of the main player's pass of the same name, so
+     * both engines' popups follow the AMOLED / pure-black toggles together, and
+     * it re-runs when a popup is about to be shown (the theme can move between
+     * the session's start and its credits).
+     */
+    private fun applyPlayerPanelTheme() {
+        val raised = playerPanelRaisedColor(this)
+        val surface = playerPanelSurfaceColor(this)
+        listOf(becauseYouWatchedPanel, nextUpPanel).forEach { panel ->
+            panel?.background = roundedPanelDrawable(this, raised, 16f)
+        }
+        // The next episode's still sits in its own frame, left alone it keeps
+        // the XML's fixed @color/kb_surface.
+        nextUpThumb?.setBackgroundColor(surface)
+        btnNextDismiss?.let { pillBackground(it, selected = false) }
+        // The credits panel re-tints its own artwork and pills through the
+        // shared panel UI.
+        bywUi?.applyTheme()
+    }
+
+    /**
+     * [applyPlayerChromeTheme]'s walk. Also called for picker rows as they
+     * attach: those are inflated on demand, long after the activity's own view
+     * tree was themed.
+     */
+    private fun refillPlayerChrome(root: View) {
+        refillPlayerChromeView(root)
+        if (root is ViewGroup) {
+            for (index in 0 until root.childCount) {
+                refillPlayerChrome(root.getChildAt(index))
+            }
+        }
+    }
+
+    /**
+     * Retints one view when its background is one of the XML chrome fills.
+     * Views are matched by the fill their own background carries, so every
+     * button, pill and panel is covered without a hand-kept list, and each one
+     * keeps its own corner radius and press ripple - the main player's rule.
+     */
+    private fun refillPlayerChromeView(view: View) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
+        val background = view.background ?: return
+
+        // A RippleDrawable IS a LayerDrawable, and layer 0 is only its content
+        // while it actually has one: a ripple without a content layer must be
+        // treated as "not a chrome fill" rather than assumed (see the main
+        // player's refillPlayerChromeView for the crash this avoids).
+        val ripple = background as? android.graphics.drawable.RippleDrawable
+        val rippled = ripple != null
+
+        val content = if (ripple == null) {
+            background
+        } else {
+            if (ripple.numberOfLayers <= 0) return
+            val contentIndex = (0 until ripple.numberOfLayers).firstOrNull { index ->
+                runCatching {
+                    ripple.getId(index) == android.R.id.content
+                }.getOrDefault(false)
+            }
+            runCatching { ripple.getDrawable(contentIndex ?: 0) }.getOrNull() ?: return
+        }
+
+        val shape = content as? GradientDrawable ?: return
+        val fill = shape.color?.defaultColor ?: return
+        val replacement = when {
+            fill == getColor(R.color.kb_surface) ->
+                themedChromeBackground(playerPanelSurfaceColor(this), shape.cornerRadius, rippled)
+
+            fill == getColor(R.color.kb_surface_raised) ->
+                themedChromeBackground(playerPanelRaisedColor(this), shape.cornerRadius, false)
+
+            fill == AVATAR_PLACEHOLDER_FILL ->
+                themedAvatarBackground(playerPanelSurfaceColor(this))
+
+            else -> null
+        }
+        replacement?.let { view.background = it }
+    }
+
+    /**
+     * AMOLED-aware stand-in for one XML chrome fill: the same corner radius and
+     * (for the ripple drawables) the same accent press ripple, but the fill
+     * follows the theme toggles.
+     */
+    private fun themedChromeBackground(
+        fill: Int,
+        radiusPx: Float,
+        rippled: Boolean
+    ): android.graphics.drawable.Drawable {
+        val body = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(fill)
+            cornerRadius = radiusPx
+        }
+        if (!rippled) return body
+        val mask = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(0xFF000000.toInt())
+            cornerRadius = radiusPx
+        }
+        return android.graphics.drawable.RippleDrawable(
+            android.content.res.ColorStateList.valueOf(getColor(R.color.kb_accent)),
+            body,
+            mask
+        )
+    }
+
+    /** The cast card's avatar circle, at the theme's own artwork fill. */
+    private fun themedAvatarBackground(fill: Int): GradientDrawable =
+        GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(fill)
+        }
 
     /**
      * The main player's control bar, driven by mpv instead: play / pause with
@@ -931,6 +1101,10 @@ class MpvPlayerActivity : ComponentActivity() {
         row.removeAllViews()
         castMembers.forEach { member ->
             val itemView = layoutInflater.inflate(R.layout.cast_member_item, row, false)
+            // The band is filled a beat after the activity's own chrome was
+            // themed, so each card is themed as it lands - the same reason the
+            // picker's rows retint when they attach.
+            if (AppPreferences.getAmoledBlack(this@MpvPlayerActivity)) refillPlayerChrome(itemView)
             // The shared tile points its next-focus at the main player's
             // seekbar, which is not on screen in this layout: re-point it at
             // mpv's own so D-pad DOWN still lands on the bar.
@@ -946,18 +1120,6 @@ class MpvPlayerActivity : ComponentActivity() {
                 }
             }
             itemView.findViewById<ImageView>(R.id.cast_member_image).apply {
-                // The shared tile's avatar circle is a fixed #FF1D2530 oval, so
-                // a pure-black overlay still drew a grey circle behind every
-                // headshot - and the circle is all that shows for the cast
-                // members TMDB has no photo for. The main player retints the
-                // same tile as it lands (see refillPlayerChrome); this engine
-                // builds its own theming, so it paints the circle here.
-                if (AppPreferences.getAmoledBlack(this@MpvPlayerActivity)) {
-                    background = GradientDrawable().apply {
-                        shape = GradientDrawable.OVAL
-                        setColor(playerPanelSurfaceColor(this@MpvPlayerActivity))
-                    }
-                }
                 val url = member.profileImageUrl()
                 if (url.isNullOrBlank()) {
                     setImageResource(R.drawable.ic_cast_placeholder)
