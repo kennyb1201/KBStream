@@ -744,12 +744,18 @@ class NativePlayerActivity : ComponentActivity() {
             params.width = dp(440)
             params.height = ViewGroup.LayoutParams.WRAP_CONTENT
             params.gravity = android.view.Gravity.BOTTOM or android.view.Gravity.END
-            // Sits clear of the control bar when it is up (seekbar row, time
-            // row, button row and the overlay's own padding), so it never
-            // covers the playback buttons; the right edge lines up with that
-            // bar's own 48dp inset, which is what makes it read as part of the
-            // screen rather than dropped on top of it.
-            params.setMargins(dp(24), dp(24), dp(48), dp(152))
+            // Low in the corner: the bottom margin is only the safe-area gap
+            // now. It used to be 152dp, the height of the control bar it was
+            // keeping clear of - but that bar is never on screen at the same
+            // time as this card (the overlay does not come up while the card is
+            // showing), so all that clearance did was hold the card a third of
+            // the way up the screen. It now sits just off the bottom edge with
+            // a small breathing gap, so it covers as little of the picture as
+            // possible while still reading as anchored to the screen rather
+            // than sliding off it. The right edge still lines up with the
+            // screen's own 48dp inset, which is what makes it read as part of
+            // the screen rather than dropped on top of it.
+            params.setMargins(dp(24), dp(24), dp(48), dp(40))
         }
         nextUpPanel.setPadding(dp(14), dp(14), dp(14), dp(14))
         nextUpPanel.requestLayout()

@@ -613,8 +613,11 @@
         android:visibility="gone" />
 
     <!-- Up Next (shown as the episode's credits roll) - the same compact card
-         the main player was reduced to, in the same bottom-right corner: clear
-         of the control bar, right-aligned with it, and every field kept. -->
+         the main player was reduced to, in the same bottom-right corner: low
+         in the corner, right-aligned with the screen's own 48dp inset, and
+         every field kept. The bottom inset is only a small safe-area gap
+         (the control bar it used to clear is never on screen at the same time
+         as this card), so the card sits just off the bottom edge. -->
     <LinearLayout
         android:id="@+id/mpv_next_up_panel"
         android:layout_width="440dp"
@@ -622,7 +625,7 @@
         android:layout_gravity="bottom|end"
         android:layout_marginTop="24dp"
         android:layout_marginEnd="48dp"
-        android:layout_marginBottom="152dp"
+        android:layout_marginBottom="40dp"
         android:background="@drawable/panel_bg"
         android:orientation="horizontal"
         android:padding="14dp"
