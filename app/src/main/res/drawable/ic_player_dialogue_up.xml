@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dialogue boost, one step up: a speech bubble with a plus. See
+     ic_player_dialogue_down for why the pair uses a bubble and not a speaker.
+     Carries kb_text_hi (#FFF3EFE4) baked in. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M3.6,4.4h16.8v2.2H3.6z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M3.6,4.4h2.2v13H3.6z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M18.2,4.4h2.2v13h-2.2z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M3.6,15.2h9.4v2.2H3.6z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M6,17.4l0,4.4l3.8,-4.4z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M9.6,9.4h4.8v2.2H9.6z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M10.9,8.1h2.2v4.8h-2.2z" />
+</vector>

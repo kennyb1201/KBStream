@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Playback settings: three sliders, replacing the "⚙" character the button
+     used to draw (see ic_player_next). Sliders rather than a gear because a
+     gear is a cog with teeth at this size - unreadable as 2.2dp of geometry -
+     while the panel this opens is a list of values to tune. Carries
+     kb_text_hi (#FFF3EFE4) baked in. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M3.4,6.4h17.2v2.1H3.4z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M7.6,5h2.6v4.9H7.6z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M3.4,10.95h17.2v2.1H3.4z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M14.4,9.55h2.6v4.9h-2.6z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M3.4,15.5h17.2v2.1H3.4z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M10.4,14.1h2.6v4.9h-2.6z" />
+</vector>

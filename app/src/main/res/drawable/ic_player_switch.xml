@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Switch player: the swap arrows the button used to draw as the "⇄"
+     character, drawn as geometry so it matches the rest of the bar (see
+     ic_player_next). Carries kb_text_hi (#FFF3EFE4) baked in. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M3.6,8.2h10.6v2.2H3.6z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M14.2,5.9L19,9.3L14.2,12.7z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M9.8,13.6h10.6v2.2H9.8z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M9.8,11.3L5,14.7L9.8,18.1z" />
+</vector>

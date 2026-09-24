@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Subtitles: a caption box with two lines of text, replacing the "CC"
+     character the button used to draw (see ic_player_next). A box, not two
+     letters, so the mark stays legible at this size in any font. Carries
+     kb_text_hi (#FFF3EFE4) baked in. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M3.4,5.4h17.2v2.2H3.4z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M3.4,16.4h17.2v2.2H3.4z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M3.4,5.4h2.2v13.2H3.4z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M18.4,5.4h2.2v13.2h-2.2z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M6.2,9.6h6v2H6.2z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M6.2,12.4h11.6v2H6.2z" />
+</vector>

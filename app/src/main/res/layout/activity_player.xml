@@ -604,20 +604,23 @@
                     android:src="@drawable/ic_player_play"
                     android:contentDescription="Play/Pause" />
 
-                <!-- Next episode -->
-                <TextView
+                <!-- Next episode. An icon button like SOURCE beside it: the
+                     bar used to mix vector icons with font glyphs ("⏭", "♫",
+                     "CC", "⚙"), so every button's weight and optical center
+                     came from the system font instead of from this layout. -->
+                <ImageView
                     android:id="@+id/btn_next"
                     android:layout_width="40dp"
                     android:layout_height="40dp"
                     android:layout_marginStart="10dp"
                     android:background="@drawable/control_button_bg"
+                    android:contentDescription="Next episode"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
                     android:nextFocusUp="@id/seekbar"
-                    android:gravity="center"
-                    android:text="⏭"
-                    android:textColor="@color/kb_text_hi"
-                    android:textSize="16sp"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_next"
                     android:visibility="gone" />
 
                 <View
@@ -651,7 +654,7 @@
                      when there is another engine on this device and this
                      stream can actually be handed over (the backup refuses
                      live TV and DRM), so a press never dead-ends. -->
-                <TextView
+                <ImageView
                     android:id="@+id/btn_player_switch"
                     android:layout_width="40dp"
                     android:layout_height="40dp"
@@ -660,44 +663,83 @@
                     android:contentDescription="Switch player"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
-                    android:gravity="center"
                     android:nextFocusUp="@id/seekbar"
-                    android:text="⇄"
-                    android:textColor="@color/kb_text_hi"
-                    android:textSize="18sp"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_switch"
                     android:visibility="gone" />
 
-                <!-- Audio -->
-                <TextView
+                <!-- Audio track -->
+                <ImageView
                     android:id="@+id/btn_audio"
                     android:layout_width="40dp"
                     android:layout_height="40dp"
                     android:layout_marginEnd="8dp"
                     android:background="@drawable/control_button_bg"
+                    android:contentDescription="Audio track"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
-                    android:gravity="center"
-                    android:text="♫"
-                    android:textColor="@color/kb_text_hi"
-                    android:textSize="18sp"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_audio"
+                    android:visibility="visible" />
+
+                <!-- Dialogue boost, stepped one level per press rather than
+                     buried in the settings panel: this is a knob viewers tune
+                     BY EAR against a mix, so it has to be reachable while the
+                     film plays. − and + are one pair (2dp apart) so they read
+                     as a stepper, and each press announces the level it landed
+                     on - the lift is subtle at 1 of 4 and "did that do
+                     anything?" is the wrong thing to leave the viewer asking.
+                     Bubbles, not speakers: the button to the left is the audio
+                     track, and a speaker here would read as the same control. -->
+                <ImageView
+                    android:id="@+id/btn_dialogue_down"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:background="@drawable/control_button_bg"
+                    android:contentDescription="Dialogue boost down"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_dialogue_down"
+                    android:visibility="visible" />
+
+                <ImageView
+                    android:id="@+id/btn_dialogue_up"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
+                    android:layout_marginStart="2dp"
+                    android:background="@drawable/control_button_bg"
+                    android:contentDescription="Dialogue boost up"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_dialogue_up"
                     android:visibility="visible" />
 
                 <!-- Subtitles -->
-                <TextView
+                <ImageView
                     android:id="@+id/btn_subtitle"
                     android:layout_width="40dp"
                     android:layout_height="40dp"
                     android:layout_marginEnd="8dp"
                     android:background="@drawable/control_button_bg"
+                    android:contentDescription="Subtitles"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
-                    android:gravity="center"
-                    android:text="CC"
-                    android:textColor="@color/kb_text_hi"
-                    android:textSize="14sp"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_subtitle"
                     android:visibility="visible" />
 
-                <!-- Speed -->
+                <!-- Speed. The two text-bearing buttons of the bar (this one
+                     and ASPECT): a rate and a mode name are the state itself,
+                     so they stay words where every other button is an icon -
+                     in the bar's own typeface, which they alone were missing. -->
                 <TextView
                     android:id="@+id/btn_speed"
                     android:layout_width="40dp"
@@ -706,13 +748,17 @@
                     android:background="@drawable/control_button_bg"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
+                    android:fontFamily="@font/oswald_medium"
                     android:gravity="center"
                     android:text="1x"
                     android:textColor="@color/kb_text_hi"
                     android:textSize="14sp"
                     android:visibility="visible" />
 
-                <!-- Aspect ratio -->
+                <!-- Aspect ratio: the mode name ("Fit", "Zoom", ...), set for
+                     real by updateSettingsPanelState as soon as the chrome is
+                     bound - the text here is only what a first frame would show
+                     before that runs. -->
                 <TextView
                     android:id="@+id/btn_aspect"
                     android:layout_width="48dp"
@@ -721,38 +767,38 @@
                     android:background="@drawable/control_button_bg"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
+                    android:fontFamily="@font/oswald_medium"
                     android:gravity="center"
-                    android:text="⊞"
+                    android:text="Fit"
                     android:textColor="@color/kb_text_hi"
                     android:textSize="12sp" />
 
                 <!-- Stream info -->
-                <TextView
+                <ImageView
                     android:id="@+id/btn_info"
                     android:layout_width="40dp"
                     android:layout_height="40dp"
                     android:layout_marginEnd="8dp"
                     android:background="@drawable/control_button_bg"
+                    android:contentDescription="Stream info"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
-                    android:gravity="center"
-                    android:text="i"
-                    android:textColor="@color/kb_text_hi"
-                    android:textSize="14sp"
-                    android:textStyle="bold" />
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_info" />
 
                 <!-- Settings -->
-                <TextView
+                <ImageView
                     android:id="@+id/btn_settings"
                     android:layout_width="40dp"
                     android:layout_height="40dp"
                     android:background="@drawable/control_button_bg"
+                    android:contentDescription="Playback settings"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
-                    android:gravity="center"
-                    android:text="⚙"
-                    android:textColor="@color/kb_text_hi"
-                    android:textSize="18sp" />
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_settings" />
             </LinearLayout>
         </LinearLayout>
     </LinearLayout>

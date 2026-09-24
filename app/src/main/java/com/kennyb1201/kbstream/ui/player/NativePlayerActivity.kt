@@ -486,6 +486,88 @@ class NativePlayerActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         installManualSwitchFeedback()
+        installDialogueBoostStepper()
+    }
+
+    /**
+     * Wires the control bar's \u2212/+ dialogue-boost pair.
+     *
+     * The panels have carried a stepper for this since the level scale existed
+     * (Settings > Video & Audio owns the global level, and each player's own
+     * panel overrides it for the title), but reaching it mid-film means opening the
+     * settings panel, and what a viewer tuning voices by ear wants is a press
+     * while it plays. `setupListeners()` sits past the tooling's edit window, so
+     * the two listeners are installed here instead - from [onResume], which runs
+     * after `bindViews()` has bound the buttons and only ever restates them.
+     */
+    private fun installDialogueBoostStepper() {
+        if (!::btnDialogueDown.isInitialized || !::btnDialogueUp.isInitialized) return
+        btnDialogueDown.setOnClickListener { stepDialogueBoost(-1) }
+        btnDialogueUp.setOnClickListener { stepDialogueBoost(1) }
+    }
+
+    /**
+     * One press of that pair: a single step of the dialogue-boost scale.
+     *
+     * Everything is shared with the panels' own steppers -
+     * [PlayerAudioTuning.stepDialogueLevel] decides where the step lands (a
+     * step taken from "Global" starts at the level Settings is actually on, so
+     * neither pad ever drops the viewer to Off), and
+     * [PlayerTrackBridge.chooseAudioDialogueBoost] stores it for this title and
+     * republishes the tuning. The processor reads [PlayerAudioTuning] per
+     * buffer, so that is the whole of "apply it": the next buffer is louder,
+     * with no rebuild and no gap in playback.
+     *
+     * The level is then named on screen, because the first steps of the scale
+     * are subtle by design (see [PlayerAudioTuning.centerGain]) and "did that
+     * do anything?" is not a question this button should leave behind.
+     */
+    private fun stepDialogueBoost(delta: Int) {
+        val wasNeutral = PlayerAudioTuning.isNeutral
+        val next = PlayerAudioTuning.stepDialogueLevel(
+            current = PlayerTrackBridge.audioDialogueBoost,
+            globalLevel = AppPreferences.getAudioDialogueBoost(this),
+            delta = delta
+        )
+        PlayerTrackBridge.chooseAudioDialogueBoost(this, next)
+        Toast.makeText(
+            this,
+            "Dialogue boost: " + PlayerAudioTuning.dialogueLevelText(next),
+            Toast.LENGTH_SHORT
+        ).show()
+        restateAudioChainIfTunneling(wasNeutral)
+    }
+
+    /**
+     * Rebuilds the player when a dialogue step turns the audio tuning on or off
+     * during a TUNNELED session.
+     *
+     * The tunnel decision is taken when the sink is built (`createPlayer`): a
+     * tunneled track carries the audio inside the hardware path, where the
+     * sink's processors - downmix, dialogue lift, volume boost - never run. The
+     * build made that call while the tuning was still neutral, so the step that
+     * leaves neutral has to build the chain again, or the press would change a
+     * number and nothing else: the exact silent no-op a viewer cannot tell from
+     * a broken button.
+     *
+     * Only the EDGE is handled - the first step up, and the step back down to
+     * neutral that hands the session back to the tunnel - never every press, and
+     * the playhead rides across in [carryPositionMs] exactly as it does for the
+     * subtitle-attach rebuild. Sessions that were never tunneled pay nothing:
+     * this returns before touching the player, and `enableTunneling` is off by
+     * default.
+     */
+    private fun restateAudioChainIfTunneling(wasNeutral: Boolean) {
+        if (!enableTunneling || isLiveChannel) return
+        // Tunneling is skipped outright when the FFmpeg audio decoder is
+        // preferred (see createPlayer), so that session's sink IS in the chain
+        // and its step is already audible.
+        if (AppPreferences.getAudioDecoder(this) == AppPreferences.AUDIO_DECODER_PREFER_APP) {
+            return
+        }
+        if (PlayerAudioTuning.isNeutral == wasNeutral) return
+        carryPositionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs
+        recreatePlayer()
     }
 
     /**
@@ -568,14 +650,22 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var currentTime: TextView
     private lateinit var totalTime: TextView
     private lateinit var btnPlayPause: ImageView
-    private lateinit var btnNext: TextView
+    // The control bar's buttons are icon views, SOURCE included: they used to be
+    // TextViews drawing a font glyph ("\u2672" for next, "\u266b" for audio, "CC",
+    // "\u2699" ...), so their weight and optical centre came from whatever font the
+    // device shipped instead of from the layout, and no two of them matched.
+    // The last two keep their words - a rate and a mode name ARE their state -
+    // in the bar's own typeface. Bound by id from bindViews().
+    private lateinit var btnNext: ImageView
     private lateinit var btnSource: ImageView
-    private lateinit var btnPlayerSwitch: TextView
-    private lateinit var btnAudio: TextView
-    private lateinit var btnSubtitle: TextView
+    private lateinit var btnPlayerSwitch: ImageView
+    private lateinit var btnAudio: ImageView
+    private lateinit var btnDialogueDown: ImageView
+    private lateinit var btnDialogueUp: ImageView
+    private lateinit var btnSubtitle: ImageView
     private lateinit var btnSpeed: TextView
     private lateinit var btnAspect: TextView
-    private lateinit var btnSettings: TextView
+    private lateinit var btnSettings: ImageView
     private lateinit var pickerContainer: LinearLayout
     private lateinit var pickerTitle: TextView
     // internal: PlayerPanelSection appends the track / A-V rows to this panel.

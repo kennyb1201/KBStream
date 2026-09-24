@@ -154,6 +154,27 @@ class MpvPlayerActivity : ComponentActivity() {
         switchToExoPlayer()
     }
 
+    /**
+     * One press of the control bar's dialogue-boost pair.
+     *
+     * The mirror of the main player's button (see
+     * NativePlayerActivity.stepDialogueBoost): the same scale, the same
+     * "Global"-aware step, and the level named on screen rather than left for
+     * the viewer to guess at. mpv applies the lift through its own audio filter,
+     * so [chooseDialogueBoost] re-issues it and the change is heard within the
+     * buffer - this engine has no tunnel to work around, and nothing here has to
+     * rebuild the player.
+     */
+    private fun stepDialogueBoost(delta: Int) {
+        val next = PlayerAudioTuning.stepDialogueLevel(
+            current = dialogueBoostOverride(),
+            globalLevel = AppPreferences.getAudioDialogueBoost(this),
+            delta = delta
+        )
+        chooseDialogueBoost(next)
+        showToast("Dialogue boost: " + PlayerAudioTuning.dialogueLevelText(next), 2_500L)
+    }
+
     private var surface: MpvPlayerView? = null
     private var loadingContainer: View? = null
     private var loadingTitle: TextView? = null
@@ -177,8 +198,14 @@ class MpvPlayerActivity : ComponentActivity() {
     private var durationView: TextView? = null
     private var seekBar: SeekBar? = null
     private var playPauseButton: ImageView? = null
-    private var nextButton: TextView? = null
-    private var playerSwitchButton: TextView? = null
+    // Icon buttons, like the main player's bar (see NativePlayerActivity): this
+    // one used to draw "⏭" and "⇄" as font glyphs while SOURCE beside them was a
+    // vector, so the two players' bars did not even match each other. SPEED and
+    // ASPECT keep their words - a rate and a mode name ARE their state.
+    private var nextButton: ImageView? = null
+    private var playerSwitchButton: ImageView? = null
+    private var dialogueDownButton: ImageView? = null
+    private var dialogueUpButton: ImageView? = null
     private var speedButton: TextView? = null
     private var aspectButton: TextView? = null
     private var settingsContainer: View? = null
@@ -691,6 +718,8 @@ class MpvPlayerActivity : ComponentActivity() {
         playPauseButton = findViewById(R.id.mpv_btn_play_pause)
         nextButton = findViewById(R.id.mpv_btn_next)
         playerSwitchButton = findViewById(R.id.mpv_btn_player_switch)
+        dialogueDownButton = findViewById(R.id.mpv_btn_dialogue_down)
+        dialogueUpButton = findViewById(R.id.mpv_btn_dialogue_up)
         speedButton = findViewById(R.id.mpv_btn_speed)
         aspectButton = findViewById(R.id.mpv_btn_aspect)
         sourceButton = findViewById(R.id.mpv_btn_source)
@@ -1019,14 +1048,24 @@ class MpvPlayerActivity : ComponentActivity() {
             keepControlsVisible()
             showPicker(PickerMode.SOURCE)
         }
+        // The dialogue-boost pair: the main player's two buttons in the same
+        // place in the bar, stepping the same scale one level per press.
+        dialogueDownButton?.setOnClickListener {
+            keepControlsVisible()
+            stepDialogueBoost(-1)
+        }
+        dialogueUpButton?.setOnClickListener {
+            keepControlsVisible()
+            stepDialogueBoost(1)
+        }
         // AUDIO / SUBTITLES / SPEED open the same lists the main player opens,
         // in the same order: a track or a speed is picked by name rather than
         // stepped to blind.
-        findViewById<TextView>(R.id.mpv_btn_audio).setOnClickListener {
+        findViewById<ImageView>(R.id.mpv_btn_audio).setOnClickListener {
             keepControlsVisible()
             showPicker(PickerMode.AUDIO)
         }
-        findViewById<TextView>(R.id.mpv_btn_subtitle).setOnClickListener {
+        findViewById<ImageView>(R.id.mpv_btn_subtitle).setOnClickListener {
             keepControlsVisible()
             showPicker(PickerMode.SUBTITLE)
         }
@@ -1038,14 +1077,14 @@ class MpvPlayerActivity : ComponentActivity() {
             cycleAspect()
             keepControlsVisible()
         }
-        findViewById<TextView>(R.id.mpv_btn_info).setOnClickListener {
+        findViewById<ImageView>(R.id.mpv_btn_info).setOnClickListener {
             // The readout names its engine: this is the only place on screen
             // that says whether the picture is coming from mpv or whether the
             // session landed here after ExoPlayer handed the file over.
             showToast("MPV  •  ${diagnosticsText()}", 4_000L)
             keepControlsVisible()
         }
-        findViewById<TextView>(R.id.mpv_btn_settings).setOnClickListener {
+        findViewById<ImageView>(R.id.mpv_btn_settings).setOnClickListener {
             showSettingsPanel()
         }
 

@@ -411,19 +411,19 @@
 
                 <!-- Next episode: the same EOF handoff the main player's button
                      makes, shown only when this session knows its episode. -->
-                <TextView
+                <ImageView
                     android:id="@+id/mpv_btn_next"
                     android:layout_width="40dp"
                     android:layout_height="40dp"
                     android:layout_marginStart="10dp"
                     android:background="@drawable/control_button_bg"
+                    android:contentDescription="Next episode"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
-                    android:gravity="center"
                     android:nextFocusUp="@id/mpv_seekbar"
-                    android:text="⏭"
-                    android:textColor="@color/kb_text_hi"
-                    android:textSize="16sp"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_next"
                     android:visibility="gone" />
 
                 <!-- Source: pick a different stream for this title, in the same
@@ -447,7 +447,7 @@
                 <!-- Switch player: the same button, the same glyph, the same
                      place in the bar as the main player's - it hands this
                      session back to ExoPlayer and resumes where it is. -->
-                <TextView
+                <ImageView
                     android:id="@+id/mpv_btn_player_switch"
                     android:layout_width="40dp"
                     android:layout_height="40dp"
@@ -456,11 +456,10 @@
                     android:contentDescription="Switch player"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
-                    android:gravity="center"
                     android:nextFocusUp="@id/mpv_seekbar"
-                    android:text="⇄"
-                    android:textColor="@color/kb_text_hi"
-                    android:textSize="18sp" />
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_switch" />
 
                 <View
                     android:layout_width="0dp"
@@ -468,34 +467,65 @@
                     android:layout_weight="1" />
 
                 <!-- Audio track -->
-                <TextView
+                <ImageView
                     android:id="@+id/mpv_btn_audio"
                     android:layout_width="40dp"
                     android:layout_height="40dp"
                     android:layout_marginEnd="8dp"
                     android:background="@drawable/control_button_bg"
+                    android:contentDescription="Audio track"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
-                    android:gravity="center"
-                    android:text="♫"
-                    android:textColor="@color/kb_text_hi"
-                    android:textSize="18sp" />
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_audio" />
+
+                <!-- Dialogue boost: the main player's pair, in the main
+                     player's place in the bar. mpv applies the lift through its
+                     own audio filters, one press at a time, and the level it
+                     landed on is named on screen exactly as it is there. -->
+                <ImageView
+                    android:id="@+id/mpv_btn_dialogue_down"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:background="@drawable/control_button_bg"
+                    android:contentDescription="Dialogue boost down"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_dialogue_down" />
+
+                <ImageView
+                    android:id="@+id/mpv_btn_dialogue_up"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
+                    android:layout_marginStart="2dp"
+                    android:background="@drawable/control_button_bg"
+                    android:contentDescription="Dialogue boost up"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_dialogue_up" />
 
                 <!-- Subtitles -->
-                <TextView
+                <ImageView
                     android:id="@+id/mpv_btn_subtitle"
                     android:layout_width="40dp"
                     android:layout_height="40dp"
                     android:layout_marginEnd="8dp"
                     android:background="@drawable/control_button_bg"
+                    android:contentDescription="Subtitles"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
-                    android:gravity="center"
-                    android:text="CC"
-                    android:textColor="@color/kb_text_hi"
-                    android:textSize="14sp" />
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_subtitle" />
 
-                <!-- Speed -->
+                <!-- Speed: a rate is its own state, so it stays a word - in the
+                     bar's typeface, which it alone was missing. -->
                 <TextView
                     android:id="@+id/mpv_btn_speed"
                     android:layout_width="40dp"
@@ -504,12 +534,14 @@
                     android:background="@drawable/control_button_bg"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
+                    android:fontFamily="@font/oswald_medium"
                     android:gravity="center"
                     android:text="1x"
                     android:textColor="@color/kb_text_hi"
                     android:textSize="14sp" />
 
-                <!-- Aspect ratio: cycles on every press, like the main player's. -->
+                <!-- Aspect ratio: cycles on every press, like the main player's,
+                     and shows the mode name it landed on. -->
                 <TextView
                     android:id="@+id/mpv_btn_aspect"
                     android:layout_width="48dp"
@@ -518,38 +550,38 @@
                     android:background="@drawable/control_button_bg"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
+                    android:fontFamily="@font/oswald_medium"
                     android:gravity="center"
-                    android:text="⊞"
+                    android:text="Fit"
                     android:textColor="@color/kb_text_hi"
                     android:textSize="12sp" />
 
                 <!-- Stream info -->
-                <TextView
+                <ImageView
                     android:id="@+id/mpv_btn_info"
                     android:layout_width="40dp"
                     android:layout_height="40dp"
                     android:layout_marginEnd="8dp"
                     android:background="@drawable/control_button_bg"
+                    android:contentDescription="Stream info"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
-                    android:gravity="center"
-                    android:text="i"
-                    android:textColor="@color/kb_text_hi"
-                    android:textSize="14sp"
-                    android:textStyle="bold" />
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_info" />
 
                 <!-- Settings -->
-                <TextView
+                <ImageView
                     android:id="@+id/mpv_btn_settings"
                     android:layout_width="40dp"
                     android:layout_height="40dp"
                     android:background="@drawable/control_button_bg"
+                    android:contentDescription="Playback settings"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
-                    android:gravity="center"
-                    android:text="⚙"
-                    android:textColor="@color/kb_text_hi"
-                    android:textSize="18sp" />
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_settings" />
             </LinearLayout>
         </LinearLayout>
     </LinearLayout>

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dialogue boost, one step down: a speech bubble with a minus. The pair of
+     these buttons is the in-player stepper for the centre/voice lift, so the
+     mark says "voices" (a bubble) rather than "volume" (a speaker) - the
+     audio-track button next to it would otherwise read as the same control.
+     Carries kb_text_hi (#FFF3EFE4) baked in. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M3.6,4.4h16.8v2.2H3.6z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M3.6,4.4h2.2v13H3.6z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M18.2,4.4h2.2v13h-2.2z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M3.6,15.2h9.4v2.2H3.6z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M6,17.4l0,4.4l3.8,-4.4z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M9.6,9.4h4.8v2.2H9.6z" />
+</vector>
