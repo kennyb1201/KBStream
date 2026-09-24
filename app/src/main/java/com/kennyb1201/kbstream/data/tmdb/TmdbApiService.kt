@@ -12,18 +12,40 @@ interface TmdbApiService {
         @Query("external_source") externalSource: String = "imdb_id"
     ): TmdbFindResponse
 
+    /**
+     * Detail with the appended `images` restricted to English and textless art.
+     *
+     * Leave `include_image_language` off and TMDB answers with every locale it
+     * holds: a probe of five titles came back with logos in 13-21 languages and
+     * backdrops in 8-13. `TmdbDetail.bestLogoPath()` and `cardBackdropPath()`
+     * only *prefer* English over the rest, so a title with no English wordmark
+     * was handed a foreign one - which is how foreign clearlogos and
+     * title-burned-in backdrops reached the heroes and the cards. Filtering the
+     * RESPONSE is what fixes every consumer at once, including the ones that
+     * read `images.logos` directly, and it costs nothing: all eleven titles
+     * probed (Western, anime, Turkish, Bollywood) kept their English art.
+     *
+     * English-first matches the rest of the app - Settings > Browse & discover
+     * is English-only by default and the discover rails ask for
+     * `with_original_language=en`. A title with neither an English nor a
+     * textless image answers with an empty list, and every caller already has
+     * its own fallback (addon art, the item's own image, then the plain title).
+     */
     @GET("movie/{id}")
     suspend fun getMovie(
         @Path("id") id: Int,
         @Query("api_key") apiKey: String,
-        @Query("append_to_response") append: String = "release_dates,credits,videos,recommendations,reviews,keywords,images,awards"
+        @Query("append_to_response") append: String = "release_dates,credits,videos,recommendations,reviews,keywords,images,awards",
+        @Query("include_image_language") imageLanguage: String = "en,null"
     ): TmdbDetail
 
+    /** See [getMovie]: the appended `images` are language-restricted the same way. */
     @GET("tv/{id}")
     suspend fun getTv(
         @Path("id") id: Int,
         @Query("api_key") apiKey: String,
-        @Query("append_to_response") append: String = "content_ratings,credits,videos,recommendations,reviews,keywords,images,awards"
+        @Query("append_to_response") append: String = "content_ratings,credits,videos,recommendations,reviews,keywords,images,awards",
+        @Query("include_image_language") imageLanguage: String = "en,null"
     ): TmdbDetail
 
     @GET("movie/{id}/reviews")

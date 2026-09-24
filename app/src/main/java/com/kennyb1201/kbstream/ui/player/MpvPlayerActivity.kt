@@ -98,6 +98,62 @@ private val AVATAR_PLACEHOLDER_FILL: Int = 0xFF1D2530.toInt()
  */
 class MpvPlayerActivity : ComponentActivity() {
 
+    /**
+     * Points the switch back at the MAIN engine.
+     *
+     * [switchToExoPlayer] builds its launch out of THIS activity's own intent,
+     * so what it gives [exoSwitchLauncher] still names MpvPlayerActivity as its
+     * component. Launched unchanged it opened a second MPV session instead of
+     * ExoPlayer, which made the control bar's SWITCH look dead from this side
+     * too. Every ActivityResultLauncher launch goes through here, so the
+     * component is corrected at that one choke point.
+     *
+     * Only a switch-back launches this activity from here: the subtitle picker
+     * opens the system's document UI, next-episode hands its result back to
+     * MainActivity, and the now-playing intent goes out as a PendingIntent.
+     */
+    override fun startActivityForResult(intent: Intent, requestCode: Int, options: Bundle?) {
+        if (intent.component?.className == MpvPlayerActivity::class.java.name) {
+            intent.setClass(this, NativePlayerActivity::class.java)
+            // Disarm this session's own Up Next countdown as playback leaves: it
+            // is a Handler tick, so it fires whether or not this surface is the
+            // one on screen. Left armed behind ExoPlayer it would chain an
+            // episode out from under it and replace ExoPlayer's result with its
+            // own, which reads exactly like the switch did nothing.
+            cancelNextUpAutoAdvance()
+        }
+        super.startActivityForResult(intent, requestCode, options)
+    }
+
+    /**
+     * Answers this engine's two SWITCH buttons when a press cannot land.
+     *
+     * The mirror of the main player's guard (see
+     * NativePlayerActivity.switchEngineFromButton): [switchToExoPlayer] returns
+     * without a word when the session cannot move, and the two moments that
+     * happens - a stream still opening, a switch already in flight - are
+     * exactly the ones a viewer presses through. Both the failure card's button
+     * and the control bar's come through here, so the press is never silent.
+     */
+    private fun switchToExoPlayerFromButton() {
+        val blocked = when {
+            playerSwitchStarted -> "Already switching to the ExoPlayer engine\u2026"
+
+            currentUrl.isBlank() ->
+                "Nothing is playing yet \u2014 try SWITCH again once it starts"
+
+            intent == null || isFinishing || isDestroyed ->
+                "Can't switch engines right now"
+
+            else -> null
+        }
+        if (blocked != null) {
+            showToast(blocked, 4_000L)
+            return
+        }
+        switchToExoPlayer()
+    }
+
     private var surface: MpvPlayerView? = null
     private var loadingContainer: View? = null
     private var loadingTitle: TextView? = null
@@ -286,6 +342,7 @@ class MpvPlayerActivity : ComponentActivity() {
     private var pendingNextEpisodeName: String? = null
     private var nextUpCountdownRemaining = 0
     private var nextUpCountdownHeld = false
+
     private val nextUpCountdownHandler = Handler(Looper.getMainLooper())
     private val nextUpCountdownRunnable = object : Runnable {
         override fun run() {
@@ -303,6 +360,25 @@ class MpvPlayerActivity : ComponentActivity() {
             nextUpCountdown?.text = "Playing next in $nextUpCountdownRemaining"
             nextUpCountdownHandler.postDelayed(this, 1_000L)
         }
+    }
+
+    /**
+     * Disarms the Up Next countdown.
+     *
+     * A session that has handed playback over (see [switchToExoPlayer]) or is
+     * being torn down must not chain out from behind the player that is
+     * actually on screen: this countdown is a Handler tick, so it fires
+     * whether or not the surface is playing, and a backgrounded session doing
+     * that starts the next episode a second time. The main player cancels the
+     * same countdown in its own teardown; this engine now does too.
+     *
+     * Called from the switch handoff ([startActivityForResult]) - the one place
+     * a switch leaves this activity - and from nothing else yet.
+     */
+    private fun cancelNextUpAutoAdvance() {
+        nextUpCountdownHeld = false
+        nextUpCountdownRemaining = 0
+        nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
     }
 
     // --- Because you watched (end-credits recommendations) ------------------
@@ -592,7 +668,7 @@ class MpvPlayerActivity : ComponentActivity() {
         // SWITCH makes (see switchToExoPlayer), on the one surface where the bar
         // is behind the card. Wired here because it belongs to that card alone.
         errorSwitchButton = findViewById(R.id.mpv_error_switch)
-        errorSwitchButton?.setOnClickListener { switchToExoPlayer() }
+        errorSwitchButton?.setOnClickListener { switchToExoPlayerFromButton() }
         bufferingView = findViewById(R.id.mpv_buffering)
         toastView = findViewById(R.id.mpv_toast)
         // The stream-info readout this engine's INFO button brings up - and
@@ -900,6 +976,10 @@ class MpvPlayerActivity : ComponentActivity() {
         val showEpisode = episode ?: return
         val target = showEpisode + offset
         if (target < 1) return
+        // A negative offset is the PREVIOUS control asking for the episode
+        // before this one on purpose. It travels the same result extras the
+        // forward step does, which is also how the main player's restartEpisode
+        // steps back a title.
         launchNextEpisode(showSeason, target)
     }
 
@@ -933,7 +1013,7 @@ class MpvPlayerActivity : ComponentActivity() {
         }
         playerSwitchButton?.setOnClickListener {
             keepControlsVisible()
-            switchToExoPlayer()
+            switchToExoPlayerFromButton()
         }
         sourceButton?.setOnClickListener {
             keepControlsVisible()

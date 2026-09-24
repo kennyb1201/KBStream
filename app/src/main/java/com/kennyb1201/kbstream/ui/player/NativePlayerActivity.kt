@@ -425,6 +425,106 @@ private fun resolveDeviceMaxChannels(context: Context): Int {
 
 class NativePlayerActivity : ComponentActivity() {
 
+    /**
+     * Points the engine handoff at the BACKUP engine.
+     *
+     * [handOffToMpv] builds its handoff out of THIS activity's own intent - it
+     * replays the whole session (source list, cast, badges, return-to) with the
+     * stream extras replaced - so the intent it gives [mpvFallbackLauncher]
+     * still names NativePlayerActivity as its component. Launched unchanged
+     * that opened a second ExoPlayer session instead of MPV: the SWITCH press
+     * looked like it did nothing, and the INFO panel came back still chipped
+     * EXOPLAYER. Every ActivityResultLauncher launch goes through here, so the
+     * component is corrected at that one choke point.
+     *
+     * The handoff extra is the trigger. Only a handoff carries it: nothing else
+     * in this activity launches itself through here (the subtitle pickers open
+     * the system's document UI, next-episode hands its result back to
+     * MainActivity, and the now-playing intent goes out as a PendingIntent).
+     */
+    override fun startActivityForResult(intent: Intent, requestCode: Int, options: Bundle?) {
+        if (intent.component?.className == NativePlayerActivity::class.java.name &&
+            intent.getBooleanExtra(MpvPlayerActivity.EXTRA_MPV_FALLBACK, false)
+        ) {
+            intent.setClass(this, MpvPlayerActivity::class.java)
+            // Disarm this session's own Up Next countdown as playback leaves for
+            // the backup engine: it is a Handler tick, so it fires whether or
+            // not this surface is the one on screen. An ExoPlayer session left
+            // armed behind MPV chains an episode out from under it and replaces
+            // MPV's result with its own, which reads like the switch failed.
+            nextUpCountdownHeld = false
+            nextUpCountdownRemaining = 0
+            nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
+        }
+        super.startActivityForResult(intent, requestCode, options)
+    }
+
+    /**
+     * Answers the two SWITCH buttons when a press cannot land.
+     *
+     * Both of them run into [handOffToMpv] (see `setupListeners()`), whose
+     * refusal is silent by design there - the same path serves the AUTOMATIC
+     * fallback, where nothing appearing on screen is correct. A press is a
+     * question, though, and the buttons' own visibility gate only covers the
+     * reasons true for the whole session (no libmpv, live TV, DRM). The two
+     * that are true only for a moment - the first source still opening, and a
+     * handoff already in flight - left the press looking exactly like a broken
+     * button, which is how the handoff-intent bug read from the couch.
+     *
+     * `setupListeners()` sits past the tooling's edit window, so the listeners
+     * are restated here instead: the same call, plus the feedback. [onResume]
+     * is the hook - `bindViews()` has bound the buttons by then, and re-running
+     * this only ever rewrites the same two listeners.
+     */
+    private fun installManualSwitchFeedback() {
+        if (!::btnPlayerSwitch.isInitialized || !::btnSwitchPlayer.isInitialized) return
+        val onSwitch = View.OnClickListener { switchEngineFromButton() }
+        btnPlayerSwitch.setOnClickListener(onSwitch)
+        btnSwitchPlayer.setOnClickListener(onSwitch)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        installManualSwitchFeedback()
+    }
+
+    /**
+     * SWITCH, from the control bar or the error card.
+     *
+     * [handOffToMpv] owns the decision - it is the only place that knows
+     * whether this session can move at all - so the press is routed straight
+     * through it. Only its refusal is answered, and with the gate that said no.
+     */
+    private fun switchEngineFromButton() {
+        if (handOffToMpv(MpvPlayerActivity.FALLBACK_REASON_MANUAL, manual = true)) return
+        Toast.makeText(this, switchBlockedReason(), Toast.LENGTH_LONG).show()
+    }
+
+    /**
+     * Which of the handoff's gates stopped the press, in the player's words.
+     *
+     * The same conditions [handOffToMpv] checks and [canHandOffToMpv] mirrors,
+     * in the order the handoff checks them, so the sentence names the gate that
+     * actually said no. The last line covers the rest (a session being torn
+     * down, a launch that never carried an intent).
+     */
+    private fun switchBlockedReason(): String = when {
+        mpvHandoffStarted -> "Already switching to the MPV player\u2026"
+
+        isLiveChannel ->
+            "Live TV can't change engines \u2014 zapping stays in the native player"
+
+        drmLicenseUrl != null ->
+            "This stream is DRM-protected; only the native player can play it"
+
+        !PlayerEngine.isMpvAvailable() -> "This device has no MPV player"
+
+        currentUrl.isBlank() ->
+            "Nothing is playing yet \u2014 try SWITCH again once it starts"
+
+        else -> "Can't switch engines right now"
+    }
+
     // Views
     private lateinit var playerView: KBPlayerView
     private lateinit var p5VideoGlesView: P5VideoGlesView

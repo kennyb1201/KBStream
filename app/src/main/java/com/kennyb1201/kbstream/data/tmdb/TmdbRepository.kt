@@ -148,6 +148,19 @@ class TmdbRepository private constructor(context: Context) {
     private val detailCacheTtlMs = 12L * 60L * 60L * 1000L
     private val detailCacheDiskTtlMs = 30L * 24L * 60L * 60L * 1000L
 
+    /**
+     * Disk key for a cached detail response.
+     *
+     * Versioned (`_en`) because the detail request now restricts its appended
+     * `images` to English/textless art (see [TmdbApiService.getMovie]). The
+     * cache lives 30 days, so without a new prefix a device would keep serving
+     * the foreign logos and title-burned backdrops it cached before the filter
+     * existed - the fix would look like it did nothing. A key bump drops them
+     * all at once instead; the orphaned `detail:` rows age out of the shared
+     * cache through the same cleanup that trims every other stale entry.
+     */
+    private fun detailDiskKey(key: String): String = "detail_en:$key"
+
     private val seasonEpisodesCache =
         ConcurrentHashMap<String, Pair<Long, List<ResolvedEpisode>>>()
     private val seasonEpisodesCacheTtlMs = 12L * 60L * 60L * 1000L
@@ -306,7 +319,7 @@ class TmdbRepository private constructor(context: Context) {
         }
 
         // Disk cache so resolved metadata survives restarts.
-        val diskKey = "detail:$key"
+        val diskKey = detailDiskKey(key)
         val diskCached = runCatching {
             tmdbJsonCacheDao.getByKey(diskKey)
         }.getOrNull()
@@ -852,7 +865,7 @@ class TmdbRepository private constructor(context: Context) {
         }
 
         // Disk cache so resolved metadata survives restarts.
-        val diskKey = "detail:$key"
+        val diskKey = detailDiskKey(key)
         val diskCached = runCatching {
             tmdbJsonCacheDao.getByKey(diskKey)
         }.getOrNull()
