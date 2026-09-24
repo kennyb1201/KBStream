@@ -605,3 +605,58 @@ internal fun SimklRepository.isShowFullyWatched(
         nextToWatch =
             item.nextToWatch
     )
+
+/**
+ * The disk-cache key a Simkl blob lives under, kept out of [SimklRepository]
+ * so the rule can be unit-tested without an Android context.
+ *
+ * Simkl auth is per-PROFILE while the disk cache table is shared, so a key has
+ * to name BOTH the profile that owns the slot and the Simkl account the blob
+ * was fetched with. The profile half alone is not enough: a fetch that STARTED
+ * under the profile the user just left resolves its access token BEFORE the
+ * switch but reads the active profile AFTER it, so it wrote the outgoing
+ * profile's library into the incoming profile's slot for up to 12h - and that
+ * library is what the Upcoming rail's caught-up cards are built from, so the
+ * symptom was the previous profile's Upcoming coming back on the new one,
+ * cleared by a force-close (memory) but not always (the poisoned disk blob).
+ *
+ * The token half is a hash rather than the token itself because these keys
+ * are plain text in the cache table: the blob is worthless without a valid
+ * token, so there is no reason to leave a working credential sitting in it.
+ * Two profiles deliberately sharing one Simkl account still resolve to the
+ * same blob, which is correct - it is the same library.
+ */
+internal object SimklCacheKeys {
+
+    /** How many bytes of the digest the key carries: 12 hex chars. */
+    private const val DISCRIMINATOR_BYTES =
+        6
+
+    /**
+     * The account half of a key: a stable, fixed-width hash of the access
+     * token. Stability matters as much as uniqueness - a value that changed
+     * between runs would miss the blob the previous run wrote and re-fetch
+     * the whole library on every launch.
+     */
+    fun discriminator(accessToken: String): String =
+        runCatching {
+            java.security.MessageDigest
+                .getInstance("SHA-256")
+                .digest(
+                    accessToken.toByteArray()
+                )
+                .take(DISCRIMINATOR_BYTES)
+                .joinToString("") { byte -> "%02x".format(byte) }
+        }.getOrElse {
+            // A JVM without SHA-256 is not a real one; degrade to a stable
+            // per-token value rather than throwing out of a cache lookup.
+            accessToken.hashCode().toString(16)
+        }
+
+    /**
+     * [profileScopedBase] as resolved by the active profile, stamped with the
+     * Simkl account the blob belongs to.
+     */
+    fun scoped(profileScopedBase: String, accessToken: String): String =
+        profileScopedBase + '#' + discriminator(accessToken)
+}

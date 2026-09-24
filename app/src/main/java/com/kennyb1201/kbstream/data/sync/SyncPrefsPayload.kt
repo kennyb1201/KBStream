@@ -736,13 +736,21 @@ object PrefsPayloadApplier {
      * in-memory lists (keyed by profile, not by account) and the
      * watched-activity checkpoint, which otherwise tells the next poll that
      * nothing changed and serves the old account's Continue Watching. The
-     * token itself needs no cache handling — SimklRepository reads it live.
+     * token itself needs no cache handling — SimklRepository reads it live —
+     * but the ON-DISK Continue Watching blob does: it is keyed by profile
+     * while its contents are per-account, so it is what the read after this
+     * one falls straight back to.
      */
     private fun resetSimklStateAfterTokenChange(context: Context) {
         runCatching {
-            com.kennyb1201.kbstream.data.simkl.SimklRepository.clearTransientCaches()
-            com.kennyb1201.kbstream.data.simkl.SimklRepository.getInstance(context)
-                .forceClearWatchedActivitySync()
+            val simkl = com.kennyb1201.kbstream.data.simkl.SimklRepository
+            simkl.clearTransientCaches()
+            val repository = simkl.getInstance(context)
+            repository.forceClearWatchedActivitySync()
+            // The feed itself, on disk. Memory above is not enough: the next
+            // read answers from the 6h blob first, and the Upcoming rail is
+            // built from that feed.
+            repository.clearContinueWatchingDiskBlob()
         }.onFailure {
             android.util.Log.w(TAG, "simkl reset after synced token change failed: ${it.message}")
         }

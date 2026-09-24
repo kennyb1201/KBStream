@@ -118,6 +118,26 @@ class SimklRepository(
     internal var cachedAllShowItemsFetchedAt =
         0L
 
+    /**
+     * The access token [cachedAllShowItems] was fetched with.
+     *
+     * Simkl auth is per-PROFILE, so this library belongs to exactly one
+     * account. The cache used to be a single slot with no stamp, cleared on a
+     * profile switch - and clearing is not enough on its own, exactly like the
+     * Continue Watching feed (see [cachedContinueWatchingOwner]): a fetch that
+     * STARTED under the profile the user just left resolves its token BEFORE
+     * the switch but its disk slot AFTER it, so its result was served from
+     * memory and written under the INCOMING profile's key for up to 12h. That
+     * library is what the Upcoming rail's caught-up cards are built from, so
+     * the symptom was the previous profile's Upcoming staying on the new one -
+     * cleared by a force-close (memory) but not always (the poisoned disk
+     * blob). Stamping the token makes every read and publish refuse another
+     * account's library; two profiles deliberately sharing one Simkl token
+     * still share it, which is correct.
+     */
+    @Volatile
+    internal var cachedAllShowItemsToken: String? = null
+
     private val tmdbJsonCacheDao:
         TmdbJsonCacheDao? =
         context
@@ -324,6 +344,11 @@ class SimklRepository(
     internal var cachedCompletedMovieKeysFetchedAt =
         0L
 
+    /** The access token [cachedCompletedMovieKeys] was fetched with; see
+     *  [cachedAllShowItemsToken] for why the stamp is required. */
+    @Volatile
+    internal var cachedCompletedMovieKeysToken: String? = null
+
     fun isConfigured(): Boolean {
         return clientId.isNotBlank() &&
             clientSecret.isNotBlank()
@@ -352,8 +377,10 @@ class SimklRepository(
     fun clearWatchedCachesForProfileSwitch() {
         cachedAllShowItems = null
         cachedAllShowItemsFetchedAt = 0L
+        cachedAllShowItemsToken = null
         cachedCompletedMovieKeys = null
         cachedCompletedMovieKeysFetchedAt = 0L
+        cachedCompletedMovieKeysToken = null
     }
 
     fun clearAuth() {
@@ -369,22 +396,38 @@ class SimklRepository(
         cachedAllShowItemsFetchedAt =
             0L
 
+        cachedAllShowItemsToken =
+            null
+
         cachedCompletedMovieKeys =
             null
 
         cachedCompletedMovieKeysFetchedAt =
             0L
 
+        cachedCompletedMovieKeysToken =
+            null
+
+        // Every key shape, resolved HERE: the removal below drops the very
+        // token the account-scoped keys are built from, and the coroutine
+        // only sweeps the disk after it is gone.
+        val diskKeysToDrop =
+            listOf(
+                ALL_SHOW_ITEMS_DISK_KEY_BASE,
+                CONTINUE_WATCHING_DISK_KEY_BASE,
+                COMPLETED_MOVIES_DISK_KEY_BASE
+            ).flatMap { base ->
+                simklDiskKeys(
+                    base
+                )
+            }
+
         CoroutineScope(
             Dispatchers.IO
         ).launch {
             runCatching {
                 tmdbJsonCacheDao?.deleteByKeys(
-                    listOf(
-                        diskKey(ALL_SHOW_ITEMS_DISK_KEY_BASE),
-                        diskKey(CONTINUE_WATCHING_DISK_KEY_BASE),
-                        diskKey(COMPLETED_MOVIES_DISK_KEY_BASE)
-                    )
+                    diskKeysToDrop
                 )
             }
         }
@@ -696,14 +739,15 @@ class SimklRepository(
 
         cachedCompletedMovieKeys = null
         cachedCompletedMovieKeysFetchedAt = 0L
+        cachedCompletedMovieKeysToken = null
 
         // Clears the Continue Watching feed in memory and on disk too.
         clearContinueWatchingCache()
 
         runCatching {
             tmdbJsonCacheDao?.deleteByKeys(
-                listOf(
-                    diskKey(COMPLETED_MOVIES_DISK_KEY_BASE)
+                simklDiskKeys(
+                    COMPLETED_MOVIES_DISK_KEY_BASE
                 )
             )
         }
@@ -717,11 +761,12 @@ class SimklRepository(
     internal suspend fun invalidateShowLibraryCache() {
         cachedAllShowItems = null
         cachedAllShowItemsFetchedAt = 0L
+        cachedAllShowItemsToken = null
 
         runCatching {
             tmdbJsonCacheDao?.deleteByKeys(
-                listOf(
-                    diskKey(ALL_SHOW_ITEMS_DISK_KEY_BASE)
+                simklDiskKeys(
+                    ALL_SHOW_ITEMS_DISK_KEY_BASE
                 )
             )
         }
@@ -738,8 +783,39 @@ class SimklRepository(
         cachedContinueWatchingFetchedAt = 0L
         runCatching {
             tmdbJsonCacheDao?.deleteByKeys(
-                listOf(diskKey(CONTINUE_WATCHING_DISK_KEY_BASE))
+                simklDiskKeys(
+                    CONTINUE_WATCHING_DISK_KEY_BASE
+                )
             )
+        }
+    }
+
+    /**
+     * Fire-and-forget [clearContinueWatchingCache] for a caller that cannot
+     * suspend (the sync payload applier, which is where a synced Simkl
+     * session - i.e. another account - lands on this device).
+     *
+     * The Continue Watching feed is the one Simkl cache still keyed by
+     * PROFILE alone (see [simklDiskKeys]) while its contents belong to an
+     * ACCOUNT: on a session change the memory copy goes with
+     * [Companion.clearTransientCaches], and the disk blob would then answer
+     * the very next read. That read feeds the Upcoming rail, so the other
+     * account's shows could come back there - a restart does not clear it.
+     */
+    internal fun clearContinueWatchingDiskBlob() {
+        val keys =
+            simklDiskKeys(
+                CONTINUE_WATCHING_DISK_KEY_BASE
+            )
+
+        CoroutineScope(
+            Dispatchers.IO
+        ).launch {
+            runCatching {
+                tmdbJsonCacheDao?.deleteByKeys(
+                    keys
+                )
+            }
         }
     }
 
@@ -1151,6 +1227,7 @@ class SimklRepository(
             if (
                 !forceRefresh &&
                 cached != null &&
+                cachedAllShowItemsToken == accessToken &&
                 now - cachedAllShowItemsFetchedAt <
                     ALL_SHOW_ITEMS_TTL_MS
             ) {
@@ -1166,7 +1243,10 @@ class SimklRepository(
             ) {
                 val diskCached =
                     readSimklJsonFromDisk(
-                        diskKey(ALL_SHOW_ITEMS_DISK_KEY_BASE)
+                        tokenScopedDiskKey(
+                            ALL_SHOW_ITEMS_DISK_KEY_BASE,
+                            accessToken
+                        )
                     )
 
                 if (
@@ -1189,6 +1269,9 @@ class SimklRepository(
 
                         cachedAllShowItemsFetchedAt =
                             now
+
+                        cachedAllShowItemsToken =
+                            accessToken
 
                         return@withLock parsed
                     }
@@ -1266,11 +1349,17 @@ class SimklRepository(
                 cachedAllShowItemsFetchedAt =
                     now
 
+                cachedAllShowItemsToken =
+                    accessToken
+
                 runCatching {
                     tmdbJsonCacheDao?.upsert(
                         TmdbJsonCacheEntity(
                             key =
-                                diskKey(ALL_SHOW_ITEMS_DISK_KEY_BASE),
+                                tokenScopedDiskKey(
+                                    ALL_SHOW_ITEMS_DISK_KEY_BASE,
+                                    accessToken
+                                ),
 
                             json =
                                 allShowsJsonAdapter
@@ -1293,6 +1382,49 @@ class SimklRepository(
 
             body ?: cached
         }
+    }
+
+    /**
+     * The key a Simkl blob is read and written under: the profile-scoped base
+     * (see [diskKey]) stamped with the account it was fetched with (see
+     * [SimklCacheKeys]). The profile half alone cannot separate two Simkl
+     * accounts, and the account half alone cannot separate two profiles -
+     * these blobs need both.
+     */
+    private fun tokenScopedDiskKey(base: String, accessToken: String): String =
+        SimklCacheKeys.scoped(
+            diskKey(base),
+            accessToken
+        )
+
+    /**
+     * Every disk key a Simkl blob may live under: the profile-scoped base and
+     * the account-scoped shape the reads use (see [tokenScopedDiskKey]). An
+     * invalidation has to drop both, or the very next read still hits the blob
+     * the write was meant to retire. The bare base is included even when the
+     * reader already stamps the account: it is what the builds before the
+     * stamp left behind, and what a blob that is still profile-scoped only
+     * (the Continue Watching feed) lives under.
+     */
+    private fun simklDiskKeys(base: String): List<String> {
+        val keys =
+            mutableListOf(
+                diskKey(base)
+            )
+
+        getSavedAccessToken()
+            ?.takeIf {
+                it.isNotBlank()
+            }
+            ?.let { token ->
+                keys +=
+                    tokenScopedDiskKey(
+                        base,
+                        token
+                    )
+            }
+
+        return keys
     }
 
     private suspend fun readSimklJsonFromDisk(
@@ -1677,6 +1809,7 @@ class SimklRepository(
 
             if (
                 cached != null &&
+                cachedCompletedMovieKeysToken == accessToken &&
                 now - cachedCompletedMovieKeysFetchedAt <
                     COMPLETED_MOVIES_TTL_MS
             ) {
@@ -1690,7 +1823,10 @@ class SimklRepository(
             ) {
                 val diskCached =
                     readSimklJsonFromDisk(
-                        diskKey(COMPLETED_MOVIES_DISK_KEY_BASE)
+                        tokenScopedDiskKey(
+                            COMPLETED_MOVIES_DISK_KEY_BASE,
+                            accessToken
+                        )
                     )
 
                 if (
@@ -1714,6 +1850,9 @@ class SimklRepository(
 
                         cachedCompletedMovieKeysFetchedAt =
                             now
+
+                        cachedCompletedMovieKeysToken =
+                            accessToken
 
                         return@withLock parsed
                     }
@@ -1842,11 +1981,17 @@ class SimklRepository(
             cachedCompletedMovieKeysFetchedAt =
                 now
 
+            cachedCompletedMovieKeysToken =
+                accessToken
+
             runCatching {
                 tmdbJsonCacheDao?.upsert(
                     TmdbJsonCacheEntity(
                         key =
-                            diskKey(COMPLETED_MOVIES_DISK_KEY_BASE),
+                            tokenScopedDiskKey(
+                                COMPLETED_MOVIES_DISK_KEY_BASE,
+                                accessToken
+                            ),
 
                         json =
                             completedMovieKeysJsonAdapter
