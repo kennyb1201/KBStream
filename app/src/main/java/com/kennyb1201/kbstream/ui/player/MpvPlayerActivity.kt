@@ -582,6 +582,11 @@ class MpvPlayerActivity : ComponentActivity() {
         errorSwitchButton?.setOnClickListener { switchToExoPlayer() }
         bufferingView = findViewById(R.id.mpv_buffering)
         toastView = findViewById(R.id.mpv_toast)
+        // The stream-info readout this engine's INFO button brings up - and
+        // every other transient line - on the solid, theme-aware panel fill:
+        // the translucent version it shipped with let the overlay's own
+        // gradient wash through it, and it ignored the AMOLED toggle.
+        toastView?.background = infoPanelDrawable(this)
         loadingBackdropView = findViewById(R.id.mpv_loading_backdrop)
         loadingLogoView = findViewById(R.id.mpv_loading_logo)
         controlsContainer = findViewById(R.id.mpv_controls)
@@ -783,7 +788,10 @@ class MpvPlayerActivity : ComponentActivity() {
             keepControlsVisible()
         }
         findViewById<TextView>(R.id.mpv_btn_info).setOnClickListener {
-            showToast(surface?.diagnostics() ?: "Stream info", 4_000L)
+            // The readout names its engine: this is the only place on screen
+            // that says whether the picture is coming from mpv or whether the
+            // session landed here after ExoPlayer handed the file over.
+            showToast("MPV  •  ${diagnosticsText()}", 4_000L)
             keepControlsVisible()
         }
         findViewById<TextView>(R.id.mpv_btn_settings).setOnClickListener {

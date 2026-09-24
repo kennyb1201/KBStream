@@ -363,6 +363,34 @@ internal fun roundedPanelDrawable(
 }
 
 /**
+ * The background of the screen the player's INFO button brings up: the same
+ * accent hairline and 16dp corners the XML shape carried, but with an OPAQUE,
+ * theme-aware fill.
+ *
+ * The old @drawable/info_panel_bg was translucent (#CC10141B), which is wrong
+ * on the one surface that is meant to be read: it sits over the player's own
+ * translucent overlay gradient, so the two washed into each other and the rails
+ * behind them showed through the codec lines. Both players use this - the main
+ * player's info screen and the MPV engine's readout pill - so the two engines'
+ * info looks the same and both follow the AMOLED / pure-black toggles instead of
+ * a fixed panel color.
+ */
+internal fun infoPanelDrawable(context: Context): GradientDrawable =
+    roundedPanelDrawable(
+        context,
+        playerPanelRaisedColor(context),
+        16f
+    ).apply {
+        val accent = ContextCompat.getColor(context, R.color.kb_accent)
+        // Quarter-strength accent: the hairline the XML drawable had, kept so
+        // the panel still reads as a panel rather than a black rectangle.
+        setStroke(
+            context.resources.displayMetrics.density.toInt().coerceAtLeast(1),
+            (accent and 0x00FFFFFF) or (0x40 shl 24)
+        )
+    }
+
+/**
  * The credits recommendation panel: the pick row, the featured strip under it,
  * and the focus rules that tie the two together.
  *

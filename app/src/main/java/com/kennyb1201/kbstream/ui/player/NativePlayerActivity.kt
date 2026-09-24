@@ -247,6 +247,20 @@ private const val CHANNEL_NUMBER_COMMIT_MS = 1_200L
 /** How long "NO CHANNEL 12" stays up before the entry HUD hides itself. */
 private const val CHANNEL_NUMBER_ERROR_MS = 1_800L
 private const val ZAP_EPG_LOOKAHEAD_MS = 6L * 60L * 60L * 1000L
+/**
+ * The tag on the INFO screen's engine chip, so it is built exactly once per
+ * session (see [NativePlayerActivity.applyInfoScreenChrome]).
+ */
+private const val INFO_ENGINE_CHIP_TAG = "info_engine_chip"
+
+/**
+ * What that chip reads. This activity IS the ExoPlayer engine - the MPV engine
+ * has its own activity and its own readout, which names MPV - so whenever this
+ * info screen is on display, ExoPlayer drew the picture. The name is what the
+ * decoder rows below it cannot say: they name the decoders, not the engine.
+ */
+private const val INFO_ENGINE_CHIP = "EXOPLAYER"
+
 private const val ZAP_EPG_ROW_LIMIT = 4
 // Repaint a cached banner instantly, but still re-query the guide if the
 // snapshot is older than this — otherwise the NOW row and progress bar
@@ -592,6 +606,9 @@ class NativePlayerActivity : ComponentActivity() {
      */
     internal fun prepareEndOfEpisodePanels() {
         compactNextUpCard()
+        // The INFO screen's own chrome comes with it: same hook, same reason
+        // (see [applyInfoScreenChrome]).
+        applyInfoScreenChrome()
         // The pick row's builder, shared with the MPV engine: focus sits on the
         // PLAY / DETAILS pills only - never the card - and both pills drive the
         // featured strip, so stepping through the row updates the info under it.
@@ -611,6 +628,60 @@ class NativePlayerActivity : ComponentActivity() {
             scope = { scope },
             onPlay = { pick, imdbId -> bywPlayPick(pick, imdbId) },
             onDetails = { pick, imdbId -> bywOpenDetails(pick, imdbId) }
+        )
+    }
+
+    /**
+     * The INFO screen: the panel the control bar's INFO button brings up.
+     *
+     * Both of the things it has to do are applied in code because the panel
+     * itself sits in this layout's XML tail (past the tooling's edit window),
+     * and because neither value can be a fixed XML one anyway:
+     *
+     *  - The FILL. The drawable it shipped with was translucent (#CC10141B), so
+     *    over the overlay's own gradient the codec lines had the video showing
+     *    through them; [infoPanelDrawable] gives the panel an opaque fill that
+     *    still follows the AMOLED / pure-black toggles.
+     *  - The ENGINE NAME. [buildInfoPanel] fills the row under the title with
+     *    the decoder configuration ("Engine: Hardware video decoder • FFmpeg
+     *    audio fallback"), which never said which ENGINE was playing the file -
+     *    the one thing worth knowing after a handoff between the two engines.
+     *    A chip beside the title says it outright.
+     *
+     * Called once per session from [prepareEndOfEpisodePanels], the point just
+     * after `bindViews()` has bound this panel's views.
+     */
+    private fun applyInfoScreenChrome() {
+        infoPanel.background = infoPanelDrawable(this)
+
+        val header = infoTitle.parent as? LinearLayout ?: return
+        if (header.findViewWithTag<TextView>(INFO_ENGINE_CHIP_TAG) != null) return
+
+        header.addView(
+            TextView(this).apply {
+                tag = INFO_ENGINE_CHIP_TAG
+                text = INFO_ENGINE_CHIP
+                // The panels' own chip look, but never focusable: this screen
+                // is read, not navigated.
+                setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11f)
+                runCatching {
+                    typeface = androidx.core.content.res.ResourcesCompat.getFont(
+                        this@NativePlayerActivity,
+                        R.font.oswald_semibold
+                    )
+                }
+                setTextColor(getColor(R.color.kb_text_hi))
+                setBackgroundResource(R.drawable.pill_chip_bg)
+                val padH = (8 * resources.displayMetrics.density).toInt()
+                val padV = (3 * resources.displayMetrics.density).toInt()
+                setPadding(padH, padV, padH, padV)
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    marginStart = (10 * resources.displayMetrics.density).toInt()
+                }
+            }
         )
     }
 
