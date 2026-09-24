@@ -201,7 +201,30 @@ data class UpNextItem(
 
     /** TMDB show id when enrichment resolved one, for episode-title fallback. */
     val tmdbId: Int? = null
-)
+) {
+
+    /**
+     * The watched count the hero's "X of Y aired episodes watched" line shows -
+     * reported as 0 rather than as nothing whenever the total is known.
+     *
+     * [episodesWatched] is null for a title with no COMPLETED episode yet: the
+     * local-history builder stores the count with `takeIf { it > 0 }`, so a show
+     * the viewer has just started arrives with a total and no count at all - and
+     * the hero, which needs both halves to make a sentence, showed no episode
+     * line for exactly the case the line is asked about (reported: started a
+     * show, paused mid-episode 1, and the hero was the only card without a
+     * count, since every other show had at least one episode finished).
+     *
+     * A known total with no count means zero watched. A movie, or a show whose
+     * episode list never resolved, has no total - and those still get no line,
+     * because there is nothing truthful to say. The count is clamped to the
+     * total so a stale watched tally cannot read "13 of 12".
+     */
+    val episodesWatchedForDisplay: Int?
+        get() = episodesTotal
+            ?.takeIf { it > 0 }
+            ?.let { total -> (episodesWatched ?: 0).coerceIn(0, total) }
+}
 
 /**
  * Media type as the Continue Watching dedupe rule sees it. Anything the app

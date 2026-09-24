@@ -1023,7 +1023,11 @@ private fun HomeHero(
         formatTimeLeft(continueWatchingItem?.remainingMinutes)
 
         val continueEpisodeCount =
-    continueWatchingItem?.let { item ->                                                val watched = item.episodesWatched
+    continueWatchingItem?.let { item ->                                                // episodesWatchedForDisplay rather than the raw field: a show
+        // with nothing completed yet carries no watched count at all, and
+        // reading it directly is what hid this line for the one title a
+        // viewer has just started (see UpNextItem).
+        val watched = item.episodesWatchedForDisplay
         val total = item.episodesTotal
 
         if (
