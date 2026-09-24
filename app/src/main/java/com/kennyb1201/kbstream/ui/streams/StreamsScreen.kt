@@ -102,27 +102,34 @@ fun StreamsScreen(
     // DetailScreen passes episode titles in the form:
     // "Show Name S1 E2 • Episode Name". Extract everything after the
     // season/episode marker so the guide can show the real episode name.
-    val episodeTitle = if (season != null && episode != null) {
-        val paddedSeason = season.toString().padStart(2, '0')
-        val paddedEpisode = episode.toString().padStart(2, '0')
-        val episodeMarker = Regex("S\\s*(?:${season}|$paddedSeason)\\s*E\\s*(?:${episode}|$paddedEpisode)\\b", RegexOption.IGNORE_CASE)
-        episodeMarker.find(title)?.let { match ->
-            // Trim first, then strip a single leading separator: titles arrive
-            // as "Show S4 E4 • Episode Name", so the remainder after the
-            // marker starts with a space before the bullet. Stripping before
-            // trimming never matches (the string leads with whitespace) and
-            // the bullet then leaks into the name, rendering a doubled
-            // separator ("S04 · E04 · • Karambits").
-            title.substring(match.range.last + 1)
-                .trim()
-                .removePrefix("•")
-                .removePrefix("-")
-                .removePrefix("·")
-                .trim()
-                .takeIf { it.isNotBlank() }
+    //
+    // Remembered: constructing a Regex compiles the pattern, and this screen
+    // recomposes on every streams-load state change and focus move. Keyed on
+    // the values the pattern is built from, so an unchanged title/season/
+    // episode reuses the compiled regex instead of recompiling it.
+    val episodeTitle = remember(title, season, episode) {
+        if (season != null && episode != null) {
+            val paddedSeason = season.toString().padStart(2, '0')
+            val paddedEpisode = episode.toString().padStart(2, '0')
+            val episodeMarker = Regex("S\\s*(?:${season}|$paddedSeason)\\s*E\\s*(?:${episode}|$paddedEpisode)\\b", RegexOption.IGNORE_CASE)
+            episodeMarker.find(title)?.let { match ->
+                // Trim first, then strip a single leading separator: titles
+                // arrive as "Show S4 E4 • Episode Name", so the remainder
+                // after the marker starts with a space before the bullet.
+                // Stripping before trimming never matches (the string leads
+                // with whitespace) and the bullet then leaks into the name,
+                // rendering a doubled separator ("S04 · E04 · • Karambits").
+                title.substring(match.range.last + 1)
+                    .trim()
+                    .removePrefix("•")
+                    .removePrefix("-")
+                    .removePrefix("·")
+                    .trim()
+                    .takeIf { it.isNotBlank() }
+            }
+        } else {
+            null
         }
-    } else {
-        null
     }
 
     val episodeLabel = if (season != null && episode != null) {

@@ -916,6 +916,9 @@ class NativePlayerActivity : ComponentActivity() {
     private var scrubStepMs = 0L
     private val scrubHandler = Handler(Looper.getMainLooper())
     private val clockHandler = Handler(Looper.getMainLooper())
+    // Cached clock formatter, keyed by pattern - see clockFormatter().
+    private var clockFormat: java.text.SimpleDateFormat? = null
+    private var clockFormatPattern: String? = null
     private val clockRunnable = object : Runnable {
         override fun run() {
             if (controlsVisible) {
@@ -5759,19 +5762,43 @@ class NativePlayerActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * The clock formatter for [pattern], built once per pattern.
+     *
+     * updateClock() runs on every tick of the visible-controls clock - once a
+     * second for as long as the controls are up - and it used to construct two
+     * fresh `SimpleDateFormat`s each time. Constructing one parses the pattern,
+     * loads locale data and allocates the calendar/number-format graph, so that
+     * was a second-by-second allocation storm (and a GC-pause risk) on exactly
+     * the low-end TV boxes this player targets. The pattern is the cache key, so
+     * the Settings > Interface 24-hour toggle still takes effect on the next
+     * tick instead of needing a player restart.
+     *
+     * Only ever touched from the main thread (the clock handler and
+     * showControls()), which is also what makes one shared instance safe -
+     * SimpleDateFormat is not thread-safe.
+     */
+    private fun clockFormatter(pattern: String): java.text.SimpleDateFormat {
+        clockFormat?.let { if (clockFormatPattern == pattern) return it }
+        return java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault())
+            .also {
+                clockFormat = it
+                clockFormatPattern = pattern
+            }
+    }
+
     private fun updateClock() {
         // Honor the Settings > Interface 24-hour toggle; falls back to the
         // locale default when unchecked.
         val clockPattern = if (
             com.kennyb1201.kbstream.ui.settings.AppPreferences.getUse24HourClock(this)
         ) "HH:mm" else "h:mm a"
-        val now = java.text.SimpleDateFormat(clockPattern, java.util.Locale.getDefault())
-            .format(java.util.Date())
-        playerClock.text = now
+        val formatter = clockFormatter(clockPattern)
+        playerClock.text = formatter.format(java.util.Date())
         val durationMs = exoPlayer?.duration ?: 0L
         val positionMs = exoPlayer?.currentPosition ?: 0L
         val remainingMs = (durationMs - positionMs).coerceAtLeast(0L)
-        val endsAt = java.text.SimpleDateFormat(clockPattern, java.util.Locale.getDefault())
+        val endsAt = formatter
             .format(java.util.Date(System.currentTimeMillis() + remainingMs))
         endsAtClock.text = "Ends at $endsAt"
     }

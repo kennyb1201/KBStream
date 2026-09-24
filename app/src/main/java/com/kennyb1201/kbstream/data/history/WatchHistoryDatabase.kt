@@ -45,18 +45,72 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                 Thread(r, "room-db-retire").apply { isDaemon = true }
             }
 
-        /** Retire a DB: swap it out now, close it after the grace period. */
-        private fun retireGracefully(db: WatchHistoryDatabase?) {
+        private val retireSequence = java.util.concurrent.atomic.AtomicLong(0L)
+
+        /** A retired instance plus the retirement it belongs to. */
+        private class Retirement(val db: WatchHistoryDatabase, val token: Long)
+
+        /**
+         * Instances retired but not yet closed, keyed by the file they belong
+         * to — so that "one open instance per file" stays true.
+         *
+         * Before this, a name mismatch closed the previous instance
+         * SYNCHRONOUSLY (`profileInstance?.close()`) while queries could still
+         * be running on it ("connection pool has been closed"), and the
+         * tombstone path from [closeScopedInstanceForSwitch] reopened the SAME
+         * file after only a null check — two live connections to one file, the
+         * same shape of failure the guide database hit as
+         * "database is locked (code 5 SQLITE_BUSY)" followed by "attempt to
+         * re-open an already-closed object".
+         *
+         * A file asked for again inside the grace window now gets its instance
+         * back ([reviveIfPending]) and the pending close is cancelled.
+         */
+        private val pendingClose = HashMap<String, Retirement>()
+
+        /**
+         * Retire [db] — the instance for the file [name] — closing it after the
+         * grace period UNLESS that file is asked for again first, which cancels
+         * the close (see [pendingClose]).
+         */
+        private fun retireGracefully(name: String?, db: WatchHistoryDatabase?) {
             if (db == null) return
+            val token = retireSequence.incrementAndGet()
+            if (name != null) {
+                synchronized(this) { pendingClose[name] = Retirement(db, token) }
+            }
             closeExecutor.execute {
                 try {
                     Thread.sleep(RETIRE_GRACE_MS)
                 } catch (_: InterruptedException) {
                     // Fall through and close promptly on interrupt.
                 }
-                runCatching { db.close() }
+                // Close only if THIS retirement is still the current one for
+                // that file: a revival removes the entry, and a later
+                // retirement of the same file replaces it with its own token.
+                val closeIt = if (name == null) {
+                    true
+                } else {
+                    synchronized(this) {
+                        val current = pendingClose[name]
+                        if (current == null || current.token != token || current.db !== db) {
+                            false
+                        } else {
+                            pendingClose.remove(name)
+                            true
+                        }
+                    }
+                }
+                if (closeIt) runCatching { db.close() }
             }
         }
+
+        /**
+         * The retired-but-still-open instance for [name], if there is one,
+         * taking it out of retirement (i.e. cancelling its close).
+         */
+        private fun reviveIfPending(name: String): WatchHistoryDatabase? =
+            synchronized(this) { pendingClose.remove(name)?.db }
 
         // Profile-scoped instances: one open DB per active profile, closed
         // when the profile switches.
@@ -94,18 +148,16 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
             val dbName = com.kennyb1201.kbstream.data.sync.ProfileStorage.dbNameForActive(
                 context, "kbstream_watch_history"
             )
-            if (profileInstanceName == dbName) {
-                return profileInstance ?: synchronized(this) {
-                    buildScoped(context, dbName).also {
-                        profileInstance = it; profileInstanceName = dbName
-                    }
-                }
-            }
             synchronized(this) {
-                if (profileInstanceName == dbName && profileInstance != null) {
-                    return profileInstance!!
+                profileInstance?.let { if (profileInstanceName == dbName) return it }
+                // Same file, retired moments ago and not closed yet: take that
+                // instance back instead of opening a second connection to it.
+                reviveIfPending(dbName)?.let { revived ->
+                    profileInstance = revived
+                    profileInstanceName = dbName
+                    return revived
                 }
-                runCatching { profileInstance?.close() }
+                retireGracefully(profileInstanceName, profileInstance)
                 val db = buildScoped(context, dbName)
                 profileInstance = db
                 profileInstanceName = dbName
@@ -138,7 +190,7 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
          */
         fun closeScopedInstance() {
             synchronized(this) {
-                retireGracefully(profileInstance)
+                retireGracefully(profileInstanceName, profileInstance)
                 profileInstance = null
                 profileInstanceName = null
             }
@@ -156,7 +208,7 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
          */
         fun closeScopedInstanceForSwitch() {
             synchronized(this) {
-                retireGracefully(profileInstance)
+                retireGracefully(profileInstanceName, profileInstance)
                 profileInstance = null
                 // Keep profileInstanceName as the tombstone; do not clear it.
             }

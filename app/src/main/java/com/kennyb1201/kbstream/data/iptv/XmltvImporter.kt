@@ -20,9 +20,34 @@ import org.xmlpull.v1.XmlPullParserFactory
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 
+/**
+ * XMLTV import that resolves its DAO per batch instead of pinning one.
+ *
+ * An import runs for minutes — a tens-of-megabytes guide, hundreds of
+ * thousand-row batches, paused by [EpgWriteGate] while something plays — and
+ * the profile-scoped [IptvDatabase] instance behind a DAO can be retired and
+ * closed inside that window. A captured DAO then killed the whole import on its
+ * next batch with
+ *
+ *   IllegalStateException: attempt to re-open an already-closed object:
+ *     SQLiteDatabase: /data/.../<profile>.iptv_epg.db
+ *
+ * (and, while a replacement instance was opening on the same file, a
+ * SQLITE_BUSY "database is locked"). Resolving through [daoProvider] per batch
+ * follows whatever instance the database layer currently has open for that
+ * profile, which is also the instance every read path uses.
+ */
 class XmltvImporter(
-    private val dao: IptvDao
+    /**
+     * Resolves the DAO of the profile this import belongs to. [IptvRepository]
+     * supplies this and pins the profile: it fails the import if the active
+     * profile changed, so a guide can never be promoted into another profile's
+     * database.
+     */
+    private val daoProvider: () -> IptvDao
 ) {
+
+    private val dao: IptvDao get() = daoProvider()
 
     suspend fun import(sourceUrl: String, input: InputStream) {
         val now = System.currentTimeMillis()

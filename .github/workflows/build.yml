@@ -44,7 +44,14 @@ jobs:
       # root cause java.lang.OutOfMemoryError"), so the daemon heap is raised
       # via -D below. GRADLE_OPTS is deliberately not used for this: it sizes
       # the throwaway client JVM and never reaches the daemon that compiles.
-      GRADLE_DAEMON_JVMARGS: "-Xmx4g -XX:MaxMetaspaceSize=768m"
+      #
+      # ActiveProcessorCount=4 overrides gradle.properties' =2 (tuned for the
+      # 2-CPU dev container), so the compiler, R8 and dex/merge all size their
+      # internal pools for the runner's 4 cores. --max-workers below lifts the
+      # container's org.gradle.workers.max=1 for the same reason. Both only
+      # change HOW FAST the work runs - neither skips or reuses a task.
+      GRADLE_DAEMON_JVMARGS: "-Xmx6g -XX:MaxMetaspaceSize=1g -XX:+UseParallelGC -XX:ActiveProcessorCount=4 -XX:ReservedCodeCacheSize=256m"
+      GRADLE_MAX_WORKERS: "4"
       
     steps:
       - name: Checkout
@@ -55,6 +62,33 @@ jobs:
         with:
           java-version: "17"
           distribution: temurin
+
+      # Dependency caching only - deliberately NOT the Gradle build cache.
+      #
+      # A fresh runner re-downloads the entire AGP/Compose/media3/Supabase/
+      # NewPipe dependency graph (hundreds of MB across google(), mavenCentral()
+      # and jitpack.io) into an empty Gradle home on every run; restoring
+      # ~/.gradle/caches skips that, and nothing else.
+      #
+      # What is NOT cached is the point: app/build is never restored, so
+      # :app:compileDebugKotlin, :app:compileReleaseKotlin, dexing and R8 all
+      # execute for real on every single run, and org.gradle.caching is left
+      # off so the build cache cannot answer a task with a previously-produced
+      # output either. "Faster" here must never mean "compiled less".
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches/modules-2
+            ~/.gradle/caches/jars-9
+            ~/.gradle/caches/transforms-4
+            ~/.gradle/caches/8.7
+            ~/.gradle/wrapper/dists
+          # Keyed on the files that decide the resolved dependency graph, so a
+          # dependency change (or a Gradle upgrade) misses and re-resolves.
+          key: gradle-deps-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', '**/*.gradle', 'gradle/wrapper/gradle-wrapper.properties', 'gradle.properties') }}
+          restore-keys: |
+            gradle-deps-${{ runner.os }}-
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -78,7 +112,7 @@ jobs:
       # catalog invariants) BEFORE spending time on the APK builds. A
       # red test fails the workflow with the HTML report attached.
       - name: Run unit tests
-        run: ./gradlew testDebugUnitTest --stacktrace -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
+        run: ./gradlew testDebugUnitTest --stacktrace --max-workers="$GRADLE_MAX_WORKERS" -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
         env:
           GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
 
@@ -90,7 +124,7 @@ jobs:
           path: app/build/reports/tests/testDebugUnitTest/
 
       - name: Build debug APK
-        run: ./gradlew assembleDebug --stacktrace -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
+        run: ./gradlew assembleDebug --stacktrace --max-workers="$GRADLE_MAX_WORKERS" -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
         env:
           GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
 
@@ -98,7 +132,7 @@ jobs:
       # or auth problem can never fail the build and block the APK. It runs
       # separately below as a best-effort step.
       - name: Build signed release APK
-        run: ./gradlew assembleRelease -x uploadSentryProguardMappingsRelease --stacktrace -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
+        run: ./gradlew assembleRelease -x uploadSentryProguardMappingsRelease --stacktrace --max-workers="$GRADLE_MAX_WORKERS" -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
         env:
           GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
           KBSTREAM_STORE_FILE: kbstream-release.jks
@@ -109,10 +143,14 @@ jobs:
       # Best-effort R8 mapping upload: needs an upload-capable Sentry token
       # (org auth token). With the wrong/read-only token this 403s and is
       # logged as a warning - the APK from the step above is still published.
+      # Same --max-workers/-Dorg.gradle.jvmargs as the steps above on purpose:
+      # matching daemon arguments mean this reuses the daemon the release
+      # build already started (the mapping-upload task itself is then
+      # up-to-date or a short upload) instead of booting a second JVM.
       - name: Upload Sentry mappings (best-effort)
         if: success()
         continue-on-error: true
-        run: ./gradlew uploadSentryProguardMappingsRelease --stacktrace
+        run: ./gradlew uploadSentryProguardMappingsRelease --stacktrace --max-workers="$GRADLE_MAX_WORKERS" -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
         env:
           GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
           KBSTREAM_STORE_FILE: kbstream-release.jks

@@ -746,6 +746,59 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         importJob = viewModelScope.launch { importGuideInternal(allEpgUrls().firstOrNull().orEmpty()) }
     }
 
+    /**
+     * Imports one EPG source, retrying once when the failure is the
+     * profile-scoped guide database being swapped underneath the import.
+     *
+     * A running import holds a database connection for minutes, and the guide
+     * database retires an instance across a profile change (or a tombstone
+     * re-request). When that lands mid-import the batch write dies with Room's
+     * "attempt to re-open an already-closed object" / SQLITE_BUSY, which used to
+     * surface as a permanent error banner and no guide. Re-running is safe: the
+     * import stages every row under its own source key and only promotes on a
+     * complete parse, and by the retry the database layer has settled on one
+     * instance, so the retry finishes the import.
+     *
+     * Only transient database symptoms are retried, and only once — a real
+     * failure (network, malformed guide) still fails loudly.
+     */
+    private suspend fun importGuideSource(url: String) {
+        try {
+            repository.importGuide(url)
+        } catch (t: Throwable) {
+            if (t is CancellationException) throw t
+            if (!isTransientDatabaseError(t)) throw t
+            Log.w(TAG, "GUIDE IMPORT RETRY after database swap source=$url", t)
+            repository.importGuide(url)
+        }
+    }
+
+    /**
+     * True when [t] is the scoped database being closed or swapped under a
+     * running operation rather than a real failure: Room reports a closed
+     * connection pool / an already-closed handle, and SQLite reports a busy
+     * database held by the instance that is being replaced.
+     */
+    private fun isTransientDatabaseError(t: Throwable): Boolean {
+        var current: Throwable? = t
+        var depth = 0
+        while (current != null && depth < 8) {
+            if (current::class.java.simpleName == "SQLiteDatabaseLockedException") return true
+            val message = current.message.orEmpty()
+            if (
+                message.contains("already-closed object") ||
+                message.contains("connection pool has been closed") ||
+                message.contains("database is locked") ||
+                message.contains("SQLITE_BUSY")
+            ) {
+                return true
+            }
+            current = current.cause
+            depth++
+        }
+        return false
+    }
+
     private fun refreshIfNeeded() {
         if (refreshJob?.isActive == true) return
         val playlistNeedsRefresh = isStale(KEY_PLAYLIST_UPDATED_AT, PLAYLIST_REFRESH_MS)
@@ -789,7 +842,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             var imported = 0
             for (url in urls) {
                 try {
-                    repository.importGuide(url)
+                    importGuideSource(url)
                     imported++
                 } catch (t: Throwable) {
                     if (t is CancellationException) throw t

@@ -59,7 +59,23 @@ class IptvRepository(
     // and imports would land in the previous profile's EPG database.
     private val db: IptvDatabase get() = IptvDatabase.getInstance(appContext)
     private val dao: com.kennyb1201.kbstream.data.iptv.db.IptvDao get() = db.iptvDao()
-    private val xmltvImporter: XmltvImporter get() = XmltvImporter(dao)
+
+    /**
+     * An importer bound to the guide file it STARTED on ([dbName]).
+     *
+     * The DAO is re-resolved per batch, so an import survives its database
+     * instance being retired and rebuilt mid-flight (see [XmltvImporter]). The
+     * NAME check is the other half: if the active profile really changes while
+     * the import is running, rebinding blindly would promote the outgoing
+     * profile's guide into the incoming profile's database, so the provider
+     * fails the import instead and the caller retries on the new profile.
+     */
+    private fun xmltvImporterFor(dbName: String): XmltvImporter = XmltvImporter {
+        check(IptvDatabase.activeFileName(appContext) == dbName) {
+            "profile changed during guide import"
+        }
+        dao
+    }
 
     private val guideSnapshotMutex = Mutex()
     private val guideSnapshots = ConcurrentHashMap<String, GuideSnapshot>()
@@ -174,9 +190,10 @@ class IptvRepository(
         }
 
         try {
+            val importer = xmltvImporterFor(IptvDatabase.activeFileName(appContext))
             val result = runCatching {
                 IptvHttpClient.streamXmltvWithRetry(client, normalizedUrl) { stream ->
-                    xmltvImporter.import(normalizedUrl, stream)
+                    importer.import(normalizedUrl, stream)
                 }
             }
 
