@@ -101,6 +101,72 @@ class EpgKeysTest {
         assertEquals("sky sports 1", normalizeEpgChannelKey("SKY SPORTS 1"))
     }
 
+    // ── The matcher: which guide channel a playlist channel resolves to ───
+
+    @Test
+    fun `a decorated name falls through to the simplified pass`() {
+        // The guide lists the bare name; the playlist carries a qualifier the
+        // guide never spells. Pass 2 misses, pass 3 ("espn2") hits.
+        val match = matchEpgChannel(
+            idCandidates = listOf(null, null),
+            nameCandidates = listOf("ESPN2 HD", "ESPN2 HD"),
+            byId = emptyMap<String, String>(),
+            byName = mapOf("espn2" to "guide-espn2")
+        )
+
+        assertEquals("guide-espn2", match?.first)
+        assertEquals(EpgMatchKind.SIMPLIFIED, match?.second)
+    }
+
+    @Test
+    fun `an id or an exact name still wins over the simplified pass`() {
+        val byId = mapOf("bbc1.uk" to "guide-id")
+        val byName = mapOf("bbcone" to "guide-simplified", "itv1" to "guide-itv")
+
+        // tvg-id is the strongest signal there is.
+        assertEquals(
+            "guide-id" to EpgMatchKind.ID,
+            matchEpgChannel(listOf("BBC1.uk"), listOf("BBC One"), byId, byName)
+        )
+
+        // No id hit: the exact name key wins, before the simplified form runs.
+        assertEquals(
+            "guide-itv" to EpgMatchKind.NAME,
+            matchEpgChannel(listOf(null), listOf("ITV1", "ITV One"), byId, byName)
+        )
+    }
+
+    @Test
+    fun `the simplified pass still respects the guide's own spelling`() {
+        // "Sky Sports 2 HD" must not fold onto "Sky Sports 1": only the exact
+        // simplified key resolves, and a miss stays a miss (no wrong channel).
+        val byName = mapOf("skysports1" to "guide-1", "skysports2" to "guide-2")
+
+        assertEquals(
+            "guide-2" to EpgMatchKind.SIMPLIFIED,
+            matchEpgChannel(
+                listOf(null), listOf("Sky Sports 2 HD"), emptyMap<String, String>(), byName
+            )
+        )
+        assertNull(
+            matchEpgChannel(
+                listOf(null), listOf("Sky Sports 3 HD"), emptyMap<String, String>(), byName
+            )
+        )
+    }
+
+    @Test
+    fun `blank candidates never match`() {
+        assertNull(
+            matchEpgChannel(
+                idCandidates = listOf(null, "  "),
+                nameCandidates = listOf(null, "", "   "),
+                byId = mapOf("" to "x"),
+                byName = mapOf("" to "x")
+            )
+        )
+    }
+
     // ── Guide-window fingerprint ─────────────────────────────────────────
 
     private val loaded = setOf("bbc1", "itv1")

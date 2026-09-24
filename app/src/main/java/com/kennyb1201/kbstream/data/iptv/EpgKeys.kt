@@ -71,6 +71,62 @@ internal fun simplifyEpgChannelName(value: String): String? {
     return simplified.ifBlank { null }
 }
 
+/** Which of the matcher's passes produced a match. */
+internal enum class EpgMatchKind { ID, NAME, SIMPLIFIED }
+
+/**
+ * Picks the guide channel for one playlist channel, trying the spellings in the
+ * order that loses the least information first.
+ *
+ *  1. **The channel's own id** (`tvg-id` / provider id) against the guide's
+ *     channel ids — exact, so it wins whenever it hits.
+ *  2. **The display names as spelled**, normalized (case/decoration/punctuation
+ *     only). This keeps `Sky Sports 1` separate from `Sky Sports 2`.
+ *  3. **The names simplified**, with quality qualifiers stripped, so
+ *     `BBC One HD` still finds `BBC One`. This pass is last on purpose: it
+ *     folds `HD`, `US`, `4K` and the like, which can rarely collide two
+ *     genuinely different channels, so it only runs when nothing above matched.
+ *
+ * Without pass 3 the alias keys built by [epgAliasKeys] were half-wired: the
+ * guide's simplified spelling was stored, but the playlist side was only ever
+ * looked up by its normalized spelling, so a channel carrying a qualifier the
+ * guide did not (`ESPN2 HD` vs `ESPN2`) showed "no program data" forever.
+ *
+ * Returns the matched value together with the pass that matched it, or null.
+ */
+internal fun <T> matchEpgChannel(
+    idCandidates: List<String?>,
+    nameCandidates: List<String?>,
+    byId: Map<String, T>,
+    byName: Map<String, T>
+): Pair<T, EpgMatchKind>? {
+    for (candidate in idCandidates) {
+        val key = candidate?.trim()
+            ?.takeIf(String::isNotEmpty)
+            ?.let(::epgLookupKey)
+            ?: continue
+        byId[key]?.let { return it to EpgMatchKind.ID }
+    }
+
+    for (candidate in nameCandidates) {
+        val key = candidate?.trim()
+            ?.takeIf(String::isNotEmpty)
+            ?.let(::epgLookupKey)
+            ?: continue
+        byName[key]?.let { return it to EpgMatchKind.NAME }
+    }
+
+    for (candidate in nameCandidates) {
+        val key = candidate?.trim()
+            ?.takeIf(String::isNotEmpty)
+            ?.let(::simplifyEpgChannelName)
+            ?: continue
+        byName[key]?.let { return it to EpgMatchKind.SIMPLIFIED }
+    }
+
+    return null
+}
+
 /**
  * Fingerprint of everything a guide query reads out of a playlist: the source
  * URLs plus the identity of the channels currently loaded into the guide

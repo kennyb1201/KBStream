@@ -1012,14 +1012,25 @@ Log.d(
     // silent (the focus path retries over the network as before).
     private val heroArtPrefetchInFlight =
         java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
-    private val heroArtPrefetchSemaphore = Semaphore(permits = 4)
+
+    // Deliberately low (2): this runs while the user is already interacting
+    // with Home and about to open a Detail page, so the prefetch must never
+    // hold the shared TMDB/OkHttp capacity the foreground needs. Two at a time
+    // still warms a rail's worth of cards well ahead of focus.
+    private val heroArtPrefetchSemaphore = Semaphore(permits = 2)
+
+    // Upper bound on cards warmed per rails build. The previous 120 covered
+    // more rails than a viewer reaches before the rest has resolved anyway,
+    // while roughly doubling the background TMDB traffic. The focus path still
+    // resolves any card on demand; this only decides how many are pre-warmed.
+    private val heroArtPrefetchLimit = 60
 
     fun prefetchHeroArt(items: List<MetaPreview>) {
         val toWarm = items
             .filter { it.id.isNotBlank() }
             .distinctBy { "${it.type}:${it.id}" }
             .filter { heroArtPrefetchInFlight.add("${it.type}:${it.id}") }
-            .take(120)
+            .take(heroArtPrefetchLimit)
         if (toWarm.isEmpty()) return
 
         viewModelScope.launch {

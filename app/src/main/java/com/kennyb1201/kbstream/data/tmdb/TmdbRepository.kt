@@ -91,7 +91,7 @@ class TmdbRepository private constructor(context: Context) {
 
     internal val api: TmdbApiService = Retrofit.Builder()
         .baseUrl("https://api.themoviedb.org/3/")
-        .client(sharedOkHttpClient())
+        .client(TmdbHttpClient.get())
         .addConverterFactory(MoshiConverterFactory.create(moshi))
         .build()
         .create(TmdbApiService::class.java)

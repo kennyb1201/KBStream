@@ -499,31 +499,27 @@ class IptvRepository(
             val snapshot = snapshots.firstOrNull { it.sourceUrl == epgUrl }
                 ?: return@forEach
 
-            idCandidates.firstNotNullOfOrNull { candidate ->
-                candidate?.trim()
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let(::normalizeLookupKey)
-                    ?.let(snapshot.guideById::get)
-            }?.let { guideChannel ->
-                return ResolvedEpgMatch(
-                    epgChannel = guideChannel.toXmltvChannel(),
-                    matchType = EpgMatchType.ID_MATCH,
-                    epgUrl = epgUrl
-                )
-            }
+            // id -> exact normalized name -> simplified name; the rules live in
+            // matchEpgChannel so the fallback pass is unit tested. The
+            // simplified pass is what turns a decorated M3U spelling ("ESPN2
+            // HD") into a hit on the guide's bare one ("ESPN2") instead of a
+            // permanent "no program data".
+            val matched = matchEpgChannel(
+                idCandidates = idCandidates,
+                nameCandidates = nameCandidates,
+                byId = snapshot.guideById,
+                byName = snapshot.guideByDisplayName
+            ) ?: return@forEach
 
-            nameCandidates.firstNotNullOfOrNull { candidate ->
-                candidate?.trim()
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let(::normalizeLookupKey)
-                    ?.let(snapshot.guideByDisplayName::get)
-            }?.let { guideChannel ->
-                return ResolvedEpgMatch(
-                    epgChannel = guideChannel.toXmltvChannel(),
-                    matchType = EpgMatchType.NAME_MATCH,
-                    epgUrl = epgUrl
-                )
-            }
+            return ResolvedEpgMatch(
+                epgChannel = matched.first.toXmltvChannel(),
+                matchType = if (matched.second == EpgMatchKind.ID) {
+                    EpgMatchType.ID_MATCH
+                } else {
+                    EpgMatchType.NAME_MATCH
+                },
+                epgUrl = epgUrl
+            )
         }
 
         return ResolvedEpgMatch(

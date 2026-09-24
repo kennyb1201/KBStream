@@ -9,9 +9,12 @@ import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -21,6 +24,11 @@ import okhttp3.Request
  * Results are cached in memory (session) and on disk (shared tmdb_json_cache Room
  * table), so re-showing an item in the hero is instant and never re-hits the
  * network. The blocking OkHttp call is dispatched to Dispatchers.IO.
+ *
+ * Resolves are independent of each other: the cache lock is never held across a
+ * fetch, so a background rail prefetch cannot serialize — and therefore delay —
+ * the foreground hero that a just-opened screen is waiting on. Duplicate
+ * concurrent resolves of the same title share one request.
  */
 class TmdbHeroArtworkRepository(
     context: Context? = null
@@ -29,11 +37,13 @@ class TmdbHeroArtworkRepository(
         .add(KotlinJsonAdapterFactory())
         .build()
 
-    // The process-wide TMDB client (shared with TmdbRepository): reuses its
-    // pooled connections so a hero-artwork fetch after ANY other TMDB call
-    // (rails, detail, prefetch) rides an already-warm TLS session instead of
-    // paying its own cold handshake on a private client.
-    private val client get() = TmdbRepository.sharedOkHttpClient()
+    // The process-wide, per-host-cap-raised TMDB client (shared with
+    // TmdbRepository): reuses its pooled connections so a hero-artwork fetch
+    // after ANY other TMDB call (rails, detail, prefetch) rides an already-warm
+    // TLS session instead of paying its own cold handshake on a private client,
+    // and it is not stuck in the base client's 5-per-host queue behind the
+    // rails prefetch.
+    private val client get() = TmdbHttpClient.get()
 
     private val imagesAdapter = moshi.adapter(TmdbImagesResponse::class.java)
     private val artworkAdapter = moshi.adapter(HeroArtwork::class.java)
@@ -44,7 +54,19 @@ class TmdbHeroArtworkRepository(
             WatchHistoryDatabase.getInstance(it).tmdbJsonCacheDao()
         }
 
+    // Guards the caches and [inFlight] only — never the network call. See
+    // resolve() for why that distinction matters.
     private val mutex = Mutex()
+
+    // In-flight fetches, keyed the same way as the caches: a second resolve
+    // for a key already being fetched awaits this deferred instead of firing a
+    // duplicate request.
+    private val inFlight = HashMap<String, CompletableDeferred<HeroArtwork?>>()
+
+    // Caps concurrent artwork fetches. Enough that a prefetch plus the hero's
+    // own resolve never queue behind each other, small enough that warming a
+    // rail cannot flood TMDB.
+    private val fetchSemaphore = Semaphore(permits = MAX_CONCURRENT_FETCHES)
 
     // fetchedAt -> artwork, keyed by "<mediaType>:<tmdbId>". Capped: an
     // evening of browsing resolves hundreds of heroes, and an unbounded
@@ -73,11 +95,21 @@ class TmdbHeroArtworkRepository(
         val key = "$mediaType:$resolvedTmdbId"
         val now = System.currentTimeMillis()
 
-        return mutex.withLock {
+        // Cache reads and in-flight registration run under the lock; the
+        // network fetch runs OUTSIDE it. Holding the mutex across
+        // fetchFromNetwork (the previous shape) serialized every hero-artwork
+        // lookup in the process: the rails prefetch queues up to 120 of them,
+        // so the hero on a freshly opened screen had to wait for the whole
+        // queue to drain before its own one-line fetch could even start. That
+        // is what made Detail and other screens feel slow right after Home.
+        var inFlightResult: CompletableDeferred<HeroArtwork?>? = null
+        var fetchDeferred: CompletableDeferred<HeroArtwork?>? = null
+
+        mutex.withLock {
             // In-memory cache (fast path for the current session).
             memoryCache[key]?.let { (fetchedAt, artwork) ->
                 if (now - fetchedAt < MEMORY_CACHE_TTL_MS) {
-                    return@withLock artwork
+                    return artwork
                 }
                 memoryCache.remove(key)
             }
@@ -94,34 +126,68 @@ class TmdbHeroArtworkRepository(
 
                 if (parsed != null) {
                     memoryCache[key] = now to parsed
-                    return@withLock parsed
+                    return parsed
                 }
             }
 
-            // Network fetch (blocking OkHttp, so off the main thread).
-            val artwork = withContext(Dispatchers.IO) {
-                runCatching {
-                    fetchFromNetwork(mediaType, resolvedTmdbId)
-                }.getOrNull()
+            // Another caller is already fetching this exact key: share its
+            // result instead of firing a duplicate request.
+            inFlight[key]?.let { pending ->
+                inFlightResult = pending
+                return@withLock
             }
 
-            if (artwork != null) {
-                memoryCache[key] = now to artwork
-                pruneMemoryCache(now)
-
-                runCatching {
-                    tmdbJsonCacheDao?.upsert(
-                        TmdbJsonCacheEntity(
-                            key = DISK_KEY_PREFIX + key,
-                            json = artworkAdapter.toJson(artwork),
-                            updatedAt = now
-                        )
-                    )
-                }
-            }
-
-            artwork
+            fetchDeferred = CompletableDeferred()
+            inFlight[key] = fetchDeferred!!
         }
+
+        inFlightResult?.let { pending -> return pending.await() }
+
+        val deferred = requireNotNull(fetchDeferred)
+
+        val artwork = try {
+            // Blocking OkHttp, so off the main thread; bounded by a semaphore
+            // so a background prefetch cannot starve the foreground resolve.
+            withContext(Dispatchers.IO) {
+                fetchSemaphore.withPermit {
+                    runCatching {
+                        fetchFromNetwork(mediaType, resolvedTmdbId)
+                    }.getOrNull()
+                }
+            }
+        } catch (cancellation: kotlinx.coroutines.CancellationException) {
+            mutex.withLock { inFlight.remove(key) }
+            // Unblock anyone sharing this fetch with a miss rather than a
+            // cancellation they did not ask for.
+            deferred.complete(null)
+            throw cancellation
+        }
+
+        val fetchedAt = System.currentTimeMillis()
+        mutex.withLock {
+            if (artwork != null) {
+                memoryCache[key] = fetchedAt to artwork
+                pruneMemoryCache(fetchedAt)
+            }
+            // Complete before dropping the in-flight marker, so a resolve that
+            // arrives between the two sees the cache and never double-fetches.
+            deferred.complete(artwork)
+            inFlight.remove(key)
+        }
+
+        if (artwork != null) {
+            runCatching {
+                tmdbJsonCacheDao?.upsert(
+                    TmdbJsonCacheEntity(
+                        key = DISK_KEY_PREFIX + key,
+                        json = artworkAdapter.toJson(artwork),
+                        updatedAt = fetchedAt
+                    )
+                )
+            }
+        }
+
+        return artwork
     }
 
     private fun fetchFromNetwork(
@@ -220,6 +286,9 @@ class TmdbHeroArtworkRepository(
         // expire.
         const val DISK_KEY_PREFIX = "hero_artwork_en:"
         const val MEMORY_CACHE_MAX_ENTRIES = 128
+
+        /** Concurrent artwork fetches (prefetch + foreground hero together). */
+        const val MAX_CONCURRENT_FETCHES = 6
     }
 
     /**
