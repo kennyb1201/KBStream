@@ -415,6 +415,7 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var errorMessage: TextView
     private lateinit var btnRetry: TextView
     private lateinit var btnChangeSource: TextView
+    private lateinit var btnSwitchPlayer: TextView
     private lateinit var btnSkipIntro: TextView
     private lateinit var controlsOverlay: LinearLayout
     private lateinit var playerClock: TextView
@@ -445,7 +446,7 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var totalTime: TextView
     private lateinit var btnPlayPause: ImageView
     private lateinit var btnNext: TextView
-    private lateinit var btnSource: TextView
+    private lateinit var btnSource: ImageView
     private lateinit var btnPlayerSwitch: TextView
     private lateinit var btnAudio: TextView
     private lateinit var btnSubtitle: TextView
@@ -2530,6 +2531,7 @@ class NativePlayerActivity : ComponentActivity() {
         errorMessage = findViewById(R.id.error_message)
         btnRetry = findViewById(R.id.btn_retry)
         btnChangeSource = findViewById(R.id.btn_change_source)
+        btnSwitchPlayer = findViewById(R.id.btn_switch_player)
         btnSkipIntro = findViewById(R.id.btn_skip_intro)
         controlsOverlay = findViewById(R.id.controls_overlay)
         playerClock = findViewById(R.id.player_clock)
@@ -2758,6 +2760,14 @@ class NativePlayerActivity : ComponentActivity() {
         // Change source
         btnChangeSource.setOnClickListener {
             showPicker(PickerMode.SOURCE)
+        }
+
+        // Switch player, from the error card: the same press the control bar's
+        // SWITCH makes (see switchPlayerManually), offered where the failure card
+        // is the only thing on screen.
+        btnSwitchPlayer.setOnClickListener { switchPlayerManually() }
+        btnSwitchPlayer.setOnFocusChangeListener { _, focused ->
+            if (focused) removeAutoHide() else scheduleAutoHide()
         }
 
         // Overlay control buttons
@@ -4479,7 +4489,37 @@ class NativePlayerActivity : ComponentActivity() {
         errorTitle.text = if (isLiveChannel) "Channel unavailable" else "Playback failed"
         errorMessage.text = errorMessageStr.orEmpty()
         btnChangeSource.visibility = View.VISIBLE
+        offerErrorSwitch()
         focusErrorButtons()
+    }
+
+    /**
+     * True when the error card's SWITCH PLAYER button would actually land.
+     *
+     * The conditions the handoff itself checks, and the ones behind the control
+     * bar's own SWITCH (see handOffToMpv): a device with libmpv at all, a session
+     * the backup engine accepts (it refuses live TV and DRM outright), a stream
+     * to hand over, and no handoff already in flight. Anywhere else the button
+     * would be one whose only outcome is "nothing happened", so the card hides it
+     * rather than leaving it dead.
+     */
+    private fun canHandOffToMpv(): Boolean =
+        PlayerEngine.isMpvAvailable() &&
+            !isLiveChannel &&
+            drmLicenseUrl == null &&
+            currentUrl.isNotBlank() &&
+            !mpvHandoffStarted
+
+    /**
+     * Offers SWITCH PLAYER on the error card, where a press can land.
+     *
+     * Every path that raises the card calls this: the startup and black-video
+     * watchdogs never asked for a handoff at all, which is the gap this button
+     * fills, and the playback-failure path can be reached with the automatic
+     * fallback switched off in Settings.
+     */
+    private fun offerErrorSwitch() {
+        btnSwitchPlayer.visibility = if (canHandOffToMpv()) View.VISIBLE else View.GONE
     }
 
     /**
@@ -4702,6 +4742,7 @@ class NativePlayerActivity : ComponentActivity() {
                     "or a non-Dolby-Vision release."
             errorContainer.visibility = View.VISIBLE
             btnChangeSource.visibility = View.VISIBLE
+            offerErrorSwitch()
             focusErrorButtons()
             return
         }
@@ -4918,6 +4959,7 @@ class NativePlayerActivity : ComponentActivity() {
                 "a different source — a 1080p H.264 release usually plays on any device."
         errorContainer.visibility = View.VISIBLE
         btnChangeSource.visibility = View.VISIBLE
+        offerErrorSwitch()
         focusErrorButtons()
     }
 
@@ -7067,6 +7109,9 @@ class NativePlayerActivity : ComponentActivity() {
             "handing playback to the MPV backup engine ($reason) from ${position}ms"
         )
         errorMessageStr = null
+        // The card is what is on screen when this is pressed from there: the
+        // reconnecting notice takes its place for the handover itself.
+        errorContainer.visibility = View.GONE
         reconnectingContainer.visibility = View.VISIBLE
         bufferingSpinner.visibility = View.GONE
         reconnectingText.text =

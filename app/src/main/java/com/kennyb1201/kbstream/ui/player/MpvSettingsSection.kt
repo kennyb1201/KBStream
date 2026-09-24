@@ -48,6 +48,11 @@ internal class MpvSettingsSection(
     private val audioDelayPills = mutableListOf<Pair<TextView, Int>>()
     private val subtitleOffsetPills = mutableListOf<Pair<TextView, Int>>()
     private val positionPills = mutableListOf<Pair<TextView, Int>>()
+    private val downmixPills = mutableListOf<Pair<TextView, Int>>()
+    private val dialoguePills = mutableListOf<Pair<TextView, Int>>()
+    private val volumePills = mutableListOf<Pair<TextView, Int>>()
+    private val bufferPills = mutableListOf<Pair<TextView, Int>>()
+    private var externalSubtitleLabel: TextView? = null
     private var audioDelayZeroPill: TextView? = null
     private var subtitleOffsetZeroPill: TextView? = null
 
@@ -121,6 +126,27 @@ internal class MpvSettingsSection(
             )
         )
 
+        // The main player's Network buffer row. mpv's cache is a per-file
+        // option, so a change made here is taken by the next title rather than
+        // by the one playing - which is what the note under the row says.
+        column.addView(ui.label("Network buffer", topMarginDp = 10))
+        ui.addPillRow(
+            column,
+            4,
+            listOf("Balanced" to 0, "Low latency" to 1),
+            bufferPills
+        ) { mode ->
+            activity.chooseBufferMode(mode)
+            refresh()
+        }
+        column.addView(
+            ui.label(
+                if (activity.bufferMode() == 1) "Lower buffer for live content"
+                else "Best for most streams",
+                topMarginDp = 4
+            )
+        )
+
         // ── SUBTITLES ──────────────────────────────────────────────────
         column.addView(ui.header("SUBTITLES", topMarginDp = 16))
         column.addView(ui.label("Size", topMarginDp = 6))
@@ -151,6 +177,9 @@ internal class MpvSettingsSection(
                 topMarginDp = 4
             )
         )
+        // The sidecar a viewer loaded from a file or from OpenSubtitles, the
+        // same line the main player's panel shows.
+        externalSubtitleLabel = ui.label("", topMarginDp = 6).also { column.addView(it) }
 
         // ── LANGUAGE ───────────────────────────────────────────────────
         column.addView(ui.header("LANGUAGE", topMarginDp = 16))
@@ -177,6 +206,76 @@ internal class MpvSettingsSection(
             activity.chooseSubtitleLanguage(code)
             refresh()
         }
+
+        // ── AUDIO ──────────────────────────────────────────────────────
+        // The main player's own three knobs, over mpv's properties and audio
+        // filter instead of the app's PCM chain. "Global" follows Settings →
+        // Video & Audio; anything else is remembered for THIS title only, so a
+        // badly mixed series does not push the next one through the same boost.
+        column.addView(ui.header("AUDIO", topMarginDp = 16))
+        column.addView(
+            ui.label(
+                if (activity.hasTitleMemory()) "Remembered for this show"
+                else "Applies for this session",
+                topMarginDp = 0
+            )
+        )
+
+        column.addView(ui.label("Downmix", topMarginDp = 8))
+        ui.addPillGrid(
+            column,
+            4,
+            listOf("Global" to -1) + PlayerAudioTuning.DOWNMIX_OPTIONS,
+            downmixPills
+        ) { target ->
+            activity.chooseAudioDownmix(target)
+            refresh()
+        }
+        column.addView(
+            ui.label(
+                "Auto folds 5.1/7.1 down to what this device can carry; Stereo " +
+                    "always folds. Every option here can be changed while the film " +
+                    "plays - pick one and listen for it.",
+                topMarginDp = 4
+            )
+        )
+
+        column.addView(ui.label("Dialogue boost", topMarginDp = 8))
+        ui.addPillGrid(
+            column,
+            4,
+            listOf("Global" to -1) + PlayerAudioTuning.DIALOGUE_OPTIONS,
+            dialoguePills
+        ) { level ->
+            activity.chooseDialogueBoost(level)
+            refresh()
+        }
+        column.addView(
+            ui.label(
+                "Lifts the centre channel (voices) on a multichannel mix, and the " +
+                    "phantom centre a stereo track keeps its dialogue in.",
+                topMarginDp = 4
+            )
+        )
+
+        column.addView(ui.label("Volume boost", topMarginDp = 8))
+        ui.addPillGrid(
+            column,
+            4,
+            listOf("Global" to -1) + PlayerAudioTuning.VOLUME_OPTIONS,
+            volumePills
+        ) { db ->
+            activity.chooseVolumeBoost(db)
+            refresh()
+        }
+        column.addView(
+            ui.label(
+                "Extra gain for quiet mixes. Unlike the main player's, this one has " +
+                    "no limiter behind it: mpv applies the gain and stops, so a boost " +
+                    "on an already-hot stream can clip.",
+                topMarginDp = 4
+            )
+        )
 
         // ── A / V SYNC ─────────────────────────────────────────────────
         column.addView(ui.header("A / V SYNC", topMarginDp = 16))
@@ -251,6 +350,25 @@ internal class MpvSettingsSection(
 
             syncLabel?.text = "Audio delay: ${activity.audioDelayMs()}ms  ·  " +
                 "Subtitle offset: ${activity.subtitleOffsetMs()}ms"
+
+            // The tuning pills mark the OVERRIDE, not the resolved value: -1 is
+            // the "Global" pill, which is why the row reads the same here as it
+            // does in the main player's panel.
+            downmixPills.forEach { (view, value) ->
+                ui.stylePill(view, activity.audioDownmixOverride() == value)
+            }
+            dialoguePills.forEach { (view, value) ->
+                ui.stylePill(view, activity.dialogueBoostOverride() == value)
+            }
+            volumePills.forEach { (view, value) ->
+                ui.stylePill(view, activity.volumeBoostOverride() == value)
+            }
+            bufferPills.forEach { (view, mode) ->
+                ui.stylePill(view, activity.bufferMode() == mode)
+            }
+            externalSubtitleLabel?.text = activity.externalSubtitleNote()
+                ?.let { "Loaded: $it" }
+                ?: "No external subtitle loaded"
 
             rebuildTrackRows()
         } finally {

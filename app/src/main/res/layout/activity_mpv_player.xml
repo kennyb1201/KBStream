@@ -4,12 +4,18 @@
      buttons in the same order, same 360dp settings side panel - so a session
      that lands here after ExoPlayer gives up looks and drives like any other.
 
-     What is missing is missing because libmpv cannot do it, not by choice:
-     there is no source button (resolving another stream needs the addon flow),
-     no cast band and no badge row (both are ExoPlayer-session state), and no
+     What is missing is missing because libmpv cannot do it, not by choice: no
+     cast band and no badge row (both are ExoPlayer-session state), and no
      Dolby Vision / P5 controls (mpv has no DV path). Their replacements live in
      the settings panel behind the gear, which is where the engine-specific
      controls sit.
+
+     The source button IS here, and so is the picker side panel: the whole
+     ranked list rides along in the launch extras (sources_json), so picking
+     another stream re-opens mpv on that URL at the same playhead - the same
+     rows, the same labels and badge chips, the same panel the main player
+     shows. AUDIO and SUBTITLES read as lists there too, naming every track mpv
+     found instead of stepping through them blind.
 
      D-pad first: the overlay appears on any key press and hides again on its
      own; while it is up the buttons take focus, exactly as in the main player. -->
@@ -131,6 +137,26 @@
             android:gravity="center"
             android:textColor="@color/kb_text_lo"
             android:textSize="14sp" />
+
+        <!-- Switch player: the error card's own copy of the control bar's
+             SWITCH (see switchToExoPlayer), so a viewer looking at a failure
+             does not have to find the bar behind a full-screen card to try the
+             other engine. ExoPlayer is always there to switch to, so unlike the
+             main player's copy of this button there is nothing to hide it for. -->
+        <TextView
+            android:id="@+id/mpv_error_switch"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:background="@drawable/button_surface_bg"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:fontFamily="@font/oswald_semibold"
+            android:paddingHorizontal="20dp"
+            android:paddingVertical="10dp"
+            android:text="SWITCH PLAYER"
+            android:textColor="@color/kb_text_hi"
+            android:textSize="16sp" />
     </LinearLayout>
 
     <!-- Transient feedback for the engine buttons ("Subtitles off"). -->
@@ -347,11 +373,27 @@
                     android:textSize="16sp"
                     android:visibility="gone" />
 
+                <!-- Source: pick a different stream for this title, in the same
+                     place in the bar as the main player's button. The list the
+                     session was launched with, so a pick re-opens mpv on that
+                     URL at the playhead instead of handing the title back. -->
+                <ImageView
+                    android:id="@+id/mpv_btn_source"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginStart="10dp"
+                    android:background="@drawable/control_button_bg"
+                    android:contentDescription="Change source"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/mpv_seekbar"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_sources" />
+
                 <!-- Switch player: the same button, the same glyph, the same
                      place in the bar as the main player's - it hands this
-                     session back to ExoPlayer and resumes where it is. MPV has
-                     no source picker of its own, so this is the only swap in
-                     this bar and the left/right arrows are unambiguous here. -->
+                     session back to ExoPlayer and resumes where it is. -->
                 <TextView
                     android:id="@+id/mpv_btn_player_switch"
                     android:layout_width="40dp"
@@ -662,6 +704,37 @@
             android:text="Pick a title, or press BACK to exit"
             android:textColor="@color/kb_text_lo"
             android:textSize="11sp" />
+    </LinearLayout>
+
+    <!-- Picker side panel (SOURCES / AUDIO / SUBTITLES / SPEED), the same box
+         as the main player's and the same shared adapter, so the rows and the
+         selection mark cannot drift between the engines. -->
+    <LinearLayout
+        android:id="@+id/mpv_picker_container"
+        android:layout_width="320dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="end"
+        android:layout_margin="24dp"
+        android:background="@drawable/panel_bg"
+        android:orientation="vertical"
+        android:padding="16dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/mpv_picker_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="@font/oswald_medium"
+            android:textColor="@color/kb_accent"
+            android:textSize="16sp" />
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/mpv_picker_list"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_marginTop="10dp"
+            android:clipToPadding="false"
+            android:paddingBottom="16dp" />
     </LinearLayout>
 
     <!-- Settings side panel, the same box as the main player's. Its rows are

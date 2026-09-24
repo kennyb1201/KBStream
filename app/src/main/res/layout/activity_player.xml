@@ -211,6 +211,30 @@
                 android:textColor="@color/kb_void"
                 android:textSize="16sp"
                 android:visibility="gone" />
+
+            <!-- Switch player: the error card's own copy of the control bar's
+                 SWITCH (see handOffToMpv). It is here because the card can be
+                 reached by paths that never ask for a handoff - the startup
+                 and black-video watchdogs - and because a viewer looking at
+                 "Playback failed" is exactly who wants to try the other engine
+                 without leaving the title. Hidden when a handoff cannot land
+                 (live TV, a DRM session, a device with no libmpv), so it is
+                 never a button whose only outcome is "nothing happened". -->
+            <TextView
+                android:id="@+id/btn_switch_player"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:background="@drawable/button_surface_bg"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
+                android:fontFamily="@font/oswald_semibold"
+                android:paddingHorizontal="20dp"
+                android:paddingVertical="10dp"
+                android:text="SWITCH PLAYER"
+                android:textColor="@color/kb_text_hi"
+                android:textSize="16sp"
+                android:visibility="gone" />
         </LinearLayout>
     </LinearLayout>
 
@@ -601,24 +625,23 @@
                     android:layout_height="0dp"
                     android:layout_weight="1" />
 
-                <!-- Source: pick a different stream for this title. The
-                     up/down swap arrows: the same "switching" mark the player
-                     button below uses, turned across the list it switches
-                     through, so the two swaps read as a pair instead of the
-                     same glyph twice. -->
-                <TextView
+                <!-- Source: pick a different stream for this title. A list
+                     with a play mark - the button opens the "SOURCES" list
+                     and choosing a row plays it - because the old up/down
+                     swap glyph read as "sort" rather than "pick another
+                     stream". -->
+                <ImageView
                     android:id="@+id/btn_source"
                     android:layout_width="40dp"
                     android:layout_height="40dp"
                     android:layout_marginEnd="8dp"
-                    android:contentDescription="Change source"
                     android:background="@drawable/control_button_bg"
+                    android:contentDescription="Change source"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
-                    android:gravity="center"
-                    android:text="⇅"
-                    android:textColor="@color/kb_text_hi"
-                    android:textSize="18sp"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_sources"
                     android:visibility="visible" />
 
                 <!-- Switch player: hand this session to the other playback

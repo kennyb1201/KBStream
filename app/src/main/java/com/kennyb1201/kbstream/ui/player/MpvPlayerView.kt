@@ -7,6 +7,8 @@ import android.view.SurfaceView
 import com.kennyb1201.kbstream.data.player.LanguageMatch
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import dev.jdtech.mpv.MPVLib
+import java.util.Locale
+import kotlin.math.pow
 
 /**
  * The backup engine's picture: a SurfaceView that libmpv renders into.
@@ -120,6 +122,32 @@ class MpvPlayerView(context: Context) : SurfaceView(context), SurfaceHolder.Call
 
     /** `mediacodec,mediacodec-copy` while hardware decoding is on, else `no`. */
     private var hwdecValue = HWDEC_HW
+
+    // --- Audio tuning, mirroring the main player's AUDIO panel section ------
+    //
+    // The main player runs these three through its own PCM path
+    // ([AudioDownmixProcessor]); here they are mpv's own properties and one
+    // mpv audio filter. Same values, same option lists (they come from
+    // [PlayerAudioTuning]), so the two panels cannot drift.
+
+    /** Layout the output should carry: Auto / Stereo / 5.1. */
+    private var downmixTarget = PlayerAudioTuning.DOWNMIX_AUTO
+
+    /** Centre (or phantom-centre) lift: 0 off, 1 low, 2 high. */
+    private var dialogueBoost = 0
+
+    /** Extra output gain in dB, 0-15. */
+    private var volumeBoostDb = 0
+
+    /**
+     * Buffering profile: 0 balanced, 1 low latency.
+     *
+     * `cache` / `demuxer-max-bytes` are per-file mpv options, so a change made
+     * while a film plays is honoured by the next load rather than by this one -
+     * which is what the panel row says.
+     */
+    private var bufferMode = 0
+
 
     /**
      * Languages this session wants, resolved by the activity (a title's
@@ -244,6 +272,82 @@ class MpvPlayerView(context: Context) : SurfaceView(context), SurfaceHolder.Call
     }
 
     fun isHardwareDecoding(): Boolean = hwdecValue != HWDEC_SW
+
+    /**
+     * Output layout. "auto-safe" is mpv's default downmix, which folds to what
+     * the device can actually carry; Stereo always folds, and 5.1 keeps six
+     * channels for an AVR (the main player's own three options, one for one).
+     */
+    fun setDownmix(target: Int) {
+        downmixTarget = target
+        if (!initialized) return
+        val layout = when (target) {
+            PlayerAudioTuning.DOWNMIX_STEREO -> "stereo"
+            PlayerAudioTuning.DOWNMIX_SURROUND -> "5.1"
+            else -> "auto-safe"
+        }
+        runCatching { MPVLib.setPropertyString("audio-channels", layout) }
+            .onFailure { Log.w(TAG, "audio-channels=$layout rejected", it) }
+    }
+
+    /**
+     * Dialogue lift, matching what the main player's chain does: a centre
+     * boost on a multichannel mix, and a mid (phantom-centre) boost on a
+     * stereo one - the only place dialogue can live in a 2.0 track.
+     *
+     * Applied through mpv's `pan` filter, built from the channel count mpv
+     * reports for what is playing now, because the filter has to name the
+     * channels it touches. A layout this does not have a spec for (mono, or
+     * anything unusual) gets no filter at all rather than a spec mpv could
+     * reject - silence would be a far worse answer than a gentle mix.
+     */
+    fun setDialogueBoost(level: Int) {
+        dialogueBoost = level.coerceIn(0, 2)
+        if (initialized) applyDialogueFilter()
+    }
+
+    /**
+     * Overall output gain, the counterpart of the main player's `linearGain`.
+     *
+     * mpv has no limiter on `volume`, so this is gain and nothing else: the
+     * panel's own note says so. `volume-max` has to be raised with it, because
+     * mpv's default ceiling (130) sits below every step above +2dB and would
+     * silently swallow the rest.
+     */
+    fun setVolumeBoostDb(db: Int) {
+        volumeBoostDb = db.coerceIn(0, 15)
+        if (!initialized) return
+        val percent =
+            if (volumeBoostDb <= 0) VOLUME_NORMAL
+            else VOLUME_NORMAL * 10.0.pow(volumeBoostDb / 20.0)
+        runCatching {
+            MPVLib.setPropertyDouble("volume-max", VOLUME_MAX)
+            MPVLib.setPropertyDouble("volume", percent)
+        }.onFailure { Log.w(TAG, "volume=$percent rejected", it) }
+    }
+
+    /**
+     * Buffering profile, from Settings' own value. Balanced keeps the 64 MB
+     * cache this engine has always used; Low Latency drops the cache and the
+     * read-ahead so a live channel is not sitting a buffer behind.
+     */
+    fun setBufferMode(mode: Int) {
+        bufferMode = mode
+        // Before init the value is picked up by applyOptions(); after it, mpv
+        // takes the properties and honours them on the next file it opens.
+        if (initialized) applyCacheOptions(mode)
+    }
+
+    /**
+     * Adds a subtitle file mpv did not find in the container - the same
+     * "open a file / search online" path the main player has. `select` makes it
+     * the track in use, since picking one by hand means "show me this".
+     */
+    fun addExternalSubtitle(uri: String) {
+        if (!initialized) return
+        runCatching { MPVLib.command(arrayOf("sub-add", uri, "select")) }
+            .onFailure { Log.w(TAG, "sub-add failed for $uri", it) }
+    }
 
     /** Audio tracks mpv found in the file. */
     fun audioTracks(): List<Track> = tracksOfType("audio")
@@ -571,10 +675,9 @@ class MpvPlayerView(context: Context) : SurfaceView(context), SurfaceHolder.Call
         MPVLib.setOptionString("network-timeout", "30")
 
         // Caching: mpv's defaults are sized for a desktop; 64 MB matches what
-        // the reference Android player uses.
-        MPVLib.setOptionString("cache", "yes")
-        MPVLib.setOptionString("demuxer-max-bytes", "${CACHE_MB * 1024 * 1024}")
-        MPVLib.setOptionString("demuxer-max-back-bytes", "${CACHE_MB * 1024 * 1024}")
+        // the reference Android player uses. Low Latency (the panel's own
+        // Network buffer row) trades that for a small read-ahead instead.
+        applyCacheOptions(bufferMode)
 
         // Playback shape. keep-open holds the last frame at EOF so the
         // activity can offer the next episode; save-position-on-quit is off
@@ -611,6 +714,103 @@ class MpvPlayerView(context: Context) : SurfaceView(context), SurfaceHolder.Call
         // an ASS track keeps the styling its author shipped.
     }
 
+    /**
+     * The cache sizing for [bufferMode]. `cache` is a per-file option, so this
+     * is what the panel's Network buffer row changes for the next title.
+     *
+     * Before initialize() these have to go in as OPTIONS (a property write on a
+     * handle mpv has not created yet is a native call, not a Kotlin one);
+     * afterwards the same values are properties.
+     */
+    private fun applyCacheOptions(mode: Int) {
+        val lowLatency = mode == 1
+        val maxBytes = if (lowLatency) LOW_LATENCY_MAX_BYTES else CACHE_MB * 1024 * 1024
+        val backBytes = if (lowLatency) 0 else CACHE_MB * 1024 * 1024
+        runCatching {
+            if (initialized) {
+                MPVLib.setPropertyBoolean("cache", !lowLatency)
+                MPVLib.setPropertyInt("demuxer-max-bytes", maxBytes)
+                MPVLib.setPropertyInt("demuxer-max-back-bytes", backBytes)
+                if (lowLatency) MPVLib.setPropertyInt("demuxer-readahead-secs", 0)
+            } else {
+                MPVLib.setOptionString("cache", if (lowLatency) "no" else "yes")
+                MPVLib.setOptionString("demuxer-max-bytes", maxBytes.toString())
+                MPVLib.setOptionString("demuxer-max-back-bytes", backBytes.toString())
+                if (lowLatency) MPVLib.setOptionString("demuxer-readahead-secs", "0")
+            }
+        }.onFailure { Log.w(TAG, "cache profile $mode rejected", it) }
+    }
+
+    /**
+     * Channel count of the audio mpv is decoding right now, which is what the
+     * dialogue filter's spec has to be built for.
+     */
+    private fun audioChannelCount(): Int =
+        getPropertyIntOrNull("audio-params/channel-count") ?: 0
+
+    /**
+     * Pushes the dialogue spec for the current layout, or clears it when the
+     * boost is off / the layout is one we have no spec for. Reads the property
+     * back afterwards: a spec mpv will not accept is worth a log line, and the
+     * value it settled on is the honest one to report.
+     */
+    private fun applyDialogueFilter() {
+        val spec = dialogueFilterSpec(dialogueBoost, audioChannelCount())
+        runCatching { MPVLib.setPropertyString("af", spec.orEmpty()) }
+            .onFailure { Log.w(TAG, "af rejected: $spec", it) }
+        if (spec != null) {
+            val applied = getPropertyStringOrNull("af").orEmpty()
+            if (applied.isBlank()) {
+                Log.w(TAG, "mpv did not take the dialogue filter: $spec")
+            } else {
+                Log.i(TAG, "dialogue filter = $applied (" + spec + ")")
+            }
+        }
+    }
+
+    /**
+     * The `pan` spec for [level] at [channels], or null for "no filter".
+     *
+     * Only the centre channel is lifted on a multichannel mix, and the mid
+     * component on a stereo one: `mid = (L+R)/2` is where a 2.0 track keeps its
+     * voices while music beds sit in `(L-R)/2`, so lifting mid raises dialogue
+     * without dragging the whole mix up - exactly what [PlayerAudioTuning.midGain]
+     * and [PlayerAudioTuning.inPlaceCenterGain] express on the other engine.
+     *
+     * Channels are named by index (`c2` is the centre in every standard
+     * layout), which is what keeps this independent of whether the file
+     * declares 5.1 or 5.1(side).
+     */
+    private fun dialogueFilterSpec(level: Int, channels: Int): String? {
+        if (level <= 0) return null
+        val gain = 1f + 0.35f * level
+        fun gainText(value: Float): String = String.format(Locale.US, "%.4f", value)
+        return when (channels) {
+            // Mono has no centre to lift and no second channel to fold
+            // against: the whole track is already the dialogue.
+            1 -> null
+            2 -> {
+                val same = gainText((gain + 1f) / 2f)
+                val cross = gainText((gain - 1f) / 2f)
+                "pan=stereo|c0=$same*c0+$cross*c1|c1=$cross*c0+$same*c1"
+            }
+            6 -> passThroughWithCentreLift("5.1", 6, gainText(gain))
+            8 -> passThroughWithCentreLift("7.1", 8, gainText(gain))
+            else -> null
+        }
+    }
+
+    /** [count] channels of the [layout], all passed through bar the centre. */
+    private fun passThroughWithCentreLift(layout: String, count: Int, gain: String): String =
+        buildString {
+            append("pan=").append(layout)
+            for (index in 0 until count) {
+                append("|c").append(index).append('=')
+                if (index == CENTRE_CHANNEL_INDEX) append(gain).append('*')
+                append('c').append(index)
+            }
+        }
+
     private fun observeProperties() {
         MPVLib.observeProperty("time-pos", MPVLib.MPV_FORMAT_DOUBLE)
         MPVLib.observeProperty("duration", MPVLib.MPV_FORMAT_DOUBLE)
@@ -622,6 +822,10 @@ class MpvPlayerView(context: Context) : SurfaceView(context), SurfaceHolder.Call
         // Bare observation (no format): we only need to know it changed, then
         // read the parts we care about through mpv's property paths.
         MPVLib.observeProperty("track-list", MPVLib.MPV_FORMAT_NONE)
+        // The dialogue filter is built for the channel count, so it has to be
+        // rebuilt whenever a new file (or another track) brings a different
+        // one.
+        MPVLib.observeProperty("audio-params/channel-count", MPVLib.MPV_FORMAT_INT64)
     }
 
     // --- Surface lifecycle --------------------------------------------------
@@ -727,7 +931,13 @@ class MpvPlayerView(context: Context) : SurfaceView(context), SurfaceHolder.Call
 
     override fun eventProperty(property: String) = Unit
 
-    override fun eventProperty(property: String, value: Long) = Unit
+    override fun eventProperty(property: String, value: Long) {
+        when (property) {
+            // The file's layout is known from here on: place the dialogue
+            // filter against the track actually playing.
+            "audio-params/channel-count" -> if (dialogueBoost > 0) applyDialogueFilter()
+        }
+    }
 
     override fun eventProperty(property: String, value: Double) {
         when (property) {
@@ -859,5 +1069,20 @@ class MpvPlayerView(context: Context) : SurfaceView(context), SurfaceHolder.Call
         const val HWDEC_CODECS = "h264,hevc,mpeg4,mpeg2video,vp8,vp9,av1"
 
         const val CACHE_MB = 64
+
+        /** Read-ahead cap in Low Latency mode: enough to bridge a hiccup. */
+        const val LOW_LATENCY_MAX_BYTES = 8 * 1024 * 1024
+
+        /** mpv's own 100 = unity gain. */
+        const val VOLUME_NORMAL = 100.0
+
+        /**
+         * The ceiling `volume` is clipped at. Every step of the panel's boost
+         * is above mpv's default 130, so this has to be raised with the gain.
+         */
+        const val VOLUME_MAX = 800.0
+
+        /** FL, FR, FC, ... - the centre is channel 3 in every standard layout. */
+        const val CENTRE_CHANNEL_INDEX = 2
     }
 }

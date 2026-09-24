@@ -4,6 +4,7 @@ import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -25,7 +26,9 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
 import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.RecyclerView
 import com.kennyb1201.kbstream.R
+import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.player.LanguageMatch
 import com.kennyb1201.kbstream.data.player.PlayerTitlePrefs
@@ -43,6 +46,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import java.io.File
 
 /**
  * The MPV backup engine, as a playable activity.
@@ -55,16 +59,21 @@ import kotlinx.coroutines.launch
  * can also open this directly, which is why the resume/watch-history/scrobble
  * half of the player is implemented here and not skipped.
  *
- * What is deliberately NOT here, because it belongs to ExoPlayer: the source
- * picker and stream ranking, the Dolby Vision compat layer, the P5 GPU
- * correction, the audio tuning chain, intro/credits skip, and the media
- * session. This engine's job is to get a picture on screen for a file the main
- * player could not open at all — and the chrome it does have mirrors the main
- * player's (play/pause, next episode, audio, subtitles, speed, aspect, stream
- * info, and a settings panel holding the engine-specific controls), so a
- * session that lands here does not feel like a different app. ±10s seeking is
- * the D-pad while the overlay is down, and the hardware/software decoding
- * switch lives in that settings panel.
+ * What is deliberately NOT here, because it belongs to ExoPlayer: stream
+ * ranking, the Dolby Vision compat layer, the P5 GPU correction, the audio
+ * tuning chain, and the media session. This engine's job is to get a picture on
+ * screen for a file the main player could not open at all — and the chrome it
+ * does have mirrors the main player's (play/pause, next episode, SOURCES,
+ * audio, subtitles, speed, aspect, stream info, and a settings panel holding
+ * the engine-specific controls), so a session that lands here does not feel
+ * like a different app. ±10s seeking is the D-pad while the overlay is down,
+ * and the hardware/software decoding switch lives in that settings panel.
+ *
+ * The picker is the main player's picker: the ranked list of sources arrives
+ * with the launch extras ([parseSourcesJson]), so SOURCES re-opens mpv on the
+ * chosen URL at the playhead instead of throwing the title back, and AUDIO /
+ * SUBTITLES name every track mpv found rather than stepping through them
+ * blind. Same panel, same rows, same labels and badge chips.
  *
  * Two things the engines genuinely share rather than mirror: the per-title
  * memory (languages, A/V offsets, chosen track - kept under the main player's
@@ -81,6 +90,7 @@ class MpvPlayerActivity : ComponentActivity() {
     private var errorContainer: View? = null
     private var errorText: TextView? = null
     private var errorHint: TextView? = null
+    private var errorSwitchButton: TextView? = null
     private var bufferingView: View? = null
     private var toastView: TextView? = null
     private var controlsContainer: View? = null
@@ -103,6 +113,28 @@ class MpvPlayerActivity : ComponentActivity() {
     private var settingsContainer: View? = null
     private var settingsSection: MpvSettingsSection? = null
 
+    // --- Picker: the same side panel the main player opens -------------------
+    private var sourceButton: ImageView? = null
+    private var pickerContainer: View? = null
+    private var pickerTitle: TextView? = null
+    private var pickerList: RecyclerView? = null
+
+    /**
+     * The list the picker shows, mirroring the main player's [PickerMode].
+     * Each one is a list here rather than a cycle: AUDIO and SUBTITLES name
+     * every track mpv found instead of stepping through them blind, which is
+     * what the same two buttons do in the main player.
+     */
+    private enum class PickerMode { SOURCE, AUDIO, SUBTITLE, SPEED }
+
+    private var pickerOpen = false
+
+    /** The ranked source list this session was launched with. */
+    private var sources: List<Stream> = emptyList()
+
+    /** Label of the source playing now, for the SOURCES picker's selected row. */
+    private var currentSourceLabel: String? = null
+
     /**
      * Result of a manual handoff back to ExoPlayer (see [switchToExoPlayer]).
      *
@@ -124,11 +156,77 @@ class MpvPlayerActivity : ComponentActivity() {
     /** One handoff at a time: a second press must not stack a second ExoPlayer. */
     private var playerSwitchStarted = false
 
-    /** True while the settings side panel is up (BACK closes it first). */
+    /**
+     * True while a side panel is up - the settings box or the picker (see
+     * [showPicker]) - so BACK closes it first, the chrome stops auto-hiding,
+     * and the focus system owns the D-pad. [pickerOpen] says which one it is.
+     */
     private var settingsOpen = false
 
     /** True while the seekbar is being dragged, so progress cannot fight it. */
     private var scrubbing = false
+
+    // --- Audio tuning: the main player's AUDIO section, on this engine -----
+    //
+    // Same three knobs, same option lists ([PlayerAudioTuning]), same storage:
+    // -1 means "follow the global Settings value", anything else is remembered
+    // for this title alone under the main player's own key.
+    private var audioDownmix = -1
+    private var audioDialogueBoost = -1
+    private var audioVolumeBoostDb = -1
+
+    // --- Session media: the system's own now-playing surface ---------------
+    //
+    // The main player builds a media3 `MediaSession` over its ExoPlayer; mpv is
+    // not a media3 `Player`, so the same feature is built here on the platform
+    // session API instead - which is what media3's own session is a wrapper for
+    // anyway. What the viewer gets is the part that matters and the reason the
+    // main player has one at all: a now-playing card other apps and the system
+    // can see, working transport buttons outside this app, and a tap on that
+    // card that comes back to the player it was raised for.
+    private var mediaSession: MpvMediaSession? = null
+
+    /** Request code for the session's tap-to-open pending intent. */
+    private val mediaSessionRequestCode = 1002
+
+    /**
+     * What the device's subtitle picker may return. The two named types are
+     * SubRip and WebVTT (what OpenSubtitles and most exporters produce); the
+     * trailing wildcard is the escape hatch for a box that reports a subtitle
+     * as plain text or with no type at all, which is why the main player's
+     * picker has the same fallback.
+     */
+    private val subtitleMimeTypes = arrayOf(
+        "application/x-subrip",
+        "application/x-subtitle-vtt",
+        "text/vtt",
+        "text/plain",
+        "*/*"
+    )
+
+    /** Where sidecar subtitles are copied; shared with the online downloads. */
+    private val subtitleCacheDirName = "kbstream_subs"
+
+    // --- External subtitles: the other half of the main player's SUBTITLES
+    // picker ---------------------------------------------------------------
+    private var externalSubtitleUri: Uri? = null
+    private var externalSubtitleName: String? = null
+
+    /** Results of the last online search, rendered as rows while they stand. */
+    private var onlineSubResults: List<SubtitleSearchResult> = emptyList()
+    private var onlineSubLoading = false
+
+    /**
+     * The device's own file picker, for a subtitle mpv has no way to know
+     * about. The picked document is copied into the app cache before mpv sees
+     * it, so what mpv is handed is always a plain file path rather than a
+     * content:// URI it may have no protocol for.
+     */
+    private val externalSubtitlePicker = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) attachExternalSubtitle(uri)
+    }
 
     // --- Playback shape, and what this title remembers ----------------------
     private var playbackSpeed = 1f
@@ -301,7 +399,7 @@ class MpvPlayerActivity : ComponentActivity() {
             Log.e(TAG, "MPV engine unavailable: $message")
             showError(
                 message,
-                "Pick ExoPlayer in Settings \u2192 Playback engine. Press Back to exit."
+                "Switch player to try this in ExoPlayer, or press Back to exit."
             )
         }
         view.onFileLoaded = { title -> onFileLoaded(title) }
@@ -315,11 +413,12 @@ class MpvPlayerActivity : ComponentActivity() {
             showError(
                 message,
                 "The stream may be offline, or the source may have changed. " +
-                    "Press Back to exit, then try another source."
+                    "Switch player to try this in ExoPlayer, or press Back to exit."
             )
         }
 
         setupControls()
+        setupMediaSession()
         // IntroDB rows for this session: the skip prompt and the end-of-episode
         // panel's credits marker both come from them.
         setupIntroDb()
@@ -327,8 +426,12 @@ class MpvPlayerActivity : ComponentActivity() {
             this,
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
-                    // BACK closes the panel first, exactly like the main player.
-                    if (settingsOpen) hideSettingsPanel() else exitPlayer()
+                    // BACK closes the panels first, exactly like the main player.
+                    when {
+                        pickerOpen -> dismissPicker()
+                        settingsOpen -> hideSettingsPanel()
+                        else -> exitPlayer()
+                    }
                 }
             }
         )
@@ -354,6 +457,15 @@ class MpvPlayerActivity : ComponentActivity() {
         view.setSubtitleDelayMs(subtitleOffsetMs)
         view.setSpeed(playbackSpeed.toDouble())
         view.setAspectMode(resizeModeIndex)
+
+        // Audio tuning, resolved the way the main player resolves it: this
+        // title's own choice, else the global Settings value. Set here rather
+        // than in applyOptions() because these are runtime properties - and the
+        // buffer profile, which is not, is read by the view itself.
+        view.setBufferMode(AppPreferences.getDefaultBufferMode(this))
+        view.setDownmix(effectiveAudioDownmix())
+        view.setDialogueBoost(effectiveAudioDialogueBoost())
+        view.setVolumeBoostDb(effectiveAudioVolumeBoost())
 
         view.load(
             MpvPlayerView.LoadRequest(
@@ -398,6 +510,14 @@ class MpvPlayerActivity : ComponentActivity() {
         fallbackReason = intent.getStringExtra(EXTRA_MPV_FALLBACK_REASON)
         streamHeaders = parseHeaders(intent.getStringExtra("stream_headers").orEmpty())
 
+        // The ranked source list the caller shipped, read with the same helper
+        // the main player uses, with this session's stream guaranteed to be on
+        // it: the SOURCES picker must be able to mark what is playing even when
+        // the session was handed over with only a stream_url.
+        sources = parseSourcesJson(intent.getStringExtra("sources_json"))
+            .withCurrentSource(currentSourceStream(currentUrl, currentAudioUrl))
+        currentSourceLabel = sources.firstOrNull { it.url == currentUrl }?.sourceLabel()
+
         // A title started "from the beginning" must not become a resume.
         startPositionMs = if (intent.getBooleanExtra("from_beginning", false)) {
             0L
@@ -423,6 +543,11 @@ class MpvPlayerActivity : ComponentActivity() {
         errorContainer = findViewById(R.id.mpv_error)
         errorText = findViewById(R.id.mpv_error_text)
         errorHint = findViewById(R.id.mpv_error_hint)
+        // The failure card's own SWITCH PLAYER: the press the control bar's
+        // SWITCH makes (see switchToExoPlayer), on the one surface where the bar
+        // is behind the card. Wired here because it belongs to that card alone.
+        errorSwitchButton = findViewById(R.id.mpv_error_switch)
+        errorSwitchButton?.setOnClickListener { switchToExoPlayer() }
         bufferingView = findViewById(R.id.mpv_buffering)
         toastView = findViewById(R.id.mpv_toast)
         loadingBackdropView = findViewById(R.id.mpv_loading_backdrop)
@@ -442,6 +567,10 @@ class MpvPlayerActivity : ComponentActivity() {
         playerSwitchButton = findViewById(R.id.mpv_btn_player_switch)
         speedButton = findViewById(R.id.mpv_btn_speed)
         aspectButton = findViewById(R.id.mpv_btn_aspect)
+        sourceButton = findViewById(R.id.mpv_btn_source)
+        pickerContainer = findViewById(R.id.mpv_picker_container)
+        pickerTitle = findViewById(R.id.mpv_picker_title)
+        pickerList = findViewById(R.id.mpv_picker_list)
         nextUpPanel = findViewById(R.id.mpv_next_up_panel)
         nextUpThumb = findViewById(R.id.mpv_next_up_thumb)
         nextUpShowTitle = findViewById(R.id.mpv_next_up_show_title)
@@ -503,6 +632,78 @@ class MpvPlayerActivity : ComponentActivity() {
      * RIGHT reach the same places they do there, and the overlay hides itself
      * after the same six seconds without input.
      */
+    /**
+     * Raises the system's now-playing session for this title.
+     *
+     * Everything the session publishes is read here, on demand, so there is one
+     * source of truth for both engines: mpv's own playhead and the same title
+     * facts this activity already holds. The transport rules are the main
+     * player's, so a handoff does not change what PREVIOUS means - NEXT is the
+     * next episode, and PREVIOUS rewinds to the start of this one unless the
+     * playhead is already near it, in which case it is the previous episode.
+     */
+    private fun setupMediaSession() {
+        mediaSession = MpvMediaSession(
+            context = this,
+            owner = this,
+            now = {
+                MpvMediaSession.Now(
+                    title = episodeTitle.orEmpty(),
+                    showName = itemName,
+                    episodeLabel = if (season != null && episode != null) {
+                        "S$season\u2009E$episode"
+                    } else {
+                        null
+                    },
+                    posterUrl = itemPoster,
+                    durationMs = durationMs,
+                    positionMs = positionMs,
+                    buffering = bufferingView?.visibility == View.VISIBLE,
+                    playing = surface?.isPaused() == false,
+                    speed = playbackSpeed
+                )
+            },
+            pendingIntent = { pendingIntentForSession() },
+            onPlay = {
+                surface?.setPaused(false)
+                keepControlsVisible()
+            },
+            onPause = {
+                surface?.setPaused(true)
+                keepControlsVisible()
+            },
+            onSkipNext = { skipToNextEpisode() },
+            onSkipPrevious = {
+                // The same rule the main player's session uses: near the start
+                // of an episode, PREVIOUS means the one before this.
+                if (positionMs > 5_000L) surface?.seekTo(0L) else skipToNextEpisode(-1)
+            },
+            onSeek = { position -> surface?.seekTo(position) }
+        ).also { it.start() }
+    }
+
+    /** The same episode step the control bar's NEXT button takes, either way. */
+    private fun skipToNextEpisode(offset: Int = 1) {
+        val showSeason = season ?: return
+        val showEpisode = episode ?: return
+        val target = showEpisode + offset
+        if (target < 1) return
+        launchNextEpisode(showSeason, target)
+    }
+
+    /** Opens this player when a remote app taps the now-playing card. */
+    private fun pendingIntentForSession(): android.app.PendingIntent {
+        val intent = Intent(this, MpvPlayerActivity::class.java).apply {
+            putExtras(this@MpvPlayerActivity.intent)
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val flags = android.app.PendingIntent.FLAG_IMMUTABLE or
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        // A fixed request code: this is the one pending intent for this
+        // activity, and re-issuing it updates the existing one.
+        return android.app.PendingIntent.getActivity(this, mediaSessionRequestCode, intent, flags)
+    }
+
     private fun setupControls() {
         updateNowPlayingText()
         updateControlsInfo()
@@ -522,19 +723,24 @@ class MpvPlayerActivity : ComponentActivity() {
             keepControlsVisible()
             switchToExoPlayer()
         }
-        findViewById<TextView>(R.id.mpv_btn_audio).setOnClickListener {
-            showToast(surface?.cycleAudioTrack() ?: "Audio")
-            refreshSettings()
+        sourceButton?.setOnClickListener {
             keepControlsVisible()
+            showPicker(PickerMode.SOURCE)
+        }
+        // AUDIO / SUBTITLES / SPEED open the same lists the main player opens,
+        // in the same order: a track or a speed is picked by name rather than
+        // stepped to blind.
+        findViewById<TextView>(R.id.mpv_btn_audio).setOnClickListener {
+            keepControlsVisible()
+            showPicker(PickerMode.AUDIO)
         }
         findViewById<TextView>(R.id.mpv_btn_subtitle).setOnClickListener {
-            showToast(surface?.cycleSubtitleTrack() ?: "Subtitles")
-            refreshSettings()
             keepControlsVisible()
+            showPicker(PickerMode.SUBTITLE)
         }
         speedButton?.setOnClickListener {
-            cycleSpeed()
             keepControlsVisible()
+            showPicker(PickerMode.SPEED)
         }
         aspectButton?.setOnClickListener {
             cycleAspect()
@@ -563,7 +769,7 @@ class MpvPlayerActivity : ComponentActivity() {
         }
 
         // Focus holds the overlay open, the same rule the main player uses.
-        listOfNotNull(playPauseButton, nextButton, speedButton, aspectButton).forEach { button ->
+        listOfNotNull(playPauseButton, nextButton, sourceButton, speedButton, aspectButton).forEach { button ->
             button.setOnFocusChangeListener { _, focused ->
                 if (focused) removeAutoHide() else keepControlsVisible()
             }
@@ -628,10 +834,15 @@ class MpvPlayerActivity : ComponentActivity() {
 
     /**
      * The engine note that stands where the main player's source badges sit, and
-     * the two buttons that read out state instead of opening a picker.
+     * the two buttons that read state out in place (aspect, and the speed label
+     * the picker leaves behind).
      */
     private fun updateControlsInfo() {
         engineNoteView?.text = buildString {
+            // Which source is playing comes first: it is what the main player's
+            // badge row says there, and it can change mid-session now that
+            // SOURCES can switch without leaving the title.
+            currentSourceLabel?.takeIf { it.isNotBlank() }?.let { append("$it  \u00b7  ") }
             append(
                 when {
                     !isFallbackSession -> "MPV engine"
@@ -649,14 +860,10 @@ class MpvPlayerActivity : ComponentActivity() {
         engineNoteView?.visibility = View.VISIBLE
         speedButton?.text = "${playbackSpeed}x"
         aspectButton?.text = ASPECT_MODES.getOrElse(resizeModeIndex) { "Fit" }
-    }
-
-    /** Cycles the same speeds the panel lists (the main player opens a picker). */
-    private fun cycleSpeed() {
-        val index = SPEED_OPTIONS.indexOfFirst { it == playbackSpeed }
-        val next = SPEED_OPTIONS[(index + 1).mod(SPEED_OPTIONS.size)]
-        chooseSpeed(next)
-        showToast("Speed: ${next}x")
+        // This runs as the file opens and whenever a title fact changes, which
+        // is exactly when the now-playing card needs to be told: the tick in
+        // [MpvMediaSession] covers the playhead between those moments.
+        mediaSession?.refresh()
     }
 
     /** Cycles the aspect modes and remembers the choice, like the main player. */
@@ -666,9 +873,335 @@ class MpvPlayerActivity : ComponentActivity() {
         showToast("Aspect: ${ASPECT_MODES[next]}")
     }
 
+    // --- Picker: the main player's panel, driven by mpv ---------------------
+
+    /**
+     * Opens the picker on [mode], filled from mpv's own state.
+     *
+     * The rows come from the same two places the main player's do: the ranked
+     * source list this session was launched with, and the tracks mpv found in
+     * the file it opened. That is why a SOURCES row and an AUDIO row read the
+     * same here as they do there, down to the selection mark.
+     */
+    private fun showPicker(mode: PickerMode) {
+        val items = when (mode) {
+            PickerMode.SOURCE -> {
+                pickerTitle?.text = "SOURCES"
+                sources.map { stream ->
+                    PickerItem(
+                        label = stream.sourceLabel(),
+                        isSelected = stream.url == currentUrl,
+                        badges = stream.badges,
+                        onClick = {
+                            switchToSource(stream)
+                            dismissPicker()
+                        }
+                    )
+                }
+            }
+
+            PickerMode.AUDIO -> {
+                pickerTitle?.text = "AUDIO"
+                surface?.audioTracks().orEmpty().map { track ->
+                    PickerItem(
+                        label = track.label,
+                        isSelected = track.selected,
+                        onClick = {
+                            chooseAudioTrackById(track)
+                            dismissPicker()
+                        }
+                    )
+                }
+            }
+
+            PickerMode.SUBTITLE -> {
+                pickerTitle?.text = "SUBTITLES"
+                val tracks = surface?.subtitleTracks().orEmpty()
+                // The two ways to bring in a subtitle mpv did not find in the
+                // container, in the same place the main player's picker puts
+                // them: a file off the device, and a search on OpenSubtitles.
+                val openFileItem = PickerItem(
+                    label = "OPEN SUBTITLE FILE",
+                    isSelected = externalSubtitleUri != null,
+                    onClick = {
+                        dismissPicker()
+                        launchExternalSubtitlePicker()
+                    }
+                )
+                val searchItem = if (AppPreferences.getOpensubtitlesApiKey(this).isNotBlank()) {
+                    PickerItem(
+                        label = "SEARCH SUBTITLES ONLINE\u2026",
+                        onClick = {
+                            dismissPicker()
+                            startOnlineSubtitleSearch()
+                        }
+                    )
+                } else {
+                    null
+                }
+                // Results of the last search, above the embedded tracks;
+                // picking one downloads it and hands the file to mpv.
+                val onlineRows = onlineSubResults.map { hit ->
+                    PickerItem(
+                        label = "${hit.language.uppercase()} \u00b7 ${hit.fileName} \u00b7 ${hit.downloads}\u2193",
+                        onClick = {
+                            dismissPicker()
+                            downloadOnlineSubtitle(hit)
+                        }
+                    )
+                }
+                val offItem = PickerItem(
+                    label = "OFF",
+                    isSelected = tracks.none { it.selected } && externalSubtitleUri == null,
+                    onClick = {
+                        surface?.clearSubtitles()
+                        clearExternalSubtitle()
+                        refreshSettings()
+                        dismissPicker()
+                    }
+                )
+                listOfNotNull(searchItem, openFileItem) + onlineRows + listOf(offItem) +
+                    tracks.map { track ->
+                        PickerItem(
+                            label = track.label,
+                            isSelected = track.selected,
+                            onClick = {
+                                surface?.selectSubtitleTrack(track.id)
+                                clearExternalSubtitle()
+                                refreshSettings()
+                                dismissPicker()
+                            }
+                        )
+                    }
+            }
+
+            PickerMode.SPEED -> {
+                pickerTitle?.text = "SPEED"
+                SPEED_OPTIONS.map { speed ->
+                    PickerItem(
+                        label = "${speed}x",
+                        isSelected = speed == playbackSpeed,
+                        onClick = {
+                            chooseSpeed(speed)
+                            dismissPicker()
+                        }
+                    )
+                }
+            }
+        }
+
+        // An empty list is a dead end, not a panel: nothing to pick means the
+        // picker stays shut rather than opening on a blank box.
+        if (items.isEmpty()) return
+
+        // A side panel is up from here on, so `settingsOpen` carries that fact
+        // (it is what the auto-hide and key rules already read - see the field)
+        // and `pickerOpen` says the picker is the one showing, since the
+        // settings box must not be.
+        settingsOpen = true
+        pickerOpen = true
+        settingsContainer?.visibility = View.GONE
+        controlsContainer?.visibility = View.VISIBLE
+        // The panel owns the remote while it is up: no auto-hide, and the
+        // D-pad goes to the rows.
+        removeAutoHide()
+        pickerContainer?.visibility = View.VISIBLE
+        pickerList?.adapter = PickerAdapter(items)
+        pickerList?.post {
+            val list = pickerList ?: return@post
+            if (list.childCount > 0) list.getChildAt(0).requestFocus() else list.requestFocus()
+        }
+    }
+
+    /**
+     * Closes the picker and hands the D-pad back to the control bar.
+     *
+     * Clears `settingsOpen` with it: that flag means "a side panel is up",
+     * which is what the auto-hide and key rules test, and [pickerOpen] is what
+     * says the picker was the panel showing.
+     */
+    private fun dismissPicker() {
+        if (!pickerOpen) return
+        pickerOpen = false
+        settingsOpen = false
+        pickerContainer?.visibility = View.GONE
+        if (controlsVisible) {
+            playPauseButton?.requestFocus()
+            keepControlsVisible()
+        } else {
+            showControls()
+        }
+    }
+
+    /**
+     * Re-opens mpv on another stream from the same list, at the playhead.
+     *
+     * This is the main player's source switch done with mpv's own load: the
+     * activity, the history row and the scrobble stream are the ones already
+     * open, so nothing downstream notices the picture came from somewhere else.
+     * The end-of-episode latches are reset because this is a fresh load -
+     * whatever plays next gets its own Up Next card and its own credits panel,
+     * and the position travels with the switch instead of restarting the file.
+     */
+    // --- External subtitles, the other half of the SUBTITLES picker -------
+    //
+    // The same two entry points the main player's picker has, driving mpv's
+    // `sub-add` instead of a sidecar renderer. Everything mpv is handed is a
+    // file path in the app cache, so neither the device picker's content:// URI
+    // nor a downloaded subtitle depends on a protocol libmpv may not ship.
+
+    /** Opens the device's file picker on the subtitle types it can deliver. */
+    private fun launchExternalSubtitlePicker() {
+        runCatching {
+            externalSubtitlePicker.launch(subtitleMimeTypes)
+        }.onFailure {
+            Log.w(TAG, "no document picker for subtitles here", it)
+            showToast("No file picker on this device")
+        }
+    }
+
+    /** There is only ever one external subtitle at a time, as in ExoPlayer. */
+    private fun clearExternalSubtitle() {
+        externalSubtitleUri = null
+        externalSubtitleName = null
+    }
+
+    /**
+     * Copies the picked document into the cache and hands it to mpv.
+     *
+     * A copy rather than the URI itself: mpv resolves plain paths, and a URI
+     * whose permission grant dies with this activity would leave the subtitle
+     * unreadable part-way through an episode.
+     */
+    private fun attachExternalSubtitle(uri: Uri) {
+        showToast("Loading subtitle\u2026")
+        lifecycleScope.launch {
+            val copied = runCatching {
+                withContext(Dispatchers.IO) {
+                    val directory = File(cacheDir, subtitleCacheDirName).apply { mkdirs() }
+                    val target = File(directory, "sidecar-${System.nanoTime()}-${displayNameFor(uri)}")
+                    val stream = contentResolver.openInputStream(uri)
+                        ?: return@withContext null
+                    stream.use { input ->
+                        target.outputStream().use { output -> input.copyTo(output) }
+                    }
+                    target
+                }
+            }.getOrNull()
+            if (copied == null) {
+                showToast("Could not read that subtitle file", 4_000L)
+                return@launch
+            }
+            externalSubtitleUri = uri
+            externalSubtitleName = copied.name
+            surface?.addExternalSubtitle(Uri.fromFile(copied).toString())
+            showToast("Subtitle loaded: ${copied.name}", 4_000L)
+            refreshSettings()
+        }
+    }
+
+    /**
+     * Queries OpenSubtitles for the playing item, then re-opens the subtitle
+     * picker with the hits as rows - the main player's own search, over mpv.
+     */
+    private fun startOnlineSubtitleSearch() {
+        if (onlineSubLoading) return
+        if (AppPreferences.getOpensubtitlesApiKey(this).isBlank()) {
+            showToast("Add an OpenSubtitles API key in Settings", 4_000L)
+            return
+        }
+        if (itemName.isBlank()) {
+            showToast("No title available to search with")
+            return
+        }
+        onlineSubLoading = true
+        showToast("Searching subtitles\u2026")
+        lifecycleScope.launch {
+            val results = SubtitleSearchHelper.search(
+                this@MpvPlayerActivity,
+                title = itemName,
+                season = season,
+                episode = episode,
+                languageHint = AppPreferences.getPreferredSubtitleLanguage(this@MpvPlayerActivity)
+            )
+            onlineSubLoading = false
+            onlineSubResults = results
+            if (results.isEmpty()) showToast("No subtitles found") else showPicker(PickerMode.SUBTITLE)
+        }
+    }
+
+    /** Downloads the picked hit into cache and hands it to mpv. */
+    private fun downloadOnlineSubtitle(hit: SubtitleSearchResult) {
+        showToast("Loading subtitle\u2026")
+        lifecycleScope.launch {
+            val body = SubtitleSearchHelper.download(this@MpvPlayerActivity, hit)
+            if (body.isNullOrBlank()) {
+                showToast("Subtitle download failed", 4_000L)
+                return@launch
+            }
+            val uri = SubtitleSearchHelper.toCacheUri(this@MpvPlayerActivity, hit, body)
+            externalSubtitleUri = uri
+            externalSubtitleName = hit.fileName
+            surface?.addExternalSubtitle(uri.toString())
+            showToast("Subtitle loaded: ${hit.fileName}", 4_000L)
+            refreshSettings()
+        }
+    }
+
+    /** The picked document's own name, for the cache file and the panel note. */
+    private fun displayNameFor(uri: Uri): String {
+        val fromProvider = runCatching {
+            contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
+            }
+        }.getOrNull()
+        return fromProvider
+            ?.substringAfterLast('/')
+            ?.substringAfterLast('\\')
+            ?.takeIf { it.isNotBlank() }
+            ?: "subtitle-${System.nanoTime()}.srt"
+    }
+
+    private fun switchToSource(stream: Stream) {
+        val newUrl = stream.url ?: return
+        if (newUrl == currentUrl) return
+
+        val resumeAt = (if (positionMs > 0L) positionMs else startPositionMs).coerceAtLeast(0L)
+        currentUrl = newUrl
+        currentAudioUrl = stream.audioUrl
+        currentSourceLabel = stream.sourceLabel()
+        startPositionMs = resumeAt
+        endedHandled = false
+        completionSent = false
+        endPanelsShown = false
+        fileLoaded = false
+        autoSkippedSegments.clear()
+        // The segment the old file's playhead was inside belongs to that file:
+        // the prompt goes with it instead of hanging over the new load.
+        activeSkipStamp = null
+        hideSkipPrompt()
+
+        Log.w(TAG, "source switch -> ${stream.sourceLabel()} at ${resumeAt}ms")
+        // The note reads out which source is playing, so it has to follow.
+        updateControlsInfo()
+        showLoading("Switching source…")
+        surface?.load(
+            MpvPlayerView.LoadRequest(
+                url = newUrl,
+                headers = streamHeaders,
+                audioUrl = currentAudioUrl,
+                startPositionMs = resumeAt
+            )
+        )
+    }
+
     /** Opens the settings side panel and puts focus inside it. */
     private fun showSettingsPanel() {
         val container = settingsContainer ?: return
+        // The picker is the other side panel: opening this one closes it.
+        pickerOpen = false
+        pickerContainer?.visibility = View.GONE
         settingsOpen = true
         removeAutoHide()
         settingsSection?.refresh()
@@ -676,10 +1209,15 @@ class MpvPlayerActivity : ComponentActivity() {
         focusFirstPill(container)
     }
 
-    /** Closes the panel and hands focus back to the control bar. */
+    /**
+     * Closes whichever side panel is up and hands focus back to the control
+     * bar: BACK reaches this from either one (see the back callback).
+     */
     private fun hideSettingsPanel() {
         settingsOpen = false
+        pickerOpen = false
         settingsContainer?.visibility = View.GONE
+        pickerContainer?.visibility = View.GONE
         controlsContainer?.visibility = View.VISIBLE
         playPauseButton?.requestFocus()
         keepControlsVisible()
@@ -730,6 +1268,9 @@ class MpvPlayerActivity : ComponentActivity() {
         audioDelayMs = remembered?.audioDelayMs ?: 0
         subtitleOffsetMs = remembered?.subtitleOffsetMs ?: 0
         audioTrackSignature = remembered?.audioTrackSignature.orEmpty()
+        audioDownmix = remembered?.audioDownmix ?: -1
+        audioDialogueBoost = remembered?.audioDialogueBoost ?: -1
+        audioVolumeBoostDb = remembered?.audioVolumeBoostDb ?: -1
 
         playbackSpeed = 1f
         resizeModeIndex = AppPreferences.getDefaultAspectRatio(this)
@@ -748,7 +1289,10 @@ class MpvPlayerActivity : ComponentActivity() {
                 subtitleLang = subtitleLanguage,
                 subtitleOffsetMs = subtitleOffsetMs,
                 audioDelayMs = audioDelayMs,
-                audioTrackSignature = audioTrackSignature
+                audioTrackSignature = audioTrackSignature,
+                audioDownmix = audioDownmix,
+                audioDialogueBoost = audioDialogueBoost,
+                audioVolumeBoostDb = audioVolumeBoostDb
             )
         )
     }
@@ -783,6 +1327,26 @@ class MpvPlayerActivity : ComponentActivity() {
     internal fun subtitlePosition(): Int = subtitlePosition
     internal fun hardwareDecoding(): Boolean = surface?.isHardwareDecoding() != false
     internal fun hasTitleMemory(): Boolean = titleKey != null
+
+    // Audio tuning. The panel marks its pills with the OVERRIDE (-1 = follow the
+    // global Settings value) and reads the resolved one out in the notes, which
+    // is exactly how the main player's AUDIO section reads.
+    internal fun audioDownmixOverride(): Int = audioDownmix
+    internal fun dialogueBoostOverride(): Int = audioDialogueBoost
+    internal fun volumeBoostOverride(): Int = audioVolumeBoostDb
+    internal fun effectiveAudioDownmix(): Int =
+        audioDownmix.takeIf { it >= 0 } ?: AppPreferences.getAudioDownmix(this)
+
+    internal fun effectiveAudioDialogueBoost(): Int =
+        audioDialogueBoost.takeIf { it >= 0 } ?: AppPreferences.getAudioDialogueBoost(this)
+
+    internal fun effectiveAudioVolumeBoost(): Int =
+        audioVolumeBoostDb.takeIf { it >= 0 } ?: AppPreferences.getAudioVolumeBoostDb(this)
+
+    internal fun bufferMode(): Int = AppPreferences.getDefaultBufferMode(this)
+
+    /** The loaded sidecar's name, or null; the panel shows it under SUBTITLES. */
+    internal fun externalSubtitleNote(): String? = externalSubtitleName
 
     internal fun diagnosticsText(): String =
         surface?.diagnostics().orEmpty().ifBlank { "Waiting for the file to open" }
@@ -830,6 +1394,21 @@ class MpvPlayerActivity : ComponentActivity() {
         refreshSettings()
     }
 
+    /**
+     * An audio track picked by hand in the picker.
+     *
+     * mpv gets the exact track id, not the signature: one file often lists the
+     * same language and codec twice (5.1 and stereo, say), and the id is what
+     * tells those rows apart. The per-title memory still keeps the signature,
+     * so the next session can look the choice up again.
+     */
+    private fun chooseAudioTrackById(track: MpvPlayerView.Track) {
+        audioTrackSignature = track.signature
+        persistTitlePreferences()
+        surface?.selectAudioTrack(track.id)
+        refreshSettings()
+    }
+
     internal fun chooseAudioDelay(ms: Int) {
         audioDelayMs = ms.coerceIn(-5_000, 5_000)
         persistTitlePreferences()
@@ -855,6 +1434,40 @@ class MpvPlayerActivity : ComponentActivity() {
         subtitleBackground = background
         AppPreferences.setDefaultSubtitleBackground(this, background)
         surface?.applySubtitleAppearance(subtitleSize, subtitleBackground, subtitlePosition)
+        refreshSettings()
+    }
+
+    /** [target] -1 = follow the global downmix setting, exactly as ExoPlayer does. */
+    internal fun chooseAudioDownmix(target: Int) {
+        audioDownmix = target
+        persistTitlePreferences()
+        surface?.setDownmix(effectiveAudioDownmix())
+        refreshSettings()
+    }
+
+    internal fun chooseDialogueBoost(level: Int) {
+        audioDialogueBoost = level
+        persistTitlePreferences()
+        surface?.setDialogueBoost(effectiveAudioDialogueBoost())
+        refreshSettings()
+    }
+
+    internal fun chooseVolumeBoost(db: Int) {
+        audioVolumeBoostDb = db
+        persistTitlePreferences()
+        surface?.setVolumeBoostDb(effectiveAudioVolumeBoost())
+        refreshSettings()
+    }
+
+    /**
+     * The buffering profile is a global choice, not a per-title one: it is about
+     * what the box and the connection can do, which does not change with the
+     * show. mpv takes it from the next file it opens (see
+     * [MpvPlayerView.setBufferMode]), so the note under the row says so.
+     */
+    internal fun chooseBufferMode(mode: Int) {
+        AppPreferences.setDefaultBufferMode(this, mode)
+        surface?.setBufferMode(mode)
         refreshSettings()
     }
 
@@ -893,8 +1506,16 @@ class MpvPlayerActivity : ComponentActivity() {
         audioTrackSignature = ""
         audioDelayMs = 0
         subtitleOffsetMs = 0
+        // Audio tuning goes back to the global defaults with the rest: the
+        // three knobs belong to this title and nothing else here.
+        audioDownmix = -1
+        audioDialogueBoost = -1
+        audioVolumeBoostDb = -1
         surface?.setAudioDelayMs(0)
         surface?.setSubtitleDelayMs(0)
+        surface?.setDownmix(effectiveAudioDownmix())
+        surface?.setDialogueBoost(effectiveAudioDialogueBoost())
+        surface?.setVolumeBoostDb(effectiveAudioVolumeBoost())
         surface?.setLanguagePreferences(
             AppPreferences.getPreferredAudioLanguage(this),
             AppPreferences.getPreferredSubtitleLanguage(this)
@@ -1829,6 +2450,15 @@ class MpvPlayerActivity : ComponentActivity() {
         errorContainer?.visibility = View.VISIBLE
         errorText?.text = message
         errorHint?.text = hint
+        // The card's own SWITCH PLAYER, the same press the control bar's SWITCH
+        // makes (see switchToExoPlayer). It is here because a viewer looking at a
+        // failure is exactly who wants to try the other engine, and finding the
+        // control bar behind a full-screen card is a gesture worth saving them.
+        // ExoPlayer is always available where this engine is, so unlike the main
+        // player's copy of this button there is no case where a press could not
+        // land - and it takes focus, since the card is the only thing on screen.
+        errorSwitchButton?.visibility = View.VISIBLE
+        errorSwitchButton?.post { errorSwitchButton?.requestFocus() }
     }
 
     private fun showControls() {
