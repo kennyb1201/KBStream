@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.player
 
+import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
@@ -29,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -283,11 +285,15 @@ fun SettingsPanel(
                 modifier = Modifier.padding(bottom = 6.dp)
             )
 
-            AudioOptionRows(
+            // A level, not a set of choices: the viewer hears the amount that
+            // is right and steps to it one press at a time. The bottom step is
+            // "Global", which hands the level back to Settings → Video & Audio
+            // for this title.
+            AudioStepperRow(
                 label = "Dialogue boost",
-                options = PlayerAudioTuning.DIALOGUE_OPTIONS,
-                selected = PlayerTrackBridge.audioDialogueBoost,
-                onSelect = { PlayerTrackBridge.chooseAudioDialogueBoost(context, it) }
+                value = PlayerAudioTuning.dialogueLevelText(PlayerTrackBridge.audioDialogueBoost),
+                onMinus = { stepDialogueBoost(context, -1) },
+                onPlus = { stepDialogueBoost(context, 1) }
             )
             Text(
                 text = "Lifts the centre channel (voices) and trims the surrounds that carry " +
@@ -424,6 +430,57 @@ private fun AudioOptionRows(
         }
         Spacer(modifier = Modifier.height(6.dp))
     }
+}
+
+/**
+ * One press of the dialogue stepper's pads.
+ *
+ * From "Global" the step starts at the level the global setting is actually on,
+ * so + is louder and - is quieter than what is playing now rather than dropping
+ * the viewer to Off, and stepping down past Off lands back on Global.
+ */
+private fun stepDialogueBoost(context: Context, delta: Int) {
+    PlayerTrackBridge.chooseAudioDialogueBoost(
+        context,
+        PlayerAudioTuning.stepDialogueLevel(
+            current = PlayerTrackBridge.audioDialogueBoost,
+            globalLevel = AppPreferences.getAudioDialogueBoost(context),
+            delta = delta
+        )
+    )
+}
+
+/**
+ * A labelled ± stepper, so a value the viewer is tuning by ear is set one step
+ * at a time and the level itself is what the row shows.
+ */
+@Composable
+private fun AudioStepperRow(
+    label: String,
+    value: String,
+    onMinus: () -> Unit,
+    onPlus: () -> Unit
+) {
+    Text(
+        text = label,
+        color = KBTextHi,
+        style = MaterialTheme.typography.bodySmall,
+        modifier = Modifier.padding(bottom = 4.dp)
+    )
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        KBCard(onClick = onMinus) { PillChip("-", false) }
+        Text(
+            text = value,
+            color = KBTextHi,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.width(96.dp)
+        )
+        KBCard(onClick = onPlus) { PillChip("+", false) }
+    }
+    Spacer(modifier = Modifier.height(6.dp))
 }
 
 @Composable

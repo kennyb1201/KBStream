@@ -534,7 +534,9 @@ object AppPreferences {
     //
     //   downmix: 0 = Auto (leave the layout to the device/HAL), 2 = stereo,
     //            6 = 5.1
-    //   dialogue: 0 = off, 1 = low, 2 = high (centre/phantom-centre lift)
+    //   dialogue: 0 = off, 1..DIALOGUE_MAX = stacked centre/phantom-centre
+    //             lifts, set with the player panel's and the settings screen's
+    //             own ± steppers (levels 1 and 2 are the old "Low" and "High")
     //   volume: overall gain in dB, 0-15, applied with the limiter
     fun getAudioDownmix(context: Context): Int =
         prefs(context).getInt(KEY_AUDIO_DOWNMIX, PlayerAudioTuning.DOWNMIX_AUTO)

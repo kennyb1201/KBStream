@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.player
 
 import android.content.Intent
+import android.graphics.drawable.GradientDrawable
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
@@ -945,6 +946,18 @@ class MpvPlayerActivity : ComponentActivity() {
                 }
             }
             itemView.findViewById<ImageView>(R.id.cast_member_image).apply {
+                // The shared tile's avatar circle is a fixed #FF1D2530 oval, so
+                // a pure-black overlay still drew a grey circle behind every
+                // headshot - and the circle is all that shows for the cast
+                // members TMDB has no photo for. The main player retints the
+                // same tile as it lands (see refillPlayerChrome); this engine
+                // builds its own theming, so it paints the circle here.
+                if (AppPreferences.getAmoledBlack(this@MpvPlayerActivity)) {
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.OVAL
+                        setColor(playerPanelSurfaceColor(this@MpvPlayerActivity))
+                    }
+                }
                 val url = member.profileImageUrl()
                 if (url.isNullOrBlank()) {
                     setImageResource(R.drawable.ic_cast_placeholder)

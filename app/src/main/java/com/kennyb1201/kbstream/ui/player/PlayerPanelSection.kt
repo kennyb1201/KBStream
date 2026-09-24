@@ -238,10 +238,12 @@ internal class PlayerPanelSection(
             val position = AppPreferences.getDefaultSubtitlePosition(context)
             positionPills.forEach { (view, index) -> stylePill(view, position == index) }
 
-            // The offset is read from the activity, not the bridge: the panel's
-            // own ± buttons move it without going through the bridge.
+            // Both numbers come from the bridge because both are its to own
+            // now: the subtitles panel's ± pads write there (so the offset is
+            // remembered for the show), and the audio-delay pills above move
+            // the other.
             syncLabel?.text = "Audio delay: ${PlayerTrackBridge.audioDelayMs}ms  ·  " +
-                "Subtitle offset: ${activity.subtitleOffsetMs}ms"
+                "Subtitle offset: ${PlayerTrackBridge.subtitleOffsetMs}ms"
 
             rebuildTrackRows(force = false)
         } finally {

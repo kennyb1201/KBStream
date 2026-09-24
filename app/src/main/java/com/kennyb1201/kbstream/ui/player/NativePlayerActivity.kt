@@ -3084,7 +3084,6 @@ class NativePlayerActivity : ComponentActivity() {
         btnOffsetPlus.setOnClickListener { nudgeSubtitleOffset(SUBTITLE_OFFSET_STEP_MS) }
     }
 
-}
 
     /**
      * Switches the PlayerView's internal video surface to a TextureView (or
