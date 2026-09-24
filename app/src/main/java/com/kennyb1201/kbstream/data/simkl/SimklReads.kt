@@ -329,24 +329,36 @@ object ShowCompletionRules {
      * moves it back to "watching" once the new season's first episode AIRS - so
      * a watching-only rule hides exactly the case the rail exists for: a show
      * whose new season is announced. A finished-and-staying-finished show is
-     * still kept out by the tally (it has nothing unaired), and the statuses
-     * that mean "not following" stay out below this list.
+     * still kept out - by TMDB, which has no dated next episode for it - and
+     * the statuses that mean "not following" stay out below this list.
      */
     private val UPCOMING_FOLLOWED_STATUSES =
         setOf("watching", "completed")
 
     /**
-     * The Upcoming rail's caught-up rule: a show the account is CAUGHT UP
-     * on, still being followed, with episodes Simkl already knows are
-     * UNAIRED.
+     * The Upcoming rail's candidate rule: a show the account is CAUGHT UP
+     * on - nothing aired left to watch - and still following.
      *
      * Caught-up shows are deliberately kept off Continue Watching (there is
-     * nothing to resume), which used to mean they surfaced nowhere - a
-     * returning show's new season never showed up in Upcoming either. This is
-     * that gap closed: ANY next unaired episode qualifies, whether it opens a
-     * season or lands mid-season, because a show the user has watched
-     * everything aired of and is still following has upcoming content either
-     * way.
+     * nothing to resume), so this rail is the only place their next episode
+     * can surface: a returning show's new season, and the next episode of one
+     * still airing, alike.
+     *
+     * Simkl's own unaired tally is deliberately NOT part of the rule any
+     * more. It used to be, and it silently vetoed the mid-season half of the
+     * rail: a show whose current season the tracker's episode list has not
+     * caught up with - or whose announced next season it does not carry yet -
+     * reports NOTHING unaired even though TMDB has the next episode dated, so
+     * only shows with a season the tracker already knew about ever got a card.
+     * That is the "Upcoming shows new seasons but never the coming episode"
+     * report, and it can look profile-specific: a profile whose cards come
+     * from local history (no tracker connected) never consults the tally at
+     * all, so its rail is TMDB-driven to begin with while a tracked profile's
+     * is not.
+     *
+     * TMDB is the authority on whether there IS a dated next episode, and it
+     * is asked for every candidate: one cached detail lookup each, and
+     * whatever comes back dateless is dropped by the schedule builder.
      */
     fun isCaughtUpUpcomingCandidate(
         status: String?,
@@ -362,15 +374,6 @@ object ShowCompletionRules {
             status
                 ?.trim()
                 ?.lowercase() !in UPCOMING_FOLLOWED_STATUSES
-        ) {
-            return false
-        }
-
-        // Nothing unaired means nothing to announce. Cheap pre-filter too:
-        // the rail looks the show up on TMDB, so unaired episodes Simkl
-        // already knows about are what justify that call.
-        if (
-            (notAiredEpisodesCount ?: 0) <= 0
         ) {
             return false
         }
@@ -440,8 +443,14 @@ internal fun SimklRepository.isContinueWatchingCandidate(
     )
 
 /**
- * The Upcoming rail's caught-up candidates: shows the account is caught up on
- * while Simkl still knows of UNAIRED episodes.
+ * The Upcoming rail's candidates: every show the account is caught up on.
+ * Continue Watching has nothing to resume for these, so this rail is the only
+ * place their next episode can surface - a returning show's new season and the
+ * next episode of one still airing alike.
+ *
+ * (The name kept from when this was gated on the tracker's own unaired tally;
+ * whether a show really has something coming is TMDB's answer, not the
+ * tally's - see [ShowCompletionRules.isCaughtUpUpcomingCandidate].)
  *
  * Returned in the same wire shape the Continue Watching feed uses, so the
  * rail enriches them through the exact path it already has (TMDB detail,
@@ -509,6 +518,21 @@ suspend fun SimklRepository.getCaughtUpUnreleasedShowsImpl():
                         item.notAiredEpisodesCount
                 )
         }
+        // The rail looks only a capped number of candidates up on TMDB, so
+        // this order decides which shows can reach it at all: whatever the
+        // tracker already knows has something coming first, then the most
+        // recently watched. It must never be the tracker's library order -
+        // that is what buried a profile's airing shows behind older finished
+        // ones in a big library.
+        .sortedWith(
+            compareByDescending<SimklWatchingShowDetailedItem> { item ->
+                (item.notAiredEpisodesCount ?: 0) > 0
+            }.thenByDescending { item ->
+                // Simkl timestamps are ISO-8601, so lexical order is
+                // chronological order.
+                item.lastWatchedAt ?: ""
+            }
+        )
         .mapNotNull { item ->
 
             val show =

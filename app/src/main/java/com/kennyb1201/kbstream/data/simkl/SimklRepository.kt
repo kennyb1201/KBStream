@@ -1037,11 +1037,12 @@ class SimklRepository(
     ): SimklWatchingShowsResponse = getWatchingShowsImpl(accessToken)
 
     /**
-     * Shows the account is caught up on while episodes it knows are still
-     * unaired remain - the Upcoming rail's "what is coming next" candidates,
-     * whether that is a new season or the next episode of one already airing.
-     * Body lives in SimklReads.kt; never throws (an unreachable Simkl just
-     * yields no cards).
+     * Shows the account is caught up on - nothing aired left to watch - so the
+     * Upcoming rail is the only place their next episode can surface, whether
+     * that is a new season or the next episode of one already airing. Body
+     * lives in SimklReads.kt; never throws (an unreachable Simkl just yields
+     * no cards). Whether a candidate really has something coming is TMDB's
+     * call: the rail asks it and drops the dateless answers.
      */
     suspend fun getCaughtUpUnreleasedShows():
         List<SimklContinueWatchingItem> =

@@ -221,7 +221,7 @@ class ShowCompletionRulesTest {
     /**
      * Reported gap: a show the user is caught up on (American Horror Story)
      * showed in other apps' Upcoming but not ours. Its card comes from this
-     * rule: following, caught up, and something still unaired.
+     * rule: following and caught up on everything aired.
      */
     @Test
     fun `a caught up show with unaired episodes has an upcoming card`() {
@@ -259,11 +259,19 @@ class ShowCompletionRulesTest {
         )
     }
 
+    /**
+     * Reported gap: on profiles with a tracker connected, Upcoming showed
+     * new seasons but never the coming episode. The tracker's own unaired
+     * tally used to veto the card, and it lags: a show still airing whose
+     * remaining episodes - or whose announced next season - the tracker's
+     * episode list has not caught up with reports NOTHING unaired while TMDB
+     * has the next episode dated. The tally is out of the rule; TMDB answers
+     * whether there is a dated episode, and a dateless answer is dropped by
+     * the rail's schedule builder.
+     */
     @Test
-    fun `a caught up show with nothing unaired has no upcoming card`() {
-        // Every episode aired and watched, nothing announced: nothing to
-        // put on a schedule.
-        assertFalse(
+    fun `a caught up show the tracker has no unaired tally for is still asked about`() {
+        assertTrue(
             ShowCompletionRules.isCaughtUpUpcomingCandidate(
                 status = "watching",
                 watchedEpisodesCount = 30,
@@ -278,8 +286,9 @@ class ShowCompletionRulesTest {
      * "completed" on the tracker, and Simkl only moves it back to "watching"
      * once the new season's first episode AIRS - so a returning show with an
      * announced season was invisible in Upcoming while other apps showed it.
-     * The tally is what makes accepting "completed" safe: the show still has
-     * to be caught up with something unaired.
+     * Being CAUGHT UP with everything aired is what makes accepting
+     * "completed" safe: there is nothing to resume, so the rail is the only
+     * place the show can surface at all.
      */
     @Test
     fun `a finished show with a new season coming is an upcoming card`() {
@@ -303,9 +312,14 @@ class ShowCompletionRulesTest {
         )
     }
 
+    /**
+     * The same widening for a finished show: with the tally out of the rule,
+     * a completely watched show is asked about too - TMDB has nothing dated
+     * for a show that really is over, which is what keeps it off the rail.
+     */
     @Test
-    fun `a completed show with nothing unaired stays off the rail`() {
-        assertFalse(
+    fun `a completed show with nothing unaired is still asked about`() {
+        assertTrue(
             ShowCompletionRules.isCaughtUpUpcomingCandidate(
                 status = "completed",
                 watchedEpisodesCount = 30,
