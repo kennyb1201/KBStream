@@ -119,3 +119,46 @@ private fun JSONObject.toStream(): Stream = Stream(
     ),
     badges = parseSourceBadges(optJSONArray("badges"))
 )
+
+/**
+ * Parses the `cast_json` extra into the cast band's members.
+ *
+ * The same payload the main player renders ([PlayerCastMember], built by
+ * MainActivity), read through one helper so both engines show the same people
+ * in the same order. A blank or malformed payload yields an empty list - the
+ * band then hides itself - rather than an exception.
+ */
+internal fun parseCastJson(raw: String?): List<PlayerCastMember> {
+    if (raw.isNullOrBlank()) return emptyList()
+    return try {
+        val arr = JSONArray(raw)
+        (0 until arr.length()).mapNotNull { i ->
+            val obj = arr.optJSONObject(i) ?: return@mapNotNull null
+            PlayerCastMember(
+                id = obj.optInt("id", 0),
+                name = obj.optString("name", ""),
+                character = obj.optString("character", "").ifBlank { null },
+                profilePath = obj.optString("profilePath", "").ifBlank { null }
+            )
+        }.filter { it.name.isNotBlank() }
+    } catch (e: Exception) {
+        Log.w("PLAYER_CAST", "Failed to parse cast_json", e)
+        emptyList()
+    }
+}
+
+/**
+ * The TMDB profile image URL for a cast member, tolerating a stored path
+ * (`/abc.jpg`), a bare filename, or an already-absolute URL - the same three
+ * shapes the main player's band accepts.
+ */
+internal fun PlayerCastMember.profileImageUrl(): String? = profilePath
+    ?.trim()
+    ?.takeIf { it.isNotBlank() }
+    ?.let { path ->
+        when {
+            path.startsWith("http://") || path.startsWith("https://") -> path
+            path.startsWith("/") -> "https://image.tmdb.org/t/p/original$path"
+            else -> "https://image.tmdb.org/t/p/original/$path"
+        }
+    }

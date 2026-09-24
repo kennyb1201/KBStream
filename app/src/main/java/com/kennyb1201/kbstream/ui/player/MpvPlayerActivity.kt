@@ -29,6 +29,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.RecyclerView
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.data.badges.StreamBadge
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.player.LanguageMatch
 import com.kennyb1201.kbstream.data.player.PlayerTitlePrefs
@@ -37,6 +38,7 @@ import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import kotlinx.coroutines.withContext
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
@@ -59,15 +61,19 @@ import java.io.File
  * can also open this directly, which is why the resume/watch-history/scrobble
  * half of the player is implemented here and not skipped.
  *
- * What is deliberately NOT here, because it belongs to ExoPlayer: stream
- * ranking, the Dolby Vision compat layer, the P5 GPU correction, the audio
- * tuning chain, and the media session. This engine's job is to get a picture on
- * screen for a file the main player could not open at all — and the chrome it
- * does have mirrors the main player's (play/pause, next episode, SOURCES,
- * audio, subtitles, speed, aspect, stream info, and a settings panel holding
- * the engine-specific controls), so a session that lands here does not feel
- * like a different app. ±10s seeking is the D-pad while the overlay is down,
- * and the hardware/software decoding switch lives in that settings panel.
+ * What is deliberately NOT here, because it belongs to ExoPlayer or to the
+ * box: the Dolby Vision compat layer and the P5 GPU correction (mpv has no DV
+ * path), and the live-TV chrome (mpv has no IPTV path). Everything else is
+ * mirrored rather than approximated: the overlaid chrome is the main player's
+ * (clear logo or name, episode row, synopsis, the source badge chips, the cast
+ * band, the seekbar with position/duration, play/pause, next episode, SOURCES,
+ * switch player, audio, subtitles, speed, aspect, stream info, skip-intro, and
+ * the settings side panel), the source list is ordered by the same StreamRanker
+ * under the same Settings switch, the audio tuning chain and a now-playing
+ * media session are built here too, and the focus / auto-hide rules are the
+ * same, so a session that lands here does not feel like a different app. ±10s
+ * seeking is the D-pad while the overlay is down, and the hardware/software
+ * decoding switch lives in that settings panel.
  *
  * The picker is the main player's picker: the ranked list of sources arrives
  * with the launch extras ([parseSourcesJson]), so SOURCES re-opens mpv on the
@@ -119,6 +125,11 @@ class MpvPlayerActivity : ComponentActivity() {
     private var pickerTitle: TextView? = null
     private var pickerList: RecyclerView? = null
 
+    // --- Badge row + cast band: the main player's two rows, over mpv --------
+    private var badgeRow: LinearLayout? = null
+    private var castSection: View? = null
+    private var castRow: LinearLayout? = null
+
     /**
      * The list the picker shows, mirroring the main player's [PickerMode].
      * Each one is a list here rather than a cycle: AUDIO and SUBTITLES name
@@ -134,6 +145,12 @@ class MpvPlayerActivity : ComponentActivity() {
 
     /** Label of the source playing now, for the SOURCES picker's selected row. */
     private var currentSourceLabel: String? = null
+
+    /** The playing source's badge chips, for the row the main player shows. */
+    private var currentBadges: List<StreamBadge> = emptyList()
+
+    /** The cast band's members, from the cast_json extra. */
+    private var castMembers: List<PlayerCastMember> = emptyList()
 
     /**
      * Result of a manual handoff back to ExoPlayer (see [switchToExoPlayer]).
@@ -514,9 +531,24 @@ class MpvPlayerActivity : ComponentActivity() {
         // the main player uses, with this session's stream guaranteed to be on
         // it: the SOURCES picker must be able to mark what is playing even when
         // the session was handed over with only a stream_url.
-        sources = parseSourcesJson(intent.getStringExtra("sources_json"))
-            .withCurrentSource(currentSourceStream(currentUrl, currentAudioUrl))
-        currentSourceLabel = sources.firstOrNull { it.url == currentUrl }?.sourceLabel()
+        // Ranked here as well as upstream when Settings -> Stream ranking is on:
+        // the payload usually arrives already ordered by the resolver, but a
+        // direct launch (Settings -> Player engine = MPV) can carry an unruly
+        // list, and both engines must offer the same order. StreamRanker.rank is
+        // a stable sort, so re-ranking an already-ranked list changes nothing.
+        val parsedSources = parseSourcesJson(intent.getStringExtra("sources_json"))
+        val orderedSources = if (AppPreferences.getUseStreamRanker(this)) {
+            StreamRanker.rank(parsedSources)
+        } else {
+            parsedSources
+        }
+        sources = orderedSources.withCurrentSource(currentSourceStream(currentUrl, currentAudioUrl))
+        val playingSource = sources.firstOrNull { it.url == currentUrl }
+        currentSourceLabel = playingSource?.sourceLabel()
+        currentBadges = playingSource?.badges.orEmpty()
+
+        // The cast band's members, the same payload the main player renders.
+        castMembers = parseCastJson(intent.getStringExtra("cast_json"))
 
         // A title started "from the beginning" must not become a resume.
         startPositionMs = if (intent.getBooleanExtra("from_beginning", false)) {
@@ -571,6 +603,10 @@ class MpvPlayerActivity : ComponentActivity() {
         pickerContainer = findViewById(R.id.mpv_picker_container)
         pickerTitle = findViewById(R.id.mpv_picker_title)
         pickerList = findViewById(R.id.mpv_picker_list)
+        badgeRow = findViewById(R.id.mpv_badge_row)
+        castSection = findViewById(R.id.mpv_cast_section)
+        castRow = findViewById(R.id.mpv_cast_row)
+        setupCastRow()
         nextUpPanel = findViewById(R.id.mpv_next_up_panel)
         nextUpThumb = findViewById(R.id.mpv_next_up_thumb)
         nextUpShowTitle = findViewById(R.id.mpv_next_up_show_title)
@@ -860,10 +896,79 @@ class MpvPlayerActivity : ComponentActivity() {
         engineNoteView?.visibility = View.VISIBLE
         speedButton?.text = "${playbackSpeed}x"
         aspectButton?.text = ASPECT_MODES.getOrElse(resizeModeIndex) { "Fit" }
+        // The playing source's own badge chips - the same shared adapter the
+        // main player's row uses, so the two cannot drift apart.
+        badgeRow?.let { PickerAdapter.bindBadgeRow(it, currentBadges) }
         // This runs as the file opens and whenever a title fact changes, which
         // is exactly when the now-playing card needs to be told: the tick in
         // [MpvMediaSession] covers the playhead between those moments.
         mediaSession?.refresh()
+    }
+
+    /**
+     * Fills the cast band, the same one the main player shows: one focusable
+     * tile per member with their TMDB photo, name and character. A press hands
+     * the person id back to the catalog (the main player's own navigate_actor
+     * contract), so the actor screen opens and this session resumes on return.
+     */
+    private fun setupCastRow() {
+        val section = castSection ?: return
+        val row = castRow ?: return
+        if (castMembers.isEmpty()) {
+            section.visibility = View.GONE
+            return
+        }
+        section.visibility = View.VISIBLE
+        row.removeAllViews()
+        castMembers.forEach { member ->
+            val itemView = layoutInflater.inflate(R.layout.cast_member_item, row, false)
+            // The shared tile points its next-focus at the main player's
+            // seekbar, which is not on screen in this layout: re-point it at
+            // mpv's own so D-pad DOWN still lands on the bar.
+            itemView.nextFocusDownId = R.id.mpv_seekbar
+            itemView.findViewById<TextView>(R.id.cast_member_name).text = member.name
+            itemView.findViewById<TextView>(R.id.cast_member_character).apply {
+                val character = member.character
+                if (character.isNullOrBlank()) {
+                    visibility = View.GONE
+                } else {
+                    text = character
+                    visibility = View.VISIBLE
+                }
+            }
+            itemView.findViewById<ImageView>(R.id.cast_member_image).apply {
+                val url = member.profileImageUrl()
+                if (url.isNullOrBlank()) {
+                    setImageResource(R.drawable.ic_cast_placeholder)
+                } else {
+                    runCatching { load(url) }
+                        .onFailure { setImageResource(R.drawable.ic_cast_placeholder) }
+                }
+            }
+            itemView.setOnClickListener { navigateToActor(member) }
+            row.addView(itemView)
+        }
+    }
+
+    /**
+     * Leaves the player for the actor screen: the main player's navigate_actor
+     * result, so MainActivity opens the person page and keeps this session's
+     * playhead - coming back resumes where it was. The playhead is saved first
+     * (as any other exit does), so watch history is right either way.
+     */
+    private fun navigateToActor(member: PlayerCastMember) {
+        val resumeAt = positionMs.coerceAtLeast(0L)
+        surface?.setPaused(true)
+        saveProgress(reason = "actor")
+        setResult(
+            RESULT_OK,
+            Intent().apply {
+                putExtra("player_result_action", "navigate_actor")
+                putExtra("actor_person_id", member.id)
+                putExtra("actor_resume_position_ms", resumeAt)
+            }
+        )
+        finish()
     }
 
     /** Cycles the aspect modes and remembers the choice, like the main player. */
@@ -1171,6 +1276,7 @@ class MpvPlayerActivity : ComponentActivity() {
         currentUrl = newUrl
         currentAudioUrl = stream.audioUrl
         currentSourceLabel = stream.sourceLabel()
+        currentBadges = stream.badges
         startPositionMs = resumeAt
         endedHandled = false
         completionSent = false

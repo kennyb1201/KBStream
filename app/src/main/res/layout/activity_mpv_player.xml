@@ -266,9 +266,22 @@
                     android:textSize="15sp"
                     android:visibility="gone" />
 
-                <!-- Stands where the main player's badge row sits: which engine
-                     is playing, and what mpv ended up decoding. Filled from
-                     mpv's own properties once the file opens. -->
+                <!-- Stream badge chips for the current source, the same row the
+                     main player shows and the same adapter that fills it
+                     (PickerAdapter.bindBadgeRow): the source's own art/labels,
+                     hiding itself when the source carries none. -->
+                <LinearLayout
+                    android:id="@+id/mpv_badge_row"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:visibility="gone" />
+
+                <!-- Which source is playing, which engine is playing it, and
+                     what mpv ended up decoding. Filled from mpv's own
+                     properties once the file opens. -->
                 <TextView
                     android:id="@+id/mpv_engine_note"
                     android:layout_width="match_parent"
@@ -280,6 +293,46 @@
                     android:visibility="gone" />
             </LinearLayout>
         </ScrollView>
+
+        <!-- Cast band: pinned between the info scroll and the seekbar, the same
+             placement as the main player's, so avatars + names are always fully
+             visible without scrolling. A press hands the actor id back to the
+             catalog, which opens the person page and resumes this session on
+             return - the main player's own navigate_actor contract. -->
+        <LinearLayout
+            android:id="@+id/mpv_cast_section"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="4dp"
+                android:fontFamily="@font/oswald_medium"
+                android:text="CAST"
+                android:textColor="@color/kb_accent"
+                android:textSize="10sp" />
+
+            <HorizontalScrollView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:clipToPadding="false"
+                android:paddingStart="2dp"
+                android:paddingEnd="2dp"
+                android:scrollbars="none">
+
+                <LinearLayout
+                    android:id="@+id/mpv_cast_row"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:clipChildren="false"
+                    android:clipToPadding="false"
+                    android:orientation="horizontal" />
+            </HorizontalScrollView>
+        </LinearLayout>
 
         <!-- Bottom section: seekbar + controls, the same layout as the main
              player's. -->
