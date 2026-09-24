@@ -1067,6 +1067,16 @@ class NativePlayerActivity : ComponentActivity() {
             // THIS channel instead of silently falling back to the old one.
             sources = listOf(zapStream)
             switchToSource(zapStream)
+            // A zap is a channel CHANGE, but the splash art (backdrop and
+            // clearlogo) belongs to the channel this session started on, so
+            // switchToSource's fresh-load splash would sit there naming the
+            // channel the user just left. It has just reset the first-play
+            // latch and raised that splash; put the latch back and take the
+            // splash down instead, so the channel change shows the small
+            // spinner while the zap banner carries the new channel.
+            hasPlayedOnce = true
+            hideSplash()
+            bufferingSpinner.visibility = View.VISIBLE
         }
     }
 
