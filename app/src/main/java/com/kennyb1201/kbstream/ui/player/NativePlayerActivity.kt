@@ -6502,9 +6502,15 @@ class NativePlayerActivity : ComponentActivity() {
 
     /**
      * The because-you-watched panel opens while the end credits are rolling:
-     * shrink the video (the credits themselves) into the bottom-right corner so
-     * the recommendations get the screen, and move the panel into the space
-     * that leaves on the left so the picks never cover the credits.
+     * shrink the video (the credits themselves) into the TOP-RIGHT corner so the
+     * recommendations get the screen, and spread the panel across it.
+     *
+     * The video takes a notch out of the panel's own fill rather than sitting on
+     * top of it - it is a SurfaceView, so a panel painted over that corner would
+     * hide the credits. The header stops short of the notch (which keeps the
+     * header the width it had when the panel sat to the left of a bottom-right
+     * video), while the pick row below it gets the full width, so more of the
+     * posters fit before the row has to scroll.
      */
     private fun enterCreditsMode() {
         if (creditsModeActive) return
@@ -6518,20 +6524,24 @@ class NativePlayerActivity : ComponentActivity() {
             (v.layoutParams as android.widget.FrameLayout.LayoutParams).apply {
                 width = pipW
                 height = pipH
-                gravity = android.view.Gravity.BOTTOM or android.view.Gravity.END
+                gravity = android.view.Gravity.TOP or android.view.Gravity.END
                 setMargins(margin, margin, margin, margin)
             }
             v.requestLayout()
         }
+        // The notch is the video plus the gap the panel used to leave between
+        // itself and the video: exactly the width the header gives up.
+        val inset = pipW + margin
         creditsModePanelParams =
             becauseYouWatchedPanel.layoutParams as android.widget.FrameLayout.LayoutParams
         becauseYouWatchedPanel.layoutParams = android.widget.FrameLayout.LayoutParams(
-            (screenW - pipW - margin * 3).coerceAtLeast(screenW / 2),
+            screenW - margin * 2,
             android.view.ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply {
             gravity = android.view.Gravity.TOP or android.view.Gravity.START
             setMargins(margin, margin, margin, margin)
         }
+        bywUi.setCreditsLayout(inset, pipH)
         becauseYouWatchedPanel.requestLayout()
     }
 
@@ -6539,6 +6549,7 @@ class NativePlayerActivity : ComponentActivity() {
     private fun exitCreditsMode() {
         if (!creditsModeActive) return
         creditsModeActive = false
+        bywUi.setCreditsLayout(0, 0)
         listOf<View>(playerView, p5VideoGlesView).forEach { v ->
             (v.layoutParams as android.widget.FrameLayout.LayoutParams).apply {
                 width = android.view.ViewGroup.LayoutParams.MATCH_PARENT

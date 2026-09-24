@@ -1990,9 +1990,15 @@ class MpvPlayerActivity : ComponentActivity() {
 
     /**
      * The credits-recommendations arrangement, the same as the main player's:
-     * shrink the video (the credits themselves) into the bottom-right corner so
-     * the picks get the screen, and move the panel into the space that leaves on
-     * the left so it never covers them.
+     * shrink the video (the credits themselves) into the TOP-RIGHT corner so the
+     * picks get the screen, and spread the panel across it.
+     *
+     * The video takes a notch out of the panel's own fill rather than sitting on
+     * top of it - it is a SurfaceView, so a panel painted over that corner would
+     * hide the credits. The header stops short of the notch (which keeps the
+     * header the width it had when the panel sat to the left of a bottom-right
+     * video), while the pick row below it gets the full width, so more of the
+     * posters fit before the row has to scroll.
      */
     private fun enterCreditsMode() {
         if (creditsModeActive) return
@@ -2007,19 +2013,23 @@ class MpvPlayerActivity : ComponentActivity() {
         (view.layoutParams as? FrameLayout.LayoutParams)?.apply {
             width = pipW
             height = pipH
-            gravity = Gravity.BOTTOM or Gravity.END
+            gravity = Gravity.TOP or Gravity.END
             setMargins(margin, margin, margin, margin)
         }
         view.requestLayout()
 
+        // The notch is the video plus the gap the panel used to leave between
+        // itself and the video: exactly the width the header gives up.
+        val inset = pipW + margin
         creditsModePanelParams = panel.layoutParams as? FrameLayout.LayoutParams
         panel.layoutParams = FrameLayout.LayoutParams(
-            (screenW - pipW - margin * 3).coerceAtLeast(screenW / 2),
+            screenW - margin * 2,
             ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             setMargins(margin, margin, margin, margin)
         }
+        bywUi?.setCreditsLayout(inset, pipH)
         panel.requestLayout()
     }
 
@@ -2027,6 +2037,7 @@ class MpvPlayerActivity : ComponentActivity() {
     private fun exitCreditsMode() {
         if (!creditsModeActive) return
         creditsModeActive = false
+        bywUi?.setCreditsLayout(0, 0)
         (surface?.layoutParams as? FrameLayout.LayoutParams)?.apply {
             width = ViewGroup.LayoutParams.MATCH_PARENT
             height = ViewGroup.LayoutParams.MATCH_PARENT

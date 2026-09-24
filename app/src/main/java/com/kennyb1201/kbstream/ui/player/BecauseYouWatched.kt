@@ -1,7 +1,14 @@
 package com.kennyb1201.kbstream.ui.player
 
 import android.content.Context
+import android.graphics.Canvas
+import android.graphics.ColorFilter
 import android.graphics.Outline
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.PixelFormat
+import android.graphics.RectF
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.text.TextUtils
 import android.view.Gravity
@@ -391,6 +398,84 @@ internal fun infoPanelDrawable(context: Context): GradientDrawable =
     }
 
 /**
+ * The credits panel's fill with its top-right corner cut away.
+ *
+ * The end-credits arrangement shrinks the video (the credits themselves) into
+ * the top-right corner and spreads the recommendations across the screen. That
+ * video is a SurfaceView - a separate surface UNDER the activity's own views -
+ * so anything the panel paints over its corner hides the credits outright. The
+ * panel therefore cannot simply be drawn full width with the video sitting on
+ * top of it; cutting the notch out of the fill is what lets the two share the
+ * top of the screen. The header stops short of the notch, and the pick row
+ * below it still gets the whole width - which is the point of moving the video
+ * out of the bottom-right, where it used to sit under the row.
+ *
+ * One path, so the panel keeps its rounded corners everywhere except where the
+ * notch meets the top edge.
+ */
+private class NotchedPanelDrawable(
+    fillColor: Int,
+    private val radiusPx: Float,
+    private val notchWidthPx: Int,
+    private val notchHeightPx: Int
+) : Drawable() {
+
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = fillColor }
+    private val silhouette = Path()
+    private val corner = Path()
+    private val rect = RectF()
+
+    override fun draw(canvas: Canvas) {
+        val bounds = bounds
+        if (bounds.isEmpty || notchWidthPx <= 0 || notchHeightPx <= 0) return
+        rect.set(
+            bounds.left.toFloat(), bounds.top.toFloat(),
+            bounds.right.toFloat(), bounds.bottom.toFloat()
+        )
+        silhouette.reset()
+        silhouette.addRoundRect(rect, radiusPx, radiusPx, Path.Direction.CW)
+        rect.set(
+            (bounds.right - notchWidthPx).toFloat(), bounds.top.toFloat(),
+            bounds.right.toFloat(), (bounds.top + notchHeightPx).toFloat()
+        )
+        corner.reset()
+        corner.addRect(rect, Path.Direction.CW)
+        silhouette.op(corner, Path.Op.DIFFERENCE)
+        canvas.drawPath(silhouette, fill)
+    }
+
+    override fun setAlpha(alpha: Int) {
+        fill.alpha = alpha
+        invalidateSelf()
+    }
+
+    override fun setColorFilter(colorFilter: ColorFilter?) {
+        fill.colorFilter = colorFilter
+        invalidateSelf()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+
+    override fun getOutline(outline: Outline) {
+        outline.setRoundRect(0, 0, bounds.width(), bounds.height(), radiusPx)
+    }
+}
+
+/** The credits panel's fill, notched for the shrunk video's corner. */
+internal fun creditsPanelDrawable(
+    context: Context,
+    color: Int,
+    notchWidthPx: Int,
+    notchHeightPx: Int
+): Drawable = NotchedPanelDrawable(
+    fillColor = color,
+    radiusPx = 16f * context.resources.displayMetrics.density,
+    notchWidthPx = notchWidthPx,
+    notchHeightPx = notchHeightPx
+)
+
+/**
  * The credits recommendation panel: the pick row, the featured strip under it,
  * and the focus rules that tie the two together.
  *
@@ -445,12 +530,23 @@ internal class BecauseYouWatchedUi(
     private val pills = mutableListOf<Pair<TextView, Boolean>>()
     private var featured: Int? = null
 
+    /**
+     * The end-credits arrangement, from [setCreditsLayout]: how far the header
+     * stops short of the shrunk video's corner, how tall that corner is, and the
+     * row's own top margin before the clearance pass below touched it.
+     */
+    private var creditsInsetPx = 0
+    private var creditsNotchPx = 0
+    private var creditsRowBaseMargin: Int? = null
+
     init {
         // The row is rebuilt on every show, so its artwork is polished from a
         // layout pass instead of once at build time - which is also what runs
-        // after the theme has re-tinted those very views.
+        // after the theme has re-tinted those very views. The same pass keeps
+        // the row clear of the video's notch.
         val onLayout = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
             if (isVisible) polish()
+            keepRowClearOfNotch()
         }
         panel.addOnLayoutChangeListener(onLayout)
         row.addOnLayoutChangeListener(onLayout)
@@ -494,9 +590,104 @@ internal class BecauseYouWatchedUi(
         return false
     }
 
+    /**
+     * Switches the panel between its plain box and the end-credits arrangement,
+     * where the shrunk video owns the top-right corner.
+     *
+     * [insetPx] is the width of that corner (the video plus the gap the panel
+     * used to leave to the screen edge): the panel's fill is notched for it and
+     * the header - kicker, title, featured strip - stops short of it, which is
+     * what keeps the header the width it has always been. The pick row and the
+     * hint under it are untouched, so they run the full width of the screen
+     * instead of being cut off at the header's edge.
+     *
+     * Zero puts the plain box back.
+     */
+    fun setCreditsLayout(insetPx: Int, notchPx: Int) {
+        creditsInsetPx = insetPx
+        creditsNotchPx = notchPx
+        if (insetPx <= 0) {
+            clearRowClearance()
+            creditsRowBaseMargin = null
+        }
+        applyPanelBackground()
+        applyHeaderInset()
+        keepRowClearOfNotch()
+    }
+
+    /**
+     * The panel's fill: notched for the credits video's corner while the end
+     * panel is up, the plain rounded box otherwise.
+     */
+    private fun applyPanelBackground() {
+        panel.background = if (creditsInsetPx > 0 && creditsNotchPx > 0) {
+            creditsPanelDrawable(host, raisedColor(), creditsInsetPx, creditsNotchPx)
+        } else {
+            roundedPanelDrawable(host, raisedColor(), 16f)
+        }
+    }
+
+    /**
+     * Holds the header - kicker, title and the featured strip - clear of the
+     * shrunk video. The strip is built on the first pick, so [feature] applies
+     * this too.
+     */
+    private fun applyHeaderInset() {
+        val header = listOfNotNull(
+            panel.getChildAt(0),
+            title,
+            panel.findViewWithTag<View>(TAG_FEATURED_STRIP)
+        )
+        header.forEach { view ->
+            val params = view.layoutParams as? LinearLayout.LayoutParams ?: return@forEach
+            if (params.marginEnd == creditsInsetPx) return@forEach
+            params.marginEnd = creditsInsetPx
+            view.requestLayout()
+        }
+    }
+
+    /** The scroll view the pick row lives in - the box the clearance moves. */
+    private fun rowScroll(): View? = row.parent as? View
+
+    /**
+     * Pushes the pick row below the notch when the header is shorter than the
+     * shrunk video. Both scale with the screen, but not identically: a box that
+     * reports a 4K surface at a 1080p density gets a video nearly twice the
+     * header's height, and the row's right end would then sit under the credits
+     * instead of under the panel's fill. The margin comes from the header's own
+     * height (which excludes it), so the pass settles after one layout.
+     */
+    private fun keepRowClearOfNotch() {
+        if (creditsInsetPx <= 0 || creditsNotchPx <= 0) return
+        val scroll = rowScroll() ?: return
+        // Before the first layout the header has no measured height at all, and
+        // taking that for a header would shove the row down for a frame. The
+        // layout pass that follows calls this again with real numbers.
+        if (scroll.top <= 0) return
+        val params = scroll.layoutParams as? LinearLayout.LayoutParams ?: return
+        val base = creditsRowBaseMargin ?: params.topMargin.also { creditsRowBaseMargin = it }
+        val header = scroll.top - panel.paddingTop - params.topMargin
+        val margin = base + (creditsNotchPx - header).coerceAtLeast(0)
+        if (params.topMargin != margin) {
+            params.topMargin = margin
+            scroll.requestLayout()
+        }
+    }
+
+    /** Puts the row's own top margin back, on leaving the credits arrangement. */
+    private fun clearRowClearance() {
+        val base = creditsRowBaseMargin ?: return
+        val scroll = rowScroll() ?: return
+        val params = scroll.layoutParams as? LinearLayout.LayoutParams ?: return
+        if (params.topMargin != base) {
+            params.topMargin = base
+            scroll.requestLayout()
+        }
+    }
+
     /** Re-tints everything the panel owns, after an AMOLED / theme change. */
     fun applyTheme() {
-        panel.background = roundedPanelDrawable(host, raisedColor(), 16f)
+        applyPanelBackground()
         // Every piece of artwork sits in its own frame: the poster's frame and
         // the featured backdrop. Left alone they keep the XML's fixed
         // @color/kb_surface, which is what made the popup ignore the AMOLED /
@@ -752,7 +943,17 @@ internal class BecauseYouWatchedUi(
                     0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
                 )
             )
-            panel.addView(strip, FEATURED_STRIP_INDEX)
+            panel.addView(
+                strip,
+                FEATURED_STRIP_INDEX,
+                // Explicit MATCH_PARENT: the header inset is a margin, and a
+                // wrap_content strip would simply refuse to narrow.
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            )
+            applyHeaderInset()
         }
         val backdrop = strip.findViewWithTag<ImageView>(TAG_FEATURED_BACKDROP)
         val logo = strip.findViewWithTag<ImageView>(TAG_FEATURED_LOGO)
