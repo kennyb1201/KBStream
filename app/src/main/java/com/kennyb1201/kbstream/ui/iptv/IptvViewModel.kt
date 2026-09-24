@@ -325,6 +325,25 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         )
 
     /**
+     * Channel ids whose guide row has already been RESOLVED by a lineup
+     * query — the keys of the guide cache above.
+     *
+     * A channel missing from here has simply not been queried yet: the
+     * guide window only covers the channels the user has actually scrolled
+     * past, so every group switch swaps in a screenful of channels whose
+     * EPG is still on its way. That is a different state from a resolved
+     * channel that matched no XMLTV channel at all, and the guide must not
+     * confuse the two — without the distinction the new group rendered a
+     * false "No program data" on every row for the second the first query
+     * for it took to land. The UI renders the first state as a quiet
+     * loading placeholder and only the second as "No program data".
+     */
+    val resolvedGuideChannelIds: StateFlow<Set<String>> = _guideItemsByChannelId
+        .map { it.keys }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptySet())
+
+    /**
      * Kids Mode Live TV filter (profile toggle "Kid-safe Live TV"). An
      * M3U guide can't be rated, so when the active kids profile opts in,
      * only channel groups that LOOK kid-focused survive — group titles

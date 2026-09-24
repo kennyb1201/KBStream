@@ -139,6 +139,10 @@ fun GuideScreen(
 ) {
     val playlist by viewModel.playlist.collectAsState()
     val visibleChannels by viewModel.visibleChannels.collectAsState()
+    // Channels whose guide row has actually been queried. Used to keep a
+    // channel that is merely still loading from being labelled "No program
+    // data" (see resolvedGuideChannelIds in the ViewModel).
+    val resolvedGuideIds by viewModel.resolvedGuideChannelIds.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val isImportingGuide by viewModel.isImportingGuide.collectAsState()
     val error by viewModel.error.collectAsState()
@@ -659,6 +663,17 @@ LaunchedEffect(channelListState, groupedChannelIds) {
   LaunchedEffect(groupedChannelMembership, membershipBump) {
     if (groupedChannels.isEmpty()) return@LaunchedEffect
 
+    // A group switch swaps in a whole screenful of channels the guide window
+    // has never covered, and the scroll-driven prefetch below is debounced
+    // (400ms) to stop scroll churn from re-querying on every frame. Fine
+    // while scrolling, but on a group change that debounce stacked on top of
+    // the lineup query, so the new group sat there with no programme data for
+    // over a second. Queueing the incoming group's window here starts the
+    // query on the first frame instead.
+    viewModel.updateGuideChannels(
+        groupedChannelIds.take(MAX_GUIDE_CHANNEL_REQUEST_SIZE)
+    )
+
     // A pending channel key (restore-on-open or channel-number jump) wins
     // over the default "select first row" reset.
     val pending = pendingChannelKey
@@ -974,6 +989,7 @@ Spacer(modifier = Modifier.height(14.dp))
                                         ChannelRowCard(
                                             item = item,
                                             selected = selectedChannelIndex == index,
+                                            guidePending = item.channel.id !in resolvedGuideIds,
                                             onClick = {
                                                 selectedChannelId = item.channel.id
                                                 // Track into the Recent group
@@ -1053,16 +1069,22 @@ Spacer(modifier = Modifier.height(14.dp))
                                         .fillMaxHeight()
                                 ) {
                                     val detailItem = selectedChannel?.let(::withFavoriteFlag)
+                                    val detailGuidePending = detailItem != null &&
+                                        detailItem.channel.id !in resolvedGuideIds
                                     if (detailItem != null) {
                                         key(
                                             detailItem.channel.id,
+                                            detailGuidePending,
                                             detailItem.now?.startUtcMillis,
                                             detailItem.now?.endUtcMillis,
                                             detailItem.next?.startUtcMillis,
                                             detailItem.next?.endUtcMillis,
                                             detailItem.upcoming.firstOrNull()?.startUtcMillis
                                         ) {
-                                            GuideDetailPanel(item = detailItem)
+                                            GuideDetailPanel(
+                                                item = detailItem,
+                                                guidePending = detailGuidePending
+                                            )
                                         }
                                     } else {
                                         Column(
@@ -1914,6 +1936,8 @@ private fun GroupChip(
 private fun ChannelRowCard(
     item: IptvChannelWithEpg,
     selected: Boolean,
+    /** Its guide row has not been queried yet, so "no programme" is unknown. */
+    guidePending: Boolean = false,
     onClick: () -> Unit,
     onFocused: () -> Unit,
     onLongClick: () -> Unit,
@@ -2016,10 +2040,21 @@ private fun ChannelRowCard(
                     }
                 }
 
-                val nowTitle = item.now?.title ?: "No program data"
+                // Three states, not two: a programme, a channel whose guide
+                // was queried and genuinely has nothing on, and a channel
+                // whose guide row is still being queried. The last one used
+                // to read "No program data" as well, which made every group
+                // switch (and first entry) look like the guide had lost all
+                // its data for the second the query took to land.
+                val nowTitle = item.now?.title
+                    ?: if (guidePending) "Loading guide..." else "No program data"
                 Text(
                     text = nowTitle,
-                    color = if (isFocused) KBTextHi.copy(alpha = 0.82f) else KBTextLo.copy(alpha = if (selected) 0.96f else 1f),
+                    color = when {
+                        guidePending && item.now == null -> KBTextLo.copy(alpha = 0.55f)
+                        isFocused -> KBTextHi.copy(alpha = 0.82f)
+                        else -> KBTextLo.copy(alpha = if (selected) 0.96f else 1f)
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -2096,6 +2131,8 @@ private fun ChannelLogo(
 @Composable
 private fun GuideDetailPanel(
     item: IptvChannelWithEpg,
+    /** Its guide row has not been queried yet, so "no data" is unknown. */
+    guidePending: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val nowMillis = rememberNowMillis()
@@ -2142,7 +2179,7 @@ private fun GuideDetailPanel(
             }
         }
         Spacer(modifier = Modifier.height(12.dp))
-        NowNextPanel(item = item, nowMillis = nowMillis)
+        NowNextPanel(item = item, nowMillis = nowMillis, guidePending = guidePending)
         Spacer(modifier = Modifier.height(14.dp))
         Text(
             text = "UPCOMING",
@@ -2157,11 +2194,16 @@ private fun GuideDetailPanel(
         ) {
             if (upcoming.isEmpty()) {
                 CenterMessage(
-                    title = if (item.epgMatchType == EpgMatchType.NO_MATCH) "Guide not matched" else "No guide data",
-                    message = if (item.epgMatchType == EpgMatchType.NO_MATCH) {
-                        "This channel did not match the XMLTV guide. Check tvg-id, tvg-name, or channel name alignment."
-                    } else {
-                        "Program information is not available for this channel."
+                    title = when {
+                        guidePending -> "Loading guide..."
+                        item.epgMatchType == EpgMatchType.NO_MATCH -> "Guide not matched"
+                        else -> "No guide data"
+                    },
+                    message = when {
+                        guidePending -> "Program information for this channel is still loading."
+                        item.epgMatchType == EpgMatchType.NO_MATCH ->
+                            "This channel did not match the XMLTV guide. Check tvg-id, tvg-name, or channel name alignment."
+                        else -> "Program information is not available for this channel."
                     },
                     modifier = Modifier.fillMaxWidth().padding(top = 24.dp)
                 )
@@ -2221,6 +2263,8 @@ private fun GuideDetailPanel(
 private fun NowNextPanel(
     item: IptvChannelWithEpg,
     nowMillis: Long,
+    /** Its guide row has not been queried yet, so "nothing on" is unknown. */
+    guidePending: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val nowProgram = item.now
@@ -2236,7 +2280,8 @@ private fun NowNextPanel(
     ) {
         ProgramCard(
             label = "NOW",
-            title = item.now?.title ?: "Nothing airing right now",
+            title = item.now?.title
+                ?: if (guidePending) "Loading guide..." else "Nothing airing right now",
             time = item.now?.let { formatTimeRange(it.startUtcMillis, it.endUtcMillis) },
             badge = nowProgram?.let { formatRemainingLabel(it.endUtcMillis - nowMillis) },
             progress = nowProgress,
@@ -2246,7 +2291,8 @@ private fun NowNextPanel(
 
         ProgramCard(
             label = "NEXT",
-            title = item.next?.title ?: "No next program listed",
+            title = item.next?.title
+                ?: if (guidePending) "Loading guide..." else "No next program listed",
             time = item.next?.let { formatTimeRange(it.startUtcMillis, it.endUtcMillis) },
             badge = item.next?.let { formatStartsInLabel(it.startUtcMillis - nowMillis) },
             description = item.next?.description,
