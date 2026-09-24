@@ -2557,7 +2557,7 @@ class NativePlayerActivity : ComponentActivity() {
      */
     private fun nudgeSubtitleOffset(stepMs: Int) {
         PlayerTrackBridge.chooseSubtitleOffset(this, subtitleOffsetMs + stepMs)
-        subtitleCueHandler?.cancelPending()
+        subtitleCueHandler?.reapplyOffset()
     }
 
     /**
@@ -4048,6 +4048,16 @@ class NativePlayerActivity : ComponentActivity() {
             playbackEndedHandled = false
             lastPolledPos = -1L
             posStallTicks = 0
+            // Auto-selection is "once per PLAYER", not once per activity: the
+            // track overrides live on the player instance, so a rebuilt one
+            // (sidecar subtitle attached, engine or audio mode changed, DV
+            // rewrite retry) starts from the file's own defaults. Leaving the
+            // latch set skipped the preferred-language pass on that new
+            // instance, and a file whose subtitle track carries no DEFAULT flag
+            // then selected nothing at all — the remembered language stayed
+            // highlighted in the panel while no cue ever arrived.
+            // switchToSource() resets the same latch on its own path.
+            languagesAutoSelected = false
 
             exoPlayer = player
             if (p5GlesActive) {
@@ -4238,6 +4248,55 @@ class NativePlayerActivity : ComponentActivity() {
                     onPlaybackEnded()
                 }
             }
+        }
+
+        /**
+         * A seek (and every other discontinuity) moves the playhead in one
+         * jump and FLUSHES the read-ahead buffer, which leaves both of the
+         * progress trackers looking at baselines that describe the position
+         * the session just left — so a seek used to read as a dead source:
+         *
+         *  - [tickStallWatchdog] only counts a tick as progress when the
+         *    position OR the buffered position has grown by 500ms. A backward
+         *    seek makes both of those numbers smaller, and the buffer the seek
+         *    just dropped was the one it measured, so the tick before that
+         *    buffer refills sees "no progress". Its quiet-window stamp was also
+         *    older than the seek, so the FIRST tick after a seek could already
+         *    be past the 12s threshold and fire a recovery seek into the middle
+         *    of a perfectly normal post-seek rebuffer. That recovery seek
+         *    flushed the buffer again, the second one burned out the retry
+         *    budget, and the session landed on "The stream stopped sending
+         *    data" for a minute or more — the reported "seeking sometimes
+         *    makes the playback fail".
+         *  - [detectStallEndedFallback] reads "the position did not advance"
+         *    as a frozen tail, which a backward seek also looks like for a
+         *    tick.
+         *
+         * Both are re-baselined here. A seek is a new place to start reading
+         * from — not evidence that the stream died — so it gets a fresh quiet
+         * window, and the explicit-seek reasons also clear the recovery budget
+         * those earlier false stalls spent.
+         */
+        override fun onPositionDiscontinuity(
+            oldPosition: Player.PositionInfo,
+            newPosition: Player.PositionInfo,
+            reason: Int
+        ) {
+            val positionMs = newPosition.positionMs
+                .takeIf { it != C.TIME_UNSET }
+                ?: (exoPlayer?.currentPosition ?: 0L)
+            stallLastProgressAtMs = System.currentTimeMillis()
+            stallLastPositionMs = positionMs
+            stallLastBufferedMs = exoPlayer?.bufferedPosition ?: positionMs
+            if (reason == Player.DISCONTINUITY_REASON_SEEK ||
+                reason == Player.DISCONTINUITY_REASON_SEEK_ADJUSTMENT
+            ) {
+                stallRecoveries = 0
+            }
+            // Unknown, not the pre-seek position: the next poller tick must
+            // not count the jump itself as a frozen position.
+            lastPolledPos = -1L
+            posStallTicks = 0
         }
 
         override fun onRenderedFirstFrame() {
@@ -5819,6 +5878,25 @@ class NativePlayerActivity : ComponentActivity() {
             currentCues = emptyList()
             renderText("")
             if (positionDriven) updateFromPosition()
+        }
+
+        /**
+         * Re-times the line already on screen after an offset change.
+         *
+         * The offset pads used to come through [cancelPending], which exists
+         * for teardown: it drops the cue text it is holding. Nothing is left
+         * to re-render from after that, so a nudge during a long line blanked
+         * the subtitles until the pipeline's NEXT cue group arrived — the
+         * "selected but not showing" report — and a nudge that crossed back
+         * into pipeline mode had to wait for a cue Media3 had already emitted.
+         */
+        fun reapplyOffset() {
+            handler.removeCallbacks(delayedShow)
+            if (positionDriven) {
+                updateFromPosition()
+                return
+            }
+            renderText(currentCueText())
         }
 
         /** Re-renders with the new size/background (offset unchanged). */
