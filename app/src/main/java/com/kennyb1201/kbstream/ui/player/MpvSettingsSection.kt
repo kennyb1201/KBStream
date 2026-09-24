@@ -49,8 +49,8 @@ internal class MpvSettingsSection(
     private val subtitleOffsetPills = mutableListOf<Pair<TextView, Int>>()
     private val positionPills = mutableListOf<Pair<TextView, Int>>()
     private val downmixPills = mutableListOf<Pair<TextView, Int>>()
-    private val dialoguePills = mutableListOf<Pair<TextView, Int>>()
     private val volumePills = mutableListOf<Pair<TextView, Int>>()
+    private var dialogueValue: TextView? = null
     private val bufferPills = mutableListOf<Pair<TextView, Int>>()
     private var externalSubtitleLabel: TextView? = null
     private var audioDelayZeroPill: TextView? = null
@@ -240,20 +240,20 @@ internal class MpvSettingsSection(
             )
         )
 
+        // A level, not a set of choices: the same ± stepper the main player's
+        // panel carries, so the dialogue boost reads and drives the same way in
+        // both engines. The bottom step is "Global" (follow Settings).
         column.addView(ui.label("Dialogue boost", topMarginDp = 8))
-        ui.addPillGrid(
+        dialogueValue = ui.addStepperRow(
             column,
             4,
-            listOf("Global" to -1) + PlayerAudioTuning.DIALOGUE_OPTIONS,
-            dialoguePills
-        ) { level ->
-            activity.chooseDialogueBoost(level)
-            refresh()
-        }
+            onMinus = { stepDialogue(-1) },
+            onPlus = { stepDialogue(1) }
+        )
         column.addView(
             ui.label(
-                "Lifts the centre channel (voices) on a multichannel mix, and the " +
-                    "phantom centre a stereo track keeps its dialogue in.",
+                "Each step lifts the centre channel (voices) on a multichannel mix, " +
+                    "and the phantom centre a stereo track keeps its dialogue in.",
                 topMarginDp = 4
             )
         )
@@ -321,6 +321,21 @@ internal class MpvSettingsSection(
         }
     }
 
+    /**
+     * One press of the dialogue stepper's pads; see
+     * [PlayerAudioTuning.stepDialogueLevel] for what a step away from "Global"
+     * starts from.
+     */
+    private fun stepDialogue(delta: Int) {
+        val next = PlayerAudioTuning.stepDialogueLevel(
+            current = activity.dialogueBoostOverride(),
+            globalLevel = AppPreferences.getAudioDialogueBoost(activity),
+            delta = delta
+        )
+        activity.chooseDialogueBoost(next)
+        refresh()
+    }
+
     /** Re-renders every pill and label from the player's current state. */
     fun refresh() {
         if (refreshing) return
@@ -357,9 +372,9 @@ internal class MpvSettingsSection(
             downmixPills.forEach { (view, value) ->
                 ui.stylePill(view, activity.audioDownmixOverride() == value)
             }
-            dialoguePills.forEach { (view, value) ->
-                ui.stylePill(view, activity.dialogueBoostOverride() == value)
-            }
+            dialogueValue?.text = PlayerAudioTuning.dialogueLevelText(
+                activity.dialogueBoostOverride()
+            )
             volumePills.forEach { (view, value) ->
                 ui.stylePill(view, activity.volumeBoostOverride() == value)
             }

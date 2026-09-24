@@ -742,16 +742,13 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                AudioTuningRow(
-                    label = "Dialogue Boost",
-                    description = "Lifts voices (the centre channel, or the phantom centre of a stereo " +
-                        "track) over score, ambience and explosions. Off is the untouched mix.",
-                    options = PlayerAudioTuning.DIALOGUE_OPTIONS,
-                    selected = audioDialogueBoost,
-                    onSelect = {
+                DialogueBoostRow(
+                    level = audioDialogueBoost,
+                    onLevelChange = {
                         audioDialogueBoost = it
                         AppPreferences.setAudioDialogueBoost(context, it)
-                    }
+                    },
+                    chip = { label, selected -> PillChip(label, selected) }
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))

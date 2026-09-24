@@ -302,7 +302,7 @@ class MpvPlayerView(context: Context) : SurfaceView(context), SurfaceHolder.Call
      * reject - silence would be a far worse answer than a gentle mix.
      */
     fun setDialogueBoost(level: Int) {
-        dialogueBoost = level.coerceIn(0, 2)
+        dialogueBoost = level.coerceIn(0, PlayerAudioTuning.DIALOGUE_MAX)
         if (initialized) applyDialogueFilter()
     }
 

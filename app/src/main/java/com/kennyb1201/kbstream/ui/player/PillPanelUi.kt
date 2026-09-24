@@ -106,6 +106,58 @@ internal class PillPanelUi(private val context: Context) {
         column.addView(row)
     }
 
+    /**
+     * A `- / value / +` row, for a setting that is a LEVEL rather than a set of
+     * choices - the dialogue boost, which the panels used to offer as Off / Low
+     * / High pills and now steps through [PlayerAudioTuning.DIALOGUE_MAX].
+     *
+     * The pads are pills, so they focus and press exactly like every other
+     * control on the panel; the value between them is a plain label, because it
+     * is the readout and not a target - giving it focus would put a dead press
+     * in the middle of the row. The label is returned so the caller can write
+     * each new level into it from its own refresh.
+     */
+    fun addStepperRow(
+        column: LinearLayout,
+        topMarginDp: Int,
+        onMinus: () -> Unit,
+        onPlus: () -> Unit
+    ): TextView {
+        val row = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(topMarginDp) }
+        }
+        fun pad(text: String, onClick: () -> Unit): TextView = pill(text).apply {
+            gravity = android.view.Gravity.CENTER
+            setPadding(0, dp(6), 0, dp(6))
+            layoutParams = LinearLayout.LayoutParams(
+                dp(40),
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            setOnClickListener { onClick() }
+        }
+        val value = TextView(context).apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            runCatching { typeface = ResourcesCompat.getFont(context, R.font.oswald_medium) }
+            setTextColor(ContextCompat.getColor(context, R.color.kb_text_hi))
+            gravity = android.view.Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+            )
+        }
+        row.addView(pad("-", onMinus))
+        row.addView(value)
+        row.addView(pad("+", onPlus))
+        column.addView(row)
+        return value
+    }
+
     fun stylePill(view: TextView, selected: Boolean) {
         view.tag = selected
         view.setBackgroundResource(

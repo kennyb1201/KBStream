@@ -44,7 +44,7 @@ object AppPreferences {
     private const val KEY_VIDEO_DECODER = "video_decoder" // legacy key, removed on migration
     private const val KEY_AUDIO_DECODER = "audio_decoder"                      // 0=auto, 1=ffmpeg-only
     private const val KEY_AUDIO_DOWNMIX = "audio_downmix_target"               // 0=auto, 2=stereo, 6=5.1 (see PlayerAudioTuning)
-    private const val KEY_AUDIO_DIALOGUE_BOOST = "audio_dialogue_boost"       // 0=off, 1=low, 2=high
+    private const val KEY_AUDIO_DIALOGUE_BOOST = "audio_dialogue_boost"       // 0=off .. PlayerAudioTuning.DIALOGUE_MAX
     private const val KEY_AUDIO_VOLUME_BOOST_DB = "audio_volume_boost_db"     // 0-15 dB, with the limiter
     private const val KEY_DV_COMPAT_MODE = "dv_compat_mode"                  // 0=p7->8.1, 1=none, 3=strip all (2=legacy auto+hdr10+, 4=legacy combined 8.1)
     private const val KEY_STRIP_HDR10_PLUS = "strip_hdr10_plus"             // independent of the DV mode
@@ -552,11 +552,23 @@ object AppPreferences {
             .apply()
     }
 
+    /**
+     * The top of the scale comes from [PlayerAudioTuning.DIALOGUE_MAX], not a
+     * literal: levels 1 and 2 are the "Low" and "High" this used to offer, so a
+     * stored value keeps the exact meaning it had, and a value written by a
+     * newer build is clamped by the same ceiling the UI steps to.
+     */
     fun getAudioDialogueBoost(context: Context): Int =
-        prefs(context).getInt(KEY_AUDIO_DIALOGUE_BOOST, 0).coerceIn(0, 2)
+        prefs(context).getInt(KEY_AUDIO_DIALOGUE_BOOST, 0)
+            .coerceIn(0, PlayerAudioTuning.DIALOGUE_MAX)
 
     fun setAudioDialogueBoost(context: Context, level: Int) {
-        prefs(context).edit().putInt(KEY_AUDIO_DIALOGUE_BOOST, level.coerceIn(0, 2)).apply()
+        prefs(context).edit()
+            .putInt(
+                KEY_AUDIO_DIALOGUE_BOOST,
+                level.coerceIn(0, PlayerAudioTuning.DIALOGUE_MAX)
+            )
+            .apply()
     }
 
     fun getAudioVolumeBoostDb(context: Context): Int =

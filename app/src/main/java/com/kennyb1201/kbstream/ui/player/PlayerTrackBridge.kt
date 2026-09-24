@@ -269,9 +269,12 @@ internal object PlayerTrackBridge {
         publishAudioTuning(context)
     }
 
-    /** [level] -1 = follow the global dialogue-boost setting. */
+    /**
+     * [level] -1 = follow the global dialogue-boost setting, 0 = Off, and
+     * [PlayerAudioTuning.DIALOGUE_MAX] is the top step the panels offer.
+     */
     fun chooseAudioDialogueBoost(context: Context, level: Int) {
-        audioDialogueBoost = level
+        audioDialogueBoost = level.coerceIn(-1, PlayerAudioTuning.DIALOGUE_MAX)
         persist(context)
         publishAudioTuning(context)
     }

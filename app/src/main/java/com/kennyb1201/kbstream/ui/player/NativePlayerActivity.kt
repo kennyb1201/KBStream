@@ -253,6 +253,15 @@ private const val ZAP_EPG_LOOKAHEAD_MS = 6L * 60L * 60L * 1000L
  */
 private const val INFO_ENGINE_CHIP_TAG = "info_engine_chip"
 
+/** One press of the settings panel's own subtitle-offset pads, in ms. */
+private const val SUBTITLE_OFFSET_STEP_MS = 500
+
+/**
+ * The fill of `@drawable/circle_avatar_bg`, the oval behind a cast card's
+ * headshot (see [NativePlayerActivity.refillPlayerChromeView]).
+ */
+private val AVATAR_PLACEHOLDER_FILL: Int = 0xFF1D2530.toInt()
+
 /**
  * What that chip reads. This activity IS the ExoPlayer engine - the MPV engine
  * has its own activity and its own readout, which names MPV - so whenever this
@@ -477,10 +486,6 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var settingsBufferLow: TextView
     private lateinit var btnTunneling: TextView
     private lateinit var btnAutoplay: TextView
-    private lateinit var btnBingePrefer: TextView
-    private lateinit var btnBingeReuse: TextView
-    private lateinit var btnBingeFallback: TextView
-    private lateinit var btnStillThere: TextView
     private lateinit var btnAspectFit: TextView
     private lateinit var btnAspectZoom: TextView
     private lateinit var btnAspectFill: TextView
@@ -2371,6 +2376,10 @@ class NativePlayerActivity : ComponentActivity() {
             castRow.removeAllViews()
             castMembers.forEach { member ->
                 val itemView = layoutInflater.inflate(R.layout.cast_member_item, castRow, false)
+                // The band is filled a beat after the activity's own chrome was
+                // themed, so each card is themed as it lands - the same reason
+                // the picker's rows retint when they attach.
+                if (AppPreferences.getAmoledBlack(this)) refillPlayerChrome(itemView)
                 val nameText = itemView.findViewById<TextView>(R.id.cast_member_name)
                 val charText = itemView.findViewById<TextView>(R.id.cast_member_character)
                 val profileImage = itemView.findViewById<ImageView>(R.id.cast_member_image)
@@ -2524,6 +2533,21 @@ class NativePlayerActivity : ComponentActivity() {
     private fun applyChosenSubtitleOffset(ms: Int) {
         subtitleOffsetMs = ms
         runCatching { subtitleOffsetValue.text = "${ms}ms" }
+    }
+
+    /**
+     * One press of the panel's own subtitle-offset pads.
+     *
+     * The pads used to move [subtitleOffsetMs] directly, which meant an offset
+     * tuned in the player was forgotten the moment the title was left while the
+     * same value set on the MPV side was remembered. Both go through
+     * [PlayerTrackBridge] now - it clamps, applies the change to the cue handler
+     * and remembers it for the show - and the pending delayed render is
+     * cancelled so the line on screen re-times at once.
+     */
+    private fun nudgeSubtitleOffset(stepMs: Int) {
+        PlayerTrackBridge.chooseSubtitleOffset(this, subtitleOffsetMs + stepMs)
+        subtitleCueHandler?.cancelPending()
     }
 
     /**
@@ -2690,10 +2714,6 @@ class NativePlayerActivity : ComponentActivity() {
         settingsBufferLow = findViewById(R.id.btn_buffer_low)
         btnTunneling = findViewById(R.id.btn_tunneling)
         btnAutoplay = findViewById(R.id.btn_autoplay)
-        btnBingePrefer = findViewById(R.id.btn_binge_prefer)
-        btnBingeReuse = findViewById(R.id.btn_binge_reuse)
-        btnBingeFallback = findViewById(R.id.btn_binge_fallback)
-        btnStillThere = findViewById(R.id.btn_still_there)
         btnAspectFit = findViewById(R.id.btn_aspect_fit)
         btnAspectZoom = findViewById(R.id.btn_aspect_zoom)
         btnAspectFill = findViewById(R.id.btn_aspect_fill)
@@ -2991,24 +3011,11 @@ class NativePlayerActivity : ComponentActivity() {
             AppPreferences.setAutoPlayNext(this, autoPlayNext)
             updateSettingsPanelState()
         }
-        btnBingePrefer.setOnClickListener {
-            AppPreferences.setBingeGroupPrefer(this, !AppPreferences.getBingeGroupPrefer(this))
-            updateSettingsPanelState()
-        }
-        btnBingeReuse.setOnClickListener {
-            AppPreferences.setBingeGroupReuse(this, !AppPreferences.getBingeGroupReuse(this))
-            updateSettingsPanelState()
-        }
-        btnBingeFallback.setOnClickListener {
-            AppPreferences.setBingeGroupFallback(this, !AppPreferences.getBingeGroupFallback(this))
-            updateSettingsPanelState()
-        }
-        btnStillThere.setOnClickListener {
-            val enabled = !AppPreferences.getStillTherePrompt(this)
-            AppPreferences.setStillTherePrompt(this, enabled)
-            if (!enabled) AppPreferences.resetConsecutiveAutoplays(this)
-            updateSettingsPanelState()
-        }
+        // The binge-group and still-there switches used to live here too. They
+        // belong to Settings → Playback and only there: the in-player panel has
+        // no business carrying a second copy of a setting that is not about the
+        // title on screen. What stays here is what IS about this title -
+        // languages, tracks, A/V sync, the audio knobs, the aspect ratio.
 
         // Aspect ratio: direct pill selection (also keeps the top-bar
         // button label in sync via updateControlsInfo).
@@ -3070,16 +3077,11 @@ class NativePlayerActivity : ComponentActivity() {
             applySubtitleStyle()
         }
 
-        // Subtitle offset
-        btnOffsetMinus.setOnClickListener {
-            subtitleOffsetMs = (subtitleOffsetMs - 500).coerceAtLeast(-5000)
-            subtitleOffsetValue.text = "${subtitleOffsetMs}ms"
-            subtitleCueHandler?.cancelPending()
-        }
-        btnOffsetPlus.setOnClickListener {
-            subtitleOffsetMs = (subtitleOffsetMs + 500).coerceAtMost(5000)
-            subtitleOffsetValue.text = "${subtitleOffsetMs}ms"
-            subtitleCueHandler?.cancelPending()
+        // Subtitle offset: through the bridge, so an offset dialled in here is
+        // remembered for this show - the same path the MPV engine's panel and
+        // the global default write.
+        btnOffsetMinus.setOnClickListener { nudgeSubtitleOffset(-SUBTITLE_OFFSET_STEP_MS) }
+        btnOffsetPlus.setOnClickListener { nudgeSubtitleOffset(SUBTITLE_OFFSET_STEP_MS) }
     }
 
 }
@@ -5641,19 +5643,6 @@ class NativePlayerActivity : ComponentActivity() {
         btnAutoplay.text = if (autoPlayNext) "ON" else "OFF"
         applyPillState(btnAutoplay, autoPlayNext)
 
-        val bingePrefer = AppPreferences.getBingeGroupPrefer(this)
-        btnBingePrefer.text = if (bingePrefer) "ON" else "OFF"
-        applyPillState(btnBingePrefer, bingePrefer)
-        val bingeReuse = AppPreferences.getBingeGroupReuse(this)
-        btnBingeReuse.text = if (bingeReuse) "ON" else "OFF"
-        applyPillState(btnBingeReuse, bingeReuse)
-        val bingeFallback = AppPreferences.getBingeGroupFallback(this)
-        btnBingeFallback.text = if (bingeFallback) "ON" else "OFF"
-        applyPillState(btnBingeFallback, bingeFallback)
-        val stillThere = AppPreferences.getStillTherePrompt(this)
-        btnStillThere.text = if (stillThere) "ON" else "OFF"
-        applyPillState(btnStillThere, stillThere)
-
         applyPillState(btnAspectFit, resizeModeIndex == 0)
         applyPillState(btnAspectZoom, resizeModeIndex == 1)
         applyPillState(btnAspectFill, resizeModeIndex == 2)
@@ -6408,6 +6397,13 @@ class NativePlayerActivity : ComponentActivity() {
         )
     }
 
+    /** The cast card's avatar circle, at the theme's own artwork fill. */
+    private fun themedAvatarBackground(fill: Int): android.graphics.drawable.Drawable =
+        android.graphics.drawable.GradientDrawable().apply {
+            shape = android.graphics.drawable.GradientDrawable.OVAL
+            setColor(fill)
+        }
+
     /**
      * The chrome around the video — the control-bar buttons, RETRY, the option
      * pills, the picker rows and the panels behind them — is plain XML with
@@ -6488,12 +6484,18 @@ class NativePlayerActivity : ComponentActivity() {
 
         val shape = content as? android.graphics.drawable.GradientDrawable ?: return
         val fill = shape.color?.defaultColor ?: return
-        val replacement = when (fill) {
-            getColor(R.color.kb_surface) ->
+        val replacement = when {
+            fill == getColor(R.color.kb_surface) ->
                 themedChromeBackground(panelSurfaceColor(), shape.cornerRadius, rippled)
 
-            getColor(R.color.kb_surface_raised) ->
+            fill == getColor(R.color.kb_surface_raised) ->
                 themedChromeBackground(panelRaisedColor(), shape.cornerRadius, false)
+
+            // Not one of the chrome fills but the same problem: the cast card's
+            // avatar circle is a fixed #FF1D2530 oval, so a pure-black theme
+            // still drew grey circles behind every headshot - and the circle is
+            // all that shows for the cast members TMDB has no photo for.
+            fill == AVATAR_PLACEHOLDER_FILL -> themedAvatarBackground(panelSurfaceColor())
 
             else -> null
         }

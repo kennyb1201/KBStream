@@ -42,13 +42,43 @@ internal object PlayerAudioTuning {
             "5.1" to DOWNMIX_SURROUND
         )
 
-    /** 0 = off, 1 = low, 2 = high. */
-    val DIALOGUE_OPTIONS: List<Pair<String, Int>> =
-        listOf(
-            "Off" to 0,
-            "Low" to 1,
-            "High" to 2
-        )
+    /**
+     * The top of the dialogue-boost scale. Every step is the same gain the
+     * three-step scale always used ([centerGain], [midGain]), so a level a
+     * viewer is already on still sounds exactly as it did - the extra steps are
+     * only more room above it.
+     *
+     * 4 is where the scale stops on purpose: the lift is not a limiter, and
+     * [AudioDownmixProcessor] trims the surrounds by 0.2 per level to pay for
+     * it, which would reach zero (surrounds gone rather than lowered) at 5.
+     */
+    const val DIALOGUE_MAX = 4
+
+    /**
+     * What a dialogue-boost level reads as, everywhere it is shown: the global
+     * row, both players' panels and the INFO screen. -1 is the players' "follow
+     * the global setting" override, which the panels offer as the bottom step.
+     */
+    fun dialogueLevelText(level: Int): String = when {
+        level < 0 -> "Global"
+        level == 0 -> "Off"
+        else -> "$level of $DIALOGUE_MAX"
+    }
+
+    /**
+     * The level one press of a stepper's pad lands on.
+     *
+     * While the title is still on "Global" (-1) the step starts from the level
+     * the global setting is actually on, so + is louder and - is quieter than
+     * what is playing now instead of dropping the viewer to Off on the first
+     * press - the thing a stepper whose bottom step is Global would otherwise
+     * do. Stepping down past Off (0) lands back on Global, so the override can
+     * always be handed back to Settings.
+     */
+    fun stepDialogueLevel(current: Int, globalLevel: Int, delta: Int): Int {
+        val from = if (current >= 0) current else globalLevel
+        return (from + delta).coerceIn(-1, DIALOGUE_MAX)
+    }
 
     /** Extra output gain in dB, applied ahead of the limiter. */
     val VOLUME_OPTIONS: List<Pair<String, Int>> =
