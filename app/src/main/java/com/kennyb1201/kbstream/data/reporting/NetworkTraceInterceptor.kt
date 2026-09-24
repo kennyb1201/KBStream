@@ -35,7 +35,6 @@ internal class NetworkTraceInterceptor : Interceptor {
     private fun labelFor(host: String): String = when {
         host.contains("themoviedb") || host.contains("tmdb") -> "http.tmdb"
         host.contains("simkl") -> "http.simkl"
-        host.contains("reddit") -> "http.reddit"
         host.contains("youtube") || host.contains("googlevideo") || host.contains("ytimg") ->
             "http.youtube"
         host.contains("opensubtitles") -> "http.subtitles"

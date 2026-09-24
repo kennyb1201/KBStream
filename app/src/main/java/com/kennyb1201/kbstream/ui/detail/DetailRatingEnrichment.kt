@@ -3,7 +3,6 @@ package com.kennyb1201.kbstream.ui.detail
 import android.util.Log
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
-import com.kennyb1201.kbstream.data.reddit.RedditDiscussionsClient
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
 import kotlinx.coroutines.launch
 
@@ -80,10 +79,8 @@ internal object DetailRatingEnrichment {
      * 1 of reviews (often just a handful); the standalone endpoint paginates
      * the full list. Fetch pages 2..totalPages (bounded) in the background
      * and merge, de-duped, after the bundled page so the UI paints
-     * immediately. Reddit discussions are then appended as the supplementary
-     * source — most titles carry only a handful of written TMDB reviews, so
-     * this is where the volume comes from. Everything fails soft: reviews
-     * must never block the detail UI.
+     * immediately. Everything fails soft: reviews must never block the detail
+     * UI.
      */
     fun extraReviews(vm: DetailViewModel, normalizedType: String) {
         val detail = vm.tmdbDetail.value ?: return
@@ -120,41 +117,9 @@ internal object DetailRatingEnrichment {
                 }
             }
 
-            // Publish TMDB pages immediately so the row grows as fast as the
-            // network allows, then merge the Reddit discussions on top when
-            // they land.
+            // Publish the pages so the row grows as fast as the network
+            // allows.
             vm.setAllReviews((bundled + extras).distinctBy { it.id })
-
-            // Keyless Reddit backfill — the volume source of written
-            // discussion. Top title+year posts, gated so only real write-ups
-            // qualify.
-            runCatching {
-                val detailNow = vm.tmdbDetail.value
-                val title = detailNow?.title ?: detailNow?.name
-                if (!title.isNullOrBlank()) {
-                    val year = (
-                        detailNow?.releaseDate ?: detailNow?.firstAirDate
-                        )?.takeIf { it.length >= 4 }?.substring(0, 4)
-                    val redditReviews = RedditDiscussionsClient.fetchReviews(
-                        title = title,
-                        year = year,
-                        type = normalizedType
-                    )
-                    if (redditReviews.isNotEmpty()) {
-                        vm.setAllReviews((vm.allReviews.value + redditReviews).distinctBy { it.id })
-                        // Log.i, not Log.d: -assumenosideeffects strips Log.d
-                        // from release builds — exactly the build a "reviews
-                        // show nothing from Reddit" report comes from.
-                        Log.i(
-                            "KBStream",
-                            "reddit reviews merged: ${redditReviews.size} " +
-                                "for \"$title\" ($year)"
-                        )
-                    }
-                }
-            }.onFailure {
-                Log.w("KBStream", "reddit reviews failed: ${it.message}")
-            }
         }
     }
 }

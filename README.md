@@ -35,7 +35,7 @@ EPG).
   leave the profile, daily watch-time limit, and a bedtime lock — each with
   parent-PIN override where relevant.
 - **Integrations** — Simkl (watch history sync + live scrobbling),
-  MDBList ratings, IPTV (M3U + XMLTV EPG), YouTube trailers, Reddit discussions.
+  MDBList ratings, IPTV (M3U + XMLTV EPG), YouTube trailers.
 
 ## Building
 

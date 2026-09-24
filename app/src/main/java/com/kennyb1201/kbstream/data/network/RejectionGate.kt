@@ -6,12 +6,12 @@ import java.util.concurrent.atomic.AtomicLong
  * Remembers that an optional source answered "no" in a way that will not
  * change on the next request, so the app stops asking for a while.
  *
- * The detail screen asks two supplementary review sources on every title the
- * user opens. Both can reject the whole app rather than the individual
- * request — Trakt's Cloudflare rules 403 its public comments API and Reddit
- * 403s the search JSON — and that answer is identical for the next title, and
- * the one after it. Without this, opening ten titles sent ten rejected
- * requests and logged ten warnings for data that was never going to arrive.
+ * The detail screen asks supplementary review sources on every title the
+ * user opens. A source can reject the whole app rather than the individual
+ * request — Trakt's Cloudflare rules 403 its public comments API — and that
+ * answer is identical for the next title, and the one after it. Without
+ * this, opening ten titles sent ten rejected requests and logged ten
+ * warnings for data that was never going to arrive.
  *
  * Blocking is deliberately short-lived and in-process only: a datacenter IP
  * that is blocked now is often fine later, and the next app start tries once

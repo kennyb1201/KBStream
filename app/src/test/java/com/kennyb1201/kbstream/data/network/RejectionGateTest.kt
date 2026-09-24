@@ -6,8 +6,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The gate decides whether Trakt comments and Reddit discussions are asked at
- * all. Both failure directions are silent and expensive: a gate that never
+ * The gate decides whether a supplementary review source is asked at all.
+ * Both failure directions are silent and expensive: a gate that never
  * unblocks quietly kills the feature for the rest of the session, and a gate
  * that never blocks keeps sending the same rejected request for every title
  * the user opens.
