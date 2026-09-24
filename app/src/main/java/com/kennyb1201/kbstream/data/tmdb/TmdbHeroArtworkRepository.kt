@@ -129,14 +129,24 @@ class TmdbHeroArtworkRepository(
         tmdbId: Int
     ): HeroArtwork? {
 
-        // No include_image_language filter: some titles (esp. newer/international ones
-        // in trending feeds like Top Today) have no English or null-language logo on
-        // TMDB, which made this call return an empty `logos` array for them -- silently
-        // dropping the clearlogo with no fallback. The sortedWith below already prefers
-        // an English logo when one exists, then falls back to the next-best option
-        // instead of nothing.
+        // English + textless images only (`null` is TMDB's textless marker).
+        // The hero is the largest art on screen, so a non-English backdrop or
+        // clearlogo cannot be missed: before this filter the backdrop was just
+        // the first entry in TMDB's list -- often a foreign release's artwork
+        // with its own title burned in -- and the logo fell through to
+        // "highest vote of any language" whenever no English wordmark existed,
+        // which is what put foreign clearlogos in the hero.
+        //
+        // Removing the filter entirely was an earlier attempt at a different
+        // problem (a title with no English logo silently losing its clearlogo).
+        // It is not needed: `null` keeps the textless logos, and a title with
+        // neither an English nor a textless image is rare -- when it happens the
+        // hero's own fallback chain (addon/item logo, then the plain title)
+        // covers it. Verified against TMDB that international titles still
+        // return their en/null art under this filter.
         val url = "https://api.themoviedb.org/3/$mediaType/$tmdbId/images" +
-            "?api_key=${BuildConfig.TMDB_API_KEY}"
+            "?api_key=${BuildConfig.TMDB_API_KEY}" +
+            "&include_image_language=en,null"
 
         val request = Request.Builder()
             .url(url)
@@ -150,15 +160,28 @@ class TmdbHeroArtworkRepository(
                 val json = response.body?.string().orEmpty()
                 val images = imagesAdapter.fromJson(json) ?: return@use null
 
+                // Textless first: a backdrop with words on it is the title's
+                // own locale art, and the hero already draws the clearlogo and
+                // metadata over the image. English is the next preference.
                 val backdrop = images.backdrops
-                    .firstOrNull { !it.filePath.isNullOrBlank() }
+                    .filter { !it.filePath.isNullOrBlank() }
+                    .sortedWith(
+                        compareByDescending<TmdbImage> { it.iso6391 == null }
+                            .thenByDescending { it.iso6391 == "en" }
+                            .thenByDescending { it.voteAverage ?: 0.0 }
+                            .thenByDescending { it.width ?: 0 }
+                    )
+                    .firstOrNull()
                     ?.filePath
                     ?.let { TmdbRepository.BACKDROP_BASE + it }
 
+                // English wordmark first, then the textless one, then the best
+                // of whatever the language filter returned.
                 val logo = images.logos
                     .filter { !it.filePath.isNullOrBlank() }
                     .sortedWith(
                         compareByDescending<TmdbImage> { it.iso6391 == "en" }
+                            .thenByDescending { it.iso6391 == null }
                             .thenByDescending { it.voteAverage ?: 0.0 }
                             .thenByDescending { it.width ?: 0 }
                     )
@@ -191,7 +214,11 @@ class TmdbHeroArtworkRepository(
     private companion object {
         const val MEMORY_CACHE_TTL_MS = 12L * 60L * 60L * 1000L
         const val DISK_CACHE_TTL_MS = 30L * 24L * 60L * 60L * 1000L
-        const val DISK_KEY_PREFIX = "hero_artwork:"
+        // Bumped from "hero_artwork:" when the language filter landed: the
+        // disk cache held 30 days of foreign-language backdrops/logos, and a
+        // key bump drops them all at once instead of serving them until they
+        // expire.
+        const val DISK_KEY_PREFIX = "hero_artwork_en:"
         const val MEMORY_CACHE_MAX_ENTRIES = 128
     }
 

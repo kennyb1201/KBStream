@@ -14,10 +14,12 @@ import com.kennyb1201.kbstream.data.addon.Stream
  *  1. **Playability here.** An http(s) URL opens right now; an infoHash-only
  *     entry has no engine in this app at all, so it may never outrank something
  *     that does, whatever its labels say.
- *  2. **Known-bad releases.** A CAM / telecine / screener copy, a 3D pair, or a
- *     sample/trailer clip is penalised far enough to sit under every honest
- *     source. A 2160p CAM is still a CAM, which is exactly how a high
- *     resolution label used to carry one to the top.
+ *  2. **Known-bad releases.** A CAM / telecine / screener copy, a 3D pair, a
+ *     sample/trailer clip, a foreign-dubbed or hardcoded-subtitle copy, or a
+ *     release whose resolution label is contradicted by its own file size is
+ *     penalised far enough to sit under every honest source. A 2160p CAM is
+ *     still a CAM, which is exactly how a high resolution label used to carry
+ *     one to the top.
  *  3. Resolution, HDR/DV, release type, size and instant-source hints, in that
  *     order of weight.
  *
@@ -42,7 +44,30 @@ object StreamRanker {
      * unlabelled ones.
      */
     private val UNWATCHABLE_RELEASE =
-        Regex("""\b(cam|hdcam|camrip|hdts|telesync|telecine|tc|ts|r5|screener|dvdscr|sample|trailer|teaser)\b""")
+        Regex(
+            """\b(cam|hdcam|newcam|webcam|camrip|hdts|telesync|telecine|tc|ts|r5|r6|r7|screener|scr|dvdscr|predvd|pdvd|sample|trailer|teaser)\b"""
+        )
+
+    /**
+     * A non-English dub, or a copy whose subtitles are burned into the picture.
+     *
+     * This is an English-first app — Settings → Browse & discover is English-only
+     * by default and the discover rails ask TMDB for `with_original_language=en`
+     * — and a foreign-dubbed or hardcoded-sub copy of an English title is a
+     * common head of the picker: it still carries every quality label (1080p
+     * WEB-DL, a large size) so it scored like a real release while playing the
+     * wrong audio.
+     *
+     * The markers are deliberately audio/subtitle-specific. Bare Western language
+     * names ("italian", "french", "german") are NOT listed because they are also
+     * film titles ("The Italian Job"), and demoting those would sink the real
+     * release. The Indic dub tags and the explicit "dubbed"/"dublado" tags have
+     * no such collision.
+     */
+    private val FOREIGN_OR_HARDSUBBED_RELEASE =
+        Regex(
+            """\b(hindi|tamil|telugu|malayalam|kannada|punjabi|bengali|marathi|urdu|dubbed|dublado|latino|castellano|vostfr|truefrench|hc|hardsub|hardcoded|esub|esubs|korsub)\b"""
+        )
 
     /**
      * A 3D encode (side-by-side or over-under, including the half variants):
@@ -72,6 +97,16 @@ object StreamRanker {
 
     /** A size written into the release name, in whichever unit it used. */
     private val SIZE_IN_TEXT = Regex("""(\d+(?:\.\d+)?)\s?(mb|gb|tb)\b""")
+
+    /**
+     * Smallest plausible file size, in GB, for the resolution a release claims.
+     * A "2160p"/"4K" tag on a file below [MIN_PLAUSIBLE_4K_GB] — or a "1080p"
+     * tag below [MIN_PLAUSIBLE_1080P_GB] — is an upscale or a mislabel: the file
+     * is not the resolution it advertises, the other way a garbage entry carries
+     * a good-looking label to the top.
+     */
+    private const val MIN_PLAUSIBLE_4K_GB = 1.5
+    private const val MIN_PLAUSIBLE_1080P_GB = 0.25
 
     fun rank(streams: List<Stream>): List<Stream> =
         streams
@@ -133,6 +168,8 @@ object StreamRanker {
         // --- Penalties last, so they always outweigh the bonuses above ---
         if (UNWATCHABLE_RELEASE.containsMatchIn(text)) score -= 400
         if (THREE_D_RELEASE.containsMatchIn(text)) score -= 400
+        if (FOREIGN_OR_HARDSUBBED_RELEASE.containsMatchIn(text)) score -= 250
+        score -= fakeQualityPenalty(stream, text)
 
         // Prefer streams that have a name (more metadata = more reliable source)
         if (!stream.name.isNullOrBlank()) score += 10
@@ -167,6 +204,21 @@ object StreamRanker {
             .filter { it.isNotBlank() }
             .joinToString(" ")
             .lowercase()
+    }
+
+    /**
+     * Penalty for a resolution label the file's own size does not support:
+     * "2160p" on a sub-[MIN_PLAUSIBLE_4K_GB] file, or "1080p" under
+     * [MIN_PLAUSIBLE_1080P_GB]. Zero when the size is unknown — an unlabelled
+     * size is not evidence of a fake, and guessing would demote honest sources.
+     */
+    private fun fakeQualityPenalty(stream: Stream, text: String): Int {
+        val sizeGb = sizeInGb(stream, text) ?: return 0
+        return when {
+            ("2160p" in text || "4k" in text) && sizeGb < MIN_PLAUSIBLE_4K_GB -> 300
+            "1080p" in text && sizeGb < MIN_PLAUSIBLE_1080P_GB -> 200
+            else -> 0
+        }
     }
 
     /**

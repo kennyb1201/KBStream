@@ -189,6 +189,61 @@ class StreamRankerTest {
     }
 
     @Test
+    fun `a foreign-dubbed release sits under an English one`() {
+        val dubbed = stream(
+            "Some Film 2024 1080p WEB-DL Hindi Dubbed 10 GB",
+            url = "https://host/dub.mkv"
+        )
+        val english = stream("Some Film 2024 1080p WEB-DL 3 GB", url = "https://host/en.mkv")
+
+        // Every quality label is present on the dub, so it used to head the
+        // list and then play in the wrong language.
+        assertEquals(listOf(english, dubbed), order(dubbed, english))
+    }
+
+    @Test
+    fun `a hardcoded-subtitle copy sits under a clean one`() {
+        val hc = stream("Some Film 2024 1080p HC HDRip", url = "https://host/hc.mkv")
+        val clean = stream("Some Film 2024 1080p WEB-DL", url = "https://host/clean.mkv")
+
+        // "HC" is subtitles burned into the picture; the release is otherwise a
+        // normal 1080p, so nothing used to keep it off the head.
+        assertEquals(listOf(clean, hc), order(hc, clean))
+    }
+
+    @Test
+    fun `a screener or cam variant sits under an honest release`() {
+        for (trap in listOf("1080p PreDVD", "1080p DVDScr", "2160p NEWCAM")) {
+            val fake = stream("Some Film 2024 $trap", url = "https://host/fake.mkv")
+            val real = stream("Some Film 2024 720p", url = "https://host/real.mkv")
+
+            assertEquals(
+                "expected the $trap copy to rank below the release",
+                listOf(real, fake),
+                order(fake, real)
+            )
+        }
+    }
+
+    @Test
+    fun `a resolution the file's size cannot support does not head the list`() {
+        val fake4k = stream("Some Film 2024 2160p WEB-DL 700 MB", url = "https://host/fake.mkv")
+        val real1080p = stream("Some Film 2024 1080p WEB-DL 8 GB", url = "https://host/real.mkv")
+
+        // "4K" on a sub-2GB file is an upscale or a mislabel, not a 4K release.
+        assertEquals(listOf(real1080p, fake4k), order(fake4k, real1080p))
+    }
+
+    @Test
+    fun `an unlabelled size is not treated as a fake`() {
+        // Nothing to contradict the label, so the real 4K release keeps its win.
+        val uhd = stream("Some Film 2024 2160p REMUX DV", url = "https://host/uhd.mkv")
+        val hd = stream("Some Film 2024 1080p WEB-DL", url = "https://host/hd.mkv")
+
+        assertEquals(listOf(uhd, hd), order(hd, uhd))
+    }
+
+    @Test
     fun `the head of the list is the stream auto-play starts`() {
         // The picker and auto-play both take the head, which is why the tests
         // above are written as whole-list assertions.

@@ -865,10 +865,11 @@ fun TmdbDetail.bestLogoPath(): String? =
         ?.firstOrNull()
 
 /**
- * Backdrop for rail/landscape cards: the first images.backdrops entry that
- * differs from the primary backdropPath, falling back to the primary when
- * the title only has one backdrop. Keeps cards visually distinct from the
- * Home hero, which always shows the primary backdrop.
+ * Backdrop for rail/landscape cards: the best text-free (or English)
+ * images.backdrops entry that differs from the primary backdropPath, falling
+ * back to the primary when the title has no other usable backdrop. Keeps cards
+ * visually distinct from the Home hero, which always shows the primary
+ * backdrop, without pulling in the foreign-language art TMDB also lists.
  */
 fun TmdbDetail.cardBackdropPath(): String? {
 
@@ -876,6 +877,16 @@ fun TmdbDetail.cardBackdropPath(): String? {
 
     return images?.backdrops
         ?.asSequence()
+        ?.filter { !it.filePath.isNullOrBlank() }
+        // Text-free backdrop first (no burned-in title, whatever its locale),
+        // then English. The plain "first backdrop that is not the primary" pick
+        // was what showed foreign-language art on the cards: TMDB lists several
+        // locales per title and the first alternate is often not English.
+        ?.sortedWith(
+            compareByDescending<TmdbImageAsset> { it.iso6391 == null }
+                .thenByDescending { it.iso6391 == "en" }
+                .thenByDescending { it.voteAverage ?: 0.0 }
+        )
         ?.mapNotNull { it.filePath?.takeIf(String::isNotBlank) }
         ?.firstOrNull { it != primary }
         ?: primary
