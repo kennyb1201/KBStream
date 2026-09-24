@@ -32,6 +32,7 @@ import com.kennyb1201.kbstream.data.tmdb.displayMetaLine
 import com.kennyb1201.kbstream.data.tmdb.keepRecommendedGenre
 import com.kennyb1201.kbstream.data.tmdb.list
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.ui.streams.StreamsViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -74,6 +75,16 @@ internal fun bywMediaType(parentType: String): String = when (parentType.lowerca
     "series", "show", "tv" -> "series"
     else -> "movie"
 }
+
+/**
+ * How many picks the credits row fills in.
+ *
+ * Seven, not six: the row is built from a wrap-content set of cards packed to
+ * the left, so the six it used to stop at left a visible gap at the end of the
+ * line while the end-credits arrangement has the whole screen's width to fill.
+ * One more card closes that gap without pushing the row into its scroll.
+ */
+private const val BYW_PICK_COUNT = 7
 
 /**
  * Weighted-rating rank (IMDB-style) for one credit of a person: the rating
@@ -318,11 +329,13 @@ internal suspend fun buildBecauseYouWatchedPicks(
     }
 
     // Resolve imdb ids only for the survivors (the final ordering), so the
-    // stream resolution on PLAY doesn't burn a lookup burst.
+    // stream resolution on PLAY doesn't burn a lookup burst. The pool is a few
+    // wider than the row: the watched-history filter below cuts into it, and a
+    // pool the same size as the row would then show a short row.
     val ranked = candidates.values
         .sortedWith(compareByDescending<Candidate> { it.score }.thenBy { it.order })
         .toList()
-        .take(10)
+        .take(BYW_PICK_COUNT + 5)
 
     val filtered = ranked.filter { candidate ->
         val pick = candidate.pick
@@ -337,7 +350,7 @@ internal suspend fun buildBecauseYouWatchedPicks(
         !seen
     }.map { it.pick }
 
-    return filtered.take(6)
+    return filtered.take(BYW_PICK_COUNT)
 }
 
 /** AMOLED-aware stand-in for @color/kb_surface (card / artwork fills). */
@@ -530,6 +543,12 @@ internal class BecauseYouWatchedUi(
     private val pills = mutableListOf<Pair<TextView, Boolean>>()
     private var featured: Int? = null
 
+    /** The pick whose sources are being resolved right now, if any. */
+    private var resolving: Int? = null
+
+    /** The hint line's own text, so a status message can be undone. */
+    private var hintDefault: CharSequence? = null
+
     /**
      * The end-credits arrangement, from [setCreditsLayout]: how far the header
      * stops short of the shrunk video's corner, how tall that corner is, and the
@@ -550,6 +569,38 @@ internal class BecauseYouWatchedUi(
         }
         panel.addOnLayoutChangeListener(onLayout)
         row.addOnLayoutChangeListener(onLayout)
+        // Captured once, from the layout's own copy: a status message must not
+        // become the text it is restored to.
+        hintDefault = hintView()?.text
+    }
+
+    /**
+     * The hint line under the row ("Pick a title, or press BACK to exit").
+     *
+     * Found by position rather than by id: each player's copy lives in its own
+     * layout, and the two ids differ (byw_hint / mpv_byw_hint). The hint is the
+     * panel's last direct TextView - the kicker and the title come before it,
+     * and the featured strip is a container, so it cannot be mistaken for one.
+     */
+    private fun hintView(): TextView? {
+        for (index in panel.childCount - 1 downTo 0) {
+            val child = panel.getChildAt(index)
+            if (child is TextView && child !== title) return child
+        }
+        return null
+    }
+
+    /** Shows a one-line status where the row's hint text normally sits. */
+    private fun setHint(text: CharSequence) {
+        val hint = hintView() ?: return
+        if (hintDefault == null) hintDefault = hint.text
+        hint.text = text
+    }
+
+    /** Puts the hint line's own text back. */
+    private fun restoreHint() {
+        val hint = hintView() ?: return
+        hintDefault?.let { hint.text = it }
     }
 
     val isVisible: Boolean
@@ -708,6 +759,8 @@ internal class BecauseYouWatchedUi(
         metaCache.clear()
         logoCache.clear()
         featured = null
+        resolving = null
+        restoreHint()
 
         picks.forEachIndexed { index, pick ->
             val card = LinearLayout(host).apply {
@@ -803,7 +856,7 @@ internal class BecauseYouWatchedUi(
 
             // Only the two pills do anything: the card itself is not focusable
             // and has no click handler of its own.
-            play.setOnClickListener { onPlay(pick, imdbFor(pick)) }
+            play.setOnClickListener { playPick(pick) }
             details.setOnClickListener { onDetails(pick, imdbFor(pick)) }
 
             play.setOnFocusChangeListener { v, hasFocus ->
@@ -873,6 +926,48 @@ internal class BecauseYouWatchedUi(
     /** The imdb id PLAY / DETAILS hand back for a pick. */
     private fun imdbFor(pick: BywPick): String =
         pick.imdbId ?: cards[pick.tmdbId]?.imdbId ?: "tmdb:${pick.tmdbId}"
+
+    /**
+     * PLAY for one card: resolve its sources here, then hand the pick to the
+     * activity only when there is something to play.
+     *
+     * The press used to fire the activity's own resolve and - when the addons
+     * answered nothing - the activity quietly swapped to the DETAILS screen,
+     * leaving no way to tell a slow resolve from a dead button. Resolving in the
+     * panel makes the press visible while it runs, and an empty answer is
+     * reported on the hint line instead of bouncing the user elsewhere. A pick
+     * that does resolve is handed off exactly as before, and the activity's own
+     * resolve then hits the addon repository's short-lived cache, so this adds
+     * no wait of its own.
+     */
+    private fun playPick(pick: BywPick) {
+        if (resolving != null) return
+        val resolveScope = scope()
+        if (resolveScope == null) {
+            // No live scope to resolve on: keep the old behaviour rather than
+            // turning the button into a no-op.
+            onPlay(pick, imdbFor(pick))
+            return
+        }
+        val imdbId = imdbFor(pick)
+        resolving = pick.tmdbId
+        setHint("Finding a stream for ${pick.name}…")
+        resolveScope.launch {
+            val streams = withContext(Dispatchers.IO) {
+                runCatching {
+                    StreamsViewModel(host.application).resolve(pick.type, imdbId)
+                }.getOrNull()
+            }.orEmpty()
+            resolving = null
+            if (!isVisible) return@launch
+            if (streams.any { !it.url.isNullOrBlank() }) {
+                restoreHint()
+                onPlay(pick, imdbId)
+            } else {
+                setHint("No stream found for ${pick.name} — press DETAILS to open it")
+            }
+        }
+    }
 
     /**
      * Featured strip under the row: the focused pick's backdrop + clear logo +
