@@ -2,6 +2,8 @@ package com.kennyb1201.kbstream.data.player
 
 import android.content.Context
 import android.os.Build
+import android.os.SystemClock
+import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 
 /**
@@ -23,7 +25,9 @@ import com.kennyb1201.kbstream.ui.settings.AppPreferences
  * Two places use this:
  *
  *  1. A launch: MainActivity asks [prefersMpv] to decide whether to open MPV
- *     straight away (the "MPV" setting).
+ *     straight away (the "MPV" setting, plus the "Play anime in MPV" setting
+ *     for a title [AnimeDetect] recognises as anime - the fansub typesetting
+ *     and 10-bit releases above are the common case on that side).
  *  2. A failure: NativePlayerActivity asks [mpvFallbackEnabled] before handing
  *     its own launch intent to the MPV player (the default setting).
  */
@@ -56,9 +60,128 @@ object PlayerEngine {
         }
     }
 
-    /** True when a launch should open the MPV player instead of ExoPlayer. */
+    /**
+     * The launch decision itself, free of prefs and device state so it can be
+     * unit-tested: the stored engine, plus the anime rule.
+     *
+     * The anime setting deliberately outranks "ExoPlayer only". That choice
+     * is about not changing engine MID-TITLE (see [mpvFallbackEnabled]); the
+     * anime setting is an explicit statement about which engine should OPEN
+     * anime, so a profile that turned it on gets it even though it also asked
+     * for no surprise engine changes elsewhere.
+     */
+    fun launchPrefersMpv(
+        chosenEngine: Int,
+        mpvAvailable: Boolean,
+        mpvForAnime: Boolean,
+        isAnime: Boolean
+    ): Boolean =
+        mpvAvailable &&
+            (
+                chosenEngine == AppPreferences.PLAYER_ENGINE_MPV ||
+                    (mpvForAnime && isAnime)
+                )
+
+    /**
+     * True when a launch should open the MPV player instead of ExoPlayer.
+     *
+     * This is the launch site's entry point, and it takes a Context alone:
+     * the anime verdict comes from [publishLaunchAnime], consumed here.
+     */
     fun prefersMpv(context: Context): Boolean =
-        selected(context) == AppPreferences.PLAYER_ENGINE_MPV
+        prefersMpv(context, isAnime = consumeLaunchAnime())
+
+    /** [prefersMpv] with the anime verdict supplied by the caller. */
+    fun prefersMpv(context: Context, isAnime: Boolean): Boolean =
+        launchPrefersMpv(
+            chosenEngine = AppPreferences.getPlayerEngine(context),
+            mpvAvailable = isMpvAvailable(),
+            mpvForAnime = AppPreferences.getMpvForAnime(context),
+            isAnime = isAnime
+        )
+
+    /**
+     * Whether the "Play anime in MPV" setting can have any effect here - false
+     * on a device without libmpv, so a caller does not spend its anime lookup
+     * on a launch that was never going to MPV.
+     */
+    fun mpvForAnimeEnabled(context: Context): Boolean =
+        isMpvAvailable() && AppPreferences.getMpvForAnime(context)
+
+    /**
+     * How long a published anime verdict stays usable. Long enough for a user
+     * who studies the source list before picking one, short enough that the
+     * verdict cannot leak onto a launch a moment later.
+     */
+    private const val LAUNCH_ANIME_TTL_MS = 60_000L
+
+    private data class LaunchAnime(
+        val isAnime: Boolean,
+        val at: Long
+    )
+
+    /**
+     * The anime verdict for the play request that is about to be launched.
+     *
+     * The launch site asks [prefersMpv] with nothing but a Context, so the one
+     * fact that decision needs about the title has to be published by whoever
+     * resolved the play request: StreamsViewModel (ui/streams) sees both the
+     * request's id and its media type and calls [publishLaunchAnime] on its way
+     * to the player screen.
+     *
+     * One-shot, and only honoured while fresh - see [LAUNCH_ANIME_TTL_MS].
+     * Without that, a verdict would outlive its launch and reach the next one
+     * through a path that publishes nothing at all (a live channel, a
+     * because-you-watched card, a chained next episode) and open it in MPV.
+     */
+    @Volatile
+    private var launchAnime: LaunchAnime? = null
+
+    /**
+     * Records whether the play request being resolved right now is anime.
+     *
+     * Costs nothing unless the setting is on and this device can run MPV: on a
+     * box without libmpv there is no point asking TMDB about a title whose
+     * launch was never going to change engine.
+     */
+    suspend fun publishLaunchAnime(
+        context: Context,
+        streamId: String,
+        contentType: String
+    ) {
+        if (!mpvForAnimeEnabled(context)) {
+            return
+        }
+
+        launchAnime =
+            LaunchAnime(
+                isAnime =
+                    AnimeDetect.isAnimeForLaunch(
+                        repository = TmdbRepository.getInstance(context),
+                        parentId = AnimeDetect.titleIdOf(streamId),
+                        parentType = contentType
+                    ),
+                at = SystemClock.elapsedRealtime()
+            )
+    }
+
+    /**
+     * Drops the published verdict: the source about to play cannot use the MPV
+     * engine at all (a DRM stream - NativePlayerActivity's own handoff excludes
+     * those for the same reason), so this launch must stay on the stored
+     * choice no matter what the anime rule said about the title.
+     */
+    fun clearLaunchAnime() {
+        launchAnime = null
+    }
+
+    /** The published verdict, consumed: stale or already-read reads as false. */
+    private fun consumeLaunchAnime(): Boolean {
+        val published = launchAnime ?: return false
+        launchAnime = null
+        return published.isAnime &&
+            SystemClock.elapsedRealtime() - published.at <= LAUNCH_ANIME_TTL_MS
+    }
 
     /**
      * True when ExoPlayer may hand a stream it cannot play over to MPV.
@@ -70,7 +193,10 @@ object PlayerEngine {
     fun mpvFallbackEnabled(context: Context): Boolean =
         isMpvAvailable() && selected(context) != AppPreferences.PLAYER_ENGINE_EXO_ONLY
 
-    /** Human-readable name of the engine a launch will use here. */
+    /**
+     * Human-readable name of the engine the STORED choice opens - the anime
+     * setting can still send one particular title to MPV.
+     */
     fun displayName(context: Context): String =
-        if (prefersMpv(context)) "MPV" else "ExoPlayer"
+        if (selected(context) == AppPreferences.PLAYER_ENGINE_MPV) "MPV" else "ExoPlayer"
 }

@@ -195,6 +195,7 @@ fun SettingsScreen(
     // Coerced read: a stored "MPV" on a device without libmpv reports as
     // ExoPlayer, which is what this row then shows and highlights.
     var playerEngine by remember { mutableIntStateOf(PlayerEngine.selected(context)) }
+    var mpvForAnime by remember { mutableStateOf(AppPreferences.getMpvForAnime(context)) }
 
     // True when this device advertises no Dolby Vision decoder, so Profile 5
     // must be stripped and color-corrected on the GPU: the conversion (and its
@@ -831,6 +832,28 @@ fun SettingsScreen(
                             "needs Android 8 or newer, so ExoPlayer is what plays here.",
                         color = KBDanger,
                         style = MaterialTheme.typography.labelSmall
+                    )
+                }
+
+                // Only meaningful where libmpv exists: on an older box the
+                // warning above already says why MPV is not an option.
+                if (PlayerEngine.isMpvAvailable()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    ToggleRow(
+                        label = "Play Anime in MPV",
+                        description = "Opens anime in the MPV engine even when the picker above " +
+                            "says ExoPlayer (including \"ExoPlayer only\"). Anime is what this " +
+                            "engine is for: libass renders fansub ASS/SSA typesetting the way it was " +
+                            "authored, and its FFmpeg decoders play the 10-bit and 4:4:4 profiles " +
+                            "release groups ship, which this TV's own decoders often refuse. A " +
+                            "title counts as anime when it comes from an anime catalog, carries " +
+                            "TMDB's \"anime\" keyword, or is Animation with a Japanese original " +
+                            "language.",
+                        checked = mpvForAnime,
+                        onToggle = {
+                            mpvForAnime = it
+                            AppPreferences.setMpvForAnime(context, it)
+                        }
                     )
                 }
 

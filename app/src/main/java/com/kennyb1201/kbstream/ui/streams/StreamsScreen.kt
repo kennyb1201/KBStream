@@ -42,6 +42,7 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.StreamBadgeRow
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -69,6 +70,19 @@ fun StreamsScreen(
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
+    /*
+     * A DRM stream cannot play on the MPV engine (NativePlayerActivity's own
+     * handoff excludes DRM for the same reason), so picking one has to drop the
+     * anime verdict published for this request - otherwise the anime rule would
+     * send a protected source to an engine that cannot open it.
+     */
+    fun selectSource(selected: Stream, allSources: List<Stream>) {
+        if (selected.drm?.licenseUrl != null) {
+            PlayerEngine.clearLaunchAnime()
+        }
+        onStreamSelected(selected, allSources)
+    }
+
     // Auto-play: when streams finish loading and autoplay is on, auto-select the
     // top result. Fire only once per target: after the user backs out of the
     // player, MainActivity marks this target as already-played and passes
@@ -80,7 +94,7 @@ fun StreamsScreen(
             // auto-select is broken.
             val top = streams.firstOrNull { !it.url.isNullOrBlank() }
             if (top != null) {
-                onStreamSelected(top, streams)
+                selectSource(top, streams)
             }
         }
     }
@@ -221,7 +235,7 @@ fun StreamsScreen(
                             StreamCard(
                                 stream = stream,
                                 onClick = {
-                                    onStreamSelected(stream, streams)
+                                    selectSource(stream, streams)
                                 }
                             )
                         }

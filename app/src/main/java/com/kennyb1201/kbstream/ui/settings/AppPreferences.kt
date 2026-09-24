@@ -39,6 +39,7 @@ object AppPreferences {
     private const val KEY_ENABLE_TUNNELING = "enable_tunneling"
     private const val KEY_ENABLE_PIP = "enable_pip"
     private const val KEY_PLAYER_ENGINE = "player_engine" // see PLAYER_ENGINE_* / PlayerEngine
+    private const val KEY_MPV_FOR_ANIME = "mpv_for_anime" // see getMpvForAnime / AnimeDetect
     private const val KEY_DECODER_MODE = "decoder_mode" // legacy toggle, migrated below
     private const val KEY_DECODER_PRIORITY = "decoder_priority" // combined (one release), migrated below
     private const val KEY_VIDEO_DECODER = "video_decoder" // legacy key, removed on migration
@@ -469,6 +470,30 @@ object AppPreferences {
 
     fun setPlayerEngine(context: Context, engine: Int) {
         prefs(context).edit().putInt(KEY_PLAYER_ENGINE, engine).apply()
+    }
+
+    /**
+     * Open ANIME titles in MPV even when the engine above is ExoPlayer.
+     *
+     * Anime is where the backup engine earns its place on a TV: libass renders
+     * the fansub ASS/SSA typesetting the way it was authored, and libmpv's
+     * FFmpeg decoders play the 10-bit/Hi10P and 4:4:4 profiles release groups
+     * ship, which a box's MediaCodec list frequently refuses (or hands out and
+     * then fails on). Detection is AnimeDetect's job and the decision is
+     * PlayerEngine.prefersMpv's (both in data/player), which is where the
+     * anime verdict published for a launch is finally applied.
+     *
+     * Off by default. Deliberately NOT part of syncDisplayPrefsBlob, for the
+     * same reason the engine itself is not: what a box can decode is a
+     * property of that box (and MPV is not even installed on an API 25
+     * device), so turning this on for the living-room Shield must not flip a
+     * Fire TV Stick onto MPV.
+     */
+    fun getMpvForAnime(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_MPV_FOR_ANIME, false)
+
+    fun setMpvForAnime(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_MPV_FOR_ANIME, enabled).apply()
     }
 
     // ── Decoder priority (KB-style) ───────────────────────────────

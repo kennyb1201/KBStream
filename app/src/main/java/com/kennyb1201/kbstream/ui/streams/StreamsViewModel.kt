@@ -8,6 +8,7 @@ import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
+import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import kotlinx.coroutines.async
@@ -112,6 +113,17 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             debugLines.add("streamUrl=$streamId")
             return listOf(directStream)
         }
+
+        // The engine this request will play on is chosen later, by the player
+        // screen the caller opens, from a Context alone: publish the anime
+        // verdict for that decision here, while the request's id and media
+        // type are both in hand (see PlayerEngine.publishLaunchAnime). Live
+        // channels took the branch above - there is no title to ask about.
+        PlayerEngine.publishLaunchAnime(
+            context = getApplication(),
+            streamId = streamId,
+            contentType = contentType
+        )
 
         val allStreams = mutableListOf<Stream>()
         val addons = addonManager.getEnabledAddons()

@@ -273,6 +273,12 @@ private data class PendingPlay(
         get() = streamNavigationKey(target.contentType, target.streamId)
 
     fun toPlayerScreen(stream: Stream, allSources: List<Stream>): Screen.Player {
+        // A DRM stream cannot play on MPV (the engine's own handoff excludes
+        // those too), so it must not inherit the anime route's engine choice.
+        if (stream.drm?.licenseUrl != null) {
+            PlayerEngine.clearLaunchAnime()
+        }
+
         return Screen.Player(
             url = stream.url.orEmpty(),
             audioUrl = stream.audioUrl,
