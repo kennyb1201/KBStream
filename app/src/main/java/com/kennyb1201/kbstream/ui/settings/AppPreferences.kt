@@ -40,6 +40,13 @@ object AppPreferences {
     private const val KEY_ENABLE_PIP = "enable_pip"
     private const val KEY_PLAYER_ENGINE = "player_engine" // see PLAYER_ENGINE_* / PlayerEngine
     private const val KEY_MPV_FOR_ANIME = "mpv_for_anime" // see getMpvForAnime / AnimeDetect
+    // Which installed app plays a title when the engine above is EXTERNAL, and
+    // whether to ask each time instead of going straight to it. Both are
+    // device-local for the same reason the engine itself is: which video
+    // players are installed is a property of this box, not of the account.
+    private const val KEY_EXTERNAL_PLAYER_PACKAGE = "external_player_package"
+    private const val KEY_EXTERNAL_PLAYER_LABEL = "external_player_label"
+    private const val KEY_EXTERNAL_PLAYER_ASK = "external_player_ask_each_time"
     private const val KEY_DECODER_MODE = "decoder_mode" // legacy toggle, migrated below
     private const val KEY_DECODER_PRIORITY = "decoder_priority" // combined (one release), migrated below
     private const val KEY_VIDEO_DECODER = "video_decoder" // legacy key, removed on migration
@@ -496,6 +503,45 @@ object AppPreferences {
         prefs(context).edit().putBoolean(KEY_MPV_FOR_ANIME, enabled).apply()
     }
 
+    /**
+     * The app the External engine hands a title to (package name), or null
+     * when nothing has been chosen yet. Read through
+     * [com.kennyb1201.kbstream.data.player.ExternalPlayer], which resolves a
+     * stored choice that is no longer installed back to a real one.
+     */
+    fun getExternalPlayerPackage(context: Context): String? =
+        prefs(context).getString(KEY_EXTERNAL_PLAYER_PACKAGE, null)
+            ?.takeIf { it.isNotBlank() }
+
+    /**
+     * Remembers which app plays externally, along with its display name so the
+     * settings row can say "VLC" instead of a package name - and so a player
+     * that has since been uninstalled can still be named in the UI.
+     */
+    fun setExternalPlayer(context: Context, packageName: String?, label: String?) {
+        prefs(context).edit()
+            .putString(KEY_EXTERNAL_PLAYER_PACKAGE, packageName)
+            .putString(KEY_EXTERNAL_PLAYER_LABEL, label)
+            .apply()
+    }
+
+    /** The remembered app's display name, or null when none is chosen. */
+    fun getExternalPlayerLabel(context: Context): String? =
+        prefs(context).getString(KEY_EXTERNAL_PLAYER_LABEL, null)
+            ?.takeIf { it.isNotBlank() }
+
+    /**
+     * Ask which app to use for every playback instead of going straight to the
+     * remembered one. Off by default: a box with one player installed should
+     * just play.
+     */
+    fun getExternalPlayerAsk(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_EXTERNAL_PLAYER_ASK, false)
+
+    fun setExternalPlayerAsk(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_EXTERNAL_PLAYER_ASK, enabled).apply()
+    }
+
     // ── Decoder priority (KB-style) ───────────────────────────────
     // Audio decoder priority (KB-style): position of the FFmpeg audio
     // extension relative to MediaCodec.
@@ -636,6 +682,14 @@ object AppPreferences {
     const val PLAYER_ENGINE_EXO = 0
     const val PLAYER_ENGINE_EXO_ONLY = 1
     const val PLAYER_ENGINE_MPV = 2
+
+    /**
+     * Hand the title to an installed external video app (VLC, MX Player, ...)
+     * instead of playing it in-app. The session is still ours: the wrapper
+     * activity records the playhead, scrobbles and raises the same end-of-
+     * episode panels when the title finishes. See ExternalPlayerActivity.
+     */
+    const val PLAYER_ENGINE_EXTERNAL = 3
 
     const val DV_COMPAT_AUTO = 0
     const val DV_COMPAT_OFF = 1

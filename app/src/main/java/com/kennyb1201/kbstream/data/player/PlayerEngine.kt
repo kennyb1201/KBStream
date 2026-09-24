@@ -30,6 +30,11 @@ import com.kennyb1201.kbstream.ui.settings.AppPreferences
  *     and 10-bit releases above are the common case on that side).
  *  2. A failure: NativePlayerActivity asks [mpvFallbackEnabled] before handing
  *     its own launch intent to the MPV player (the default setting).
+ *
+ * A third choice, "External player", sits beside those two: the title is handed
+ * to an installed video app. It is handled by [prefersExternal] and never by the
+ * MPV rules - a profile that asked for an external player is not also asking to
+ * be redirected to libmpv because the title happens to be anime.
  */
 object PlayerEngine {
 
@@ -53,12 +58,34 @@ object PlayerEngine {
      */
     fun selected(context: Context): Int {
         val chosen = AppPreferences.getPlayerEngine(context)
-        return if (chosen == AppPreferences.PLAYER_ENGINE_MPV && !isMpvAvailable()) {
-            AppPreferences.PLAYER_ENGINE_EXO
-        } else {
-            chosen
+        return when {
+            chosen == AppPreferences.PLAYER_ENGINE_MPV && !isMpvAvailable() ->
+                AppPreferences.PLAYER_ENGINE_EXO
+
+            // Same reasoning for the External engine: a box with no video app
+            // installed has nothing to hand a title TO, so the stored choice
+            // reads back as ExoPlayer rather than launching into a chooser with
+            // an empty list.
+            chosen == AppPreferences.PLAYER_ENGINE_EXTERNAL &&
+                !ExternalPlayer.isAvailable(context) ->
+                AppPreferences.PLAYER_ENGINE_EXO
+
+            else -> chosen
         }
     }
+
+    /** Whether this box has an installed app the External engine could use. */
+    fun externalAvailable(context: Context): Boolean =
+        ExternalPlayer.isAvailable(context)
+
+    /**
+     * True when a launch should open the external-player wrapper instead of
+     * either in-app engine. The stored choice alone decides: unlike MPV, there
+     * is no per-title rule that overrides it.
+     */
+    fun prefersExternal(context: Context): Boolean =
+        externalAvailable(context) &&
+            AppPreferences.getPlayerEngine(context) == AppPreferences.PLAYER_ENGINE_EXTERNAL
 
     /**
      * The launch decision itself, free of prefs and device state so it can be
@@ -77,6 +104,7 @@ object PlayerEngine {
         isAnime: Boolean
     ): Boolean =
         mpvAvailable &&
+            chosenEngine != AppPreferences.PLAYER_ENGINE_EXTERNAL &&
             (
                 chosenEngine == AppPreferences.PLAYER_ENGINE_MPV ||
                     (mpvForAnime && isAnime)
@@ -197,6 +225,11 @@ object PlayerEngine {
      * Human-readable name of the engine the STORED choice opens - the anime
      * setting can still send one particular title to MPV.
      */
-    fun displayName(context: Context): String =
-        if (selected(context) == AppPreferences.PLAYER_ENGINE_MPV) "MPV" else "ExoPlayer"
+    fun displayName(context: Context): String = when (selected(context)) {
+        AppPreferences.PLAYER_ENGINE_MPV -> "MPV"
+        AppPreferences.PLAYER_ENGINE_EXTERNAL ->
+            ExternalPlayer.target(context)?.label ?: "External player"
+
+        else -> "ExoPlayer"
+    }
 }

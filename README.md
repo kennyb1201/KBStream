@@ -23,7 +23,11 @@ EPG).
   and Continue Watching rows, and both raise the same two end-of-episode
   panels — the Up Next card, and the because-you-watched recommendations when
   there is no next episode — each with its own on/off switch and pop-up point
-  (a percentage of the runtime) in Settings → Playback.
+  (a percentage of the runtime) in Settings → Playback. A third engine, an
+  installed external player (VLC, MX Player, Kodi), can be chosen for a title
+  or from either in-player bar: the stream is handed over while KBStream keeps
+  the session, so watch history, Continue Watching, scrobbling and both
+  end-of-episode panels behave exactly as they do in-app.
 - **Profiles** — multiple per-device profiles with avatars, optional PIN
   locks, and full cross-device sync (history, watched state, addons,
   settings) via Supabase with row-level security.

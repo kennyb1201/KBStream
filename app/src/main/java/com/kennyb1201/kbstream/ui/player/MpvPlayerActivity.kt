@@ -32,7 +32,9 @@ import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.badges.StreamBadge
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.player.ExternalPlayer
 import com.kennyb1201.kbstream.data.player.LanguageMatch
+import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.player.PlayerTitlePrefs
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
@@ -204,6 +206,7 @@ class MpvPlayerActivity : ComponentActivity() {
     // ASPECT keep their words - a rate and a mode name ARE their state.
     private var nextButton: ImageView? = null
     private var playerSwitchButton: ImageView? = null
+    private var externalButton: ImageView? = null
     private var dialogueDownButton: ImageView? = null
     private var dialogueUpButton: ImageView? = null
     private var speedButton: TextView? = null
@@ -718,6 +721,7 @@ class MpvPlayerActivity : ComponentActivity() {
         playPauseButton = findViewById(R.id.mpv_btn_play_pause)
         nextButton = findViewById(R.id.mpv_btn_next)
         playerSwitchButton = findViewById(R.id.mpv_btn_player_switch)
+        externalButton = findViewById(R.id.mpv_btn_player_external)
         dialogueDownButton = findViewById(R.id.mpv_btn_dialogue_down)
         dialogueUpButton = findViewById(R.id.mpv_btn_dialogue_up)
         speedButton = findViewById(R.id.mpv_btn_speed)
@@ -1043,6 +1047,15 @@ class MpvPlayerActivity : ComponentActivity() {
         playerSwitchButton?.setOnClickListener {
             keepControlsVisible()
             switchToExoPlayerFromButton()
+        }
+        // Play in another app: the main player's third engine, offered here
+        // too. Shown only where this box has an app to hand the stream to, so
+        // the press never dead-ends on a box without one.
+        externalButton?.visibility =
+            if (PlayerEngine.externalAvailable(this)) View.VISIBLE else View.GONE
+        externalButton?.setOnClickListener {
+            keepControlsVisible()
+            switchToExternal()
         }
         sourceButton?.setOnClickListener {
             keepControlsVisible()
@@ -2733,6 +2746,68 @@ class MpvPlayerActivity : ComponentActivity() {
 
         Log.i(TAG, "switching playback to the ExoPlayer engine from ${position}ms")
         showToast("Switching to the ExoPlayer engine\u2026")
+        exoSwitchLauncher.launch(launch)
+    }
+
+    /**
+     * The control bar's "play in another app" button: hand this session to an
+     * installed external player (see [ExternalPlayerActivity]).
+     *
+     * Deliberately the same handoff as [switchToExoPlayer] with a different
+     * target, because it has to satisfy the same two constraints: this activity
+     * stays in the chain (the result is forwarded to whoever started the
+     * player, so "next episode" and the watch-history handoff behind it keep
+     * working), and the position carries over, so a viewer who opened a file in
+     * MPV and then wants their own player does not restart the title. What mpv
+     * was handed - the stream URL, the request headers, the canonical parent id
+     * - travels with it.
+     */
+    private fun switchToExternal() {
+        val blocked = when {
+            playerSwitchStarted -> "Already switching engines\u2026"
+
+            currentUrl.isBlank() ->
+                "Nothing is playing yet \u2014 try this again once it starts"
+
+            intent == null || isFinishing || isDestroyed ->
+                "Can't switch engines right now"
+
+            !PlayerEngine.externalAvailable(this) ->
+                "No external player is installed on this device"
+
+            else -> null
+        }
+        if (blocked != null) {
+            showToast(blocked)
+            return
+        }
+        val baseIntent = intent ?: return
+        playerSwitchStarted = true
+
+        val position = runCatching {
+            surface?.positionMs()?.coerceAtLeast(0L) ?: positionMs
+        }.getOrDefault(positionMs)
+
+        val launch = Intent(baseIntent).apply {
+            setClass(this@MpvPlayerActivity, ExternalPlayerActivity::class.java)
+            // Extras that describe THIS engine, not the session.
+            removeExtra(EXTRA_MPV_FALLBACK)
+            removeExtra(EXTRA_MPV_FALLBACK_REASON)
+            putExtra("stream_url", currentUrl)
+            putExtra("start_position_ms", position)
+            putExtra("from_beginning", false)
+            putExtra(
+                "stream_headers",
+                streamHeaders.entries.joinToString("\n") { "${it.key}: ${it.value}" }
+            )
+            historyParentIdOverride?.let {
+                putExtra(EXTRA_HISTORY_PARENT_ID, it)
+            }
+        }
+
+        Log.i(TAG, "handing playback to the external player from ${position}ms")
+        val label = ExternalPlayer.target(this)?.label ?: "the external player"
+        showToast("Opening in $label\u2026")
         exoSwitchLauncher.launch(launch)
     }
 

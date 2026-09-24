@@ -49,6 +49,7 @@ import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.backup.BackupManager
+import com.kennyb1201.kbstream.data.player.ExternalPlayer
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
 import com.kennyb1201.kbstream.ui.components.KBCard
@@ -196,6 +197,17 @@ fun SettingsScreen(
     // ExoPlayer, which is what this row then shows and highlights.
     var playerEngine by remember { mutableIntStateOf(PlayerEngine.selected(context)) }
     var mpvForAnime by remember { mutableStateOf(AppPreferences.getMpvForAnime(context)) }
+    // External engine, device-local like the engine itself: which video apps
+    // are installed is a property of this box, not of the account.
+    val externalPlayers = remember { ExternalPlayer.installed(context) }
+    var externalPackage by remember {
+        mutableStateOf(
+            AppPreferences.getExternalPlayerPackage(context)?.takeIf { stored ->
+                externalPlayers.any { it.packageName == stored }
+            }
+        )
+    }
+    var externalAsk by remember { mutableStateOf(AppPreferences.getExternalPlayerAsk(context)) }
 
     // True when this device advertises no Dolby Vision decoder, so Profile 5
     // must be stripped and color-corrected on the GPU: the conversion (and its
@@ -797,7 +809,8 @@ fun SettingsScreen(
                     listOf(
                         AppPreferences.PLAYER_ENGINE_EXO to "ExoPlayer",
                         AppPreferences.PLAYER_ENGINE_EXO_ONLY to "ExoPlayer only",
-                        AppPreferences.PLAYER_ENGINE_MPV to "MPV"
+                        AppPreferences.PLAYER_ENGINE_MPV to "MPV",
+                        AppPreferences.PLAYER_ENGINE_EXTERNAL to "External player"
                     ).forEach { (value, label) ->
                         KBCard(onClick = {
                             playerEngine = value
@@ -816,6 +829,12 @@ fun SettingsScreen(
                         AppPreferences.PLAYER_ENGINE_EXO_ONLY ->
                             "ExoPlayer only. A stream it cannot decode shows the error instead of " +
                                 "changing engine mid-title."
+                        AppPreferences.PLAYER_ENGINE_EXTERNAL ->
+                            "Hands the title to an installed video app (VLC, MX Player, Kodi). " +
+                                "Everything around playback stays here - watch history, " +
+                                "Continue Watching, scrobbling and the Up Next / " +
+                                "because-you-watched cards. Request headers and DRM cannot travel " +
+                                "to another app, so a source that needs them plays in-app."
                         else ->
                             "MPV (libmpv) plays anything: its decoders fall back to software when the " +
                                 "hardware ones refuse, so \"no decoder resources\" and unsupported codecs " +
@@ -825,6 +844,68 @@ fun SettingsScreen(
                     color = KBTextLo,
                     style = MaterialTheme.typography.labelSmall
                 )
+                if (playerEngine == AppPreferences.PLAYER_ENGINE_EXTERNAL &&
+                    externalPlayers.isEmpty()
+                ) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "No video player app is installed on this device, so ExoPlayer " +
+                            "plays instead. Install VLC, MX Player or Kodi to use the external " +
+                            "engine.",
+                        color = KBDanger,
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+
+                // Only meaningful when this box has an app to hand a title to:
+                // with none installed the picker above never opens the external
+                // engine (see PlayerEngine.selected), so this would be a list of
+                // nothing.
+                if (externalPlayers.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "External player",
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+                    Text(
+                        text = "Which app plays a title when the engine above is \"External " +
+                            "player\". KBStream keeps the session either way: the playhead is " +
+                            "measured while the other app is in front, so watch history, Continue " +
+                            "Watching, scrobbling and the Up Next / because-you-watched cards all " +
+                            "keep working.",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        externalPlayers.forEach { player ->
+                            KBCard(onClick = {
+                                externalPackage = player.packageName
+                                AppPreferences.setExternalPlayer(
+                                    context,
+                                    player.packageName,
+                                    player.label
+                                )
+                            }) {
+                                PillChip(player.label, externalPackage == player.packageName)
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    ToggleRow(
+                        label = "Ask every time",
+                        description = "Show the system's own chooser for each title instead of " +
+                            "going straight to the app picked above.",
+                        checked = externalAsk,
+                        onToggle = {
+                            externalAsk = it
+                            AppPreferences.setExternalPlayerAsk(context, it)
+                        }
+                    )
+                }
+
                 if (!PlayerEngine.isMpvAvailable()) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(

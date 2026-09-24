@@ -76,6 +76,7 @@ import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
 import com.kennyb1201.kbstream.ui.player.PickerAdapter.Companion.bindBadgeRow
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.player.ExternalPlayer
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
@@ -659,6 +660,7 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var btnNext: ImageView
     private lateinit var btnSource: ImageView
     private lateinit var btnPlayerSwitch: ImageView
+    private lateinit var btnPlayerExternal: ImageView
     private lateinit var btnAudio: ImageView
     private lateinit var btnDialogueDown: ImageView
     private lateinit var btnDialogueUp: ImageView
@@ -685,7 +687,7 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var settingsBitrate: TextView
     private lateinit var settingsCodec: TextView
     private lateinit var settingsSpeedAspect: TextView
-    private lateinit var btnInfo: TextView
+    private lateinit var btnInfo: ImageView
     private lateinit var infoPanel: ScrollView
     private lateinit var infoAddonIcon: ImageView
     private lateinit var infoTitle: TextView
@@ -1737,6 +1739,26 @@ class NativePlayerActivity : ComponentActivity() {
      * what keeps "next episode" working after a mid-title engine switch.
      */
     private val mpvFallbackLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (!isFinishing && !isDestroyed) {
+            setResult(result.resultCode, result.data)
+            finish()
+        }
+    }
+
+    /// True once this session has been handed to an installed external player.
+    /// One handoff per session, for the same reason the MPV flag above is one:
+    /// a second one would start a second player on top of the first.
+    private var externalHandoffStarted = false
+
+    /**
+     * Result of an external handoff (see [handOffToExternal]). Same contract as
+     * [mpvFallbackLauncher]: this activity stays in the chain and forwards what
+     * the wrapper decided, so MainActivity's player-result callback still fires
+     * and "next episode" keeps working across the switch.
+     */
+    private val externalLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (!isFinishing && !isDestroyed) {
@@ -2854,6 +2876,7 @@ class NativePlayerActivity : ComponentActivity() {
         btnNext = findViewById(R.id.btn_next)
         btnSource = findViewById(R.id.btn_source)
         btnPlayerSwitch = findViewById(R.id.btn_player_switch)
+        btnPlayerExternal = findViewById(R.id.btn_player_external)
         btnAudio = findViewById(R.id.btn_audio)
         btnSubtitle = findViewById(R.id.btn_subtitle)
         btnSpeed = findViewById(R.id.btn_speed)
@@ -2995,6 +3018,15 @@ class NativePlayerActivity : ComponentActivity() {
             } else {
                 View.GONE
             }
+        // The external engine's own gate: an app on this box to hand the
+        // stream TO, and a stream it can take - it refuses live TV and a DRM
+        // session exactly as the MPV backup does (see handOffToExternal).
+        btnPlayerExternal.visibility =
+            if (PlayerEngine.externalAvailable(this) && !isLiveChannel && drmLicenseUrl == null) {
+                View.VISIBLE
+            } else {
+                View.GONE
+            }
         renderSourceBadges()
 
         // Populate header info
@@ -3072,6 +3104,21 @@ class NativePlayerActivity : ComponentActivity() {
         btnSource.setOnClickListener { showPicker(PickerMode.SOURCE) }
         btnPlayerSwitch.setOnClickListener { switchPlayerManually() }
         btnPlayerSwitch.setOnFocusChangeListener { _, focused ->
+            if (focused) removeAutoHide() else scheduleAutoHide()
+        }
+        btnPlayerExternal.setOnClickListener {
+            // A press is a question, so a refusal has to say why rather than
+            // look like a dead button - the same rule as the SWITCH buttons
+            // (see installManualSwitchFeedback).
+            if (!handOffToExternal()) {
+                Toast.makeText(
+                    this,
+                    "Can't open another player right now",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+        btnPlayerExternal.setOnFocusChangeListener { _, focused ->
             if (focused) removeAutoHide() else scheduleAutoHide()
         }
 
@@ -7504,6 +7551,72 @@ class NativePlayerActivity : ComponentActivity() {
      */
     private fun switchPlayerManually() {
         handOffToMpv(MpvPlayerActivity.FALLBACK_REASON_MANUAL, manual = true)
+    }
+
+    /**
+     * The control bar's "play in another app" button: hand this session to an
+     * installed external player.
+     *
+     * The third engine, and the one that gives the LEAST to the other app to
+     * do: the stream URL, a title and a resume point go over, and everything
+     * that makes playback a feature stays here. The wrapper that receives the
+     * handoff ([com.kennyb1201.kbstream.ui.player.ExternalPlayerActivity])
+     * measures the playhead while the other app is in front, writes the same
+     * watch-history row this engine writes, scrobbles to the same trackers, and
+     * raises the same two end-of-episode panels - so a title played externally
+     * keeps its Continue Watching card and still chains into its next episode,
+     * on whichever engine the settings say.
+     *
+     * Refused, and silently, for the two sessions it cannot take, both for the
+     * same reason the MPV backup refuses them: live TV has no runtime to
+     * measure and no end to chain from, and a DRM licence is ours to request -
+     * another app handed the URL alone could not play it.
+     */
+    private fun handOffToExternal(): Boolean {
+        if (externalHandoffStarted) return false
+        if (isLiveChannel || drmLicenseUrl != null) return false
+        if (currentUrl.isBlank()) return false
+        if (isFinishing || isDestroyed) return false
+        if (!PlayerEngine.externalAvailable(this)) return false
+        val baseIntent = intent ?: return false
+        externalHandoffStarted = true
+
+        val position = runCatching {
+            exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs
+        }.getOrDefault(carryPositionMs)
+
+        // Re-play the original launch with the stream extras replaced, so the
+        // wrapper inherits the whole session: the episode it is on, the poster
+        // and backdrop for the end-of-episode cards, the runtime it measures
+        // against, and the source list a "play in app" fall-out needs.
+        val launch = Intent(baseIntent).apply {
+            setClass(this@NativePlayerActivity, ExternalPlayerActivity::class.java)
+            removeExtra(MpvPlayerActivity.EXTRA_MPV_FALLBACK)
+            removeExtra(MpvPlayerActivity.EXTRA_MPV_FALLBACK_REASON)
+            putExtra("stream_url", currentUrl)
+            putExtra("start_position_ms", position)
+            // Resume, never restart: the title is already part-way through.
+            putExtra("from_beginning", false)
+            putExtra(
+                EXTRA_HEADERS,
+                streamHeaders.entries.joinToString("\n") { "${it.key}: ${it.value}" }
+            )
+            historyParentIdOverride?.let {
+                putExtra(MpvPlayerActivity.EXTRA_HISTORY_PARENT_ID, it)
+            }
+        }
+
+        Log.i(
+            "PLAYER_RETRY",
+            "handing playback to the external player from ${position}ms"
+        )
+        errorMessageStr = null
+        errorContainer.visibility = View.GONE
+        reconnectingContainer.visibility = View.VISIBLE
+        bufferingSpinner.visibility = View.GONE
+        reconnectingText.text = "Opening in the external player\u2026"
+        externalLauncher.launch(launch)
+        return true
     }
 
     private suspend fun canonicalHistoryParentId(): String {

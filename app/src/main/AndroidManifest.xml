@@ -120,6 +120,19 @@
             android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden|density|uiMode"
             android:screenOrientation="landscape" />
 
+        <!-- Third engine (External player). Hands the stream to an installed
+             video app (VLC, MX Player, Kodi) and keeps the SESSION here: the
+             playhead, the watch-history row, both scrobblers and the
+             end-of-episode panels all belong to this activity, which is why
+             the title is handed over with startActivityForResult rather than
+             a plain launch. Same launch extras as the other two engines. -->
+        <activity
+            android:name=".ui.player.ExternalPlayerActivity"
+            android:exported="false"
+            android:resizeableActivity="false"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden|density|uiMode"
+            android:screenOrientation="landscape" />
+
         <!-- Self-update fallback flow: shares the downloaded APK with the
              system installer via a content URI. -->
         <provider

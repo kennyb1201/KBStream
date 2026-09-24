@@ -461,6 +461,26 @@
                     android:scaleType="fitCenter"
                     android:src="@drawable/ic_player_switch" />
 
+                <!-- Play in another app: the main player's third engine, on
+                     this bar too, because a viewer who opened MPV for a file
+                     this TV's decoders refused may still prefer their own
+                     player. Hidden when there is nothing installed to hand
+                     the stream to. -->
+                <ImageView
+                    android:id="@+id/mpv_btn_player_external"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginStart="10dp"
+                    android:background="@drawable/control_button_bg"
+                    android:contentDescription="Play in another app"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/mpv_seekbar"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_external"
+                    android:visibility="gone" />
+
                 <View
                     android:layout_width="0dp"
                     android:layout_height="0dp"

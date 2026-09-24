@@ -68,6 +68,7 @@ import com.kennyb1201.kbstream.ui.iptv.IptvViewModel
 import com.kennyb1201.kbstream.ui.onboarding.OnboardingPrefs
 import com.kennyb1201.kbstream.ui.onboarding.OnboardingScreen
 import com.kennyb1201.kbstream.data.player.PlayerEngine
+import com.kennyb1201.kbstream.ui.player.ExternalPlayerActivity
 import com.kennyb1201.kbstream.ui.player.MpvPlayerActivity
 import com.kennyb1201.kbstream.ui.player.NativePlayerActivity
 import com.kennyb1201.kbstream.ui.player.NextEpisodeResult
@@ -1849,10 +1850,20 @@ fun AppRoot() {
                 // over to MPV by itself when a stream is unplayable (see
                 // NativePlayerActivity.handOffToMpv). Both take the same
                 // extras, so nothing below has to know which one it got.
-                val playerActivity = if (PlayerEngine.prefersMpv(context)) {
-                    MpvPlayerActivity::class.java
-                } else {
-                    NativePlayerActivity::class.java
+                // "External player" hands the stream to an installed video app
+                // while THIS app keeps the session (see ExternalPlayerActivity).
+                // DRM stays in-app whatever the setting says: the licence is
+                // ours to request, so another app handed the URL alone could
+                // not play it. The external wrapper says the same thing on a
+                // card; deciding it here just skips the detour.
+                val playerActivity = when {
+                    PlayerEngine.prefersExternal(context) && current.drmLicenseUrl == null ->
+                        ExternalPlayerActivity::class.java
+
+                    PlayerEngine.prefersMpv(context) ->
+                        MpvPlayerActivity::class.java
+
+                    else -> NativePlayerActivity::class.java
                 }
                 val intent = Intent(context, playerActivity).apply {
                     putExtra("stream_url", current.url)
@@ -1927,6 +1938,12 @@ fun AppRoot() {
                     putExtra("season_episode_label", listOfNotNull(current.season?.let { "Season $it" }, current.episode?.let { "Episode $it" }).joinToString(" • "))
                     // Pass total episodes
                     current.totalEpisodesInSeason?.let { putExtra("total_episodes_in_season", it) }
+                    // The runtime, for the external engine: it cannot see a
+                    // playhead it does not own, so the TMDB runtime is the only
+                    // duration it has when the other app reports none - and a
+                    // duration is what makes a saved position mean anything to
+                    // Continue Watching. Ignored by the two in-app engines.
+                    current.runtimeMinutes?.let { putExtra("runtime_minutes", it) }
                 }
                 playerResultLauncher.launch(intent)
             }

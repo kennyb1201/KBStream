@@ -1,0 +1,333 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The External player's own screen.
+
+    An external app is a separate process we cannot draw over, so this activity
+    is what makes the session still OURS: it hands the stream over, and when the
+    viewer comes back it shows the same end-of-episode panels the other two
+    engines raise, then chains the next episode the same way. The screen is
+    therefore only ever visible in three moments - the hand-off, a player that
+    refused the stream, and the end of a title - which is why it is a plain dark
+    surface with three mutually exclusive states rather than a player UI.
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/ext_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/kb_void"
+    android:keepScreenOn="true">
+
+    <!-- Hand-off card: what is playing and in which app. Shown while the
+         external player is being brought to the front. -->
+    <LinearLayout
+        android:id="@+id/ext_handoff"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:paddingStart="64dp"
+        android:paddingEnd="64dp">
+
+        <TextView
+            android:id="@+id/ext_handoff_kicker"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="@font/oswald_medium"
+            android:letterSpacing="0.18"
+            android:text="PLAYING IN"
+            android:textColor="@color/kb_accent"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/ext_handoff_player"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:fontFamily="@font/oswald_semibold"
+            android:textColor="@color/kb_text_hi"
+            android:textSize="30sp" />
+
+        <TextView
+            android:id="@+id/ext_handoff_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:ellipsize="end"
+            android:fontFamily="@font/oswald_medium"
+            android:gravity="center_horizontal"
+            android:maxLines="2"
+            android:textColor="@color/kb_text_lo"
+            android:textSize="16sp" />
+
+        <TextView
+            android:id="@+id/ext_handoff_hint"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:fontFamily="@font/oswald_medium"
+            android:textColor="@color/kb_text_lo"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <!-- Refused-stream card: the external app came back immediately, which
+         almost always means it could not play what it was handed. -->
+    <LinearLayout
+        android:id="@+id/ext_error"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:paddingStart="64dp"
+        android:paddingEnd="64dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/ext_error_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="@font/oswald_semibold"
+            android:gravity="center_horizontal"
+            android:textColor="@color/kb_text_hi"
+            android:textSize="22sp" />
+
+        <TextView
+            android:id="@+id/ext_error_hint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:fontFamily="@font/oswald_medium"
+            android:gravity="center_horizontal"
+            android:textColor="@color/kb_text_lo"
+            android:textSize="14sp" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="22dp"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/ext_error_retry"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@drawable/button_accent_bg"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
+                android:fontFamily="@font/oswald_semibold"
+                android:paddingHorizontal="20dp"
+                android:paddingVertical="10dp"
+                android:text="TRY AGAIN"
+                android:textColor="@color/kb_void"
+                android:textSize="15sp" />
+
+            <TextView
+                android:id="@+id/ext_error_switch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:background="@drawable/button_surface_bg"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
+                android:fontFamily="@font/oswald_semibold"
+                android:paddingHorizontal="20dp"
+                android:paddingVertical="10dp"
+                android:text="PLAY IN KBSTREAM"
+                android:textColor="@color/kb_text_hi"
+                android:textSize="15sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Scrim behind the end-of-episode panels (clickable to dismiss). -->
+    <View
+        android:id="@+id/ext_scrim"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#CC000000"
+        android:clickable="true"
+        android:focusable="true"
+        android:visibility="gone" />
+
+    <!-- Up Next card: same compact card, same bottom-right corner and same
+         margins as the other two engines', so the end of a title looks the
+         same whichever one played it. -->
+    <LinearLayout
+        android:id="@+id/ext_next_up_panel"
+        android:layout_width="440dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_marginTop="24dp"
+        android:layout_marginEnd="48dp"
+        android:layout_marginBottom="40dp"
+        android:background="@drawable/panel_bg"
+        android:orientation="horizontal"
+        android:padding="14dp"
+        android:visibility="gone">
+
+        <ImageView
+            android:id="@+id/ext_next_up_thumb"
+            android:layout_width="150dp"
+            android:layout_height="84dp"
+            android:background="@color/kb_surface"
+            android:contentDescription="Next episode thumbnail"
+            android:scaleType="centerCrop" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="14dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/ext_next_up_kicker"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="@font/oswald_medium"
+                android:letterSpacing="0.18"
+                android:text="UP NEXT"
+                android:textColor="@color/kb_accent"
+                android:textSize="10sp" />
+
+            <TextView
+                android:id="@+id/ext_next_up_show_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:ellipsize="end"
+                android:fontFamily="@font/oswald_medium"
+                android:maxLines="1"
+                android:textColor="@color/kb_text_hi"
+                android:textSize="18sp" />
+
+            <TextView
+                android:id="@+id/ext_next_up_episode_label"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="3dp"
+                android:fontFamily="@font/oswald_medium"
+                android:textColor="@color/kb_accent"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/ext_next_up_episode_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:ellipsize="end"
+                android:fontFamily="@font/oswald_medium"
+                android:maxLines="2"
+                android:textColor="@color/kb_text_lo"
+                android:textSize="12sp" />
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/ext_btn_next_play"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/button_accent_bg"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:fontFamily="@font/oswald_semibold"
+                    android:paddingHorizontal="14dp"
+                    android:paddingVertical="6dp"
+                    android:text="PLAY NEXT"
+                    android:textAllCaps="true"
+                    android:textColor="@color/kb_void"
+                    android:textSize="11sp" />
+
+                <TextView
+                    android:id="@+id/ext_btn_next_dismiss"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/button_surface_bg"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:fontFamily="@font/oswald_semibold"
+                    android:paddingHorizontal="14dp"
+                    android:paddingVertical="6dp"
+                    android:text="EXIT"
+                    android:textAllCaps="true"
+                    android:textColor="@color/kb_text_hi"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/ext_next_up_countdown"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:fontFamily="@font/oswald_medium"
+                android:textColor="@color/kb_text_lo"
+                android:textSize="10sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Because-you-watched panel: the same row the other two engines raise,
+         built by the shared BecauseYouWatchedUi. Its hint must stay the LAST
+         direct TextView child - the panel UI finds it by position because each
+         layout names it differently. -->
+    <LinearLayout
+        android:id="@+id/ext_byw_panel"
+        android:layout_width="720dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:background="@drawable/panel_bg"
+        android:orientation="vertical"
+        android:padding="22dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/ext_byw_kicker"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="@font/oswald_medium"
+            android:letterSpacing="0.18"
+            android:text="BECAUSE YOU WATCHED"
+            android:textColor="@color/kb_accent"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/ext_byw_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:ellipsize="end"
+            android:fontFamily="@font/oswald_medium"
+            android:maxLines="1"
+            android:textColor="@color/kb_text_hi"
+            android:textSize="22sp" />
+
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:fillViewport="true"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/ext_byw_row"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal" />
+        </HorizontalScrollView>
+
+        <TextView
+            android:id="@+id/ext_byw_hint"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:fontFamily="@font/oswald_medium"
+            android:text="Pick a title, or press BACK to exit"
+            android:textColor="@color/kb_text_lo"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+</FrameLayout>
