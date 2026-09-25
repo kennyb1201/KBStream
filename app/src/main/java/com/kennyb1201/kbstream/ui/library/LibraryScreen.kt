@@ -1,7 +1,7 @@
 package com.kennyb1201.kbstream.ui.library
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,7 +29,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -40,7 +39,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
+import androidx.tv.material3.Glow
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
@@ -65,6 +66,10 @@ import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBFocusChip
+import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
+import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
+import com.kennyb1201.kbstream.ui.theme.KBFocusRow
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -433,18 +438,36 @@ private fun LibraryFilterChip(
                 else -> KBTextLo
             }
         ),
-        modifier = modifier
-            .clip(shape)
-            .border(
-                1.dp,
-                when {
-                    selected -> KBAccent
-                    focused -> KBTextHi
-                    else -> KBTextLo.copy(alpha = 0.35f)
-                },
-                shape
+        scale = ClickableSurfaceDefaults.scale(
+            focusedScale = KBFocusChip,
+            pressedScale = KBFocusPressed
+        ),
+        // Surface-owned border, not a `.clip(shape).border()` on the modifier:
+        // the caller-side clip wraps the whole Surface, so it pins the animated
+        // growth to the chip's layout bounds and swallows the focus scale.
+        border = ClickableSurfaceDefaults.border(
+            border = Border(
+                border = BorderStroke(
+                    1.dp,
+                    if (selected) KBAccent else KBTextLo.copy(alpha = 0.35f)
+                ),
+                shape = shape
+            ),
+            focusedBorder = Border(
+                border = BorderStroke(
+                    2.dp,
+                    if (selected) KBAccent else KBTextHi
+                ),
+                shape = shape
             )
-            .onFocusChanged { focused = it.isFocused }
+        ),
+        glow = ClickableSurfaceDefaults.glow(
+            focusedGlow = Glow(
+                elevationColor = KBAccent,
+                elevation = KBFocusGlowSmall
+            )
+        ),
+        modifier = modifier.onFocusChanged { focused = it.isFocused }
     ) {
         Text(
             text = label,
@@ -576,6 +599,27 @@ private fun ListsPane(
                             else -> KBSurface
                         },
                         contentColor = KBTextHi
+                    ),
+                    // A rail row, so it takes the row step of the shared focus
+                    // scale -- and the press-in every other row in the app
+                    // has. It previously changed container colour only, which
+                    // left the list rail the one place a Select press did
+                    // nothing at all.
+                    scale = ClickableSurfaceDefaults.scale(
+                        focusedScale = KBFocusRow,
+                        pressedScale = KBFocusPressed
+                    ),
+                    border = ClickableSurfaceDefaults.border(
+                        focusedBorder = Border(
+                            border = BorderStroke(2.dp, KBAccent),
+                            shape = KBShapeCard
+                        )
+                    ),
+                    glow = ClickableSurfaceDefaults.glow(
+                        focusedGlow = Glow(
+                            elevationColor = KBAccent,
+                            elevation = KBFocusGlowSmall
+                        )
                     ),
                     modifier = Modifier
                         .fillMaxWidth()

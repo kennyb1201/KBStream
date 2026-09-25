@@ -359,12 +359,12 @@ private fun StreamCard(
 ) {
     var isFocused by remember { mutableStateOf(false) }
 
-    val scale by animateFloatAsState(
-        targetValue = 1f,
-        animationSpec = tween(140),
-        label = "streamCardScale"
-    )
-
+    // The card's growth and press-in come from KBCard (the card step of the
+    // shared KBFocus* scale). What is left here is the opacity dim that keeps
+    // the focused source crisp against a busy frame. The `scale` animation
+    // that used to sit here eased to a constant 1f and fed nothing -- the
+    // graphicsLayer below had long since been pinned to literal 1f -- so it
+    // is gone rather than left running on every focus change.
     val alpha by animateFloatAsState(
         targetValue = if (isFocused) 1f else 0.97f,
         animationSpec = tween(140),
@@ -376,8 +376,6 @@ private fun StreamCard(
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer {
-                scaleX = 1f
-                scaleY = 1f
                 this.alpha = alpha
             }
             .onFocusChanged { isFocused = it.isFocused }

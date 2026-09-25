@@ -1,6 +1,6 @@
 package com.kennyb1201.kbstream.ui.components
 
-import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyRow
@@ -11,16 +11,20 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
+import androidx.tv.material3.Glow
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.tmdb.TmdbGenre
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBFocusChip
+import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
+import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -101,18 +105,45 @@ private fun DiscoverFilterChip(
                 else -> KBTextLo
             }
         ),
-        modifier = Modifier
-            .clip(shape)
-            .border(
-                1.dp,
-                when {
-                    selected -> KBAccent
-                    focused -> KBTextHi
-                    else -> KBTextLo.copy(alpha = 0.35f)
-                },
-                shape
+        // The shared focus vocabulary (see KBFocus* in the theme). These are
+        // the chips the discover screens are crossed with -- services,
+        // networks, studios, decades -- and they were the one chip row in the
+        // app that did not move on D-pad focus at all: no growth, and (a tv
+        // Surface with no `scale` reports nothing on press either) no
+        // press-in. Colour and border alone carried the whole cue.
+        scale = ClickableSurfaceDefaults.scale(
+            focusedScale = KBFocusChip,
+            pressedScale = KBFocusPressed
+        ),
+        // The border belongs to the Surface, not to a `.clip(shape).border()`
+        // on the modifier: a caller-side clip wraps the whole Surface, so it
+        // pins the animated growth to the chip's layout bounds and swallows
+        // the scale -- the pitfall LibraryPicker's row documents. Leaving the
+        // clip in place is what made this row look like it had no focus
+        // animation even once one was asked for.
+        border = ClickableSurfaceDefaults.border(
+            border = Border(
+                border = BorderStroke(
+                    1.dp,
+                    if (selected) KBAccent else KBTextLo.copy(alpha = 0.35f)
+                ),
+                shape = shape
+            ),
+            focusedBorder = Border(
+                border = BorderStroke(
+                    2.dp,
+                    if (selected) KBAccent else KBTextHi
+                ),
+                shape = shape
             )
-            .onFocusChanged { focused = it.isFocused }
+        ),
+        glow = ClickableSurfaceDefaults.glow(
+            focusedGlow = Glow(
+                elevationColor = KBAccent,
+                elevation = KBFocusGlowSmall
+            )
+        ),
+        modifier = Modifier.onFocusChanged { focused = it.isFocused }
     ) {
         Text(
             text = label,

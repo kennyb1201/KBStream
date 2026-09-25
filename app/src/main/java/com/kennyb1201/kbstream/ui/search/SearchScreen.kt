@@ -84,7 +84,9 @@ import com.kennyb1201.kbstream.ui.components.rememberLongPressModifier
 import com.kennyb1201.kbstream.ui.components.PosterSize
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBFocusCard
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
+import com.kennyb1201.kbstream.ui.theme.KBFocusGlow
 import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
 import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
@@ -1205,6 +1207,20 @@ private fun SearchChip(
             border = Border(BorderStroke(1.dp, borderColor)),
             focusedBorder = Border(BorderStroke(2.dp, KBAccent))
         ),
+        // Chip step of the shared focus scale, plus the press-in. These browse
+        // chips lit up on focus but never moved, so a Select press read as
+        // nothing happening at all.
+        scale = CardDefaults.scale(
+            scale = 1f,
+            focusedScale = KBFocusChip,
+            pressedScale = KBFocusPressed
+        ),
+        glow = CardDefaults.glow(
+            focusedGlow = Glow(
+                elevationColor = KBAccent,
+                elevation = KBFocusGlowSmall
+            )
+        ),
         modifier = modifier
             .then(rememberLongPressModifier(onLongClick))
             .focusRequester(returnFocusRequester)
@@ -1281,6 +1297,19 @@ private fun PersonResultCard(
             border = Border(BorderStroke(1.dp, KBTextLo.copy(alpha = 0.25f))),
             focusedBorder = Border(BorderStroke(2.dp, KBAccent))
         ),
+        // Card step of the shared focus scale: a search result is a card, and
+        // these had border + colour feedback but no movement and no press.
+        scale = CardDefaults.scale(
+            scale = 1f,
+            focusedScale = KBFocusCard,
+            pressedScale = KBFocusPressed
+        ),
+        glow = CardDefaults.glow(
+            focusedGlow = Glow(
+                elevationColor = KBAccent,
+                elevation = KBFocusGlow
+            )
+        ),
         modifier = Modifier.width(260.dp)
     ) {
         Column(
@@ -1338,6 +1367,19 @@ private fun StudioResultCard(
         border = CardDefaults.border(
             border = Border(BorderStroke(1.dp, KBTextLo.copy(alpha = 0.25f))),
             focusedBorder = Border(BorderStroke(2.dp, KBAccent))
+        ),
+        // Same card treatment as the person result, so the two rows of results
+        // move together (see KBFocus* in the theme).
+        scale = CardDefaults.scale(
+            scale = 1f,
+            focusedScale = KBFocusCard,
+            pressedScale = KBFocusPressed
+        ),
+        glow = CardDefaults.glow(
+            focusedGlow = Glow(
+                elevationColor = KBAccent,
+                elevation = KBFocusGlow
+            )
         ),
         modifier = Modifier.width(240.dp)
     ) {

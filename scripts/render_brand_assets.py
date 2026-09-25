@@ -679,6 +679,14 @@ def mark_layers(d, x, y):
 
 TILE = 108.0
 
+# The mark inside the icon plate. The adaptive-icon safe zone is a 66dp
+# diameter circle centred in the 108dp layer -- a launcher is free to crop
+# everything outside it -- so 62 leaves 2dp of margin all round. It used to be
+# 58, which read as a small badge floating in the plate rather than as the
+# app's mark: the launcher rail draws this at 48-96px, and 58/108 of 48px is
+# under 26px of button.
+ICON_MARK_D = 62.0
+
 
 def tile_plate(inset=3.5, round_corner=False):
     if round_corner:
@@ -693,9 +701,7 @@ def icon_layers(round_icon=False):
         ([circle(TILE / 2.0, TILE / 2.0, 52.0)], rad((TILE / 2.0, TILE / 2.0 - 4), 52.0, BRASS, 0.17)),
         (ring(5.6, 5.6, TILE - 11.2, TILE - 11.2, (TILE - 11.2) * 0.21, 1.5), solid(rgb("E8A33D", 0.30))),
     ]
-    # 58 of the 108dp layer: big enough to carry the icon at 48px, small enough
-    # to stay inside the 66dp safe circle the launcher masks to.
-    d = 58.0
+    d = ICON_MARK_D
     layers += mark_layers(d, (TILE - d) / 2.0, (TILE - d) / 2.0)
     return layers
 
@@ -709,36 +715,61 @@ BANNER_H = 180.0
 
 TAGLINE = "MOVIES \u00b7 SERIES \u00b7 LIVE TV"
 
+# The plate is authored once, in design units measured at the banner's own
+# 320x180 basis, and `k` scales it: 1.0 is the Leanback banner exactly, 4.0 is
+# the same artwork at 1280x720. The store listing plates reuse this composition
+# rather than restating it, so the project has one lockup instead of three that
+# drift apart.
+PLATE_WORD_CAP = 29.0
+PLATE_TAG_CAP = 7.5
+PLATE_LEAD = 11.0       # wordmark block down to the tagline
+PLATE_MARK_GAP = 26.0   # mark across to the wordmark
+PLATE_HALO_R = 132.0
+PLATE_BEAM_H = 78.0     # half-height of the light beam at the plate's right edge
 
-def banner_layers():
-    mark_d = MARK_D
-    word = wordmark(BOLD, "KBSTREAM", cap=29.0, tracking_em=0.05)
+
+def plate_layers(w, h, k=1.0):
+    """The KBStream plate: background, mark-as-light-source, lockup.
+
+    The lockup is centred in (w, h) at design scale `k`, so a wider plate gets
+    more breathing room around the same lockup rather than a stretched one.
+    `k = 1.0` at 320x180 is the TV banner, bit for bit.
+    """
+    mark_d = MARK_D * k
+    word = wordmark(BOLD, "KBSTREAM", cap=PLATE_WORD_CAP * k, tracking_em=0.05)
     word_w = bbox(word)[2] - bbox(word)[0]
-    tag = fitted_line(MEDIUM, TAGLINE, cap=7.5, target_w=word_w)
-    gap = 26.0
+    tag = fitted_line(MEDIUM, TAGLINE, cap=PLATE_TAG_CAP * k, target_w=word_w)
+    gap = PLATE_MARK_GAP * k
     total = mark_d + gap + word_w
-    x0 = (BANNER_W - total) / 2.0
+    x0 = (w - total) / 2.0
     mark_x = x0
-    mark_y = (BANNER_H - mark_d) / 2.0
+    mark_y = (h - mark_d) / 2.0
     text_x = x0 + mark_d + gap
-    block_top = (BANNER_H - (29.0 + 11.0 + 7.5)) / 2.0
+    block_top = (h - (PLATE_WORD_CAP + PLATE_LEAD + PLATE_TAG_CAP) * k) / 2.0
 
-    # The mark is the banner's light source: a halo sits behind it and a wide,
+    # The mark is the plate's light source: a halo sits behind it and a wide,
     # very faint beam opens out of the play glyph across the lockup. Both are
     # low enough that they read as depth rather than as decoration -- a plain
     # navy plate with a logo dropped on it is what looks cheap.
-    tip_x, tip_y = mark_x + mark_d, BANNER_H / 2.0
+    tip_x, tip_y = mark_x + mark_d, h / 2.0
+    beam_h = PLATE_BEAM_H * k
+    halo_r = PLATE_HALO_R * k
     layers = [
-        ([rect(0, 0, BANNER_W, BANNER_H)], lin((0, 0), (0, BANNER_H), BANNER_TOP, BANNER_BOT)),
-        ([[(tip_x, tip_y), (BANNER_W, tip_y - 78.0), (BANNER_W, tip_y + 78.0)]],
-         lin((tip_x, tip_y), (BANNER_W * 0.86, tip_y), rgb("F7CE86", 0.11), rgb("F7CE86", 0.0))),
-        ([circle(tip_x - mark_d / 2.0, tip_y, 132.0)],
-         rad((tip_x - mark_d / 2.0, tip_y - 6.0), 132.0, BRASS, 0.16)),
+        ([rect(0, 0, w, h)], lin((0, 0), (0, h), BANNER_TOP, BANNER_BOT)),
+        ([[(tip_x, tip_y), (w, tip_y - beam_h), (w, tip_y + beam_h)]],
+         lin((tip_x, tip_y), (w * 0.86, tip_y), rgb("F7CE86", 0.11), rgb("F7CE86", 0.0))),
+        ([circle(tip_x - mark_d / 2.0, tip_y, halo_r)],
+         rad((tip_x - mark_d / 2.0, tip_y - 6.0 * k), halo_r, BRASS, 0.16)),
     ]
     layers += mark_layers(mark_d, mark_x, mark_y)
     layers.append((move(word, text_x, block_top), solid(TEXT_HI)))
-    layers.append((move(tag, text_x, block_top + 29.0 + 11.0), solid(rgb("8891A0", 0.92))))
+    layers.append((move(tag, text_x, block_top + (PLATE_WORD_CAP + PLATE_LEAD) * k),
+                   solid(rgb("8891A0", 0.92))))
     return layers
+
+
+def banner_layers():
+    return plate_layers(BANNER_W, BANNER_H)
 
 
 # --------------------------------------------------------------------------- #
@@ -772,6 +803,16 @@ def logo_layers():
 
 ICON_SIZES = [("mdpi", 48), ("hdpi", 72), ("xhdpi", 96), ("xxhdpi", 144), ("xxxhdpi", 192)]
 
+# The two listing plates. A Play listing wants a 1280x720 banner and a 1024x500
+# feature graphic, and neither is the launcher banner resampled: they are the
+# same composition laid out at their own size, so the type and the mark keep
+# their proportions. The feature graphic is laid out at 1024 wide (k = 1024/320)
+# which is what holds its lockup at the same relative size as the banner's.
+STORE_PLATES = (
+    ("kbstream-banner-1280x720", 1280.0, 720.0, 4.0),
+    ("kbstream-feature-graphic-1024x500", 1024.0, 500.0, 3.2),
+)
+
 
 def emit_banner():
     # The design is authored at the spec's own 320x180; the bitmap is written at
@@ -786,6 +827,19 @@ def emit_banner():
     written.append(write(os.path.join(BRAND, "kbstream-banner.png"), png_bytes(buf, w, h, alpha=False)))
     written.append(write(os.path.join(BRAND, "kbstream-banner.svg"),
                          svg_doc(layers, BANNER_W, BANNER_H, "KBStream TV banner")))
+    return written
+
+
+def emit_store_banners():
+    """The store listing plates: the same plate, laid out at listing sizes."""
+    written = []
+    for name, w, h, k in STORE_PLATES:
+        layers = plate_layers(w, h, k)
+        iw, ih = int(w), int(h)
+        written.append(write(os.path.join(BRAND, name + ".png"),
+                             png_bytes(render(layers, iw, ih), iw, ih, alpha=False)))
+        written.append(write(os.path.join(BRAND, name + ".svg"),
+                             svg_doc(layers, w, h, name)))
     return written
 
 
@@ -834,7 +888,7 @@ def emit_logo():
 
 def emit_vectors():
     """The adaptive icon's layers, plus the monochrome (themed-icon) variant."""
-    d = 58.0
+    d = ICON_MARK_D
     ox = oy = (TILE - d) / 2.0
     glyph = _poly_d(mark(d, ox, oy))
     fg = [(glyph, lin((0.0, oy), (0.0, oy + d), BRASS_HI, BRASS_LO))]
@@ -851,8 +905,8 @@ def emit_vectors():
                          "KBStream icon plate: the theme's void navy with the brass halo.")),
         write(os.path.join(RES, "drawable", "ic_launcher_foreground.xml"),
               vector_xml(TILE, TILE, TILE, fg,
-                         "KBStream mark: the brass play button. 58 of the 108dp layer, so it\n"
-                         "     sits inside the 66dp safe circle the launcher masks to.")),
+                         "KBStream mark: the brass play button. %.0f of the 108dp layer, so it\n"
+                         "     sits inside the 66dp safe circle the launcher masks to." % ICON_MARK_D)),
         write(os.path.join(RES, "drawable", "ic_launcher_monochrome.xml"),
               vector_xml(TILE, TILE, TILE, mono,
                          "Single-colour mark for Android 13+ themed icons.")),
@@ -907,6 +961,24 @@ def emit_sheet():
     return [write(os.path.join(BRAND, "preview.png"), png_bytes(buf, w, h))]
 
 
+def emit_store_sheet():
+    """The listing plates on their own sheet, so the launcher set stays one
+    readable image instead of growing a row of very wide plates under it."""
+    fg_w, fg_h = 1024, 500
+    hd_scale = 0.9
+    hd_w, hd_h = int(1280 * hd_scale), int(720 * hd_scale)
+    pad, gap = 40, 30
+    w = max(fg_w, hd_w) + 2 * pad
+    h = pad + fg_h + gap + hd_h + pad
+    buf = new_buffer(w, h)
+    fill(buf, w, h, [rect(0, 0, w, h)], solid(rgb("222834")))
+    fg = render(plate_layers(1024.0, 500.0, 3.2), fg_w, fg_h)
+    blit(buf, w, h, fg, fg_w, fg_h, (w - fg_w) // 2, pad)
+    hd = render(scale_layers(plate_layers(1280.0, 720.0, 4.0), hd_scale), hd_w, hd_h)
+    blit(buf, w, h, hd, hd_w, hd_h, (w - hd_w) // 2, pad + fg_h + gap)
+    return [write(os.path.join(BRAND, "preview-store.png"), png_bytes(buf, w, h))]
+
+
 # --------------------------------------------------------------------------- #
 # ASCII preview, for checking a design without an image viewer
 # --------------------------------------------------------------------------- #
@@ -939,6 +1011,7 @@ def ascii_preview(layers, w, h, cols=104):
 
 PREVIEWS = {
     "banner": lambda: (banner_layers(), int(BANNER_W), int(BANNER_H)),
+    "promo": lambda: (plate_layers(1024.0, 500.0, 3.2), 1024, 500),
     "icon": lambda: (icon_layers(), int(TILE), int(TILE)),
     "round": lambda: (icon_layers(True), int(TILE), int(TILE)),
     "logo": lambda: (logo_layers(), int(LOGO_W), int(LOGO_H)),
@@ -952,8 +1025,9 @@ def main():
         print(ascii_preview(layers, w, h))
         return
     written = (
-        emit_banner() + emit_icons() + emit_logo() + emit_vectors()
-        + emit_notification_icon() + emit_sheet()
+        emit_banner() + emit_store_banners() + emit_icons() + emit_logo()
+        + emit_vectors() + emit_notification_icon() + emit_sheet()
+        + emit_store_sheet()
     )
     for path in written:
         print(path)

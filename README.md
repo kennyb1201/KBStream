@@ -103,11 +103,13 @@ scripts/           # TMDB id-verification probes used while curating the
                    # (font_glyphs.py draws a wordmark from a bundled TTF,
                    # svg_preview.py renders a drawable's path as ASCII).
                    # render_brand_assets.py is the one source of truth for the
-                   # launcher branding -- the play-button mark, the TV banner,
-                   # the icons and the lockup -- rasterizing them to res/ and
-                   # to docs/brand/ (run it after any design change; nothing
-                   # is hand-edited). `--preview banner|icon|logo|mark|round`
-                   # prints one of them as ASCII.
+                   # branding -- the play-button mark, the TV banner, the
+                   # icons, the lockup and the two store listing plates (a
+                   # 1280x720 banner and a 1024x500 feature graphic, both laid
+                   # out from the same plate as the TV banner) -- rasterizing
+                   # them to res/ and to docs/brand/ (run it after any design
+                   # change; nothing is hand-edited). `--preview
+                   # banner|promo|icon|logo|mark|round` prints one as ASCII.
 supabase_profiles.sql  # optional dashboard table for inspecting profiles
 docs/              # Supabase RLS policy reference
 ```

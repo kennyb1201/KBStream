@@ -43,6 +43,11 @@ fun KBCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     onLongClick: (() -> Unit)? = null,
+    // Which step of the shared focus scale this surface is (see KBFocus* in the
+    // theme). The default is the card step; a surface that is much wider or
+    // taller than a tile -- a full-width list or guide row -- passes its own
+    // class so that growing it does not shove the rows around it.
+    focusedScale: Float = KBFocusCard,
     content: @Composable ColumnScope.() -> Unit
 ) {
     // Timestamp of the most recent "fresh" KeyDown (repeatCount == 0).
@@ -65,7 +70,7 @@ fun KBCard(
         // the same two beats for free — see the KBFocus* scale in the theme.
         scale = CardDefaults.scale(
             scale = 1f,
-            focusedScale = KBFocusCard,
+            focusedScale = focusedScale,
             pressedScale = KBFocusPressed
         ),
         border = CardDefaults.border(

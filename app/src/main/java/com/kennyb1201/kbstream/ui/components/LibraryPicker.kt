@@ -583,9 +583,16 @@ private fun PickerAction(
             }
         }
     } else {
+        // Plain (non-clickable) Surface, the same disabled shape SyncSection's
+        // SyncActionButton and the Settings rows use. This was a *clickable*
+        // Surface with an empty onClick, which left a dead control in the
+        // focus order: the D-pad stopped on something that looked disabled,
+        // took focus, and did nothing when pressed. A plain Surface is skipped
+        // by focus entirely. It also picks up the card shape the enabled
+        // branch gets from KBCard, which the clickable default did not match.
         androidx.tv.material3.Surface(
-            onClick = {},
-            colors = androidx.tv.material3.ClickableSurfaceDefaults.colors(
+            shape = KBShapeCard,
+            colors = androidx.tv.material3.SurfaceDefaults.colors(
                 containerColor = KBSurface.copy(alpha = 0.50f),
                 contentColor = KBTextLo.copy(alpha = 0.50f)
             )

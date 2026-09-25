@@ -127,6 +127,7 @@ import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBFocusNone
 import com.kennyb1201.kbstream.ui.theme.KBPlum
 import com.kennyb1201.kbstream.ui.theme.KBRust
 import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
@@ -253,8 +254,13 @@ private fun TopBarChip(
             )
         ),
         glow = androidx.tv.material3.ClickableSurfaceDefaults.glow(),
+        // No growth, on purpose: a top-bar chip is about as wide as its label
+        // plus the dismiss affordance beside it, so growing it would move the
+        // bar. This is exactly the case KBFocusNone in the theme names -- the
+        // container / border / content swap is the whole focus cue. It was the
+        // last raw focus-scale literal left in the app.
         scale = androidx.tv.material3.ClickableSurfaceDefaults.scale(
-            focusedScale = 1f
+            focusedScale = KBFocusNone
         )
     ) {
         content()

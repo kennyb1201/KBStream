@@ -98,6 +98,7 @@ import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBFocusRow
 import com.kennyb1201.kbstream.ui.theme.KBRust
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
@@ -1958,11 +1959,13 @@ private fun ChannelRowCard(
     modifier: Modifier = Modifier
 ) {
     var isFocused by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(
-        targetValue = if (isFocused) 1.015f else 1f,
-        animationSpec = tween(durationMillis = 140),
-        label = "channelRowScale"
-    )
+    // No hand-rolled scale here any more. The row eased itself to 1.015 in a
+    // graphicsLayer *on top of* the growth KBCard already applies, so a focused
+    // channel grew 1.03 x 1.015 = 1.045 -- more than any other surface in the
+    // app, on the widest rows in it, against the theme's own rule that a row
+    // takes the 1.02 step. It now takes that step, and the press-in, from
+    // KBCard like every other row; the graphicsLayer keeps only the opacity
+    // dim below.
     val alpha by animateFloatAsState(
         targetValue = if (isFocused || selected) 1f else 0.96f,
         animationSpec = tween(durationMillis = 140),
@@ -1985,11 +1988,10 @@ private fun ChannelRowCard(
     // Horizontal inset keeps the focused border + glow from clipping
     // against the channel list's viewport edges (LazyColumn clips
     // children to its bounds; the glow paints outside the card bounds).
+    focusedScale = KBFocusRow,
     modifier = modifier
         .padding(horizontal = 4.dp)
         .graphicsLayer {
-            scaleX = scale
-            scaleY = scale
             this.alpha = alpha
         }
         .onFocusChanged {
