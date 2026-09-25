@@ -260,6 +260,20 @@ class TmdbRepository private constructor(context: Context) :
         tmdbResolutionMemoryCache.clear()
     }
 
+    /**
+     * Each cache against its own cap, for the diagnostics dump.
+     *
+     * The cap is printed next to the size on purpose: a cache that sits at its
+     * ceiling all session is a working cap, while one that climbs past it means
+     * [pruneMemoryCaches] is not being reached — and those two read identically
+     * if only the size is shown.
+     */
+    override fun cacheStats(): String =
+        "tmdb: detail=${detailCache.size}/$MAX_DETAIL_ENTRIES" +
+            " season=${seasonEpisodesCache.size}/$MAX_SEASON_ENTRIES" +
+            " imdbRes=${imdbResolutionMemoryCache.size}/$MAX_RESOLUTION_ENTRIES" +
+            " tmdbRes=${tmdbResolutionMemoryCache.size}/$MAX_RESOLUTION_ENTRIES"
+
     private fun pruneImdbCacheOnce() {
         if (cachePruned.compareAndSet(false, true)) {
             val cutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(90)

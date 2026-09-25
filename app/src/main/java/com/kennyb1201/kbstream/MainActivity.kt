@@ -401,14 +401,21 @@ class MainActivity : ComponentActivity() {
     ) {
         super.onCreate(savedInstanceState)
         // Application.onCreate → this activity's create: the part of the
-        // launch the user actually waits on before the first frame.
-        com.kennyb1201.kbstream.data.reporting.PerfTrace
-            .sinceAppStartMs()
-            .takeIf { it >= 0 }
-            ?.let {
-                com.kennyb1201.kbstream.data.reporting.PerfTrace
-                    .record("startup.mainCreate", it)
-            }
+        // launch the user actually waits on before the first frame. A
+        // cumulative figure rather than a phase delta, so it is recorded here
+        // instead of through recordStartupPhase — but it is still LOGGED, or
+        // `adb logcat -s STARTUP` would show only three of the four phases.
+        val sinceAppStartMs =
+            com.kennyb1201.kbstream.data.reporting.PerfTrace.sinceAppStartMs()
+        if (sinceAppStartMs >= 0) {
+            com.kennyb1201.kbstream.data.reporting.PerfTrace
+                .record("startup.mainCreate", sinceAppStartMs)
+            Log.w(
+                TAG_STARTUP,
+                "startup.mainCreate=${sinceAppStartMs}ms " +
+                    "sinceAppStart=${sinceAppStartMs}ms"
+            )
+        }
 
         WindowCompat.setDecorFitsSystemWindows(
             window,

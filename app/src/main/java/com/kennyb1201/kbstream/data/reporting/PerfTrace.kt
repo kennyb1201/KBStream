@@ -85,6 +85,29 @@ internal object PerfTrace {
     }
 
     /**
+     * The newest duration under each label starting with [prefix], in the order
+     * those labels were first recorded.
+     *
+     * Exists so the launch phases can be printed as a fixed breakdown rather
+     * than left to [summary]'s busiest-labels ranking. Each phase is recorded
+     * about once, so a few hundred milliseconds never out-totals a session of
+     * network traffic — the breakdown therefore drops out of the top six
+     * exactly on the slow launch it was added to measure.
+     */
+    fun latestByPrefix(prefix: String): List<Pair<String, Long>> {
+        val snapshot = synchronized(lock) { samples.toList() }
+        // mutableMapOf is a LinkedHashMap: assigning an existing key keeps its
+        // original position, which is what makes this first-seen order.
+        val lastByLabel = mutableMapOf<String, Long>()
+        snapshot.forEach { sample ->
+            if (sample.label.startsWith(prefix)) {
+                lastByLabel[sample.label] = sample.ms
+            }
+        }
+        return lastByLabel.entries.map { it.key to it.value }
+    }
+
+    /**
      * Multi-line summary for the diagnostics dump. Empty string when nothing
      * was recorded, so a quiet session adds no noise.
      */

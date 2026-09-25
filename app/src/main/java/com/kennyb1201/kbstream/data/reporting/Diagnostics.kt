@@ -6,10 +6,12 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.os.Build
+import android.os.Debug
 import android.util.Log
 import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
@@ -51,6 +53,7 @@ object Diagnostics {
             "sha ${BuildConfig.GIT_SHA.take(7)}")
 
         report.appendLine(deviceLine(app))
+        report.appendLine(memoryLine())
         report.appendLine(accountLine())
         report.appendLine(profileLine())
         report.appendLine(cleanupLine(app))
@@ -58,6 +61,9 @@ object Diagnostics {
         report.appendLine(localLine(app))
         markerLines(app).forEach { report.appendLine(it) }
         report.appendLine(addonLine(app))
+        // The launch breakdown, printed explicitly: it is the one set of samples
+        // the perf summary's ranking below is most likely to crowd out.
+        startupLine()?.let { report.appendLine(it) }
         // Where the time goes: startup + per-service HTTP + home refresh, with
         // the slowest samples named. Empty on a session that recorded nothing.
         PerfTrace.summary().takeIf { it.isNotEmpty() }?.let { perf ->
@@ -92,6 +98,59 @@ object Diagnostics {
         return "device: ${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} " +
             "(SDK ${Build.VERSION.SDK_INT}) · fireTV=$fireTv · abi=" +
             "${Build.SUPPORTED_ABIS.firstOrNull() ?: "?"} · lowRam=$lowRam · totalMem=${totalGb}GB · heap=${heapMb}MB"
+    }
+
+    /**
+     * What the process is holding, in both places it can run out.
+     *
+     * The launch that prompted the memory work died with the Java heap pinned
+     * at its growth limit, and until now no line in this report showed the heap
+     * at all — Runtime was only ever consulted inside the player, for its own
+     * buffer budget. Bitmap pixels live in native memory on API 26+, so the
+     * native figure is the other half of the same question.
+     *
+     * The cache figures come from the caches themselves. MemoryPressure holds
+     * owners weakly and reports only the live ones, so this reads what exists
+     * rather than constructing a repository in order to measure it — and a cap
+     * printed beside its size is what separates a working bound from one that is
+     * never actually reached.
+     */
+    private fun memoryLine(): String {
+        val runtime = Runtime.getRuntime()
+        val usedMb = (runtime.totalMemory() - runtime.freeMemory()) / 1_048_576
+        val maxMb = runtime.maxMemory() / 1_048_576
+        val percent = if (maxMb > 0L) usedMb * 100 / maxMb else 0L
+        // -1 when the runtime will not report it; never worth failing a dump over.
+        val nativeMb = runCatching { Debug.getNativeHeapAllocatedSize() / 1_048_576 }
+            .getOrDefault(-1L)
+        val caches = MemoryPressure.cacheStatsLines()
+        return buildString {
+            append("memory: java=$usedMb/${maxMb}MB ($percent%) native=${nativeMb}MB")
+            append(" cacheOwners=${caches.size}")
+            if (caches.isNotEmpty()) {
+                appendLine()
+                append("  caches: ")
+                append(caches.joinToString(" · "))
+            }
+        }
+    }
+
+    /**
+     * The launch phase by phase, in the order they happen.
+     *
+     * Printed ahead of the perf summary because that summary ranks by total time
+     * and keeps only the top six, while each launch phase is recorded about once
+     * — so the slow launch these exist to explain is exactly when they would be
+     * crowded out. Null when no phase has been recorded (a process that never
+     * re-created its activity).
+     */
+    private fun startupLine(): String? {
+        val phases = PerfTrace.latestByPrefix("startup.")
+        if (phases.isEmpty()) return null
+        val breakdown = phases.joinToString(" ") { (label, ms) ->
+            "${label.removePrefix("startup.")}=${ms}ms"
+        }
+        return "startup: $breakdown"
     }
 
     private fun accountLine(): String {

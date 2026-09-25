@@ -19,43 +19,92 @@ import java.util.concurrent.CopyOnWriteArrayList
  * of it needs to survive a fullscreen viewing, and keeping it resident is
  * exactly what leaves the player without headroom.
  *
+ * It also *reports*: Diagnostics reads the live owners' sizes back out of this
+ * same registry, which is what makes a bounded cache verifiable on a device
+ * instead of assumed. Nothing here is created to be measured — the registry
+ * holds owners weakly and simply skips the ones that are gone.
+ *
  * Deliberately a leaf: this file knows nothing about the guide or the player,
  * so the callers stay `onTrimMemory` (system pressure) and the fullscreen
  * player opening (self-inflicted pressure).
  */
 object MemoryPressure {
 
-    /** An owner of rebuildable caches that can drop them on demand. */
-    interface Releasable {
+    /**
+     * Something that holds caches and can say how big they are.
+     *
+     * The report is a pull, not a push: a size is asked for when the diagnostics
+     * dump is built rather than kept up to date on every write, so a cache pays
+     * nothing for being observable.
+     */
+    interface CacheOwner {
+        /** Entry counts of what this owner holds, one line for Diagnostics. */
+        fun cacheStats(): String
+    }
+
+    /**
+     * An owner of rebuildable caches that can drop them on demand.
+     *
+     * Every Releasable is also observed; not everything observed is releasable.
+     * The trailer source cache is the counter-example worth knowing about: it is
+     * bounded and worth watching, but rebuilding a dropped entry means
+     * re-resolving over the network against YouTube's anonymous player API —
+     * the exact churn its cache exists to prevent — so it is reported and never
+     * released.
+     */
+    interface Releasable : CacheOwner {
         fun releaseCaches()
     }
 
     // Weak by design. Holding these strongly would mean the registry keeps a
     // released ViewModel's entire cache alive — the opposite of the point.
-    private val releasables = CopyOnWriteArrayList<WeakReference<Releasable>>()
+    private val tracked = CopyOnWriteArrayList<WeakReference<CacheOwner>>()
 
     /** Called by a cache owner as it is constructed. */
-    fun register(releasable: Releasable) {
-        releasables.add(WeakReference(releasable))
+    fun register(owner: CacheOwner) {
+        tracked.add(WeakReference(owner))
     }
 
     /**
-     * Drops every registered cache. Safe to call at any time from any thread,
-     * including when nothing has registered: the caches it clears are all
-     * rebuilt on next use rather than assumed to be present.
+     * Drops every registered releasable cache. Safe to call at any time from
+     * any thread, including when nothing has registered: the caches it clears
+     * are all rebuilt on next use rather than assumed to be present.
      */
     fun releaseBrowsingCaches() {
         // Iterating a CopyOnWriteArrayList walks a snapshot, so removing dead
         // references mid-loop is safe.
-        releasables.forEach { ref ->
-            val releasable = ref.get()
-            if (releasable == null) {
-                releasables.remove(ref)
+        tracked.forEach { ref ->
+            val owner = ref.get()
+            if (owner == null) {
+                tracked.remove(ref)
             } else {
-                // One bad actor must not leave the rest of the caches resident.
-                runCatching { releasable.releaseCaches() }
+                // Owners that are only observed have nothing to give back. One
+                // bad actor must not leave the rest of the caches resident.
+                (owner as? Releasable)?.let { runCatching { it.releaseCaches() } }
             }
         }
+    }
+
+    /**
+     * One line per live cache owner, for the diagnostics dump.
+     *
+     * Dead references are pruned here as well as in [releaseBrowsingCaches]: a
+     * dump is usually taken on an idle session, which is exactly when a released
+     * repository's entry is most likely to still be sitting in the list.
+     */
+    fun cacheStatsLines(): List<String> {
+        val lines = mutableListOf<String>()
+        tracked.forEach { ref ->
+            val owner = ref.get()
+            if (owner == null) {
+                tracked.remove(ref)
+            } else {
+                // A cache that throws while sizing itself must not lose the rest
+                // of the report — this runs inside the diagnostics dump.
+                runCatching { lines += owner.cacheStats() }
+            }
+        }
+        return lines
     }
 }
 

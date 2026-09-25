@@ -4,12 +4,13 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.util.Log
+import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.memory.evictOldest
 import com.kennyb1201.kbstream.ui.player.NativePlayerActivity
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-object TrailerPlayerLauncher {
+object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
 
     private const val TAG = "TrailerLauncher"
 
@@ -55,6 +56,15 @@ object TrailerPlayerLauncher {
     private const val MAX_SOURCE_ENTRIES = 100
     private const val MAX_FAILURE_ENTRIES = 200
 
+    init {
+        // Observed but NOT releasable, which is why this is CacheOwner and not
+        // Releasable: the sizes are worth seeing in diagnostics, but dropping a
+        // cached source means re-resolving it over the network against
+        // YouTube's anonymous player API, and that churn is what these caches
+        // exist to prevent. Pressure must not take them.
+        MemoryPressure.register(this)
+    }
+
     /**
      * Brings both caches back under their caps, oldest first.
      *
@@ -68,6 +78,11 @@ object TrailerPlayerLauncher {
         evictOldest(sourceCache, { it.cachedAt }, MAX_SOURCE_ENTRIES)
         evictOldest(resolutionFailures, { it }, MAX_FAILURE_ENTRIES)
     }
+
+    /** Both caches against their caps, for the diagnostics dump. */
+    override fun cacheStats(): String =
+        "trailer: sources=${sourceCache.size}/$MAX_SOURCE_ENTRIES" +
+            " failures=${resolutionFailures.size}/$MAX_FAILURE_ENTRIES"
 
     /** Drops any cached source for [videoId] so the next resolve fetches a fresh signed URL. */
     fun invalidate(videoId: String) {

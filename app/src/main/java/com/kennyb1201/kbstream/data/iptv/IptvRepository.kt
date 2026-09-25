@@ -175,6 +175,18 @@ class IptvRepository(
         guideQueryCache.clear()
     }
 
+    /**
+     * What the guide is holding, for the diagnostics dump.
+     *
+     * These are the app's largest Java-heap structures, so the counts are the
+     * number to read after a guide session: snapshots are keyed by EPG source
+     * (one per configured source), and the query windows are an LRU against a
+     * hard cap — printed with the cap so a leak would show as a climb past it.
+     */
+    override fun cacheStats(): String =
+        "iptv: guideSnapshots=${guideSnapshots.size}" +
+            " guideQueries=${guideQueryCache.size}/$MAX_CACHED_GUIDE_QUERIES"
+
     suspend fun loadPlaylist(
         playlistUrl: String,
         playlistName: String? = null
