@@ -44,6 +44,11 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
+    // Surfaced to the screen so a failed load reads as a failure instead of
+    // an empty decade (same contract as TagViewModel/ActorViewModel).
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error.asStateFlow()
+
     private val _pagingStates = MutableStateFlow<Map<String, RailPagingState>>(emptyMap())
     val pagingStates: StateFlow<Map<String, RailPagingState>> = _pagingStates.asStateFlow()
 
@@ -155,6 +160,7 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch {
             _isLoading.value = true
+            _error.value = null
             _sections.value = emptyList()
             _resolvedIds.value = emptyMap()
             _pagingStates.value = emptyMap()
@@ -178,6 +184,7 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 }
             } catch (e: Exception) {
+                _error.value = e.message ?: "Failed to load decade"
                 Log.e("DECADE_VM", "load failed for decade $decadeStart", e)
             } finally {
                 _isLoading.value = false

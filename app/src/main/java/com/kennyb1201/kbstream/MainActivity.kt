@@ -102,7 +102,16 @@ sealed class Screen {
 
     object Home : Screen()
 
-    object Addons : Screen()
+    /**
+     * Add-on management. [returnTo] is where Back lands, because this screen
+     * is reached from two different places: Settings (the app's normal route
+     * in) and onboarding's setup cards. Its own on-screen BACK button used to
+     * send everyone Home while the hardware BACK sent everyone to Settings —
+     * the same gesture landing on two different screens depending on which
+     * BACK the user pressed. Both now follow where the user actually came
+     * from.
+     */
+    data class Addons(val returnTo: Screen = Home) : Screen()
 
     object Search : Screen()
 
@@ -742,7 +751,7 @@ fun AppRoot() {
         screen = when (val current = screen) {
 
             is Screen.Addons ->
-                Screen.Settings
+                stableBackDestination(current.returnTo)
 
             is Screen.Player ->
                 if (current.parentType == "channel") {
@@ -758,26 +767,30 @@ fun AppRoot() {
                     stableBackDestination(current.returnTo)
                 }
 
+            // Every drill-down goes through stableBackDestination for the
+            // same reason Detail/Streams/Player do: it strips a one-shot
+            // pending target from a Detail destination, so Back can never
+            // re-fire that Detail screen's auto-play.
             is Screen.Actor ->
-                current.returnTo
+                stableBackDestination(current.returnTo)
 
             is Screen.Studio ->
-                current.returnTo
+                stableBackDestination(current.returnTo)
 
             is Screen.Decade ->
-                current.returnTo
+                stableBackDestination(current.returnTo)
 
             is Screen.Tag ->
-                current.returnTo
+                stableBackDestination(current.returnTo)
 
             is Screen.Collection ->
-                current.returnTo
+                stableBackDestination(current.returnTo)
 
             is Screen.CatalogGrid ->
-                current.returnTo
+                stableBackDestination(current.returnTo)
 
             is Screen.KBFolder ->
-                current.returnTo
+                stableBackDestination(current.returnTo)
 
             is Screen.ProfileEdit ->
                 if (current.returnTo != null) {
@@ -864,7 +877,7 @@ fun AppRoot() {
     // until "Start Browsing" is tapped.
     if (!onboardingComplete && screen is Screen.Home) {
         OnboardingScreen(
-            onOpenAddons = { screen = Screen.Addons },
+            onOpenAddons = { screen = Screen.Addons(returnTo = Screen.Home) },
             onOpenSimkl = { screen = Screen.Simkl },
             onOpenGuide = { screen = Screen.Guide },
             onFinish = {
@@ -1026,7 +1039,7 @@ fun AppRoot() {
                     if (active?.kidsMaxAge != null && active.kidsHideAddons) {
                         screen = Screen.Home
                     } else {
-                        screen = Screen.Addons
+                        screen = Screen.Addons(returnTo = Screen.Settings)
                     }
                 },
                 onOpenSimkl = { screen = Screen.Simkl },
@@ -1077,7 +1090,7 @@ fun AppRoot() {
 
             AddonsScreen(
                 onBack = {
-                    screen = Screen.Home
+                    screen = stableBackDestination(current.returnTo)
                 }
             )
         }
@@ -1291,6 +1304,16 @@ fun AppRoot() {
 
         is Screen.Detail -> {
 
+            // A pending target is a one-shot Continue Watching / up-next
+            // request, so it must never be stored as a Back destination:
+            // returning to that Detail screen fires its LaunchedEffect again,
+            // which reopens the player and makes Back look like it did
+            // nothing. Every drill-down opened from this page (actor, studio,
+            // genre, streams) returns here, and keeping the poster / backdrop
+            // / logo / overview is what lets it repaint instantly instead of
+            // re-resolving meta.
+            val stableReturnTo = current.copy(pendingTarget = null)
+
             DetailScreen(
                 type = current.type,
                 id = current.id,
@@ -1311,10 +1334,7 @@ fun AppRoot() {
 
                 onNavigateActor = { personId ->
 
-                    screen = Screen.Actor(
-                        personId,
-                        Screen.Detail(current.type, current.id, current.pendingTarget, current.itemPoster)
-                    )
+                    screen = Screen.Actor(personId, stableReturnTo)
                 },
 
                 onNavigateStudio = {
@@ -1327,7 +1347,7 @@ fun AppRoot() {
                         name,
                         isNetwork,
                         null,
-                        returnTo = Screen.Detail(current.type, current.id, current.pendingTarget, current.itemPoster)
+                        returnTo = stableReturnTo
                     )
                 },
 
@@ -1342,7 +1362,7 @@ fun AppRoot() {
                         name,
                         isKeyword,
                         type,
-                        Screen.Detail(current.type, current.id, current.pendingTarget, current.itemPoster)
+                        stableReturnTo
                     )
                 },
 
@@ -1358,12 +1378,6 @@ fun AppRoot() {
 
                     val manualSourceSelection =
                         ManualSourceSelection.consume()
-                    // A pending target is a one-shot Continue Watching/up-next
-                    // request. Do not keep it in the back destination: returning
-                    // to that Detail screen would fire its LaunchedEffect again,
-                    // reopen Streams, and make Back appear to flash without
-                    // leaving the picker.
-                    val stableReturnTo = current.copy(pendingTarget = null)
 
                     if (
                         !manualSourceSelection &&

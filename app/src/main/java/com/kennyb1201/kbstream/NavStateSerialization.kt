@@ -43,6 +43,11 @@ internal fun encodeScreen(
     put(SCREEN_TYPE_KEY, screen.typeName())
 
     when (screen) {
+        is Screen.Addons -> {
+            if (depth < MAX_RETURN_DEPTH) {
+                put("returnTo", encodeScreen(screen.returnTo, depth + 1))
+            }
+        }
         is Screen.Detail -> {
             put("type", screen.type)
             put("id", screen.id)
@@ -165,7 +170,9 @@ internal fun decodeScreen(
     return try {
         when (json.optString(SCREEN_TYPE_KEY)) {
             "home" -> Screen.Home
-            "addons" -> Screen.Addons
+            "addons" -> Screen.Addons(
+                returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
+            )
             "search" -> Screen.Search
             "simkl" -> Screen.Simkl
             "guide" -> Screen.Guide
@@ -233,8 +240,9 @@ internal fun decodeScreen(
                 folderId = json.optString("folderId"),
                 returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
             )
-            // Legacy saved state from when the manager was its own screen.
-            "kbManager" -> Screen.Addons
+            // Legacy saved state from when the manager was its own screen:
+            // no returnTo was ever recorded, so Back goes Home.
+            "kbManager" -> Screen.Addons()
             "streams" -> {
                 val target = json.optJSONObject("target")
                     ?.let { decodeTarget(it) }

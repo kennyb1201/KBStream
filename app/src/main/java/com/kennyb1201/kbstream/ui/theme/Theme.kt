@@ -85,18 +85,44 @@ private val KBStreamColorScheme get() = darkColorScheme(
     onSurface = KBTextHi
 )
 
+// EVERY slot is defined, not just the handful the first pass needed. A
+// Typography slot that is left out silently keeps TV Material3's default,
+// which is the platform font — so screen titles, dialog titles, section
+// labels and chips written against headlineSmall / headlineMedium /
+// titleSmall / labelMedium were rendering in Roboto while the rest of the app
+// was in Oswald. Which typeface a heading got depended on nothing but which
+// style name the call site happened to pick. Sizes stay close to the Material
+// defaults they replaced (Oswald is condensed, so the same sp reads slightly
+// smaller) and the hierarchy is strictly ordered:
+//   displayLarge > displayMedium > displaySmall > headlineLarge >
+//   headlineMedium > headlineSmall > titleLarge > titleMedium > titleSmall
 private val KBStreamTypography = Typography(
     displayLarge = androidx.compose.ui.text.TextStyle(
         fontFamily = OswaldFamily, fontWeight = FontWeight.Bold, fontSize = 40.sp, letterSpacing = 0.5.sp
     ),
+    displayMedium = androidx.compose.ui.text.TextStyle(
+        fontFamily = OswaldFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, letterSpacing = 0.5.sp
+    ),
+    displaySmall = androidx.compose.ui.text.TextStyle(
+        fontFamily = OswaldFamily, fontWeight = FontWeight.Bold, fontSize = 30.sp, letterSpacing = 0.5.sp
+    ),
     headlineLarge = androidx.compose.ui.text.TextStyle(
         fontFamily = OswaldFamily, fontWeight = FontWeight.SemiBold, fontSize = 28.sp, letterSpacing = 0.5.sp
+    ),
+    headlineMedium = androidx.compose.ui.text.TextStyle(
+        fontFamily = OswaldFamily, fontWeight = FontWeight.SemiBold, fontSize = 26.sp, letterSpacing = 0.5.sp
+    ),
+    headlineSmall = androidx.compose.ui.text.TextStyle(
+        fontFamily = OswaldFamily, fontWeight = FontWeight.SemiBold, fontSize = 22.sp, letterSpacing = 0.5.sp
     ),
     titleLarge = androidx.compose.ui.text.TextStyle(
         fontFamily = OswaldFamily, fontWeight = FontWeight.SemiBold, fontSize = 20.sp, letterSpacing = 1.sp
     ),
     titleMedium = androidx.compose.ui.text.TextStyle(
         fontFamily = OswaldFamily, fontWeight = FontWeight.Medium, fontSize = 16.sp, letterSpacing = 1.5.sp
+    ),
+    titleSmall = androidx.compose.ui.text.TextStyle(
+        fontFamily = OswaldFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, letterSpacing = 1.sp
     ),
     bodyLarge = androidx.compose.ui.text.TextStyle(
         fontFamily = OswaldFamily, fontWeight = FontWeight.Medium, fontSize = 16.sp, letterSpacing = 0.3.sp, lineHeight = 24.sp
@@ -109,6 +135,9 @@ private val KBStreamTypography = Typography(
     ),
     labelLarge = androidx.compose.ui.text.TextStyle(
         fontFamily = OswaldFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, letterSpacing = 0.8.sp
+    ),
+    labelMedium = androidx.compose.ui.text.TextStyle(
+        fontFamily = OswaldFamily, fontWeight = FontWeight.Medium, fontSize = 12.sp, letterSpacing = 1.sp
     ),
     labelSmall = androidx.compose.ui.text.TextStyle(
         fontFamily = OswaldFamily, fontWeight = FontWeight.Medium, fontSize = 11.sp, letterSpacing = 1.sp

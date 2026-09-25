@@ -57,6 +57,8 @@ import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.tmdb.TmdbPersonCredit
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.metaLine
+import com.kennyb1201.kbstream.ui.components.KBStatusMessage
+import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterSize
@@ -76,7 +78,6 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import kotlinx.coroutines.launch
-import androidx.compose.material3.CircularProgressIndicator
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -140,8 +141,8 @@ fun ActorScreen(
     }
 
     when {
-        isLoading -> ActorStatusMessage(icon = "⏳", message = "Loading…")
-        error != null -> ActorStatusMessage(icon = "⚠️", message = "Error: $error")
+        isLoading -> KBStatusMessage(loading = true, message = KB_STATUS_LOADING)
+        error != null -> KBStatusMessage(message = "Error: $error")
         person != null -> {
             val p = person!!
             val context = androidx.compose.ui.platform.LocalContext.current
@@ -583,34 +584,6 @@ fun ActorScreen(
                     }
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun ActorStatusMessage(icon: String, message: String) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .background(KBSurface, RoundedCornerShape(12.dp))
-                .padding(horizontal = 20.dp, vertical = 16.dp)
-        ) {
-            if (icon == "⏳") {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(18.dp),
-                    color = KBAccent,
-                    strokeWidth = 2.dp
-                )
-            } else {
-                Text(icon, style = MaterialTheme.typography.bodyLarge)
-            }
-            Text(
-                message,
-                color = KBTextLo,
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.padding(start = 12.dp)
-            )
         }
     }
 }

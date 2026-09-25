@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -51,6 +50,9 @@ import coil3.size.Size
 import com.kennyb1201.kbstream.data.tmdb.StudioItem
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.ui.components.KBStatusMessage
+import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
+import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.PosterSize
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
@@ -81,6 +83,7 @@ fun TagScreen(
 ) {
     val sectionsRaw by viewModel.sections.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val error by viewModel.error.collectAsStateWithLifecycle()
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
     val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
     val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
@@ -185,13 +188,34 @@ fun TagScreen(
                 when {
                 isLoading -> {
                     item(key = "loading") {
-                        CircularProgressIndicator(color = KBAccent, strokeWidth = 3.dp)
+                        KBStatusMessage(
+                            loading = true,
+                            message = KB_STATUS_LOADING,
+                            modifier = Modifier.fillParentMaxSize()
+                        )
+                    }
+                }
+
+                // A failed load used to fall through to the empty branch, so
+                // a network error was indistinguishable from "this genre has
+                // no titles". ActorScreen has always shown the error; the
+                // browse pages now say it the same way.
+                error != null -> {
+                    item(key = "error") {
+                        KBStatusMessage(
+                            message = "Error: $error",
+                            modifier = Modifier.fillParentMaxSize()
+                        )
                     }
                 }
 
                 sections.isEmpty() -> {
                     item(key = "empty") {
-                        Text("Nothing found for $name")
+                        KBStatusMessage(
+                            icon = KB_STATUS_ICON_EMPTY,
+                            message = "Nothing found for $name",
+                            modifier = Modifier.fillParentMaxSize()
+                        )
                     }
                 }
 
