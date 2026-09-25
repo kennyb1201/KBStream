@@ -109,7 +109,7 @@ internal object NotificationCenter {
         }
 
         val notification = NotificationCompat.Builder(context, CHANNEL_LIVE_REMINDERS)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(channelName.ifBlank { "Live TV" })
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
@@ -185,9 +185,11 @@ internal object NotificationCenter {
         }
 
         val notification = NotificationCompat.Builder(context, CHANNEL_NEW_EPISODES)
-            // Plain vector, not the adaptive launcher icon: small icons are
-            // alpha-masked, and adaptive XML icons render as a solid blob.
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            // A plain vector, not a launcher icon: small icons are alpha-masked
+            // (adaptive XML icons render as a solid blob), and at ~18dp a
+            // bezelled button loses its ring -- ic_notification is the bare
+            // play glyph, scaled up to fill the frame.
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(showTitle)
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
