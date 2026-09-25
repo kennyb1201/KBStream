@@ -21,7 +21,10 @@ object TrailerPlayerLauncher {
      */
     private val resolveMutex = Mutex()
 
-    /** Cache of resolved playback sources per video ID (expire-based TTL). */
+    /**
+     * Cache of resolved playback sources per video ID (expire-based TTL),
+     * capped at [MAX_SOURCE_ENTRIES] (see [pruneCaches]).
+     */
     private val sourceCache =
         java.util.concurrent.ConcurrentHashMap<String, CachedSource>()
 
@@ -30,12 +33,52 @@ object TrailerPlayerLauncher {
      * blocked, removed, resolver outage) are not retried on every hero
      * rotation. Without this, a single unavailable trailer re-runs the full
      * InnerTube → NewPipe → Piped chain (~5s of network churn) every time the
-     * user's cursor passes over its card.
+     * user's cursor passes over its card. Capped at [MAX_FAILURE_ENTRIES].
      */
     private val resolutionFailures =
         java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     private const val FAILURE_TTL_MS = 10 * 60 * 1000L // 10 minutes
+
+    /**
+     * Caps for the two caches above, which live for the whole process (this is
+     * an `object`).
+     *
+     * Nothing used to remove an entry except a later lookup of the *same* video
+     * id, so browsing past hundreds of hero titles kept every resolved source
+     * and every failed id resident for the session. That is the same shape of
+     * leak the TMDB caches had, and bounded here the same way: an evicted
+     * source costs one network resolve to rebuild, an evicted failure just a
+     * retry.
+     */
+    private const val MAX_SOURCE_ENTRIES = 100
+    private const val MAX_FAILURE_ENTRIES = 200
+
+    /**
+     * Brings both caches back under their caps, oldest first.
+     *
+     * Called from inside [resolveMutex], which serializes every resolve, so
+     * there is no concurrent writer to race the eviction.
+     */
+    private fun pruneCaches() {
+        evictOldest(sourceCache, { it.cachedAt }, MAX_SOURCE_ENTRIES)
+        evictOldest(resolutionFailures, { it }, MAX_FAILURE_ENTRIES)
+    }
+
+    /** Drops the oldest entries of [cache] until it is back at or below [max]. */
+    private fun <V> evictOldest(
+        cache: java.util.concurrent.ConcurrentHashMap<String, V>,
+        stamp: (V) -> Long,
+        max: Int
+    ) {
+        val over = cache.size - max
+        if (over <= 0) return
+        // sortedBy snapshots the entries, so removing while walking is safe.
+        cache.entries
+            .sortedBy { stamp(it.value) }
+            .take(over)
+            .forEach { cache.remove(it.key) }
+    }
 
     /** Drops any cached source for [videoId] so the next resolve fetches a fresh signed URL. */
     fun invalidate(videoId: String) {
@@ -104,6 +147,11 @@ object TrailerPlayerLauncher {
          */
         recordFailure: Boolean = true
     ): Result<PlayableSource> = resolveMutex.withLock {
+
+        // Keep the two process-wide caches bounded (see [pruneCaches]). Every
+        // resolve runs under resolveMutex, so this is both the only writer and
+        // the only pruner.
+        pruneCaches()
 
         val videoId = extractVideoId(trailerUrlOrId)
 
