@@ -115,6 +115,7 @@ import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.LandscapeCard
 import com.kennyb1201.kbstream.ui.components.PosterCard
+import com.kennyb1201.kbstream.ui.components.kbFocusMarquee
 import com.kennyb1201.kbstream.ui.kb.KBHomeCollectionRail
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.components.hideTarget
@@ -1686,7 +1687,7 @@ private fun UpcomingEpisodeCard(
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 1.dp)
+                    modifier = Modifier.padding(top = 1.dp).kbFocusMarquee(focused)
                 )
 
                 val seLabel = "S%02d · E%02d".format(
@@ -1924,7 +1925,8 @@ private fun CompactUpNextCard(
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.kbFocusMarquee(focused)
                 )
 
                 episodeLabel?.let { label ->

@@ -128,6 +128,12 @@ import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBFocusChip
+import com.kennyb1201.kbstream.ui.theme.KBFocusGlow
+import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
+import com.kennyb1201.kbstream.ui.theme.KBFocusNone
+import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
+import com.kennyb1201.kbstream.ui.theme.KBFocusTile
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
@@ -1826,7 +1832,8 @@ fun DetailScreen(
                                                 pressedContentColor = KBAccent
                                             ),
                                             scale = ClickableSurfaceDefaults.scale(
-                                                focusedScale = 1.05f
+                                                focusedScale = KBFocusChip,
+                                                pressedScale = KBFocusPressed
                                             ),
                                             border = ClickableSurfaceDefaults.border(
                                                 border = Border(
@@ -1847,7 +1854,7 @@ fun DetailScreen(
                                             glow = ClickableSurfaceDefaults.glow(
                                                 focusedGlow = Glow(
                                                     elevationColor = KBAccent,
-                                                    elevation = 12.dp
+                                                    elevation = KBFocusGlow
                                                 )
                                             ),
                                             modifier = Modifier
@@ -4044,7 +4051,10 @@ private fun CastCard(
                 pressedContentColor = KBTextHi
             ),
             scale = ClickableSurfaceDefaults.scale(
-                focusedScale = 1.0f
+                // No growth: the cast rail packs several circles per row, and growing
+                // one would shove its neighbours; the press-in still gives feedback.
+                focusedScale = KBFocusNone,
+                pressedScale = KBFocusPressed
             ),
             border = ClickableSurfaceDefaults.border(
                 border = Border(
@@ -4065,7 +4075,7 @@ private fun CastCard(
             glow = ClickableSurfaceDefaults.glow(
                 focusedGlow = Glow(
                     elevationColor = KBAccent,
-                    elevation = 10.dp
+                    elevation = KBFocusGlowSmall
                 )
             ),
             modifier = Modifier
@@ -4172,7 +4182,8 @@ private fun StudioCard(
             pressedContentColor = Color.Black
         ),
         scale = ClickableSurfaceDefaults.scale(
-            focusedScale = 1.08f
+            focusedScale = KBFocusTile,
+            pressedScale = KBFocusPressed
         ),
         border = ClickableSurfaceDefaults.border(
             border = Border(
@@ -4193,7 +4204,7 @@ private fun StudioCard(
         glow = ClickableSurfaceDefaults.glow(
             focusedGlow = Glow(
                 elevationColor = KBAccent,
-                elevation = 12.dp
+                elevation = KBFocusGlow
             )
         ),
         modifier = Modifier
@@ -4562,7 +4573,8 @@ private fun GenreChip(
             pressedContentColor = KBAccent
         ),
         scale = ClickableSurfaceDefaults.scale(
-            focusedScale = 1.08f
+            focusedScale = KBFocusChip,
+            pressedScale = KBFocusPressed
         ),
         border = ClickableSurfaceDefaults.border(
             focusedBorder = Border(
@@ -4576,7 +4588,7 @@ private fun GenreChip(
         glow = ClickableSurfaceDefaults.glow(
             focusedGlow = Glow(
                 elevationColor = KBAccent,
-                elevation = 12.dp
+                elevation = KBFocusGlow
             )
         )
     ) {
@@ -4618,7 +4630,8 @@ private fun KeywordChip(
             pressedContentColor = KBAccent
         ),
         scale = ClickableSurfaceDefaults.scale(
-            focusedScale = 1.05f
+            focusedScale = KBFocusChip,
+            pressedScale = KBFocusPressed
         ),
         border = ClickableSurfaceDefaults.border(
             border = Border(
@@ -4639,7 +4652,7 @@ private fun KeywordChip(
         glow = ClickableSurfaceDefaults.glow(
             focusedGlow = Glow(
                 elevationColor = KBAccent,
-                elevation = 6.dp
+                elevation = KBFocusGlowSmall
             )
         )
     ) {
@@ -4726,7 +4739,16 @@ private fun PosterGridCard(
     // The Column must be pinned to the poster width: a LazyRow measures
     // children with unbounded width, so an unconstrained caption would let
     // single-line titles run wide and overlap the next tile.
-    Column(modifier = Modifier.width(rememberPosterSize().width)) {
+
+    // The whole tile — poster plus caption — owns the focus state, so the
+    // caption can marquee while the tile it belongs to is focused.
+    var focused by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .width(rememberPosterSize().width)
+            .onFocusChanged { focused = it.hasFocus }
+    ) {
         PosterCard(
             posterUrl = remember(posterPath) {
                 posterPath?.let {
@@ -4749,6 +4771,7 @@ private fun PosterGridCard(
             title = contentDescription,
             year = captionYear,
             rating = captionRating,
+            focused = focused,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 5.dp)
