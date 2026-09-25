@@ -344,6 +344,17 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptySet())
 
     /**
+     * The guide rows resolved so far, keyed by playlist channel id: the guide's
+     * visible rows plus anything [updateGuideChannels] has been asked for.
+     *
+     * Read by the search overlay so a channel hit can say what is on now and
+     * next before it is opened, and without a second query - the rows the
+     * search asked for are already the ones the guide loaded.
+     */
+    val loadedGuideItems: StateFlow<Map<String, IptvChannelWithEpg>> =
+        _guideItemsByChannelId.asStateFlow()
+
+    /**
      * Kids Mode Live TV filter (profile toggle "Kid-safe Live TV"). An
      * M3U guide can't be rated, so when the active kids profile opts in,
      * only channel groups that LOOK kid-focused survive — group titles

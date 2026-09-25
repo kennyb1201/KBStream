@@ -70,11 +70,68 @@ class IptvRepository(
      * profile's guide into the incoming profile's database, so the provider
      * fails the import instead and the caller retries on the new profile.
      */
-    private fun xmltvImporterFor(dbName: String): XmltvImporter = XmltvImporter {
-        check(IptvDatabase.activeFileName(appContext) == dbName) {
-            "profile changed during guide import"
+    private fun xmltvImporterFor(
+        dbName: String,
+        playlistMatchKeys: Set<String>
+    ): XmltvImporter = XmltvImporter(
+        daoProvider = {
+            check(IptvDatabase.activeFileName(appContext) == dbName) {
+                "profile changed during guide import"
+            }
+            dao
+        },
+        playlistMatchKeys = playlistMatchKeys
+    )
+
+    /**
+     * The matcher keys of every channel in the configured playlist(s), read
+     * from the CACHED playlist rather than the network: an import must not
+     * depend on a playlist fetch - the background worker has no UI to trigger
+     * one - and the cache is what a cold start has. Anything unreadable
+     * contributes nothing, and an empty result means the import keeps every
+     * channel's programmes exactly as it used to.
+     *
+     * Pref names match IptvViewModel's: both address the same profile-scoped
+     * "iptv_prefs" store.
+     */
+    private suspend fun playlistGuideMatchKeys(): Set<String> {
+        val prefs = appContext.getSharedPreferences(
+            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
+                appContext, "iptv_prefs"
+            ),
+            Context.MODE_PRIVATE
+        )
+
+        val playlistUrls = buildList {
+            prefs.getString("playlist_url", "")
+                .orEmpty()
+                .trim()
+                .takeIf(String::isNotEmpty)
+                ?.let(::add)
+            addAll(
+                prefs.getString("extra_playlist_urls", "")
+                    .orEmpty()
+                    .split('\n', ';')
+                    .mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+            )
+        }.distinct()
+
+        if (playlistUrls.isEmpty()) return emptySet()
+
+        val playlistName = prefs.getString("playlist_name", "").orEmpty()
+        val keys = HashSet<String>()
+        playlistUrls.forEach { url ->
+            val cached = runCatching { loadCachedPlaylist(url, playlistName) }
+                .getOrNull()
+                ?: return@forEach
+            keys.addAll(playlistEpgMatchKeys(cached.channels))
         }
-        dao
+
+        Log.i(
+            TAG,
+            "GUIDE IMPORT MATCH KEYS keys=${keys.size} playlists=${playlistUrls.size}"
+        )
+        return keys
     }
 
     private val guideSnapshotMutex = Mutex()
@@ -190,7 +247,10 @@ class IptvRepository(
         }
 
         try {
-            val importer = xmltvImporterFor(IptvDatabase.activeFileName(appContext))
+            val importer = xmltvImporterFor(
+                dbName = IptvDatabase.activeFileName(appContext),
+                playlistMatchKeys = playlistGuideMatchKeys()
+            )
             val result = runCatching {
                 IptvHttpClient.streamXmltvWithRetry(client, normalizedUrl) { stream ->
                     importer.import(normalizedUrl, stream)

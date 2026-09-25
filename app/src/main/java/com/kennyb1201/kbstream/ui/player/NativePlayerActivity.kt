@@ -999,6 +999,15 @@ class NativePlayerActivity : ComponentActivity() {
     // Stream health
     private var streamWidth = 0
     private var streamHeight = 0
+
+    /**
+     * The zap banner's identity line ("CH 101  •  LIVE  •  SPORT") without the
+     * resolution. Kept so the line can be rebuilt the moment the new stream
+     * tells the player its size: the banner paints at zap time, before the new
+     * channel has a video track, and the outgoing channel's resolution must
+     * never be shown against it.
+     */
+    private var zapLabelParts: List<String> = emptyList()
     private var streamBitrate = 0
     private var streamCodec: String? = null
     // Original declared codec of the current video track (e.g. "dvhe.07.06")
@@ -1250,6 +1259,13 @@ class NativePlayerActivity : ComponentActivity() {
     private fun tuneToChannel(index: Int, channel: LiveChannelZapRegistry.ZapChannel) {
         zapChannelIndex = index
 
+        // The outgoing channel's size is not this channel's. Clear it before
+        // the banner paints, or a 1080p -> 720p zap would name the old
+        // resolution until the new track arrives; onTracksChanged paints the
+        // real one into both live overlays.
+        streamWidth = 0
+        streamHeight = 0
+
         // Always show the banner immediately with cached/known info — the
         // EPG row fills in async a moment later. Rapid-fire zapping re-shows
         // it and re-reads the (now cached) row.
@@ -1360,11 +1376,12 @@ class NativePlayerActivity : ComponentActivity() {
         val scopeLabel = LiveChannelZapRegistry.browsingGroup()
             ?.takeIf { it.isNotBlank() && !it.equals("All", ignoreCase = true) }
             ?.uppercase()
-        zapChannelLabel?.text = buildList {
+        zapLabelParts = buildList {
             if (channel.chno?.isNotBlank() == true) add("CH ${channel.chno}")
             add("LIVE")
             scopeLabel?.let(::add)
-        }.joinToString("  •  ")
+        }
+        renderZapChannelLabel()
         zapChannelName?.text = channel.name
         if (channel.logoUrl.isNullOrBlank()) {
             zapLogo?.setImageDrawable(null)
@@ -1455,6 +1472,36 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     /** Paints one EPG snapshot into the banner views. */
+    /**
+     * The resolution being DECODED, named the way the Info panel names it
+     * ("4K", "1080p", "480p"), or null until a video track reports its size.
+     * Live channels differ here even within one provider, so this is the only
+     * honest answer to "what are we showing?".
+     */
+    private fun streamResolutionLabel(): String? =
+        normalizeResolution(streamWidth, streamHeight)
+            .takeIf { it != "—" }
+
+    /** Zap banner identity line, resolution included once it is known. */
+    private fun renderZapChannelLabel() {
+        if (zapLabelParts.isEmpty()) return
+        zapChannelLabel?.text = buildList {
+            addAll(zapLabelParts)
+            streamResolutionLabel()?.let(::add)
+        }.joinToString("  •  ")
+    }
+
+    /**
+     * Repaints the live overlays that carry the resolution when it arrives or
+     * changes (a channel switch, or an adaptive ladder step). No-ops when the
+     * banner or the block is not on screen.
+     */
+    private fun refreshResolutionLabels() {
+        if (!isLiveChannel) return
+        if (zapBanner?.visibility == View.VISIBLE) renderZapChannelLabel()
+        if (liveProgramBlock?.visibility == View.VISIBLE) refreshLiveProgramBlock()
+    }
+
     private fun applyZapEpg(info: ZapEpgInfo?) {
         val now = info?.now
         if (now == null) {
@@ -1590,7 +1637,10 @@ class NativePlayerActivity : ComponentActivity() {
             } else {
                 "No programme data"
             }
-            liveProgramStatus?.text = liveProgramScope
+            liveProgramStatus?.text = buildList {
+                add(liveProgramScope)
+                streamResolutionLabel()?.let(::add)
+            }.joinToString("  •  ")
             liveProgramProgress?.visibility = View.GONE
             liveProgramDesc?.visibility = View.GONE
             liveProgramDesc?.text = ""
@@ -1601,6 +1651,7 @@ class NativePlayerActivity : ComponentActivity() {
         liveProgramTitle?.text = now.title
         liveProgramStatus?.text = buildList {
             add(liveProgramScope)
+            streamResolutionLabel()?.let(::add)
             add(
                 zapTimeFormat.format(Date(now.startUtcMillis)) +
                     " \u2013 " +
@@ -4575,6 +4626,9 @@ class NativePlayerActivity : ComponentActivity() {
                         streamBitrate = fmt.bitrate
                         streamCodec = codec.ifBlank { null }
                         streamMimeType = fmt.sampleMimeType
+                        // Both live overlays name the resolution: repaint
+                        // them now that this track's size is known.
+                        refreshResolutionLabels()
                         // A declared-DV track that the DV → HDR10 strip rewrote
                         // carries its original codec ("dvhe.07.06") in the
                         // format label — remember it for the codec badge.

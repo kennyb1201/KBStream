@@ -44,7 +44,25 @@ class XmltvImporter(
      * profile changed, so a guide can never be promoted into another profile's
      * database.
      */
-    private val daoProvider: () -> IptvDao
+    private val daoProvider: () -> IptvDao,
+
+    /**
+     * Keys of every channel the loaded playlist could match, from
+     * [playlistEpgMatchKeys]. Programmes whose channel is known to be
+     * unreachable are skipped.
+     *
+     * The guide only ever reads programmes for channels that matched a playlist
+     * entry ([IptvRepository] queries them by matched channel id), so the rows a
+     * large provider ships for its other few thousand channels are pure import
+     * cost: the batched inserts, the staging -> live swap that re-keys every
+     * row, and the size of the guide database. Skipping them cannot hide a
+     * channel, because an unmatched guide channel is never displayed in the
+     * first place.
+     *
+     * Empty means "no playlist known" and keeps everything, which is what the
+     * background worker falls back to when no cached playlist can be read.
+     */
+    private val playlistMatchKeys: Set<String> = emptySet()
 ) {
 
     private val dao: IptvDao get() = daoProvider()
@@ -130,9 +148,16 @@ class XmltvImporter(
         val channelBatch = ArrayList<EpgChannelEntity>(CHANNEL_BATCH_SIZE)
         val programBatch = ArrayList<EpgProgramEntity>(PROGRAM_BATCH_SIZE)
 
+        // Whether any playlist channel can reach each guide channel, keyed the
+        // way a <programme channel="..."> value is normalized
+        // ([normalizeEpgChannelKey]). A channel missing from this map has not
+        // been read yet, which fails open (see the programme branch).
+        val channelMatchability = HashMap<String, Boolean>(1024)
+
         var parsedChannels = 0
         var parsedPrograms = 0
         var keptPrograms = 0
+        var skippedPrograms = 0
 
         var eventType = parser.eventType
         while (eventType != XmlPullParser.END_DOCUMENT) {
@@ -144,6 +169,15 @@ class XmltvImporter(
                         readChannel(parser, stagingUrl)?.let { channel ->
                             channelBatch.add(channel)
                             parsedChannels++
+                            // Decided once per channel, from the ids and alias
+                            // keys this file spells it with - the same two
+                            // indexes the matcher will read later.
+                            channelMatchability[normalizeEpgChannelKey(channel.id)] =
+                                guideChannelCanMatch(
+                                    channelId = channel.id,
+                                    aliasKeys = channel.allDisplayNames.split('|'),
+                                    playlistKeys = playlistMatchKeys
+                                )
                         }
 
                         if (channelBatch.size >= CHANNEL_BATCH_SIZE) {
@@ -158,17 +192,28 @@ class XmltvImporter(
                     "programme" -> {
                         parsedPrograms++
 
-                        readProgram(
-                            parser = parser,
-                            sourceUrl = stagingUrl,
-                            windowStartMs = windowStartMs,
-                            windowEndMs = windowEndMs
-                        )?.let { program ->
-                            programBatch.add(program)
-                            keptPrograms++
+                        // A whole block for a channel the playlist can never
+                        // reach is skipped before title/description/category
+                        // are even read. A channel that has not been seen yet
+                        // (a file that lists programmes before channels) has
+                        // no entry, and an unknown channel is KEPT: the filter
+                        // may only ever drop rows it is sure about.
+                        if (shouldSkipProgram(parser, channelMatchability)) {
+                            skippedPrograms++
+                            skip(parser)
+                        } else {
+                            readProgram(
+                                parser = parser,
+                                sourceUrl = stagingUrl,
+                                windowStartMs = windowStartMs,
+                                windowEndMs = windowEndMs
+                            )?.let { program ->
+                                programBatch.add(program)
+                                keptPrograms++
 
-                            if (programBatch.size >= PROGRAM_BATCH_SIZE) {
-                                flushPrograms(programBatch)
+                                if (programBatch.size >= PROGRAM_BATCH_SIZE) {
+                                    flushPrograms(programBatch)
+                                }
                             }
                         }
 
@@ -211,7 +256,7 @@ class XmltvImporter(
         Log.i(
             TAG,
             "IMPORT END channels=$parsedChannels parsedPrograms=$parsedPrograms " +
-                "keptPrograms=$keptPrograms swapped=$swapped " +
+                "keptPrograms=$keptPrograms skippedPrograms=$skippedPrograms swapped=$swapped " +
                 "hadLiveGuide=$hadLiveGuide elapsedMs=$elapsedMs source=$sourceUrl"
         )
 
@@ -378,6 +423,27 @@ private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
     private fun normalizeChannelKey(value: String): String =
         value.trim().lowercase(Locale.US)
 
+    /**
+     * Whether the <programme> the parser is sitting on belongs to a channel
+     * this import intends to keep. See [playlistMatchKeys]: with no playlist
+     * known nothing is skipped, and an unread channel keeps its programmes.
+     */
+    private fun shouldSkipProgram(
+        parser: XmlPullParser,
+        channelMatchability: Map<String, Boolean>
+    ): Boolean {
+        if (playlistMatchKeys.isEmpty()) return false
+
+        val channelKey = parser
+            .getAttributeValue(null, "channel")
+            ?.trim()
+            ?.takeIf(String::isNotEmpty)
+            ?.let(::normalizeEpgChannelKey)
+            ?: return false
+
+        return channelMatchability[channelKey] == false
+    }
+
     private fun skip(parser: XmlPullParser) {
         if (parser.eventType != XmlPullParser.START_TAG) return
 
@@ -402,7 +468,18 @@ private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
         const val GZIP_MAGIC_2 = 0x8b
 
         const val DEFAULT_PAST_WINDOW_MS = 2 * 60 * 60 * 1000L
-        const val DEFAULT_FUTURE_WINDOW_MS = 18 * 60 * 60 * 1000L
+
+        /**
+         * How far ahead a guide is stored. An import only keeps a window, so
+         * this is what stands between the viewer and a guide that runs out of
+         * programmes before its next refresh: with the old 18 hours and a
+         * refresh that can be delayed (Doze, or the write gate deferring the
+         * whole import past a film), the tail of the window was reachable and
+         * the guide went empty rather than merely old. Two days of headroom
+         * costs one extra row per 30-minute slot per matched channel - and the
+         * channel filter removes orders of magnitude more than that.
+         */
+        const val DEFAULT_FUTURE_WINDOW_MS = 48 * 60 * 60 * 1000L
 
         val IMPORT_MUTEX = Mutex()
 

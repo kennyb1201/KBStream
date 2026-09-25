@@ -506,6 +506,19 @@ fun GuideScreen(
         }
     }
 
+    // Channel hits answer "what's on it?" before it is opened: the rows come
+    // from the same guide lookup the grid uses, queued for the hits this query
+    // produced (same per-request cap the grid's own rows use). A channel with
+    // no rows yet simply keeps the group line it always had.
+    val loadedGuideItems by viewModel.loadedGuideItems.collectAsStateWithLifecycle()
+    LaunchedEffect(showSearch, searchResults) {
+        if (!showSearch || searchResults.isEmpty()) return@LaunchedEffect
+        viewModel.updateGuideChannels(
+            searchResults.map { item -> channelKey(item) }
+                .take(MAX_GUIDE_CHANNEL_REQUEST_SIZE)
+        )
+    }
+
     // EPG program hits for the same query ("what's on with X tonight").
     // The ViewModel debounces the query and searches the EPG table; here the
     // hits are mapped onto VISIBLE channels only, so a channel the user hid
@@ -1131,6 +1144,7 @@ Spacer(modifier = Modifier.height(14.dp))
                     ChannelSearchDialog(
                         query = searchQuery,
                         results = searchResults,
+                        guideItems = loadedGuideItems,
                         programHits = programSearchHits,
                         channelKey = ::channelKey,
                         onQueryChanged = { searchQuery = it },
@@ -2705,6 +2719,8 @@ private data class GuideProgramHit(
 private fun ChannelSearchDialog(
     query: String,
     results: List<IptvChannelWithEpg>,
+    /** Guide rows resolved so far, so a hit can show its now/next programme. */
+    guideItems: Map<String, IptvChannelWithEpg> = emptyMap(),
     programHits: List<GuideProgramHit> = emptyList(),
     channelKey: (IptvChannelWithEpg) -> String,
     onQueryChanged: (String) -> Unit,
@@ -2780,17 +2796,48 @@ private fun ChannelSearchDialog(
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
-                                    item.channel.groupTitle?.trim()
-                                        ?.takeIf { it.isNotBlank() }
-                                        ?.let { group ->
+                                    val resolved = guideItems[channelKey(item)]
+                                    val onNow = resolved?.now
+                                    val onNext = resolved?.next
+                                    if (onNow != null) {
+                                        // What is on, and what follows: the two
+                                        // things a viewer decides a channel on.
+                                        Text(
+                                            text = formatTimeRange(
+                                                onNow.startUtcMillis,
+                                                onNow.endUtcMillis
+                                            ) + "  " + onNow.title,
+                                            color = KBTextHi,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        onNext?.let { following ->
                                             Text(
-                                                text = group,
+                                                text = "Next  " +
+                                                    formatTimeRange(
+                                                        following.startUtcMillis,
+                                                        following.endUtcMillis
+                                                    ) + "  " + following.title,
                                                 color = KBTextLo,
                                                 style = MaterialTheme.typography.labelSmall,
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis
                                             )
                                         }
+                                    } else {
+                                        item.channel.groupTitle?.trim()
+                                            ?.takeIf { it.isNotBlank() }
+                                            ?.let { group ->
+                                                Text(
+                                                    text = group,
+                                                    color = KBTextLo,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                    }
                                 }
                                 item.channel.tvgChno?.trim()
                                     ?.takeIf { it.isNotBlank() }

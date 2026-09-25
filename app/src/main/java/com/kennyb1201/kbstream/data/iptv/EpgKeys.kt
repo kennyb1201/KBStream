@@ -128,6 +128,66 @@ internal fun <T> matchEpgChannel(
 }
 
 /**
+ * Every key the matcher could look a playlist channel up under, in one set.
+ *
+ * [matchEpgChannel] probes a playlist channel's ids (tvg-id, provider id) and
+ * its names (tvg-name, display name, name) against the guide's two indexes.
+ * This collects the same probes in the same normalized forms, so the importer
+ * can ask "could this guide channel ever be reached?" without a playlist in
+ * hand ([guideChannelCanMatch]).
+ *
+ * An empty result means "no playlist known": callers must read that as "cannot
+ * decide" and keep everything, never as "nothing matches".
+ */
+internal fun playlistEpgMatchKeys(channels: List<IptvChannel>): Set<String> {
+    if (channels.isEmpty()) return emptySet()
+
+    val keys = HashSet<String>(channels.size * 6)
+    channels.forEach { channel ->
+        // Pass 1: the ids, normalized exactly as the matcher normalizes them.
+        listOf(channel.tvgId, channel.providerChannelId).forEach { candidate ->
+            candidate?.trim()
+                ?.takeIf(String::isNotEmpty)
+                ?.let { keys.add(epgLookupKey(it)) }
+        }
+        // Passes 2 and 3: the names as spelled, and simplified with quality
+        // qualifiers stripped - the two spellings the matcher tries.
+        listOf(channel.tvgName, channel.displayName, channel.name).forEach { candidate ->
+            candidate?.trim()
+                ?.takeIf(String::isNotEmpty)
+                ?.let { name ->
+                    keys.add(epgLookupKey(name))
+                    simplifyEpgChannelName(name)?.let(keys::add)
+                }
+        }
+    }
+    return keys
+}
+
+/**
+ * Whether a guide channel could ever be matched by a playlist carrying
+ * [playlistKeys], which is what decides whether its programmes are worth
+ * importing. True when [playlistKeys] is empty - "cannot decide" keeps the
+ * old keep-everything behaviour.
+ *
+ * Deliberately a SUPERSET test: it may keep a guide channel that would not
+ * have matched, but it must never drop one that would. Both indexes the
+ * matcher reads are mirrored here - `byId` is keyed by [epgLookupKey] of the
+ * channel id, `byName` by [epgLookupKey] of every alias key - so a channel
+ * whose ids or names intersect the playlist's probes is kept, and one whose do
+ * not could only ever have shown programmes no playlist row could reach.
+ */
+internal fun guideChannelCanMatch(
+    channelId: String,
+    aliasKeys: List<String>,
+    playlistKeys: Set<String>
+): Boolean {
+    if (playlistKeys.isEmpty()) return true
+    if (epgLookupKey(channelId) in playlistKeys) return true
+    return aliasKeys.any { alias -> epgLookupKey(alias) in playlistKeys }
+}
+
+/**
  * Fingerprint of everything a guide query reads out of a playlist: the source
  * URLs plus the identity of the channels currently loaded into the guide
  * window. A background playlist refresh almost always returns the same

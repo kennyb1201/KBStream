@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.iptv
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -181,6 +182,83 @@ class EpgKeysTest {
         channelIds = ids,
         channels = channels
     )
+
+    // ── Import-time pruning (does a guide channel have anywhere to go?) ────
+
+    @Test
+    fun `playlist keys carry every spelling the matcher probes`() {
+        val keys = playlistEpgMatchKeys(
+            listOf(channel("c1", name = "BBC One HD", tvgId = "bbc1.uk"))
+        )
+        // The id pass, as normalized as the matcher normalizes it.
+        assertTrue("bbc1.uk" in keys)
+        // The name pass, and the simplified pass the decorated spelling needs.
+        assertTrue(epgLookupKey("BBC One HD") in keys)
+        assertTrue("bbcone" in keys)
+    }
+
+    @Test
+    fun `no playlist means nothing may be pruned`() {
+        // An empty key set is "cannot decide", never "nothing matches": a
+        // background import with no readable cached playlist must keep the
+        // guide exactly as it was.
+        assertEquals(emptySet<String>(), playlistEpgMatchKeys(emptyList()))
+        assertTrue(guideChannelCanMatch("anything", listOf("anything"), emptySet()))
+    }
+
+    @Test
+    fun `a guide channel a playlist can reach is kept`() {
+        val keys = playlistEpgMatchKeys(
+            listOf(channel("c1", name = "BBC One HD", tvgId = "bbc1.uk"))
+        )
+        // Reached through a display-name alias (the guide's own id is opaque).
+        assertTrue(
+            guideChannelCanMatch(
+                channelId = "i.dish.1001",
+                aliasKeys = listOf("i.dish.1001", "BBC One HD", "bbcone"),
+                playlistKeys = keys
+            )
+        )
+        // Reached through the guide's id, which is what a tvg-id refers to.
+        assertTrue(
+            guideChannelCanMatch(
+                channelId = "bbc1.uk",
+                aliasKeys = listOf("bbc1.uk"),
+                playlistKeys = keys
+            )
+        )
+    }
+
+    @Test
+    fun `a guide channel no playlist entry can reach is pruned`() {
+        val keys = playlistEpgMatchKeys(
+            listOf(channel("c1", name = "BBC One HD", tvgId = "bbc1.uk"))
+        )
+        assertFalse(
+            guideChannelCanMatch(
+                channelId = "de.premiere",
+                aliasKeys = listOf("de.premiere", "Premiere One"),
+                playlistKeys = keys
+            )
+        )
+    }
+
+    @Test
+    fun `a qualifier the guide lacks still matches, so its programmes stay`() {
+        // The ESPN2 HD / ESPN2 case: matched through the SIMPLIFIED pass, so
+        // the simplified spelling has to be one of the playlist's keys.
+        val keys = playlistEpgMatchKeys(
+            listOf(channel("c9", name = "ESPN2 HD", tvgId = null))
+        )
+        assertTrue("espn2" in keys)
+        assertTrue(
+            guideChannelCanMatch(
+                channelId = "espn2",
+                aliasKeys = listOf("espn2"),
+                playlistKeys = keys
+            )
+        )
+    }
 
     private fun channel(
         id: String,

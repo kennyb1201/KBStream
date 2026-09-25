@@ -90,6 +90,19 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                     it, mapOf("source" to "app_create_addon_worker")
                 )
             }
+        // IPTV guide: enqueue the periodic EPG refresh. The only caller used to
+        // be the cloud-sync prefs applier, so a guide configured in the app
+        // itself never got a background refresh and went stale between manual
+        // ones. No-op when no guide is configured (the worker returns success
+        // on a blank epg_url), and WorkManager persists the request across
+        // process death, so this covers the app being closed.
+        runCatching {
+            com.kennyb1201.kbstream.data.iptv.EpgRefreshScheduler.schedule(applicationContext)
+        }.onFailure {
+            com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
+                it, mapOf("source" to "app_create_epg_worker")
+            )
+        }
         // Launch-time auto-update: picks up addon manifest changes on the
         // first launch after any restart. Throttled internally so frequent
         // app relaunches don't spam every manifest URL; runs on a background

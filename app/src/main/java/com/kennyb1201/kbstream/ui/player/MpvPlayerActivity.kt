@@ -37,6 +37,7 @@ import com.kennyb1201.kbstream.data.player.LanguageMatch
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.player.PlayerTitlePrefs
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
+import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
@@ -497,6 +498,13 @@ class MpvPlayerActivity : ComponentActivity() {
         // the playback it is counting. The lock overlay lives in MainActivity,
         // behind this Activity, so without this the film simply ran to the end.
         com.kennyb1201.kbstream.data.sync.KidsTimeGuard.enforceLock(this)
+
+        // Same guide-write gate the ExoPlayer path holds: libmpv decodes in
+        // this process, and a 500/1000-row EPG batch landing on the shared
+        // SQLite pool mid-film is the stall the gate exists to prevent.
+        // Released in onStop - the surface is paused there, so there is no
+        // playback left to protect.
+        EpgWriteGate.setPlayerActive(true)
 
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(R.layout.activity_mpv_player)
@@ -3140,6 +3148,8 @@ class MpvPlayerActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
+        // mpv is paused just below, so guide writes may proceed again.
+        EpgWriteGate.setPlayerActive(false)
         handler.removeCallbacks(hideControlsRunnable)
         // Pause rather than tear down: the native instance is released in
         // onDestroy, and a backgrounded player that kept playing would be a bug
@@ -3152,6 +3162,9 @@ class MpvPlayerActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // Safety net for a player that never reached onStop: leaving this
+        // set would hold guide writes back for the life of the process.
+        EpgWriteGate.setPlayerActive(false)
         handler.removeCallbacksAndMessages(null)
         nextUpCountdownHandler.removeCallbacksAndMessages(null)
         surface?.release()
