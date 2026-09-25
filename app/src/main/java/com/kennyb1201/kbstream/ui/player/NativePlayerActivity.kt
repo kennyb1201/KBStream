@@ -4238,8 +4238,18 @@ class NativePlayerActivity : ComponentActivity() {
         // (DefaultLoadControl.Builder throws IllegalArgumentException
         // otherwise). The old IPTV config (2500/10000/1500/3000) violated
         // that and force-closed the player on every IPTV start.
+        // The VOD profile's after-rebuffer threshold was 6_000, and that number
+        // IS the stall a viewer sees on a slow source: the player must accumulate
+        // that many SECONDS of media before it resumes, so at a fill rate of
+        // ~0.5x realtime the spinner sits there for ~12s (measured: an 11.4s
+        // "Rebuffer stall" on a high-bitrate file). 3_000 is what the IPTV
+        // profile above already uses and what the initial bufferForPlaybackMs
+        // is, so resuming now costs the same cushion as starting. On a
+        // connection below realtime this trades one long stall for shorter, more
+        // frequent ones; the 12s no-progress watchdog is unaffected, because a
+        // genuinely dead source never reaches this threshold at all.
         val bufferDurations = if (resolvedBufferMode == 1) intArrayOf(5_000, 10_000, 1_500, 3_000)
-        else intArrayOf(10_000, 30_000, 3_000, 6_000)
+        else intArrayOf(10_000, 30_000, 3_000, 3_000)
 
         // Media3 buffers sample data as JAVA-HEAP byte[] blocks (DefaultAllocator
         // uses a plain `newarray byte`, never native/direct buffers), so a
@@ -4261,8 +4271,16 @@ class NativePlayerActivity : ComponentActivity() {
         // If the budget were ever too small for a stream, media3 logs "Target
         // buffer size reached with less than 500ms of buffered media data" and
         // keeps playing; it does not throw.
+        //
+        // The divisor was 8 until a real high-bitrate file showed what that
+        // costs: on a 384MB-heap box the budget is 48MB, and at 40-60Mbps that
+        // is 6-10 seconds of media -- so far short of the 30s the duration
+        // target asks for that any dip longer than a few seconds stalls. 5 is
+        // 76MB on the same box, still less than half the ~150MB unbounded
+        // buffering that caused the OOM above, and the clamp keeps every device
+        // bounded regardless of heap.
         val maxBufferBudgetBytes =
-            (Runtime.getRuntime().maxMemory() / 8)
+            (Runtime.getRuntime().maxMemory() / 5)
                 .coerceIn(24L * 1024 * 1024, 96L * 1024 * 1024)
                 .toInt()
         Log.i(
