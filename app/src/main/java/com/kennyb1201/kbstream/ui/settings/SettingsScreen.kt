@@ -1094,9 +1094,16 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
+                // Off is not just "the old way": an add-on that already filters
+                // and sorts its own results (AIOStreams with a regex + SEL
+                // config is the one people run) has an opinion this ranker is
+                // only ever guessing at, so the description has to say which
+                // side wins instead of implying the ranker is strictly better.
                 ToggleRow(
                     label = "Stream Ranker",
-                    description = "Reorder sources by quality and reliability. Off keeps the order addons return them in",
+                    description = "Reorder sources by availability, resolution and release type. " +
+                        "Off keeps the exact order the add-on returned — the better choice when the " +
+                        "add-on already sorts its own results, like AIOStreams with a SEL config",
                     checked = useStreamRanker,
                     onToggle = {
                         useStreamRanker = it

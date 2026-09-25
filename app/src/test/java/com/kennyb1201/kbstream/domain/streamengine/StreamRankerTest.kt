@@ -179,6 +179,92 @@ class StreamRankerTest {
         assertEquals(listOf(cached, uncached), order(uncached, cached))
     }
 
+    // ── Availability: the criterion the sorted addons sort on first ──
+    //
+    // Reported bug: with AIOStreams (regex + SEL) configured, its own ordering
+    // was better than this ranker's. The divergence was availability - a
+    // debrid add-on puts the copy it already holds on top, and a re-sort by
+    // resolution alone walks a 4K that has to find its swarm back over it.
+
+    @Test
+    fun `an uncached line does not collect the cached bonus`() {
+        // "Uncached" contains "cached", so a stream that spelled out that it
+        // was NOT ready collected the instant bonus for saying so - the claim
+        // read backwards, in the branch that decides the head of the list.
+        val spelledOut = stream("Some Film 2024 1080p WEB-DL Uncached", url = "https://host/a.mkv")
+        val silent = stream("Some Film 2024 1080p WEB-DL", url = "https://host/b.mkv")
+
+        assertEquals(listOf(spelledOut, silent), order(spelledOut, silent))
+
+        // The cached twin still wins, so the word boundary did not disarm the
+        // signal it was meant to protect.
+        val cached = stream("Some Film 2024 1080p WEB-DL Cached", url = "https://host/c.mkv")
+        assertEquals(listOf(cached, silent), order(silent, cached))
+    }
+
+    @Test
+    fun `a cached copy outranks a higher-resolution uncached one`() {
+        val cached = stream("Some Film 2024 1080p WEB-DL cached", url = "https://host/c.mkv")
+        val uncached4k = stream("Some Film 2024 2160p REMUX DV HDR", url = "https://host/u4k.mkv")
+
+        // A 4K that has to find peers stalls; the 1080p the debrid service
+        // already holds starts now. This is the order AIOStreams returns.
+        assertEquals(listOf(cached, uncached4k), order(uncached4k, cached))
+    }
+
+    @Test
+    fun `the debrid completion marker counts as cached`() {
+        val marked = stream("Some Film 2024 1080p WEB-DL [RD+]", url = "https://host/rd.mkv")
+        val plain4k = stream("Some Film 2024 2160p REMUX DV HDR", url = "https://host/4k.mkv")
+
+        assertEquals(listOf(marked, plain4k), order(plain4k, marked))
+    }
+
+    @Test
+    fun `availability cannot lift a cam over an honest release`() {
+        // The reason availability is a tier under the known-bad one instead of
+        // a bigger bonus: a *cached* CAM would otherwise be handed the top spot
+        // it was originally kept out of.
+        val cachedCam = stream("Some Film 2024 1080p CAM cached", url = "https://host/cam.mkv")
+        val honest = stream("Some Film 2024 480p", url = "https://host/sd.mkv")
+
+        assertEquals(listOf(honest, cachedCam), order(cachedCam, honest))
+    }
+
+    // ── Peers ──
+
+    @Test
+    fun `the swarm decides between two otherwise equal uncached copies`() {
+        val busy = stream("Some Film 2024 1080p WEB-DL \uD83D\uDC65 240 seeders", url = "https://host/busy.mkv")
+        val quiet = stream("Some Film 2024 1080p WEB-DL \uD83D\uDC65 4 seeders", url = "https://host/quiet.mkv")
+
+        assertEquals(listOf(busy, quiet), order(quiet, busy))
+    }
+
+    @Test
+    fun `the plain seeders wording is read too`() {
+        val busy = stream("Some Film 2024 1080p WEB-DL 52 seeders", url = "https://host/busy.mkv")
+        val quiet = stream("Some Film 2024 1080p WEB-DL 2 seeders", url = "https://host/quiet.mkv")
+
+        assertEquals(listOf(busy, quiet), order(quiet, busy))
+
+        val labelled = stream("Some Film 2024 720p Seeders: 30", url = "https://host/labelled.mkv")
+        val bare = stream("Some Film 2024 720p", url = "https://host/bare.mkv")
+
+        assertEquals(listOf(labelled, bare), order(bare, labelled))
+    }
+
+    @Test
+    fun `copies the ranker cannot separate keep the addon's order`() {
+        // The other half of the contract, and the whole reason the toggle
+        // exists: where this ranker has no opinion, a list an addon already
+        // sorted (AIOStreams + SEL) is handed back exactly as it arrived.
+        val first = stream("Some Film 2024 1080p WEB-DL", url = "https://host/1.mkv")
+        val second = stream("Some Film 2024 1080p WEB-DL", url = "https://host/2.mkv")
+
+        assertEquals(listOf(first, second), order(first, second))
+    }
+
     @Test
     fun `a link with no playable scheme and no hash is dropped`() {
         // Nothing here can open a magnet link, so it is not an option at all -

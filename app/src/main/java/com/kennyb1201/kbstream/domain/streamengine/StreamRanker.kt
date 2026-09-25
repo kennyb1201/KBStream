@@ -15,13 +15,20 @@ import com.kennyb1201.kbstream.data.addon.Stream
  *     entry has no engine in this app at all, so it may never outrank something
  *     that does, whatever its labels say.
  *  2. **Known-bad releases.** A CAM / telecine / screener copy, a 3D pair, a
- *     sample/trailer clip, a foreign-dubbed or hardcoded-subtitle copy, or a
- *     release whose resolution label is contradicted by its own file size is
- *     penalised far enough to sit under every honest source. A 2160p CAM is
- *     still a CAM, which is exactly how a high resolution label used to carry
- *     one to the top.
- *  3. Resolution, HDR/DV, release type, size and instant-source hints, in that
- *     order of weight.
+ *     sample/trailer clip, or a foreign-dubbed or hardcoded-subtitle copy sits
+ *     under every honest source. A 2160p CAM is still a CAM, which is exactly
+ *     how a high resolution label used to carry one to the top. This is a tier
+ *     rather than a score penalty for a reason: as points a CAM penalty had to
+ *     out-shout the bonuses below, and the cache bonus that arrived with the
+ *     debrid addons could hand a *cached* CAM right back over an honest 480p.
+ *  3. **Availability.** A copy the debrid service already holds starts now; an
+ *     uncached one of the same title waits for peers, whatever its resolution
+ *     label says. AIOStreams sorts on exactly this first, and it is the one
+ *     criterion a re-sort by quality labels alone got backwards - which is how
+ *     a 4K that had to find its swarm ended up heading a list whose addon had
+ *     deliberately put a cached 1080p there.
+ *  4. Resolution, HDR/DV, release type, size, seeders and a resolution label
+ *     its own file size contradicts, in that order of weight.
  *
  * Every rule reads the stream's *text*, and that text is every field the addon
  * sent plus the filename its link carries - not just `title ?: description ?:
@@ -92,8 +99,27 @@ object StreamRanker {
         Regex("""\b(webrip|hdtv)\b""") to 5
     )
 
-    /** A source that starts playing now instead of hunting for peers. */
-    private val INSTANT_HINT = Regex("""cached|instant|\u26a1""")
+    /**
+     * A source that starts playing now instead of hunting for peers: the addon
+     * says the copy is cached, or marks it the way Torrentio and AIOStreams mark
+     * a completed download (`\u26a1`, `[RD+]`, `[TB+]`).
+     *
+     * `cached` is word-bounded here, not the bare substring it used to be.
+     * "Uncached" contains "cached", so every line that spelled out that the copy
+     * was NOT ready collected the bonus for saying it was — the exact opposite
+     * of the claim, and in the one place it matters most, since this tier is
+     * what decides the head of an AIOStreams list.
+     */
+    private val INSTANT_HINT = Regex("""\b(cached|instant)\b|\u26a1|\b(?:rd|tb)\+""")
+
+    /**
+     * Peers a release reports, in any of the shapes addons print them: the
+     * `\uD83D\uDC65 42` marker, and plain "42 seeders" / "Seeders: 42".
+     */
+    private val SEEDERS = Regex(
+        """(?:\uD83D\uDC65\s*(\d+))|(?:(\d+)\s*seeders?\b)|(?:\bseeders?\s*[:=]?\s*(\d+))""",
+        RegexOption.IGNORE_CASE
+    )
 
     /** A size written into the release name, in whichever unit it used. */
     private val SIZE_IN_TEXT = Regex("""(\d+(?:\.\d+)?)\s?(mb|gb|tb)\b""")
@@ -111,14 +137,29 @@ object StreamRanker {
     fun rank(streams: List<Stream>): List<Stream> =
         streams
             .filter { stream -> isPlayable(stream) || !stream.infoHash.isNullOrBlank() }
+            // The text every rule reads, built once per stream. The comparator
+            // below runs O(n log n) times, so joining and URL-decoding inside a
+            // selector would repeat that work on every comparison.
+            .map { stream -> stream to searchableText(stream) }
             // Playability is its own tier, not a score bonus: no combination of
             // quality labels may lift an entry this app cannot open over one it
             // can. Kotlin's sort is stable, so within a tier the addon's own
-            // order is kept for equal scores.
+            // order is kept for equal scores - and that is the whole contract
+            // for an addon that already sorted and filtered its own results
+            // (AIOStreams with a regex + SEL config): the ranker only speaks
+            // where it has something to say.
             .sortedWith(
-                compareByDescending<Stream> { if (isPlayable(it)) 1 else 0 }
-                    .thenByDescending { score(it) }
+                compareByDescending<Pair<Stream, String>> { if (isPlayable(it.first)) 1 else 0 }
+                    // Known-bad copies sink as a class, above every question of
+                    // quality or availability - the only way a cached CAM stays
+                    // under an honest 480p, which no score bonus can promise.
+                    .thenBy { if (isKnownBad(it.second)) 1 else 0 }
+                    // Availability, because it is what the sorted addons sort on
+                    // first and what the viewer's configuration asked for.
+                    .thenByDescending { if (INSTANT_HINT.containsMatchIn(it.second)) 1 else 0 }
+                    .thenByDescending { score(it.first, it.second) }
             )
+            .map { it.first }
 
     /** True when this app can open the stream directly. */
     private fun isPlayable(stream: Stream): Boolean {
@@ -127,8 +168,21 @@ object StreamRanker {
             url.startsWith("file://") || url.startsWith("rtmp://")
     }
 
-    private fun score(stream: Stream): Int {
-        val text = searchableText(stream)
+    /**
+     * True for a copy a viewer would call broken: a CAM / telecine / screener,
+     * a sample or trailer clip, a 3D pair, a foreign dub, or a copy whose
+     * subtitles are burned into the picture.
+     *
+     * Checked as a tier in [rank] rather than subtracted from the score, so the
+     * class keeps its promise ("under every honest source") no matter how the
+     * bonuses below are weighted.
+     */
+    private fun isKnownBad(text: String): Boolean =
+        UNWATCHABLE_RELEASE.containsMatchIn(text) ||
+            THREE_D_RELEASE.containsMatchIn(text) ||
+            FOREIGN_OR_HARDSUBBED_RELEASE.containsMatchIn(text)
+
+    private fun score(stream: Stream, text: String): Int {
         var score = 0
 
         // --- Signals from the stream's own fields ---
@@ -158,17 +212,36 @@ object StreamRanker {
         RELEASE_TIERS.firstOrNull { (pattern, _) -> pattern.containsMatchIn(text) }
             ?.let { (_, bonus) -> score += bonus }
 
-        if (INSTANT_HINT.containsMatchIn(text)) score += 40
+        // --- Peers, which only the uncached copies have to find ---
+        //
+        // AIOStreams sorts on seeders; this app read none of them, so two
+        // uncached copies with the same labels were separated only by the
+        // addon's own order. Tiered rather than linear: the gap between 4 and
+        // 40 peers decides whether a stream starts at all, the gap between 400
+        // and 900 does not.
+        seeders(text)?.let { peers ->
+            score += when {
+                peers >= 100 -> 25
+                peers >= 30 -> 18
+                peers >= 10 -> 10
+                peers >= 3 -> 4
+                else -> 0
+            }
+        }
 
         // --- Size: bigger usually means less compressed, but it is a nudge
         // next to resolution/HDR and it is capped - past ~20 GB the file is
         // likelier to stall this device than to look better.
         sizeInGb(stream, text)?.let { score += (it.coerceAtMost(20.0) * 1.5).toInt() }
 
-        // --- Penalties last, so they always outweigh the bonuses above ---
-        if (UNWATCHABLE_RELEASE.containsMatchIn(text)) score -= 400
-        if (THREE_D_RELEASE.containsMatchIn(text)) score -= 400
-        if (FOREIGN_OR_HARDSUBBED_RELEASE.containsMatchIn(text)) score -= 250
+        // --- The one penalty left in the score ---
+        //
+        // The unwatchable, 3D and foreign-dub rules are tiers now (see
+        // [isKnownBad]): as points each had to outweigh every bonus above, and
+        // the answer - a bigger penalty - only ever met the next bonus head-on.
+        // A contradicted resolution label is different in kind. The file still
+        // plays; it simply is not the resolution it advertises, so it stays a
+        // score term sitting next to the resolution it claims.
         score -= fakeQualityPenalty(stream, text)
 
         // Prefer streams that have a name (more metadata = more reliable source)
@@ -205,6 +278,17 @@ object StreamRanker {
             .joinToString(" ")
             .lowercase()
     }
+
+    /**
+     * Peers the stream reports, or null when it reports none — an unknown swarm
+     * is not an empty one, and guessing would demote honest sources.
+     */
+    private fun seeders(text: String): Int? =
+        SEEDERS.find(text)
+            ?.groupValues
+            ?.drop(1)
+            ?.firstOrNull { it.isNotEmpty() }
+            ?.toIntOrNull()
 
     /**
      * Penalty for a resolution label the file's own size does not support:
