@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.tmdb
 
 import android.content.Context
+import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import java.util.concurrent.ConcurrentHashMap
 import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.cache.ImdbResolutionEntity
@@ -1921,10 +1922,16 @@ class TmdbRepository private constructor(context: Context) {
         @Volatile
         private var sharedClient: OkHttpClient? = null
 
-        /** Lazily built, process-wide client for TMDB API traffic. */
+        /**
+         * Lazily built, process-wide client for TMDB API traffic - the shared
+         * base client itself, so TMDB reuses the sockets and threads every
+         * other feature client in the process already holds open. Identical
+         * configuration to a private builder (both are OkHttp defaults), just
+         * one pool instead of two.
+         */
         fun sharedOkHttpClient(): OkHttpClient =
             sharedClient ?: synchronized(this) {
-                sharedClient ?: OkHttpClient.Builder().build().also { sharedClient = it }
+                sharedClient ?: BaseHttpClient.get().also { sharedClient = it }
             }
 
         const val PROFILE_BASE = "https://image.tmdb.org/t/p/w185"

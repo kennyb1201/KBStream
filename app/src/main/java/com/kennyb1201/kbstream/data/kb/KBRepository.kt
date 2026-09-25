@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.kb
 
 import android.content.Context
 import android.util.Log
+import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
@@ -10,7 +11,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -49,10 +49,10 @@ class KBRepository private constructor(context: Context) {
             )
         )
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .build()
+    private val client = BaseHttpClient.derived {
+        connectTimeout(15, TimeUnit.SECONDS)
+        readTimeout(30, TimeUnit.SECONDS)
+    }
 
     private val cacheMutex = Mutex()
     private val memoryCache = mutableMapOf<String, Pair<Long, List<KBCollectionProfile>>>()

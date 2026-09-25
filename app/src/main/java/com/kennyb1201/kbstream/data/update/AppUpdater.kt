@@ -9,13 +9,13 @@ import android.content.pm.PackageInstaller
 import android.os.Build
 import android.util.Log
 import androidx.core.content.FileProvider
+import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.io.File
@@ -128,10 +128,12 @@ object AppUpdater {
 
     private const val TAG = "AppUpdater"
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .build()
+    // Derived from the process-wide base client: the long read window this
+    // needs for an APK download stays its own, the sockets and threads do not.
+    private val client = BaseHttpClient.derived {
+        connectTimeout(15, TimeUnit.SECONDS)
+        readTimeout(60, TimeUnit.SECONDS)
+    }
 
     // Launch {} failures funnel here: without a handler an uncaught
     // Throwable on this scope kills the process (the updater runs at every

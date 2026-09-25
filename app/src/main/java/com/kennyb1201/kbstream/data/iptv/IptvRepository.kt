@@ -135,7 +135,11 @@ class IptvRepository(
     }
 
     private val guideSnapshotMutex = Mutex()
-    private val guideSnapshots = ConcurrentHashMap<String, GuideSnapshot>()
+
+    // Each entry carries the import revision it was built from, so an import
+    // that happened in ANOTHER instance (the background worker owns its own
+    // repository) invalidates it too - see GuideRevision.
+    private val guideSnapshots = ConcurrentHashMap<String, CachedGuideSnapshot>()
 
     // Memoized lineup results. The guide flow is re-subscribed on every screen
     // recomposition and refresh tick, and each pass re-runs the entire
@@ -259,6 +263,10 @@ class IptvRepository(
 
             waiter.complete(result)
             result.getOrThrow()
+            // Bumped BEFORE the local invalidation: this is what tells every
+            // other live instance (the guide screen's ViewModel) that the
+            // snapshot and rows it is holding predate this import.
+            GuideRevision.bump(normalizedUrl)
             invalidateGuideSnapshot(normalizedUrl)
         } finally {
             importRequestMutex.withLock {
@@ -305,7 +313,10 @@ class IptvRepository(
             limit = limit
         )
         guideQueryCache[cacheKey]?.let { cached ->
-            if (System.currentTimeMillis() - cached.atUtcMillis < GUIDE_QUERY_CACHE_TTL_MS) {
+            if (
+                cached.revision == GuideRevision.total() &&
+                System.currentTimeMillis() - cached.atUtcMillis < GUIDE_QUERY_CACHE_TTL_MS
+            ) {
                 Log.w(
                     TAG,
                     "LINEUP QUERY memo hit channels=${playlist.channels.size} " +
@@ -403,6 +414,7 @@ class IptvRepository(
             nowUtcMillis = System.currentTimeMillis()
         )
         guideQueryCache[cacheKey] = CachedGuideQuery(
+            revision = GuideRevision.total(),
             items = items,
             atUtcMillis = System.currentTimeMillis()
         )
@@ -420,10 +432,15 @@ class IptvRepository(
             )
         }
 
-        guideSnapshots[normalizedGuideUrl]?.let { return it }
+        val revision = GuideRevision.of(normalizedGuideUrl)
+        guideSnapshots[normalizedGuideUrl]
+            ?.takeIf { it.revision == revision }
+            ?.let { return it.snapshot }
 
         return guideSnapshotMutex.withLock {
-            guideSnapshots[normalizedGuideUrl]?.let { return@withLock it }
+            guideSnapshots[normalizedGuideUrl]
+                ?.takeIf { it.revision == revision }
+                ?.let { return@withLock it.snapshot }
 
             val guideChannels = withContext(Dispatchers.IO) {
                 dao.getChannelsBySource(normalizedGuideUrl)
@@ -447,7 +464,7 @@ class IptvRepository(
                 guideById = guideById,
                 guideByDisplayName = guideByDisplayName
             ).also { snapshot ->
-                guideSnapshots[normalizedGuideUrl] = snapshot
+                guideSnapshots[normalizedGuideUrl] = CachedGuideSnapshot(revision, snapshot)
                 Log.w(
                     TAG,
                     "GUIDE SNAPSHOT BUILT channels=${guideChannels.size} epgUrl=$normalizedGuideUrl"
@@ -1038,8 +1055,16 @@ class IptvRepository(
     )
 
     private data class CachedGuideQuery(
+        /** [GuideRevision.total] when these rows were read. */
+        val revision: Long,
         val items: List<IptvChannelWithEpg>,
         val atUtcMillis: Long
+    )
+
+    /** A guide snapshot plus the [GuideRevision] it was built from. */
+    private data class CachedGuideSnapshot(
+        val revision: Long,
+        val snapshot: GuideSnapshot
     )
 
     private companion object {

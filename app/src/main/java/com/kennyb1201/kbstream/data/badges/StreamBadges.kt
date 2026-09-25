@@ -3,12 +3,12 @@ package com.kennyb1201.kbstream.data.badges
 import android.content.Context
 import android.util.Log
 import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 
@@ -74,10 +74,10 @@ object StreamBadgeEngine {
 
     private val packAdapter = moshi.adapter(StreamBadgePack::class.java)
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .build()
+    private val client = BaseHttpClient.derived {
+        connectTimeout(10, TimeUnit.SECONDS)
+        readTimeout(20, TimeUnit.SECONDS)
+    }
 
     // ------------------------------------------------------------------
     // Persistence + import

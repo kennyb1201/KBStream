@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.data.iptv
 
+import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import java.io.BufferedInputStream
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
@@ -13,15 +14,22 @@ import kotlinx.coroutines.withContext
 
 object IptvHttpClient {
 
+    /**
+     * Derived from the process-wide base client. The HTTP/1.1-only probe, the
+     * long read window and the VLC user agent are all still this client's own
+     * - only the connection pool and dispatcher are shared, and the pool is
+     * keyed by host, so an HTTP/2 connection another feature opened is never
+     * handed to this HTTP/1.1-only client.
+     */
     fun create(): OkHttpClient {
-        return OkHttpClient.Builder()
-            .protocols(listOf(Protocol.HTTP_1_1))
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(180, TimeUnit.SECONDS)
-            .writeTimeout(180, TimeUnit.SECONDS)
-            .callTimeout(0, TimeUnit.SECONDS)
-            .retryOnConnectionFailure(true)
-            .addInterceptor { chain ->
+        return BaseHttpClient.derived {
+            protocols(listOf(Protocol.HTTP_1_1))
+            connectTimeout(20, TimeUnit.SECONDS)
+            readTimeout(180, TimeUnit.SECONDS)
+            writeTimeout(180, TimeUnit.SECONDS)
+            callTimeout(0, TimeUnit.SECONDS)
+            retryOnConnectionFailure(true)
+            addInterceptor { chain ->
                 val request = chain.request().newBuilder()
                     .header("User-Agent", "VLC/3.0.20 LibVLC/3.0.20")
                     .header("Accept", "*/*")
@@ -29,7 +37,7 @@ object IptvHttpClient {
                     .build()
                 chain.proceed(request)
             }
-            .build()
+        }
     }
 
     suspend fun fetchTextWithRetry(

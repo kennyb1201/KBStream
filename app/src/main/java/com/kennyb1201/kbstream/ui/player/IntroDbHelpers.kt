@@ -1,9 +1,9 @@
 package com.kennyb1201.kbstream.ui.player
 
 import android.net.Uri
+import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
@@ -31,9 +31,9 @@ internal data class IntroDbStamp(
     val confidence: Double? = null
 )
 
-internal val introDbHttpClient = OkHttpClient.Builder()
-    .callTimeout(5, TimeUnit.SECONDS)
-    .build()
+internal val introDbHttpClient = BaseHttpClient.derived {
+    callTimeout(5, TimeUnit.SECONDS)
+}
 
 /**
  * Millisecond field. Accepts a JSON number (the API's normal shape), a numeric

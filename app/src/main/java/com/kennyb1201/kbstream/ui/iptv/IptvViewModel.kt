@@ -449,6 +449,13 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
      * of leaving the guide, and the VM dies with it) plus one shot on start
      * so returning to the guide after a while shows current programmes
      * immediately instead of the last session's snapshot.
+     *
+     * The same loop is where guide FRESHNESS gets re-checked, on a slow
+     * multiple of the clock cadence. Staleness used to be evaluated exactly
+     * once, on the cache-restore path at construction, so an app left running
+     * (a TV box can stay open for days) never revisited the question and its
+     * guide aged out from under it - showing yesterday's schedule until the
+     * process was restarted.
      */
     private fun startGuideClockRefresh() {
         viewModelScope.launch {
@@ -458,9 +465,11 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             delay(GUIDE_CLOCK_FIRST_REFRESH_MS)
             bumpGuideClock()
 
+            var ticks = 0
             while (isActive) {
                 delay(GUIDE_CLOCK_REFRESH_INTERVAL_MS)
                 bumpGuideClock()
+                if (++ticks % GUIDE_STALENESS_CHECK_EVERY_TICKS == 0) refreshIfNeeded()
             }
         }
     }
@@ -1114,5 +1123,14 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         // recurring cadence for recomputing now/next with a fresh clock.
         const val GUIDE_CLOCK_FIRST_REFRESH_MS = 15_000L
         const val GUIDE_CLOCK_REFRESH_INTERVAL_MS = 2 * 60 * 1000L
+
+        /**
+         * Guide freshness is re-checked every 15th clock tick, i.e. every
+         * 30 minutes. The check is a pref read that no-ops until the guide is
+         * actually older than [EPG_REFRESH_MS], and the worker normally
+         * refreshes it first, so this fires roughly never - it is the safety
+         * net for a process that stays up (and for a worker Android deferred).
+         */
+        const val GUIDE_STALENESS_CHECK_EVERY_TICKS = 15
     }
 }

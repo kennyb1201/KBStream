@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.mdblist
 
 import android.content.Context
 import android.util.Log
+import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -15,7 +16,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -372,10 +372,12 @@ object MdbListClient {
         }
     }
 
-    private val client = OkHttpClient.Builder()
-        .callTimeout(6, TimeUnit.SECONDS)
-        .addInterceptor(budgetInterceptor)
-        .build()
+    private val client = BaseHttpClient.derived {
+        // 6 s ceiling and the local budget interceptor stay this client's
+        // own; the sockets and threads behind it are the process-wide ones.
+        callTimeout(6, TimeUnit.SECONDS)
+        addInterceptor(budgetInterceptor)
+    }
 
     private const val BASE = "https://api.mdblist.com"
     private const val TAG = "MDBLIST"

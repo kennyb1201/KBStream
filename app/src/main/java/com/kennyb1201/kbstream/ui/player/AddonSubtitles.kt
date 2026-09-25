@@ -11,6 +11,7 @@ import androidx.media3.ui.PlayerView
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.SubtitleEntry
+import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -105,11 +106,17 @@ class AddonSubtitleController(
     /** Downloaded subtitle files: offer url -> cached file URI. */
     private val downloadCache = mutableMapOf<String, Uri>()
 
+    /**
+     * Derived from the process-wide base client. This controller is built per
+     * playback session, so a private builder here meant a fresh connection
+     * pool, dispatcher and thread pool for every title opened - for subtitle
+     * downloads, on the one screen where the decoder wants the headroom.
+     */
     private val downloadClient by lazy {
-        okhttp3.OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(20, TimeUnit.SECONDS)
-            .build()
+        BaseHttpClient.derived {
+            connectTimeout(10, TimeUnit.SECONDS)
+            readTimeout(20, TimeUnit.SECONDS)
+        }
     }
 
     private var fetchJob: Job? = null

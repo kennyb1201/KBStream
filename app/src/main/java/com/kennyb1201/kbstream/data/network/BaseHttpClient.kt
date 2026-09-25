@@ -10,6 +10,20 @@ import okhttp3.OkHttpClient
  * threads. Per-feature timeouts/interceptors stay exactly as they were —
  * they are per-call settings and do not affect pool sharing.
  *
+ * Derived callers today: MDBList, stream badges, KB collections, TMDB (its
+ * shared client IS [get]), the IntroDB skip lookups, addon subtitle
+ * downloads, the IPTV/EPG stack, and the addon repository.
+ *
+ * Two things to know before adding another:
+ *
+ *  - A derived client inherits the base DISPATCHER unless it installs its own,
+ *    and a dispatcher caps concurrent requests per host. The two callers that
+ *    fan out against a single host - AddonRepository and TmdbHttpClient - set
+ *    one with a higher cap for that reason; sharing this dispatcher is right
+ *    for features that talk to different hosts, which is what the rest do.
+ *  - Nothing may shut down or evict this client: it is the base every one of
+ *    those features derives from (nothing does, and nothing should).
+ *
  * NOT for playback: the player keeps its own dedicated clients (its stack,
  * UA handling and watchdog behavior are deliberately self-contained).
  */

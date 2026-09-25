@@ -9,6 +9,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.library.LibraryItem
 import com.kennyb1201.kbstream.data.library.LibrarySource
+import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import com.kennyb1201.kbstream.data.sync.SimklAuthRules
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
@@ -20,7 +21,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import com.kennyb1201.kbstream.data.reporting.NetworkTraceInterceptor
-import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 
@@ -74,9 +74,13 @@ class SimklRepository(
             )
             .build()
 
+    // Derived from the process-wide base client, so Simkl's API traffic reuses
+    // the process's sockets instead of idling a pool and thread pool of its
+    // own. Both interceptors (auth header, per-service trace) stay this
+    // client's own.
     private val okHttpClient =
-        OkHttpClient.Builder()
-            .addInterceptor(
+        BaseHttpClient.derived {
+            addInterceptor(
                 SimklQueryInterceptor(
                     clientId = clientId,
                     appName = SimklConfig.APP_NAME,
@@ -85,7 +89,7 @@ class SimklRepository(
             )
             // Per-service request timing for the diagnostics perf block.
             .addInterceptor(NetworkTraceInterceptor())
-            .build()
+        }
 
     internal val api: SimklApiService =
         Retrofit.Builder()

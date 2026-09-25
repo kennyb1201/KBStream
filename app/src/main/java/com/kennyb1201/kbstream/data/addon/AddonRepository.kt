@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.addon
 
 import com.kennyb1201.kbstream.BuildConfig
+import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import com.kennyb1201.kbstream.data.reporting.NetworkTraceInterceptor
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.squareup.moshi.Moshi
@@ -46,8 +47,8 @@ private val sharedAddonLogging =
     }
 
 private val sharedAddonClient: OkHttpClient by lazy {
-    OkHttpClient.Builder()
-        .dispatcher(
+    BaseHttpClient.derived {
+        dispatcher(
             Dispatcher().apply {
                 // Catalog-only addons like AIOMetadata expose ~12 search
                 // catalogs that are probed in parallel; the default 5
@@ -61,7 +62,7 @@ private val sharedAddonClient: OkHttpClient by lazy {
         // cache above only lives for the current process). Skipped when the
         // app context isn't attached yet (unit tests) — caching is purely an
         // optimization, never a startup dependency.
-        .cache(
+        cache(
             AppContextHolder.appContext?.let { appContext ->
                 okhttp3.Cache(
                     java.io.File(appContext.cacheDir, "addon_http_cache"),
@@ -69,27 +70,27 @@ private val sharedAddonClient: OkHttpClient by lazy {
                 )
             }
         )
-        .connectTimeout(
+        connectTimeout(
             10,
             TimeUnit.SECONDS
         )
-        .readTimeout(
+        readTimeout(
             20,
             TimeUnit.SECONDS
         )
-        .writeTimeout(
+        writeTimeout(
             20,
             TimeUnit.SECONDS
         )
-        .callTimeout(
+        callTimeout(
             25,
             TimeUnit.SECONDS
         )
-        .addInterceptor(sharedAddonLogging)
+        addInterceptor(sharedAddonLogging)
         // Per-service request timing for the diagnostics perf block. Read-only
         // (it only inspects the host), so it cannot change behavior.
-        .addInterceptor(NetworkTraceInterceptor())
-        .build()
+        addInterceptor(NetworkTraceInterceptor())
+    }
 }
 
 class AddonRepository private constructor() {
