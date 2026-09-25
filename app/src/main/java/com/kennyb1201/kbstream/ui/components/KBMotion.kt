@@ -1,9 +1,12 @@
 package com.kennyb1201.kbstream.ui.components
 
 import android.provider.Settings
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 
 /**
  * Standard screen-transition length. Long enough to read as motion, short
@@ -43,3 +46,31 @@ fun rememberReducedMotion(): Boolean {
 /** [KB_SCREEN_TRANSITION_MS] unless motion is reduced, where it is a hard cut. */
 fun screenTransitionMs(reducedMotion: Boolean): Int =
     if (reducedMotion) 0 else KB_SCREEN_TRANSITION_MS
+
+/** Slower than basicMarquee's 30dp/s default: this is read at ten feet. */
+private val KB_MARQUEE_VELOCITY = 24.dp
+
+/**
+ * Scrolls a one-line title while its tile holds D-pad focus.
+ *
+ * Every title that has to live on one line behind an ellipsis — the caption
+ * under a poster, the fallback title in a landscape card's corner — arrives
+ * truncated, and focus is exactly the moment the viewer is asking what the
+ * thing is. A D-pad has no hover and no tooltip, so the line itself slides
+ * instead. basicMarquee is documented to have no effect when the content
+ * already fits, so short titles never move; reduced motion leaves the plain
+ * ellipsis in place, the same cut every other animation in the app takes.
+ */
+@Composable
+fun Modifier.kbFocusMarquee(focused: Boolean): Modifier {
+    val reducedMotion = rememberReducedMotion()
+    if (!focused || reducedMotion) return this
+    return basicMarquee(
+        iterations = Int.MAX_VALUE,
+        // Let the eye land on the words before they move, and pause a beat at
+        // the end of each pass instead of snapping straight back.
+        initialDelayMillis = 400,
+        repeatDelayMillis = 1_500,
+        velocity = KB_MARQUEE_VELOCITY
+    )
+}

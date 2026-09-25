@@ -18,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
@@ -55,6 +56,10 @@ fun LandscapeCard(
 ) {
     val context = LocalContext.current
     var hasError by remember(backdropUrl) { mutableStateOf(false) }
+    var focused by remember { mutableStateOf(false) }
+    // Drives the fallback-title marquee at the bottom of the card. The card
+    // itself is focusable, so the tile's own focus state is enough here —
+    // nothing has to be threaded down from the rail.
 
     // Settings toggle: the eye badge (started-but-not-finished shows) can be
     // switched off app-wide; the completed checkmark is always unaffected.
@@ -68,7 +73,7 @@ fun LandscapeCard(
     KBCard(
         onClick = onClick,
         onLongClick = onLongClick,
-        modifier = modifier
+        modifier = modifier.onFocusChanged { focused = it.hasFocus }
     ) {
         BoxWithConstraints(
             modifier = Modifier
@@ -151,6 +156,7 @@ fun LandscapeCard(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .padding(start = 8.dp, bottom = 6.dp)
+                        .kbFocusMarquee(focused)
                 )
             }
 
