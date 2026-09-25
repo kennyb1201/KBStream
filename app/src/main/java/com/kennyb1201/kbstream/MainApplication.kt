@@ -16,6 +16,8 @@ import coil3.svg.SvgDecoder
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache
+import com.kennyb1201.kbstream.data.reporting.CrashReporter
+import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.work.AddonManifestRefreshWorker
 import com.kennyb1201.kbstream.work.NewEpisodeWorker
@@ -23,6 +25,10 @@ import com.kennyb1201.kbstream.work.ReminderWorker
 import com.kennyb1201.kbstream.work.SimklSyncWorker
 import io.sentry.android.core.SentryAndroid
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 class MainApplication : Application(), SingletonImageLoader.Factory {
 
@@ -60,70 +66,86 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                     it, mapOf("source" to "app_create_supabase_init")
                 )
             }
-        runCatching { scheduleSimklPeriodicSync() }
-            .onFailure {
-                com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
-                    it, mapOf("source" to "app_create_simkl_worker")
-                )
-            }
         // Notification channels must exist before anything posts; created here
         // (not in the worker) so a tap target is never missing on first alert.
         runCatching {
             com.kennyb1201.kbstream.data.notifications.NotificationCenter
                 .ensureChannels(applicationContext)
         }
-        runCatching { scheduleNewEpisodeChecks() }
-            .onFailure {
-                com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
-                    it, mapOf("source" to "app_create_new_episode_worker")
-                )
+        // Everything below this point is scheduling and bookkeeping:
+        // WorkManager enqueues (each a write into WorkManager's own database),
+        // four SharedPreferences files read for their throttles, and two
+        // throttled checks. None of it can change what the first frame shows,
+        // and as main-thread I/O it sat directly in front of that first frame
+        // on every cold start. One hop to the IO pool takes the whole chain off
+        // the launch path; the steps keep their individual isolation, and each
+        // is timed into PerfTrace so the cost stays visible (see Diagnostics)
+        // rather than assumed.
+        startupScope.launch {
+            startupStep("startup.simklWorker", "app_create_simkl_worker") {
+                scheduleSimklPeriodicSync()
             }
-        runCatching { scheduleReminderAlerts() }
-            .onFailure {
-                com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
-                    it, mapOf("source" to "app_create_reminder_worker")
-                )
+            startupStep("startup.newEpisodeWorker", "app_create_new_episode_worker") {
+                scheduleNewEpisodeChecks()
             }
-        runCatching { scheduleAddonManifestRefresh() }
-            .onFailure {
-                com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
-                    it, mapOf("source" to "app_create_addon_worker")
-                )
+            startupStep("startup.reminderWorker", "app_create_reminder_worker") {
+                scheduleReminderAlerts()
             }
-        // IPTV guide: enqueue the periodic EPG refresh. The only caller used to
-        // be the cloud-sync prefs applier, so a guide configured in the app
-        // itself never got a background refresh and went stale between manual
-        // ones. No-op when no guide is configured (the worker returns success
-        // on a blank epg_url), and WorkManager persists the request across
-        // process death, so this covers the app being closed.
-        runCatching {
-            com.kennyb1201.kbstream.data.iptv.EpgRefreshScheduler.schedule(applicationContext)
-        }.onFailure {
-            com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
-                it, mapOf("source" to "app_create_epg_worker")
-            )
+            startupStep("startup.addonWorker", "app_create_addon_worker") {
+                scheduleAddonManifestRefresh()
+            }
+            // IPTV guide: enqueue the periodic EPG refresh. The only caller
+            // used to be the cloud-sync prefs applier, so a guide configured in
+            // the app itself never got a background refresh and went stale
+            // between manual ones. No-op when no guide is configured (the
+            // worker returns success on a blank epg_url), and WorkManager
+            // persists the request across process death, so this covers the app
+            // being closed.
+            startupStep("startup.epgWorker", "app_create_epg_worker") {
+                com.kennyb1201.kbstream.data.iptv.EpgRefreshScheduler
+                    .schedule(applicationContext)
+            }
+            // Launch-time auto-update: picks up addon manifest changes on the
+            // first launch after any restart. Throttled internally so frequent
+            // app relaunches don't spam every manifest URL. The daily worker
+            // covers long-running installs that stay alive for days.
+            startupStep("startup.addonRefresh", "app_create_addon_launch_refresh") {
+                com.kennyb1201.kbstream.data.addon.AddonManager
+                    .getInstance(this@MainApplication)
+                    .maybeRefreshOnLaunch(this@MainApplication)
+            }
+            // Self-update: quiet GitHub-release check at most every 12h; only
+            // downloads when the user accepts the prompt in Settings.
+            startupStep("startup.updateCheck", "app_create_update_check") {
+                com.kennyb1201.kbstream.data.update.AppUpdater
+                    .maybeAutoCheck(this@MainApplication)
+            }
         }
-        // Launch-time auto-update: picks up addon manifest changes on the
-        // first launch after any restart. Throttled internally so frequent
-        // app relaunches don't spam every manifest URL; runs on a background
-        // scope, so startup is never blocked. The daily worker covers
-        // long-running installs that stay alive for days.
-        runCatching {
-            com.kennyb1201.kbstream.data.addon.AddonManager.getInstance(this)
-                .maybeRefreshOnLaunch(this)
-        }.onFailure {
-            com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
-                it, mapOf("source" to "app_create_addon_launch_refresh")
-            )
-        }
-        // Self-update: quiet GitHub-release check at most every 12h; only
-        // downloads when the user accepts the prompt in Settings.
-        runCatching { com.kennyb1201.kbstream.data.update.AppUpdater.maybeAutoCheck(this) }
-            .onFailure {
-                com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
-                    it, mapOf("source" to "app_create_update_check")
-                )
-            }
+    }
+
+    /**
+     * Launch-time work that does not have to finish before the first frame.
+     *
+     * Dispatched to IO because every step is disk or database work (WorkManager
+     * enqueues and prefs reads), and because nothing here is read by the UI
+     * until long after the first frame. The Application outlives every screen,
+     * so the scope is never cancelled; SupervisorJob keeps one failing step
+     * from taking the rest of the chain down with it.
+     */
+    private val startupScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /**
+     * One launch step: isolated, and timed into PerfTrace.
+     *
+     * An exception here must degrade a single feature and never the launch
+     * (Application.onCreate throwing kills the process before any Activity
+     * exists -- on a TV that is a black screen, then the launcher), so this
+     * keeps the runCatching that every call site used to spell out.
+     */
+    private fun startupStep(label: String, source: String, block: () -> Unit) {
+        runCatching { PerfTrace.timed(label, block) }
+            .onFailure { CrashReporter.recordNonFatal(it, mapOf("source" to source)) }
     }
 
     /**

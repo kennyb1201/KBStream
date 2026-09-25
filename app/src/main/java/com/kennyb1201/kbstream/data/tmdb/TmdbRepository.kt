@@ -8,6 +8,7 @@ import com.kennyb1201.kbstream.data.cache.ImdbResolutionEntity
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheDao
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.sync.KidsMode
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.squareup.moshi.JsonAdapter
@@ -78,7 +79,8 @@ data class ResolvedEpisode(
     val voteAverage: Double?
 )
 
-class TmdbRepository private constructor(context: Context) {
+class TmdbRepository private constructor(context: Context) :
+    MemoryPressure.Releasable {
 
     // Process-wide singleton (see [Companion.getInstance]): Retrofit +
     // Moshi(KotlinJsonAdapterFactory) are heavyweight reflection setups and
@@ -205,6 +207,66 @@ class TmdbRepository private constructor(context: Context) {
     init {
         pruneImdbCacheOnce()
         pruneJsonCacheOnce()
+        // Registered so the system (or the player opening fullscreen) can take
+        // these back the way it takes Coil's bitmaps and the guide's snapshots.
+        MemoryPressure.register(this)
+    }
+
+    /**
+     * Caps for the in-memory caches above.
+     *
+     * A long browse session opens hundreds of titles, and until now nothing
+     * removed an entry before its TTL was *consulted* -- the maps only grew.
+     * Each entry is small, but [detailCache] holds whole enriched responses
+     * (cast, images, videos, recommendations) and this app has already died at
+     * the heap limit with a browse session live (see MemoryPressure), so these
+     * are bounded the way Coil's caches are. The TTLs still apply on top of the
+     * cap: an entry evicted here is rebuilt from the JSON cache table on disk,
+     * or from one request.
+     */
+    private val MAX_DETAIL_ENTRIES = 150
+    private val MAX_SEASON_ENTRIES = 200
+    private val MAX_RESOLUTION_ENTRIES = 500
+
+    /**
+     * Keeps all four in-memory caches bounded.
+     *
+     * Called from the lookup paths rather than from the dozen write sites:
+     * growth can only happen through a lookup, and the size check makes this
+     * free while a cache is under its cap.
+     */
+    private fun pruneMemoryCaches() {
+        evictOldest(detailCache, MAX_DETAIL_ENTRIES)
+        evictOldest(seasonEpisodesCache, MAX_SEASON_ENTRIES)
+        evictOldest(imdbResolutionMemoryCache, MAX_RESOLUTION_ENTRIES)
+        evictOldest(tmdbResolutionMemoryCache, MAX_RESOLUTION_ENTRIES)
+    }
+
+    /** Drops the oldest entries until [cache] is back at or below [max]. */
+    private fun <V> evictOldest(
+        cache: ConcurrentHashMap<String, Pair<Long, V>>,
+        max: Int
+    ) {
+        val over = cache.size - max
+        if (over <= 0) return
+        // sortedBy snapshots the entries, so removing while walking is safe.
+        cache.entries
+            .sortedBy { it.value.first }
+            .take(over)
+            .forEach { cache.remove(it.key) }
+    }
+
+    /**
+     * Drops every in-memory cache. All four are rebuilt from the JSON cache
+     * table on disk (30-day TTL) or from one request, so the worst case cost is
+     * a database read -- which is what makes them worth giving back when the
+     * heap is tight, like the guide's snapshots.
+     */
+    override fun releaseCaches() {
+        detailCache.clear()
+        seasonEpisodesCache.clear()
+        imdbResolutionMemoryCache.clear()
+        tmdbResolutionMemoryCache.clear()
     }
 
     private fun pruneImdbCacheOnce() {
@@ -312,6 +374,7 @@ class TmdbRepository private constructor(context: Context) {
     suspend fun fetchEnrichedMetaCached(imdbId: String, type: String): TmdbDetail? {
         val key = "${normalizeType(type)}:$imdbId"
         val now = System.currentTimeMillis()
+        pruneMemoryCaches()
 
         // In-memory TTL cache (fast path for the current session).
         val cached = detailCache[key]
@@ -782,6 +845,7 @@ class TmdbRepository private constructor(context: Context) {
         // memory with a TTL instead of hitting TMDB every time.
         val key = "$tvId:$season:$imdbId"
         val now = System.currentTimeMillis()
+        pruneMemoryCaches()
         val cached = seasonEpisodesCache[key]
 
         if (cached != null && now - cached.first < seasonEpisodesCacheTtlMs) {
@@ -858,6 +922,7 @@ class TmdbRepository private constructor(context: Context) {
 
         val key = "${normalizeType(type)}:tmdb:$tmdbId"
         val now = System.currentTimeMillis()
+        pruneMemoryCaches()
 
         // In-memory TTL cache (fast path for the current session).
         val cached = detailCache[key]
