@@ -238,6 +238,13 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-hls:1.9.0")
     implementation("androidx.media3:media3-exoplayer-dash:1.9.0")
     implementation("androidx.media3:media3-exoplayer-rtsp:1.9.0")
+    // Microsoft Smooth Streaming (MSS), the Silverlight-era adaptive format:
+    // ".../stream.ism/Manifest", still served by IIS Media Services and some
+    // CDNs. Small module, and Media3's DefaultMediaSourceFactory picks it up by
+    // class name (SsMediaSource$Factory) once it is on the classpath - see
+    // resolveMimeType in NativePlayerActivity, which is what puts the mime on
+    // the MediaItem for a URL that has no extension to key off.
+    implementation("androidx.media3:media3-exoplayer-smoothstreaming:1.9.0")
     implementation("androidx.media3:media3-ui:1.9.0")
     implementation("androidx.media3:media3-session:1.9.0")
     implementation("androidx.media3:media3-datasource-okhttp:1.9.0")

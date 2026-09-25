@@ -54,11 +54,15 @@ import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.mediacodec.MediaCodecRenderer
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
+import androidx.media3.exoplayer.mediacodec.MediaCodecUtil
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
+import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
+import androidx.media3.extractor.ts.TsExtractor
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -1066,6 +1070,16 @@ class NativePlayerActivity : ComponentActivity() {
     // Retry
     private var retryAttempt = 0
     private var decoderResourceFallbackDone = false
+    /**
+     * True once a decoder failure has had the ladder's one meaningful retry,
+     * the raw-extractor probe (see [RAW_EXTRACTOR_PROBE_ATTEMPT]).
+     *
+     * A SECOND decoder failure after that is the decoder rejecting the FORMAT -
+     * 10-bit AVC, VP9 profile 2, AV1 with no decoder on the box, an unsupported
+     * Dolby Vision profile - rather than the container being mis-identified by
+     * its URL, and no rebuild changes it. See onPlayerError.
+     */
+    private var decoderFailureRetried = false
     private var retryExhausted = false
     private var errorMessageStr: String? = null
     private var manualRetryToken = 0
@@ -3154,6 +3168,11 @@ class NativePlayerActivity : ComponentActivity() {
         btnRetry.setOnClickListener {
             retryAttempt = 0
             retryExhausted = false
+            // An explicit retry is the viewer asking for the whole ladder
+            // again, so the decoder failure that previously handed the session
+            // to the backup engine starts from the top rather than handing
+            // over on its first failure this time.
+            decoderFailureRetried = false
             errorMessageStr = null
             manualRetryToken++
             recreatePlayer()
@@ -4124,12 +4143,34 @@ class NativePlayerActivity : ComponentActivity() {
         )
         // The compat extractor is needed when DV conversion is on OR the
         // HDR10+ strip toggle is on — both run inside it.
+        // Both branches share ONE plain factory, configured with the two TS
+        // settings the field needs and Media3 does not default to. Just Player
+        // ships the same pair, and they are the two upstream TS issues worth
+        // working around:
+        //
+        //  - HDMV DTS audio streams. A DTS track that arrives through the HDMV
+        //    stream descriptors is SKIPPED by the extractor's default flags, so
+        //    a Blu-ray-style remux or an IPTV transport stream carrying DTS
+        //    played with no sound at all, on boxes that decode DTS perfectly.
+        //    This is the same class of audio the FFmpeg decoder above exists
+        //    for, one descriptor layer earlier.
+        //  - the timestamp search window. The default is three TS packets;
+        //    captures whose first usable PES timestamp sits further in (raw
+        //    cable/QAM captures, badly remuxed .ts files) never establish a
+        //    start time, and then either do not start or seek to nowhere
+        //    (google/ExoPlayer#8571). 1500 packets is the value Just Player
+        //    ships for exactly these files.
+        val plainExtractors = DefaultExtractorsFactory()
+            .setTsExtractorFlags(
+                DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS
+            )
+            .setTsExtractorTimestampSearchBytes(1500 * TsExtractor.TS_PACKET_SIZE)
         val extractorsFactory: androidx.media3.extractor.ExtractorsFactory =
             if (!dvRewriteEnabled && !convertTo81 && !stripHdr10Plus) {
-                DefaultExtractorsFactory()
+                plainExtractors
             } else {
                 DolbyVisionCompatExtractorsFactory(
-                    DefaultExtractorsFactory(),
+                    plainExtractors,
                     stripHdr10Plus = stripHdr10Plus,
                     convertAllProfiles = convertAllProfiles,
                     dvRewriteEnabled = dvRewriteEnabled,
@@ -4268,8 +4309,10 @@ class NativePlayerActivity : ComponentActivity() {
                 val urlMimeType = resolveMimeType(currentUrl)
                 val isManifest = mimeType == MimeTypes.APPLICATION_M3U8 ||
                     mimeType == MimeTypes.APPLICATION_MPD ||
+                    mimeType == MimeTypes.APPLICATION_SS ||
                     urlMimeType == MimeTypes.APPLICATION_M3U8 ||
-                    urlMimeType == MimeTypes.APPLICATION_MPD
+                    urlMimeType == MimeTypes.APPLICATION_MPD ||
+                    urlMimeType == MimeTypes.APPLICATION_SS
                 Log.i(
                     "PLAYER_DV",
                     "Media source path=${if (isManifest) "manifest" else "progressive"} " +
@@ -4827,6 +4870,25 @@ class NativePlayerActivity : ComponentActivity() {
                 updateUIError()
                 return
             }
+            // No decoder for this codec at all: AVI's MPEG-4 ASP, VC-1/WMV,
+            // Theora, 10-bit AVC on most boxes. This is the decoder failure a
+            // rebuild cannot touch - every attempt below asks for the same
+            // component, so the ladder can only spend its six backoffs (about a
+            // minute of "Reconnecting...") to arrive back here. The backup
+            // engine is the thing that CAN play these files: libmpv carries the
+            // full FFmpeg decoder set, software included. That is the same
+            // trade Vimu makes with its own engine, which is why those boxes
+            // play files this one refuses.
+            //
+            // handOffToMpv still refuses live TV, a DRM session, a device
+            // without libmpv, and an "ExoPlayer only" engine setting; those
+            // fall through to the ladder below exactly as before.
+            if (
+                isMissingDecoderFailure(error) &&
+                handOffToMpv(MpvPlayerActivity.FALLBACK_REASON_DECODER)
+            ) {
+                return
+            }
             // A decoder error is not an IO error. Rebuilding here produced an
             // identical decoder on an identical device, and the field log shows
             // the cost: after the vendor DV decoder failed, each retry started a
@@ -4837,8 +4899,30 @@ class NativePlayerActivity : ComponentActivity() {
             // hint so the extractor sniffs the container itself — so skip straight
             // to those, which also gives the vendor codec time to finish releasing
             // before it is asked for a component again.
-            if (isDecoderError(error.errorCode) && retryAttempt < RAW_EXTRACTOR_PROBE_ATTEMPT) {
-                retryAttempt = RAW_EXTRACTOR_PROBE_ATTEMPT
+            // A decoder failure gets ONE meaningful retry out of the ladder:
+            // the MIME-hint-free probe described above. That is the retry that
+            // matters for a stream whose URL extension lied about its container
+            // (a ".ts" that is really an MKV hands the TS extractor garbage).
+            //
+            // A decoder failure that SURVIVES that probe is the decoder
+            // rejecting the FORMAT: 10-bit AVC, VP9 profile 2, AV1 on a box
+            // with no decoder for it, an unsupported Dolby Vision profile. The
+            // remaining attempts ask for the same component (16s and 30s of
+            // backoff apart) and land right back here, on the error card. The
+            // backup engine is the one thing that can play those files, so the
+            // second failure hands the session over instead of grinding out the
+            // rest of the ladder. handOffToMpv refuses live TV, a DRM session,
+            // a device without libmpv and an "ExoPlayer only" engine setting,
+            // and those keep the old ladder.
+            if (decoderFailure) {
+                if (decoderFailureRetried) {
+                    if (handOffToMpv(MpvPlayerActivity.FALLBACK_REASON_DECODER)) return
+                } else {
+                    decoderFailureRetried = true
+                    if (retryAttempt < RAW_EXTRACTOR_PROBE_ATTEMPT) {
+                        retryAttempt = RAW_EXTRACTOR_PROBE_ATTEMPT
+                    }
+                }
             }
             errorMessageStr = msg
             if (isLikelyRetryable(error)) {
@@ -4993,6 +5077,50 @@ class NativePlayerActivity : ComponentActivity() {
             val target = if (btnRetry.visibility == View.VISIBLE) btnRetry else btnChangeSource
             target.requestFocus()
         }
+    }
+
+    /**
+     * True when this box has NO decoder for the codec that just failed.
+     *
+     * [isDecoderError] above answers "the decoder path failed", which includes
+     * failures a different attempt could fix: a bad bitstream, a decoder still
+     * releasing its OMX component. This answers the narrower question the retry
+     * ladder silently assumes a yes to: is there any decoder on this device for
+     * this codec at all? When there is not, every rebuild asks for the same
+     * component and fails the same way, so the only useful move is the other
+     * engine.
+     *
+     * The codec comes from the failure itself (the DecoderInitializationException's
+     * mimeType) rather than from the add-on's stream metadata: the metadata
+     * names a codec family, while this is the mime Media3 actually asked the
+     * platform for. MediaCodecUtil then answers with the device's own decoder
+     * list - the same list Media3's selector uses - and a query failure counts
+     * as "a decoder exists", because the conservative side is to keep the
+     * pre-existing ladder.
+     */
+    private fun isMissingDecoderFailure(error: Throwable?): Boolean {
+        var cause: Throwable? = error
+        while (cause != null) {
+            if (cause is MediaCodecRenderer.DecoderInitializationException) {
+                val mime = cause.mimeType
+                val decoderExists = if (mime.isNullOrBlank()) {
+                    cause.codecInfo != null
+                } else {
+                    runCatching {
+                        MediaCodecUtil.getDecoderInfos(mime, false, false).isNotEmpty()
+                    }.getOrDefault(true)
+                }
+                Log.w(
+                    "PLAYER_RETRY",
+                    "decoder init failed mime=${mime ?: "unknown"} " +
+                        "candidate=${cause.codecInfo?.name ?: "none"} " +
+                        "decoderExists=$decoderExists"
+                )
+                return !decoderExists
+            }
+            cause = cause.cause
+        }
+        return false
     }
 
     // --- Black-video watchdog ---
@@ -7990,6 +8118,7 @@ class NativePlayerActivity : ComponentActivity() {
         retryAttempt = 0; retryExhausted = false; errorMessageStr = null; forceTextureViewFallback = false; languagesAutoSelected = false
         dvStripRetryDone = false; forceDvStripForSession = false
         decoderResourceFallbackDone = false
+        decoderFailureRetried = false
         // Per-source Dolby Vision identity. These used to survive into the
         // next player build, so a P5 title followed by any other title kept
         // the P5 GL color path "on": the shader then applied ICtCp math to
@@ -8098,6 +8227,14 @@ private fun resolveMimeType(url: String): String? {
     return when {
         ".m3u8" in path -> MimeTypes.APPLICATION_M3U8
         ".mpd" in path -> MimeTypes.APPLICATION_MPD
+        // Microsoft Smooth Streaming: the manifest lives at
+        // ".../stream.ism/Manifest" (live publishing points use .isml, hence the
+        // substring test), and there is no file extension anywhere in that URL
+        // to key off - so without this it reached Media3 as an unknown type and
+        // was handed to the progressive extractors. A bare "/manifest" is
+        // deliberately NOT matched: HLS and DASH servers name their playlist
+        // that too, and a wrong SS guess would break a stream that plays.
+        ".ism" in path -> MimeTypes.APPLICATION_SS
         ".mp4" in path || ".m4v" in path -> MimeTypes.VIDEO_MP4
         ".mkv" in path || ".webm" in path -> MimeTypes.VIDEO_MATROSKA
         ".ts" in path -> MimeTypes.VIDEO_MP2T
