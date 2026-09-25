@@ -67,18 +67,24 @@ class SimklRepository(
             )
         }
 
-    private val moshi =
+    // Heavyweight and deliberately lazy: Moshi's reflection setup costs real
+    // time, and this constructor runs during the first composition (see
+    // HomeViewModel), so building it inline put that cost in front of the
+    // first frame. warmUpReflectionStack() forces it on IO instead — the same
+    // pattern, for the same reason, as TmdbRepository.
+    private val moshi by lazy {
         Moshi.Builder()
             .add(
                 KotlinJsonAdapterFactory()
             )
             .build()
+    }
 
     // Derived from the process-wide base client, so Simkl's API traffic reuses
     // the process's sockets instead of idling a pool and thread pool of its
     // own. Both interceptors (auth header, per-service trace) stay this
     // client's own.
-    private val okHttpClient =
+    private val okHttpClient by lazy {
         BaseHttpClient.derived {
             addInterceptor(
                 SimklQueryInterceptor(
@@ -90,8 +96,9 @@ class SimklRepository(
             // Per-service request timing for the diagnostics perf block.
             .addInterceptor(NetworkTraceInterceptor())
         }
+    }
 
-    internal val api: SimklApiService =
+    internal val api: SimklApiService by lazy {
         Retrofit.Builder()
             .baseUrl(
                 SimklConfig.BASE_URL
@@ -108,6 +115,7 @@ class SimklRepository(
             .create(
                 SimklApiService::class.java
             )
+    }
 
     private val allShowItemsMutex =
         Mutex()
@@ -143,14 +151,15 @@ class SimklRepository(
     internal var cachedAllShowItemsToken: String? = null
 
     private val tmdbJsonCacheDao:
-        TmdbJsonCacheDao? =
-        context
-            ?.applicationContext
-            ?.let {
-                WatchHistoryDatabase
-                    .getInstance(it)
-                    .tmdbJsonCacheDao()
-            }
+        TmdbJsonCacheDao? by lazy {
+            context
+                ?.applicationContext
+                ?.let {
+                    WatchHistoryDatabase
+                        .getInstance(it)
+                        .tmdbJsonCacheDao()
+                }
+        }
 
     init {
         // One-time sweep: builds before the per-profile disk-cache keys
@@ -158,17 +167,51 @@ class SimklRepository(
         // Those rows are now unreachable (all reads/writes go through the
         // profile-scoped diskKey()) and can hold ANOTHER account's data —
         // delete them once so they don't sit stale forever.
-        tmdbJsonCacheDao?.let { dao ->
-            CoroutineScope(Dispatchers.IO).launch {
-                runCatching {
-                    dao.deleteByKeys(
-                        listOf(
-                            "simkl:all_show_items",
-                            "simkl:continue_watching",
-                            "simkl:completed_movies"
-                        )
+        //
+        // Dispatched rather than resolved at construction: reaching the DAO
+        // opens the Room database, and this constructor runs during the first
+        // composition. Resolving it here would force the lazy on the calling
+        // thread. The warm-up below covers it, so the sweep only needs to stay
+        // out of the constructor's way.
+        CoroutineScope(Dispatchers.IO).launch {
+            runCatching {
+                tmdbJsonCacheDao?.deleteByKeys(
+                    listOf(
+                        "simkl:all_show_items",
+                        "simkl:continue_watching",
+                        "simkl:completed_movies"
                     )
-                }
+                )
+            }
+        }
+        warmUpReflectionStack()
+    }
+
+    /**
+     * Forces this class's heavyweight lazies (Moshi's reflection setup, the
+     * OkHttp client and the Retrofit service) off the main thread.
+     *
+     * Lazy alone would have moved this work rather than removed it from the
+     * cold-start path: "first use" is a fetch on `viewModelScope`, which is
+     * Dispatchers.Main.immediate, so the first `api` touch would still have
+     * built the whole stack on the main thread — just later, trading a slow
+     * first frame for slow first data. Priming on IO is what actually gets it
+     * off the frame.
+     *
+     * A main-thread caller that beats this still blocks on a lazy's lock for
+     * the remainder of the work — exactly what it would have paid inline — so
+     * the change can never be worse, only usually much better.
+     */
+    private fun warmUpReflectionStack() {
+        CoroutineScope(Dispatchers.IO).launch {
+            runCatching {
+                // Passing each lazy to listOf() is what forces it; the result
+                // is discarded, which is why it is not assigned to anything.
+                listOf(
+                    moshi,
+                    okHttpClient,
+                    api
+                )
             }
         }
     }

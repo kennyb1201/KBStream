@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.sync
 
 import android.content.Context
 import android.util.Log
+import java.util.concurrent.atomic.AtomicBoolean
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.gotrue.Auth
@@ -147,7 +148,16 @@ object SupabaseSync {
 
     // ── Client ──────────────────────────────────────────────────────
 
+    // Built on `scope` (see init) and read from other threads — signIn,
+    // signOut, the enqueue paths and the UI all touch it — so publish it
+    // safely now that the write is no longer on the caller's thread.
+    @Volatile
     private var client: SupabaseClient? = null
+
+    // init() is called once from MainApplication, but the client is now built
+    // asynchronously: a plain `client != null` guard would let a second call
+    // start a second build before the first one assigns.
+    private val initStarted = AtomicBoolean(false)
 
     // Last-resort net under every launch {} in this object: the per-path
     // try/catch blocks only catch Exception, but an Error/Throwable escaping
@@ -180,6 +190,26 @@ object SupabaseSync {
             Log.i(TAG, "Supabase not configured — sync disabled")
             return
         }
+        if (!initStarted.compareAndSet(false, true)) return
+
+        // createSupabaseClient builds a Ktor engine, an OkHttp stack and the
+        // Auth/Postgrest/Realtime plugin chain — the single heaviest piece of
+        // app startup, and it used to run inline here, on the main thread,
+        // ahead of the first frame. Nothing on the first-frame path reads this
+        // object: authState/syncEnabled start at SignedOut/false and the only
+        // consumers are the onboarding and settings screens. restoreSession()
+        // already dispatched to `scope`, so dispatching the client build puts
+        // ALL of sync's startup on IO. The scope carries a
+        // CoroutineExceptionHandler, so a failure here is logged and reported
+        // instead of crashing the process.
+        scope.launch { startClient(context) }
+    }
+
+    /**
+     * Builds the client, then starts session restore and the session-status
+     * collector. Runs on [scope] — never the main thread.
+     */
+    private fun startClient(context: Context) {
         if (client != null) return
 
         client = createSupabaseClient(

@@ -10,7 +10,9 @@ import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
@@ -33,9 +35,16 @@ import okhttp3.Request
 class TmdbHeroArtworkRepository(
     context: Context? = null
 ) {
-    private val moshi = Moshi.Builder()
-        .add(KotlinJsonAdapterFactory())
-        .build()
+    // Heavyweight and deliberately lazy: this repository is constructed during
+    // the first composition (HomeViewModel), so building Moshi inline put its
+    // reflection setup in front of the first frame. warmUpReflectionStack()
+    // forces it on IO instead — the same pattern, for the same reason, as
+    // TmdbRepository.
+    private val moshi by lazy {
+        Moshi.Builder()
+            .add(KotlinJsonAdapterFactory())
+            .build()
+    }
 
     // The process-wide, per-host-cap-raised TMDB client (shared with
     // TmdbRepository): reuses its pooled connections so a hero-artwork fetch
@@ -45,14 +54,53 @@ class TmdbHeroArtworkRepository(
     // rails prefetch.
     private val client get() = TmdbHttpClient.get()
 
-    private val imagesAdapter = moshi.adapter(TmdbImagesResponse::class.java)
-    private val artworkAdapter = moshi.adapter(HeroArtwork::class.java)
+    private val imagesAdapter by lazy {
+        moshi.adapter(TmdbImagesResponse::class.java)
+    }
+    private val artworkAdapter by lazy {
+        moshi.adapter(HeroArtwork::class.java)
+    }
 
-    private val tmdbJsonCacheDao: TmdbJsonCacheDao? = context
-        ?.applicationContext
-        ?.let {
-            WatchHistoryDatabase.getInstance(it).tmdbJsonCacheDao()
+    private val tmdbJsonCacheDao: TmdbJsonCacheDao? by lazy {
+        context
+            ?.applicationContext
+            ?.let {
+                WatchHistoryDatabase.getInstance(it).tmdbJsonCacheDao()
+            }
+    }
+
+    init {
+        warmUpReflectionStack()
+    }
+
+    /**
+     * Forces this class's heavyweight lazies (Moshi's reflection setup, the two
+     * adapters and the Room DAO) off the main thread.
+     *
+     * Lazy alone would have moved this work rather than removed it from the
+     * cold-start path: "first use" is the Home hero asking for artwork while
+     * the screen is being composed, so the stack would still have been built on
+     * the main thread — just later. Priming on IO is what actually gets it off
+     * the frame.
+     *
+     * A main-thread caller that beats this still blocks on a lazy's lock for
+     * the remainder of the work — exactly what it would have paid inline — so
+     * the change can never be worse, only usually much better.
+     */
+    private fun warmUpReflectionStack() {
+        CoroutineScope(Dispatchers.IO).launch {
+            runCatching {
+                // Passing each lazy to listOf() is what forces it; the result
+                // is discarded, which is why it is not assigned to anything.
+                listOf(
+                    moshi,
+                    imagesAdapter,
+                    artworkAdapter,
+                    tmdbJsonCacheDao
+                )
+            }
         }
+    }
 
     // Guards the caches and [inFlight] only — never the network call. See
     // resolve() for why that distinction matters.

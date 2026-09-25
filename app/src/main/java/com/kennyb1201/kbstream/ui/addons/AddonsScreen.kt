@@ -1181,8 +1181,9 @@ private fun CatalogManagerDialog(
                         modifier = Modifier.padding(top = 3.dp)
                     )
                     Text(
-                        text = "Collections can pin above everything · a catalog " +
-                            "moves to the top of the list · ⏬ unpins and drops it last",
+                        text = "Collections pin above your other rails · a " +
+                            "catalog moves to the top of the list · ⏬ unpins " +
+                            "and drops it last",
                         color = KBTextLo.copy(alpha = 0.7f),
                         style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.padding(top = 5.dp)
