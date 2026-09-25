@@ -50,6 +50,7 @@ import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.sync.KidsMode
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.rememberKBFeedback
 import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -74,6 +75,7 @@ fun ProfileEditScreen(
     onDone: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val feedback = rememberKBFeedback()
     val profiles by ProfileManager.profiles.collectAsStateWithLifecycle()
 
     // Manage mode: when opened with a null id (Settings entry point or the
@@ -601,15 +603,18 @@ fun ProfileEditScreen(
                     val clearOk = !wantsClear || currentPinInput.isNotBlank()
                     val matchOk = newPinInput.isBlank() || newPinInput == confirmPinInput
                     if (!currentOk || !clearOk || !matchOk) {
-                        android.widget.Toast.makeText(
-                            context,
-                            when {
+                        // Through the app's own channel rather than a system
+                        // Toast: same wording, but it is styled like the rest
+                        // of the app, readable from across the room, and read
+                        // aloud by TalkBack.
+                        feedback.show(
+                            text = when {
                                 !currentOk -> "Current PIN is incorrect"
                                 !clearOk -> "Enter the current PIN to remove the lock"
                                 else -> "PINs don't match"
                             },
-                            android.widget.Toast.LENGTH_SHORT
-                        ).show()
+                            isError = true
+                        )
                         return@ProfileActionButton
                     }
                 }

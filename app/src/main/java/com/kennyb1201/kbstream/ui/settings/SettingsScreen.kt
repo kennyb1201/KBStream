@@ -1978,6 +1978,14 @@ private fun SettingsContentHost(
             .padding(start = 40.dp, end = 64.dp, top = 32.dp, bottom = 40.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        // Deliberately NOT KBPageTitle, and deliberately not the 28sp every
+        // top-level screen now uses. Settings is the app's only master-detail
+        // screen: the rail draws the SCREEN's name above this ("SETTINGS" at
+        // headlineMedium / 26sp), so a 28sp pane title would end up larger
+        // than the name of the screen it belongs to. headlineSmall / 22sp is
+        // what keeps "SETTINGS > About" reading in the right order. Library,
+        // Add-ons and Live TV have no parent name on screen, so the same
+        // argument does not apply to them.
         Text(
             text = title.uppercase(),
             color = KBAccent,

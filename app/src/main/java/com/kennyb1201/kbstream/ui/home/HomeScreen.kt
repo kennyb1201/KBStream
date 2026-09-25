@@ -1750,8 +1750,7 @@ private fun CompactUpNextCard(
     onUpPressed: () -> Unit = {},
     onLongClick: (() -> Unit)? = null,
     focusRequester: FocusRequester? = null,
-    badgeColor: Color,
-    badgeText: String
+    badgeColor: Color
 ) {
     var focused by remember {
         mutableStateOf(false)
@@ -2801,31 +2800,6 @@ fun HomeScreen(
                                                                     KBPlum
                                                             }
                                                     },
-                                                badgeText =
-                                                    when {
-                                                        item.isSeriesFinale ->
-                                                            "SERIES FINALE"
-
-                                                        item.isSeasonFinale ->
-                                                            "SEASON FINALE"
-
-                                                        else ->
-                                                            when (
-                                                                item.badge
-                                                            ) {
-                                                                UpNextBadge.CONTINUE_WATCHING ->
-                                                                    "RESUME"
-
-                                                                UpNextBadge.NEXT_UP ->
-                                                                    "NEXT UP"
-
-                                                                UpNextBadge.NEW_EPISODE ->
-                                                                    "NEW"
-
-                                                                UpNextBadge.NEW_SEASON ->
-                                                                    "NEW SEASON"
-                                                            }
-                                                    }
                                             )
                                         }
                                     }

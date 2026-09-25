@@ -270,6 +270,10 @@ fun PosterContextMenu(
 ) {
     val context = LocalContext.current
 
+    // Every screen's poster menu shares this one channel, so the confirmation
+    // for a destructive action lands in the same place app-wide.
+    val feedback = rememberKBFeedback()
+
     val firstRowFocusRequester = remember {
         FocusRequester()
     }
@@ -368,13 +372,29 @@ fun PosterContextMenu(
                     description = "Remove this title from every screen",
                     isDestructive = true
                 ) {
-                    HiddenTitles.hide(
+                    // Capture the key forms BEFORE hiding: the stored entry
+                    // keeps every spelling of the title, and the undo has to
+                    // match one of them.
+                    val hiddenKeys = HiddenTitles.keysFor(target.mediaType, target.ids)
+                    val stored = HiddenTitles.hide(
                         context = context,
                         title = target.title,
                         mediaType = target.mediaType,
                         posterUrl = target.posterUrl,
                         ids = target.ids
                     )
+                    if (stored) {
+                        // The card leaves the screen the instant this runs, so
+                        // with no message the app just silently deletes a
+                        // title. It gets an undo because a menu row that
+                        // removes content from EVERY screen is precisely the
+                        // kind of action that needs one.
+                        feedback.show(
+                            text = "Hidden: ${target.title}",
+                            actionLabel = "UNDO",
+                            onAction = { HiddenTitles.unhide(context, hiddenKeys) }
+                        )
+                    }
                     // The caller's dismiss restores focus to the poster that
                     // was long-pressed; that card is on its way out of the
                     // composition, so Compose moves focus on to the nearest

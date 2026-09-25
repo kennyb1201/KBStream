@@ -319,6 +319,42 @@ internal fun decodeCast(array: JSONArray?): List<TmdbCastMember> {
     }
 }
 
+/**
+ * How far from Home a screen sits, used only to pick the direction of the
+ * screen transition: a deeper target slides in from the trailing edge, a
+ * shallower one slides back out. Equal depths crossfade, which is the honest
+ * answer for the handful of moves that are sideways rather than in or out
+ * (Settings -> Add-ons, Home -> Search vs Home -> Library).
+ *
+ * Deliberately a fixed table rather than a walk of the returnTo chain: the
+ * chain is exact for the screens that carry a returnTo, but ProfileEdit,
+ * Addons and the entry picker are reached in more than one way, and inferring
+ * direction from an equality check on screens that hold lists and nested
+ * screens would misfire more often than a small, readable table does.
+ */
+internal val Screen.navDepth: Int
+    get() = when (this) {
+        is Screen.Home -> 0
+        is Screen.Search,
+        is Screen.Library,
+        is Screen.Guide,
+        is Screen.Settings,
+        is Screen.Simkl,
+        is Screen.ProfilePicker,
+        is Screen.Detail,
+        is Screen.CatalogGrid,
+        is Screen.KBFolder,
+        is Screen.Addons -> 1
+        is Screen.ProfileEdit,
+        is Screen.Actor,
+        is Screen.Studio,
+        is Screen.Decade,
+        is Screen.Tag,
+        is Screen.Collection,
+        is Screen.Streams -> 2
+        is Screen.Player -> 3
+    }
+
 internal fun Screen.typeName(): String = when (this) {
     is Screen.Home -> "home"
     is Screen.ProfilePicker -> "profilePicker"

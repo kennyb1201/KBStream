@@ -45,9 +45,10 @@ import com.kennyb1201.kbstream.data.kb.KBFolder
 import com.kennyb1201.kbstream.data.kb.KBRail
 import com.kennyb1201.kbstream.data.tmdb.HeroArtwork
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBSkeletonGrid
+import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
-import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.LandscapeCard
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
@@ -175,14 +176,17 @@ private fun TabChip(
 }
 
 /**
- * Loading / error / empty state for a KB collection, as the app's shared
+ * Error / empty state for a KB collection, as the app's shared
  * [KBStatusMessage] card.
  *
  * These were two functions with identical bodies ([FolderLoading] and
- * [FolderErrorMessage]) wrapping a plain centred line of text; a collection
- * that failed to load looked exactly like one that was legitimately empty, and
- * neither matched the status card every other browse screen shows. The
- * `weight` is what makes the card centre in the space the rails would have
+ * [FolderErrorMessage]) wrapping a plain centred line of text, so a
+ * collection that failed to load looked exactly like one that was
+ * legitimately empty. Loading is no longer handled here: it draws skeleton
+ * rails/grid instead, matching every other browse surface — a skeleton says
+ * "this is coming", the card says "there is nothing here".
+ *
+ * The `weight` is what makes the card centre in the space the rails would have
  * used — KBStatusMessage itself defaults to fillMaxSize, and inside a Column
  * that would run past the bottom of the screen instead of filling what is
  * left below the hero and source tabs.
@@ -574,7 +578,13 @@ private fun FollowHomeLayout(
 
         when {
             state.isLoading ->
-                FolderStatus(KB_STATUS_LOADING, loading = true)
+                KBSkeletonRailStack(
+                    posterWidth = if (showLandscapeCards) FolderLandscapeWidth
+                    else FolderPosterWidth,
+                    posterHeight = if (showLandscapeCards) FolderLandscapeHeight
+                    else FolderPosterHeight,
+                    horizontalPadding = FolderSafeHorizontal
+                )
             state.error != null -> FolderStatus(state.error.orEmpty())
             visibleRails.isEmpty() ->
                 FolderStatus("Nothing to show here yet.", icon = KB_STATUS_ICON_EMPTY)
@@ -660,7 +670,13 @@ private fun RowsLayout(
 
         when {
             state.isLoading ->
-                FolderStatus(KB_STATUS_LOADING, loading = true)
+                KBSkeletonRailStack(
+                    posterWidth = if (showLandscapeCards) FolderLandscapeWidth
+                    else FolderPosterWidth,
+                    posterHeight = if (showLandscapeCards) FolderLandscapeHeight
+                    else FolderPosterHeight,
+                    horizontalPadding = FolderSafeHorizontal
+                )
             state.error != null -> FolderStatus(state.error.orEmpty())
             visibleRails.isEmpty() ->
                 FolderStatus("Nothing to show here yet.", icon = KB_STATUS_ICON_EMPTY)
@@ -742,7 +758,12 @@ private fun GridLayout(
 
         when {
             state.isLoading ->
-                FolderStatus(KB_STATUS_LOADING, loading = true)
+                KBSkeletonGrid(
+                    cellWidth = FolderPosterWidth,
+                    cellHeight = FolderPosterHeight,
+                    columns = 6,
+                    horizontalPadding = FolderSafeHorizontal
+                )
             state.error != null -> FolderStatus(state.error.orEmpty())
             gridItems.isEmpty() ->
                 FolderStatus("Nothing to show here yet.", icon = KB_STATUS_ICON_EMPTY)

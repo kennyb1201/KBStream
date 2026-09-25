@@ -50,8 +50,8 @@ import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.components.GenreChipRow
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
+import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
-import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.PosterSize
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
@@ -92,6 +92,9 @@ fun DecadeScreen(
     val selectedGenreId by viewModel.selectedGenreId.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
+    // Poster geometry for the loading skeleton, so the placeholders occupy
+    // exactly the space the real rails will.
+    val posterSize = rememberPosterSize()
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
     val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
     val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
@@ -202,10 +205,10 @@ fun DecadeScreen(
                 when {
                 isLoading -> {
                     item(key = "loading") {
-                        KBStatusMessage(
-                            loading = true,
-                            message = KB_STATUS_LOADING,
-                            modifier = Modifier.fillParentMaxSize()
+                        KBSkeletonRailStack(
+                            posterWidth = posterSize.width,
+                            posterHeight = posterSize.height,
+                            horizontalPadding = 20.dp
                         )
                     }
                 }

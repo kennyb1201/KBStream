@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -51,6 +52,9 @@ import com.kennyb1201.kbstream.ui.actor.ActorScreen
 import com.kennyb1201.kbstream.ui.addons.AddonsScreen
 import com.kennyb1201.kbstream.ui.collection.CollectionScreen
 import com.kennyb1201.kbstream.ui.components.AutoPlayLoadSplash
+import com.kennyb1201.kbstream.ui.components.KBFeedbackHost
+import com.kennyb1201.kbstream.ui.components.LocalKBFeedback
+import com.kennyb1201.kbstream.ui.components.rememberKBFeedbackState
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
@@ -95,6 +99,17 @@ import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
+import com.kennyb1201.kbstream.ui.components.screenTransitionMs
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -455,7 +470,16 @@ class MainActivity : ComponentActivity() {
                             // the keyboard dismissed.
                             .imePadding()
                     ) {
-                        AppRoot()
+                        // One transient-feedback channel for the whole shell.
+                        // The host is the Box's LAST child so a message draws
+                        // above whatever screen is showing — including
+                        // onboarding, which AppRoot returns early for and which
+                        // would otherwise skip a host placed inside AppRoot.
+                        val kbFeedback = rememberKBFeedbackState()
+                        CompositionLocalProvider(LocalKBFeedback provides kbFeedback) {
+                            AppRoot()
+                        }
+                        KBFeedbackHost(state = kbFeedback)
                     }
                 }
             }
@@ -574,6 +598,10 @@ fun AppRoot() {
     var autoPlayedStreamKeys by rememberSaveable {
         mutableStateOf(listOf<String>())
     }
+
+    // Collapses the screen transitions below to an instant cut when the user
+    // has asked the platform to reduce motion.
+    val transitionMs = screenTransitionMs(rememberReducedMotion())
 
     val context = LocalContext.current
 
@@ -889,7 +917,45 @@ fun AppRoot() {
         return
     }
 
-    when (val current = screen) {
+    // Screen transitions. Every navigation used to be an instant cut, which is
+    // the one thing that most reliably reads as "not a finished app" on a TV —
+    // the user triggers it constantly.
+    //
+    // Keying on the screen KIND rather than its value means navigating between
+    // two Detail pages, or re-targeting one, does not replay a full-screen
+    // transition; only an actual screen change does.
+    AnimatedContent(
+        targetState = screen,
+        contentKey = { it.typeName() },
+        transitionSpec = {
+            when {
+                // The player is a separate Activity that covers this one the
+                // moment it starts, so there is nothing to animate — and
+                // animating anyway would only keep the outgoing screen
+                // composed for another 220ms. Leave that path byte-identical
+                // to how it behaved before transitions existed.
+                initialState is Screen.Player || targetState is Screen.Player ->
+                    EnterTransition.None togetherWith ExitTransition.None
+
+                // Forward (deeper): the new screen drifts in from the trailing
+                // edge while the old one fades.
+                targetState.navDepth >= initialState.navDepth ->
+                    (slideInHorizontally { width -> width / 6 } + fadeIn(tween(transitionMs)))
+                        .togetherWith(fadeOut(tween(transitionMs)))
+
+                // Back: only the outgoing screen moves, so the two never look
+                // like they are fighting for the same pixels.
+                else ->
+                    fadeIn(tween(transitionMs))
+                        .togetherWith(
+                            slideOutHorizontally { width -> width / 6 } +
+                                fadeOut(tween(transitionMs))
+                        )
+            }
+        },
+        label = "screen"
+    ) { current ->
+    when (current) {
 
         is Screen.ProfilePicker -> {
             ProfilePickerScreen(
@@ -1974,6 +2040,7 @@ fun AppRoot() {
         )
     }
     }
+    } // closes AnimatedContent( targetState = screen ) { current -> ... }
 }
 
 @Composable

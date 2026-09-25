@@ -36,6 +36,9 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
+import com.kennyb1201.kbstream.ui.components.KBSkeletonGrid
+import com.kennyb1201.kbstream.ui.components.KBStatusMessage
+import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterSize
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
@@ -124,15 +127,20 @@ fun CatalogGridScreen(
         // within a frame; this is just that one loading frame (plus a
         // possible cold-restore wait for the rails to load). It NEVER
         // navigates from here — see the open effect above for why.
+        // Skeleton grid rather than a centred spinner: the cards cost the
+        // same space either way, so the page does not jump when the real
+        // posters land.
+        val posterSize = rememberPosterSize()
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(KBVoid),
-            contentAlignment = Alignment.Center
+                .background(KBVoid)
         ) {
-            CircularProgressIndicator(
-                color = KBAccent,
-                strokeWidth = 3.dp
+            KBSkeletonGrid(
+                cellWidth = posterSize.width,
+                cellHeight = posterSize.height,
+                columns = 6,
+                rows = 2
             )
         }
         return
@@ -204,10 +212,9 @@ fun CatalogGridScreen(
             }
 
             state.items.isEmpty() -> {
-                Text(
-                    text = "Nothing to show here.",
-                    color = KBTextLo,
-                    modifier = Modifier.padding(24.dp)
+                KBStatusMessage(
+                    icon = KB_STATUS_ICON_EMPTY,
+                    message = "Nothing to show here."
                 )
             }
 
