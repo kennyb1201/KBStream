@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Random episode. Two crossed arrows, drawn as geometry in the control
+     bar's language (compare ic_player_switch, the bar's own two-arrow mark)
+     instead of the Material shuffle glyph, which is a thin two-curve figure
+     with small heads - next to the bar's marks on the same screen it read as
+     a different hand entirely.
+
+     Same spec as the rest of the family: 24x24 viewport, bars 2.2 units on
+     the 3.4 grid, heads the same isoceles triangles every bar arrow uses
+     (4.8 long, 6.8 across the base). The diagonals run at 45 degrees and
+     cross on the centre line, so the whole mark stays inside the same
+     3.4-unit margin the other glyphs respect. Carries kb_text_hi
+     (#FFF3EFE4) baked in, the way every bar glyph does. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M3.62,18.42L14.82,7.22L16.38,8.78L5.18,19.98Z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M3.62,5.58L14.82,16.78L16.38,15.22L5.18,4.02Z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M15.6,4.6L20.4,8L15.6,11.4Z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M15.6,12.6L20.4,16L15.6,19.4Z" />
+</vector>

@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.detail
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.annotation.DrawableRes
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.ScrollState
@@ -35,10 +36,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.LocalMovies
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -61,7 +58,6 @@ import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
@@ -71,6 +67,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -93,6 +90,7 @@ import coil3.request.ImageRequest
 import coil3.request.allowHardware
 import coil3.request.crossfade
 import coil3.size.Size
+import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbCastMember
@@ -237,10 +235,19 @@ private val BUTTON_PROGRESS_WIDTH = 26.dp
  * The row is reserved in EVERY button rather than only in the resume state,
  * so the three cards stay exactly the same height with their glyphs on one
  * baseline, and the row does not shift as progress appears or gets finished.
+ *
+ * The marks are the control bar's own geometry - ic_player_play for PLAY, and
+ * ic_detail_shuffle / ic_detail_trailer for the other two - rather than
+ * Material glyphs. The bar's icons were redrawn as vectors so that its buttons
+ * would match each other (see ic_player_next); its play mark and Material's
+ * PlayArrow happen to be the same triangle, but the shuffle and film-strip
+ * glyphs are a different hand, and this row was the last place mixing them in.
+ * They are still tinted by the card's content colour, as the Material ones
+ * were, so focus/idle colouring is unchanged.
  */
 @Composable
 private fun IconButtonBody(
-    icon: ImageVector,
+    @DrawableRes iconRes: Int,
     contentDescription: String,
     progress: Float? = null
 ) {
@@ -252,7 +259,9 @@ private fun IconButtonBody(
         )
     ) {
         Icon(
-            imageVector = icon,
+            // painterResource + Icon tints with LocalContentColor, exactly as
+            // the ImageVector form did.
+            painter = painterResource(iconRes),
             contentDescription = contentDescription,
             modifier = Modifier.size(BUTTON_ICON_SIZE)
         )
@@ -1360,7 +1369,7 @@ fun DetailScreen(
                                 )
                         ) {
                             IconButtonBody(
-                                icon = Icons.Filled.PlayArrow,
+                                iconRes = R.drawable.ic_player_play,
                                 // Keeps the label the eye no longer sees
                                 // ("PLAY S1 E3" / "RESUME") available to
                                 // TalkBack and to anyone reading the screen.
@@ -1434,7 +1443,7 @@ fun DetailScreen(
                                 modifier = Modifier.padding(end = 8.dp)
                             ) {
                                 IconButtonBody(
-                                    icon = Icons.Filled.Shuffle,
+                                    iconRes = R.drawable.ic_detail_shuffle,
                                     contentDescription = "Random episode"
                                 )
                             }
@@ -1447,7 +1456,7 @@ fun DetailScreen(
                                 }
                             ) {
                                 IconButtonBody(
-                                    icon = Icons.Filled.LocalMovies,
+                                    iconRes = R.drawable.ic_detail_trailer,
                                     contentDescription = "Trailer"
                                 )
                             }
