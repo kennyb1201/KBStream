@@ -89,16 +89,26 @@ class TmdbRepository private constructor(context: Context) :
     // sites — the player alone used to build several instances per
     // session. One shared instance means one Retrofit stack and warm caches
     // for the whole process.
-    private val moshi = Moshi.Builder()
-        .add(KotlinJsonAdapterFactory())
-        .build()
+    //
+    // Everything heavyweight below is `by lazy` on purpose. This singleton is
+    // constructed on the MAIN thread — the first ViewModel that needs it is
+    // built during the first composition — so building Retrofit and Moshi here
+    // put their reflection on the first-frame path. Constructing the object now
+    // costs only the cheap fields; warmUpReflectionStack() builds the rest on IO.
+    private val moshi by lazy {
+        Moshi.Builder()
+            .add(KotlinJsonAdapterFactory())
+            .build()
+    }
 
-    internal val api: TmdbApiService = Retrofit.Builder()
-        .baseUrl("https://api.themoviedb.org/3/")
-        .client(TmdbHttpClient.get())
-        .addConverterFactory(MoshiConverterFactory.create(moshi))
-        .build()
-        .create(TmdbApiService::class.java)
+    internal val api: TmdbApiService by lazy {
+        Retrofit.Builder()
+            .baseUrl("https://api.themoviedb.org/3/")
+            .client(TmdbHttpClient.get())
+            .addConverterFactory(MoshiConverterFactory.create(moshi))
+            .build()
+            .create(TmdbApiService::class.java)
+    }
 
     internal val apiKey = BuildConfig.TMDB_API_KEY
     private val appContext = context.applicationContext
@@ -142,9 +152,12 @@ class TmdbRepository private constructor(context: Context) :
     internal val today: String
         get() = LocalDate.now().toString()
 
-    private val database = WatchHistoryDatabase.getInstance(context)
-    private val imdbResolutionDao = database.imdbResolutionDao()
-    private val tmdbJsonCacheDao: TmdbJsonCacheDao = database.tmdbJsonCacheDao()
+    // Lazy for the same reason, and in practice first touched by the prune
+    // coroutines in init — which run on IO — rather than by whatever thread
+    // happened to construct this object.
+    private val database by lazy { WatchHistoryDatabase.getInstance(context) }
+    private val imdbResolutionDao by lazy { database.imdbResolutionDao() }
+    private val tmdbJsonCacheDao: TmdbJsonCacheDao by lazy { database.tmdbJsonCacheDao() }
 
     // ConcurrentHashMap: continue-watching lookups run several rows in
     // parallel, so these caches are written from multiple coroutines.
@@ -170,24 +183,27 @@ class TmdbRepository private constructor(context: Context) :
     private val seasonEpisodesCacheTtlMs = 12L * 60L * 60L * 1000L
     private val seasonEpisodesDiskTtlMs = 7L * 24L * 60L * 60L * 1000L
 
-    private val detailJsonAdapter: JsonAdapter<TmdbDetail> =
+    private val detailJsonAdapter: JsonAdapter<TmdbDetail> by lazy {
         moshi.adapter(TmdbDetail::class.java)
+    }
 
-    private val seasonEpisodesJsonAdapter: JsonAdapter<List<ResolvedEpisode>> =
+    private val seasonEpisodesJsonAdapter: JsonAdapter<List<ResolvedEpisode>> by lazy {
         moshi.adapter(
             Types.newParameterizedType(
                 List::class.java,
                 ResolvedEpisode::class.java
             )
         )
+    }
 
-    private val genresJsonAdapter: JsonAdapter<List<TmdbGenre>> =
+    private val genresJsonAdapter: JsonAdapter<List<TmdbGenre>> by lazy {
         moshi.adapter(
             Types.newParameterizedType(
                 List::class.java,
                 TmdbGenre::class.java
             )
         )
+    }
 
     private val imdbResolutionMemoryCache =
         ConcurrentHashMap<String, Pair<Long, String?>>()
@@ -211,6 +227,40 @@ class TmdbRepository private constructor(context: Context) :
         // Registered so the system (or the player opening fullscreen) can take
         // these back the way it takes Coil's bitmaps and the guide's snapshots.
         MemoryPressure.register(this)
+        // Constructing this object is now cheap; this is where the expensive
+        // half actually gets built, and it does it off the main thread.
+        warmUpReflectionStack()
+    }
+
+    /**
+     * Builds the reflection-heavy half of this class on IO.
+     *
+     * The cost has to be paid somewhere. Paying it here is deliberate rather
+     * than leaving it to first use, because "first use" is a `viewModelScope`
+     * coroutine — `Dispatchers.Main.immediate` — so on-demand initialisation
+     * would move the same work to the main thread a few milliseconds later,
+     * and delay the first real data instead of the first frame.
+     *
+     * Nothing here depends on user action, so building it speculatively is
+     * free. A caller that does beat this coroutine waits on the lazy's lock for
+     * whatever is left of the build — never more than it would have spent doing
+     * the work itself. The database and its DAOs are absent because the prune
+     * coroutines above already force them, on this same dispatcher.
+     */
+    private fun warmUpReflectionStack() {
+        CoroutineScope(Dispatchers.IO).launch {
+            runCatching {
+                // Passing each lazy to listOf() is what forces it; the result is
+                // discarded, which is why it is not assigned to anything.
+                listOf(
+                    moshi,
+                    api,
+                    detailJsonAdapter,
+                    seasonEpisodesJsonAdapter,
+                    genresJsonAdapter
+                )
+            }
+        }
     }
 
     /**

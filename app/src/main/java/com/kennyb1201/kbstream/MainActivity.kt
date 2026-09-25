@@ -625,10 +625,11 @@ fun AppRoot() {
         mutableStateOf(OnboardingPrefs.isComplete(context))
     }
 
-    val tmdbRepository = remember {
-        TmdbRepository.getInstance(context)
-    }
-
+    // Deliberately NOT constructing TmdbRepository here. This composable used to
+    // call getInstance during the first composition — building Retrofit and
+    // Moshi on the main thread — for a value nothing in this file ever read.
+    // Every consumer calls getInstance itself, and the repository now builds its
+    // reflection-heavy half on IO (see TmdbRepository.warmUpReflectionStack).
     val streamsViewModel: StreamsViewModel = viewModel()
 
     // Activity-scoped search state, referenced by the BackHandler so exiting
