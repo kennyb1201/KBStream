@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.components
 
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.tv.material3.MaterialTheme
@@ -23,12 +24,42 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
  * When every enabled part is blank, emits nothing so tiles keep a tight,
  * uniform look instead of reserving empty space.
  */
+/**
+ * Scrolls the title of the tile the viewer is standing on.
+ *
+ * A poster's title is one line of bodySmall under a 108–200dp tile, so real
+ * titles ("The Lord of the Rings: The Fellowship of the Ring") arrive
+ * truncated — and the focused tile is exactly the moment the viewer is asking
+ * what the thing is. A D-pad has no hover, no tooltip and no room for a second
+ * line, so the title itself scrolls while the tile holds focus, the way
+ * Android TV's own launcher does. basicMarquee is documented to have no effect
+ * when the content already fits, so short titles never move, and reduced
+ * motion leaves the plain ellipsis in place.
+ */
+@Composable
+private fun rememberTitleMarquee(focused: Boolean): Modifier {
+    val reducedMotion = rememberReducedMotion()
+    return if (focused && !reducedMotion) {
+        Modifier.basicMarquee(
+            iterations = Int.MAX_VALUE,
+            repeatDelayMillis = 1_500,
+            initialDelayMillis = 400,
+            // Slower than the 30dp/s default: this is being read at ten feet.
+            velocity = 24.dp
+        )
+    } else {
+        Modifier
+    }
+}
+
 @Composable
 fun PosterCaptions(
     title: String?,
     year: String? = null,
     rating: Double? = null,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** True while the tile this caption belongs to holds D-pad focus. */
+    focused: Boolean = false
 ) {
     val context = LocalContext.current
     val showTitle = AppPreferences.getPosterCaptionTitle(context)
@@ -52,7 +83,8 @@ fun PosterCaptions(
                 style = MaterialTheme.typography.bodySmall,
                 color = KBTextHi,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.then(rememberTitleMarquee(focused))
             )
         }
 

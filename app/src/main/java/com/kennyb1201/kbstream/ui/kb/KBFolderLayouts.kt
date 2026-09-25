@@ -270,10 +270,12 @@ private fun FolderItemCard(
     val width = if (isLandscape) FolderLandscapeWidth else FolderPosterWidth
     val height = if (isLandscape) FolderLandscapeHeight else FolderPosterHeight
 
-    val focusModifier = if (onFocus != null) {
-        Modifier.onFocusChanged { if (it.isFocused) onFocus() }
-    } else {
-        Modifier
+    // The tile's own focus drives the caption marquee below as well as the
+    // caller's hook (Home keeps its header in step with the focused rail).
+    var focused by remember { mutableStateOf(false) }
+    val focusModifier = Modifier.onFocusChanged {
+        focused = it.hasFocus
+        if (it.isFocused) onFocus?.invoke()
     }
 
     Column {
@@ -320,7 +322,8 @@ private fun FolderItemCard(
                 title = item.title,
                 year = item.year,
                 rating = item.rating,
-                modifier = Modifier.padding(top = 2.dp, start = FolderRailGap / 2)
+                modifier = Modifier.padding(top = 2.dp, start = FolderRailGap / 2),
+                focused = focused
             )
         }
     }

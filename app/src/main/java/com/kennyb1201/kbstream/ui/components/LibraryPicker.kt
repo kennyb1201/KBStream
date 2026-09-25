@@ -50,6 +50,9 @@ import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
+import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
+import com.kennyb1201.kbstream.ui.theme.KBFocusRow
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -502,7 +505,8 @@ private fun PickerRow(
         // (see the clip note above), so the description cannot be pushed past
         // the list item it lives in.
         scale = androidx.tv.material3.ClickableSurfaceDefaults.scale(
-            focusedScale = 1.015f
+            focusedScale = KBFocusRow,
+            pressedScale = KBFocusPressed
         ),
         border = androidx.tv.material3.ClickableSurfaceDefaults.border(
             border = Border(
@@ -517,7 +521,7 @@ private fun PickerRow(
         glow = androidx.tv.material3.ClickableSurfaceDefaults.glow(
             focusedGlow = Glow(
                 elevationColor = KBAccent,
-                elevation = 6.dp
+                elevation = KBFocusGlowSmall
             )
         ),
         modifier = modifier

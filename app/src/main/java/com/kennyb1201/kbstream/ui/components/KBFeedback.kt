@@ -40,8 +40,25 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import kotlinx.coroutines.delay
 
-/** How long a message stays up before it dismisses itself. */
+/** How long a plain acknowledgement ("Added to list") stays up. */
 private const val FEEDBACK_VISIBLE_MS = 3_500L
+
+/** Messages that ask something of the viewer get longer — see [visibleMillisFor]. */
+private const val FEEDBACK_ACTION_VISIBLE_MS = 6_000L
+private const val FEEDBACK_ERROR_VISIBLE_MS = 7_000L
+
+/**
+ * How long a message stays up, by what it asks of the viewer. Everything used
+ * to get 3.5s: right for "Added to list", which only has to be noticed, and
+ * wrong for a failure or an action, where the viewer has to read the text,
+ * find the button and press it from ten feet away. A timeout that expires
+ * mid-read is the same as no message at all.
+ */
+private fun visibleMillisFor(message: KBFeedbackMessage): Long = when {
+    message.isError -> FEEDBACK_ERROR_VISIBLE_MS
+    message.actionLabel != null -> FEEDBACK_ACTION_VISIBLE_MS
+    else -> FEEDBACK_VISIBLE_MS
+}
 
 /**
  * One transient message: what just happened, and optionally the one thing the
@@ -128,9 +145,13 @@ fun KBFeedbackHost(
 ) {
     val message = state.current
 
+    // Reduced motion collapses the enter/exit to an instant appear, the same
+    // as every other animation in the app shell.
+    val motionMs = screenTransitionMs(rememberReducedMotion())
+
     LaunchedEffect(message?.id) {
         if (message != null) {
-            delay(FEEDBACK_VISIBLE_MS)
+            delay(visibleMillisFor(message))
             state.dismiss()
         }
     }
@@ -141,10 +162,10 @@ fun KBFeedbackHost(
     ) {
         AnimatedVisibility(
             visible = message != null,
-            enter = fadeIn(tween(KB_SCREEN_TRANSITION_MS)) +
-                slideInVertically(tween(KB_SCREEN_TRANSITION_MS)) { height -> height / 2 },
-            exit = fadeOut(tween(KB_SCREEN_TRANSITION_MS)) +
-                slideOutVertically(tween(KB_SCREEN_TRANSITION_MS)) { height -> height / 2 }
+            enter = fadeIn(tween(motionMs)) +
+                slideInVertically(tween(motionMs)) { height -> height / 2 },
+            exit = fadeOut(tween(motionMs)) +
+                slideOutVertically(tween(motionMs)) { height -> height / 2 }
         ) {
             message?.let { current ->
                 Row(

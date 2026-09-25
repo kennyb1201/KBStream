@@ -673,12 +673,16 @@ private fun LibraryPosterCard(
     onLongClick: (() -> Unit)?
 ) {
     val posterSize = rememberPosterSize()
+    // The tile's own focus drives the caption marquee below.
+    var focused by remember { mutableStateOf(false) }
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         // Fills the grid cell (a grid picks the cell width), so the caption and
         // source line sit under the poster instead of being measured against a
         // width the cell may not have.
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { focused = it.hasFocus }
     ) {
         KBCard(
             onClick = onClick,
@@ -748,6 +752,7 @@ private fun LibraryPosterCard(
             title = item.title,
             year = item.year?.toString(),
             rating = rating,
+            focused = focused,
             modifier = Modifier.padding(top = 6.dp)
         )
         Text(

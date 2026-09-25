@@ -51,6 +51,10 @@ import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBFocusButton
+import com.kennyb1201.kbstream.ui.theme.KBFocusCard
+import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
+import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -178,9 +182,12 @@ fun OnboardingScreen(
                     pressedContainerColor = KBAccent.copy(alpha = 0.85f),
                     pressedContentColor = KBVoid
                 ),
-                scale = ClickableSurfaceDefaults.scale(focusedScale = 1.04f),
+                scale = ClickableSurfaceDefaults.scale(
+                    focusedScale = KBFocusButton,
+                    pressedScale = KBFocusPressed
+                ),
                 glow = ClickableSurfaceDefaults.glow(
-                    focusedGlow = Glow(elevationColor = KBAccent, elevation = 10.dp)
+                    focusedGlow = Glow(elevationColor = KBAccent, elevation = KBFocusGlowSmall)
                 ),
                 modifier = Modifier.width(360.dp)
             ) {
@@ -439,7 +446,10 @@ private fun OnboardingCard(
             pressedContainerColor = KBSurfaceRaised,
             pressedContentColor = KBAccent
         ),
-        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.03f),
+        scale = ClickableSurfaceDefaults.scale(
+            focusedScale = KBFocusCard,
+            pressedScale = KBFocusPressed
+        ),
         border = ClickableSurfaceDefaults.border(
             border = Border(
                 border = BorderStroke(1.dp, KBAccent.copy(alpha = 0.28f)),
@@ -451,7 +461,7 @@ private fun OnboardingCard(
             )
         ),
         glow = ClickableSurfaceDefaults.glow(
-            focusedGlow = Glow(elevationColor = KBAccent, elevation = 8.dp)
+            focusedGlow = Glow(elevationColor = KBAccent, elevation = KBFocusGlowSmall)
         ),
         modifier = modifier
     ) {

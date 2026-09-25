@@ -26,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -399,8 +400,12 @@ private fun CollectionPosterTile(
     isPartiallyWatched: Boolean = false
 ) {
     val posterSize = rememberPosterSize()
+    // The tile's own focus drives the caption marquee below.
+    var focused by remember { mutableStateOf(false) }
     Column(
-        modifier = modifier.width(posterSize.width)
+        modifier = modifier
+            .width(posterSize.width)
+            .onFocusChanged { focused = it.hasFocus }
     ) {
         PosterCard(
             posterUrl = part.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" },
@@ -418,6 +423,7 @@ private fun CollectionPosterTile(
 
         PosterCaptions(
             title = part.title ?: part.name,
+            focused = focused,
             year = part.releaseDate?.take(4),
             rating = part.voteAverage,
             modifier = Modifier.padding(top = 5.dp)

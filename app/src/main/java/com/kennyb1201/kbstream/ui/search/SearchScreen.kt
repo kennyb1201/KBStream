@@ -84,6 +84,9 @@ import com.kennyb1201.kbstream.ui.components.rememberLongPressModifier
 import com.kennyb1201.kbstream.ui.components.PosterSize
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBFocusChip
+import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
+import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
@@ -919,7 +922,8 @@ private fun SearchHero(
                 pressedContentColor = KBVoid
             ),
             scale = ClickableSurfaceDefaults.scale(
-                focusedScale = 1.06f
+                focusedScale = KBFocusChip,
+                pressedScale = KBFocusPressed
             ),
             border = ClickableSurfaceDefaults.border(
                 border = Border(
@@ -934,7 +938,7 @@ private fun SearchHero(
             glow = ClickableSurfaceDefaults.glow(
                 focusedGlow = Glow(
                     elevationColor = KBAccent,
-                    elevation = 10.dp
+                    elevation = KBFocusGlowSmall
                 )
             ),
             modifier = Modifier.padding(top = 10.dp)
@@ -1226,8 +1230,12 @@ private fun TitlePosterTile(
     isPartiallyWatched: Boolean = false
 ) {
     val posterSize = rememberPosterSize()
+    // The tile's own focus drives the caption marquee below.
+    var focused by remember { mutableStateOf(false) }
     Column(
-        modifier = Modifier.width(posterSize.width)
+        modifier = Modifier
+            .width(posterSize.width)
+            .onFocusChanged { focused = it.hasFocus }
     ) {
         PosterCard(
             posterUrl = result.poster,
@@ -1246,6 +1254,7 @@ private fun TitlePosterTile(
 
         PosterCaptions(
             title = result.name,
+            focused = focused,
             year = result.year?.toString(),
             rating = result.rating,
             modifier = Modifier.padding(top = 5.dp)

@@ -34,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.graphics.Brush
@@ -78,6 +79,9 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import kotlinx.coroutines.launch
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBFocusChip
+import com.kennyb1201.kbstream.ui.theme.KBFocusGlow
+import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 
@@ -326,7 +330,8 @@ fun ActorScreen(
                                                     pressedContentColor = KBAccent
                                                 ),
                                                 scale = ClickableSurfaceDefaults.scale(
-                                                    focusedScale = 1.05f
+                                                    focusedScale = KBFocusChip,
+                                                    pressedScale = KBFocusPressed
                                                 ),
                                                 border = ClickableSurfaceDefaults.border(
                                                     border = Border(
@@ -347,7 +352,7 @@ fun ActorScreen(
                                                 glow = ClickableSurfaceDefaults.glow(
                                                     focusedGlow = Glow(
                                                         elevationColor = KBAccent,
-                                                        elevation = 12.dp
+                                                        elevation = KBFocusGlow
                                                     )
                                                 ),
                                                 modifier = Modifier.padding(top = 8.dp)
@@ -599,10 +604,13 @@ private fun ActorCreditCard(
     isPartiallyWatched: Boolean = false
 ) {
     val posterSize = rememberPosterSize()
+    // The tile's own focus drives the caption marquee below.
+    var focused by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .width(posterSize.width)
             .padding(end = 12.dp)
+            .onFocusChanged { focused = it.hasFocus }
     ) {
         PosterCard(
             posterUrl = remember(credit.posterPath) { credit.posterPath?.let { TmdbRepository.POSTER_BASE + it } },
@@ -625,6 +633,7 @@ private fun ActorCreditCard(
 
         PosterCaptions(
             title = credit.title ?: credit.name,
+            focused = focused,
             year = (credit.releaseDate ?: credit.firstAirDate)?.take(4),
             rating = credit.voteAverage,
             modifier = Modifier.padding(top = 5.dp)

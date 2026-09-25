@@ -25,6 +25,9 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBFocusChip
+import com.kennyb1201.kbstream.ui.theme.KBFocusGlow
+import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 
@@ -54,7 +57,8 @@ fun StudioChip(
             pressedContentColor = Color.Black
         ),
         scale = ClickableSurfaceDefaults.scale(
-            focusedScale = 1.08f
+            focusedScale = KBFocusChip,
+            pressedScale = KBFocusPressed
         ),
         border = ClickableSurfaceDefaults.border(
             border = Border(
@@ -75,7 +79,7 @@ fun StudioChip(
         glow = ClickableSurfaceDefaults.glow(
             focusedGlow = Glow(
                 elevationColor = KBAccent,
-                elevation = 12.dp
+                elevation = KBFocusGlow
             )
         ),
         modifier = Modifier

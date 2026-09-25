@@ -28,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
@@ -697,8 +698,13 @@ private fun StudioRailRow(
 
                 val posterSize = rememberPosterSize()
 
+                // The tile's own focus drives the caption marquee below.
+                var focused by remember { mutableStateOf(false) }
+
                 Column(
-                    modifier = Modifier.padding(end = 12.dp)
+                    modifier = Modifier
+                        .padding(end = 12.dp)
+                        .onFocusChanged { focused = it.hasFocus }
                 ) {
                     PosterCard(
                         posterUrl = studioItem.item.posterPath
@@ -732,6 +738,7 @@ private fun StudioRailRow(
 
                     PosterCaptions(
                         title = studioItem.item.title ?: studioItem.item.name,
+                        focused = focused,
                         year = (studioItem.item.releaseDate
                             ?: studioItem.item.firstAirDate)?.take(4),
                         rating = studioItem.item.voteAverage,

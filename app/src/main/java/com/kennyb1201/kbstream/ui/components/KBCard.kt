@@ -21,6 +21,9 @@ import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.Glow
 import com.kennyb1201.kbstream.ui.theme.CardShape
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBFocusCard
+import com.kennyb1201.kbstream.ui.theme.KBFocusGlow
+import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -57,7 +60,14 @@ fun KBCard(
             focusedContainerColor = KBSurfaceRaised,
             focusedContentColor = KBAccent
         ),
-        scale = CardDefaults.scale(scale = 1f, focusedScale = 1.03f),
+        // Focus grows the tile and lifts it; press pulls it back toward the
+        // plate. Every poster, tile and button that goes through KBCard gets
+        // the same two beats for free — see the KBFocus* scale in the theme.
+        scale = CardDefaults.scale(
+            scale = 1f,
+            focusedScale = KBFocusCard,
+            pressedScale = KBFocusPressed
+        ),
         border = CardDefaults.border(
             focusedBorder = Border(
                 border = BorderStroke(2.dp, KBAccent),
@@ -65,7 +75,7 @@ fun KBCard(
             )
         ),
         glow = CardDefaults.glow(
-            focusedGlow = Glow(elevationColor = KBAccent, elevation = 12.dp)
+            focusedGlow = Glow(elevationColor = KBAccent, elevation = KBFocusGlow)
         ),
         // onPreviewKeyEvent runs on the way DOWN the tree, before Card's own
         // internal clickable sees the event, so we get first refusal on it.

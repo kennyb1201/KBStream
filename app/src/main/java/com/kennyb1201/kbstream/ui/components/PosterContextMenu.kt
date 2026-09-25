@@ -45,6 +45,8 @@ import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBFocusNone
+import com.kennyb1201.kbstream.ui.theme.KBFocusRow
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -532,7 +534,9 @@ fun PosterContextMenu(
             ),
             scale = ClickableSurfaceDefaults.scale(
                 scale = 1f,
-                focusedScale = 1f
+                // No growth: this panel is nearly full width, so its focus cue
+                // is the border and the lifted container colour instead.
+                focusedScale = KBFocusNone
             ),
             border = ClickableSurfaceDefaults.border(
                 border = Border(
@@ -655,7 +659,7 @@ private fun ContextMenuActionRow(
         ),
         scale = ClickableSurfaceDefaults.scale(
             scale = 1f,
-            focusedScale = 1.02f
+            focusedScale = KBFocusRow
         ),
         border = ClickableSurfaceDefaults.border(
             border = Border(

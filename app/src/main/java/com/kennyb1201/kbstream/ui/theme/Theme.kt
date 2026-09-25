@@ -84,6 +84,40 @@ val KBShapeChip = RoundedCornerShape(10.dp()) // rating / badge chips
 val KBShapeSmall = RoundedCornerShape(8.dp()) // small pills, poster fans
 val KBShapePill = RoundedCornerShape(999.dp()) // avatars, fully-round pills
 
+// The focus scale. D-pad focus is the app's most-touched feedback — a viewer
+// crosses a rail in twenty focus steps — and like the corner radii it had
+// drifted to nine hand-picked values (1.0 / 1.015 / 1.02 / 1.03 / 1.04 / 1.05 /
+// 1.06 / 1.08 / 1.1) with no rule behind them: two chips in one row grew by
+// different amounts, and the same kind of button grew by 1.04 on one screen
+// and 1.08 on another. The rule that actually applies is the surface's own
+// size — a fixed percentage of a chip is a few pixels, and the same percentage
+// of a full-bleed row is a lurch that shoves its neighbours — so the scale is
+// now chosen by surface class and nothing else:
+//
+//   row (1.02) < card (1.03) < button (1.04) < chip (1.06) < tile (1.08)
+//
+// KBFocusNone is not "unpolished": a surface wider than about half the screen
+// takes its focus cue from colour and border instead, because growing it would
+// move more than it lights up.
+const val KBFocusNone = 1f
+const val KBFocusRow = 1.02f
+const val KBFocusCard = 1.03f
+const val KBFocusButton = 1.04f
+const val KBFocusChip = 1.06f
+const val KBFocusTile = 1.08f
+
+// The press-in: what an interactive surface does under Select. tv-material3's
+// default press scale is 1f, so until now a click produced nothing but the
+// ripple — the one interaction a viewer performs thousands of times had no
+// physical feel. A surface that travels toward the viewer when focused and
+// back away when pressed is most of the difference between poking a picture
+// and pressing a button.
+const val KBFocusPressed = 0.97f
+
+// Focus glow radius: the shared card, and the smaller controls that host it.
+val KBFocusGlow = 12.dp()
+val KBFocusGlowSmall = 8.dp()
+
 private fun Int.dp() = androidx.compose.ui.unit.Dp(this.toFloat())
 
 val OswaldFamily = FontFamily(

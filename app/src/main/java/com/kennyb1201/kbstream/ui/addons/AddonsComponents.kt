@@ -64,6 +64,9 @@ import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
+import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
+import com.kennyb1201.kbstream.ui.theme.KBFocusRow
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBShapePill
@@ -104,7 +107,10 @@ internal fun AddonListCard(
             pressedContainerColor = KBSurfaceRaised,
             pressedContentColor = KBAccent
         ),
-        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.015f),
+        scale = ClickableSurfaceDefaults.scale(
+            focusedScale = KBFocusRow,
+            pressedScale = KBFocusPressed
+        ),
         border = ClickableSurfaceDefaults.border(
             border = Border(
                 border = BorderStroke(
@@ -119,7 +125,7 @@ internal fun AddonListCard(
             )
         ),
         glow = ClickableSurfaceDefaults.glow(
-            focusedGlow = Glow(elevationColor = KBAccent, elevation = 6.dp)
+            focusedGlow = Glow(elevationColor = KBAccent, elevation = KBFocusGlowSmall)
         ),
         modifier = Modifier
             .fillMaxWidth()

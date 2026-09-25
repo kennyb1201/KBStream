@@ -55,6 +55,9 @@ import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBFocusChip
+import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
+import com.kennyb1201.kbstream.ui.theme.KBFocusTile
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -446,7 +449,8 @@ fun ProfileEditScreen(
                     useCustomAvatar = true
                 },
                 scale = ClickableSurfaceDefaults.scale(
-                    focusedScale = 1.1f
+                    focusedScale = KBFocusTile,
+                    pressedScale = KBFocusPressed
                 ),
                 border = ClickableSurfaceDefaults.border(
                     focusedBorder = Border(
@@ -510,7 +514,8 @@ fun ProfileEditScreen(
                         useCustomAvatar = false
                     },
                     scale = ClickableSurfaceDefaults.scale(
-                        focusedScale = 1.1f
+                        focusedScale = KBFocusTile,
+                        pressedScale = KBFocusPressed
                     ),
                     border = ClickableSurfaceDefaults.border(
                         focusedBorder = Border(
@@ -770,7 +775,10 @@ private fun ProfileChip(
         // not a foundation Shape (non-clickable Surfaces do take Shape —
         // hence the disabled-pill usages elsewhere compile fine).
         shape = ClickableSurfaceDefaults.shape(shape = KBShapePanel),
-        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.06f),
+        scale = ClickableSurfaceDefaults.scale(
+            focusedScale = KBFocusChip,
+            pressedScale = KBFocusPressed
+        ),
         colors = ClickableSurfaceDefaults.colors(
             containerColor = if (selected) KBAccent.copy(alpha = 0.25f) else KBSurfaceRaised,
             contentColor = if (selected) KBTextHi else KBTextLo,
