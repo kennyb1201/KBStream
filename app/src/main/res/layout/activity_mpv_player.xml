@@ -266,33 +266,58 @@
                     android:textSize="15sp"
                     android:visibility="gone" />
 
-                <!-- Stream badge chips for the current source, the same row the
-                     main player shows and the same adapter that fills it
-                     (PickerAdapter.bindBadgeRow): the source's own art/labels,
-                     hiding itself when the source carries none. -->
-                <LinearLayout
-                    android:id="@+id/mpv_badge_row"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal"
-                    android:visibility="gone" />
-
-                <!-- Which source is playing, which engine is playing it, and
-                     what mpv ended up decoding. Filled from mpv's own
-                     properties once the file opens. -->
-                <TextView
-                    android:id="@+id/mpv_engine_note"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:fontFamily="@font/oswald_medium"
-                    android:textColor="@color/kb_accent"
-                    android:textSize="14sp"
-                    android:visibility="gone" />
             </LinearLayout>
         </ScrollView>
+
+        <!-- The source/engine status strip, PINNED below the info scroll for the
+             same reason the cast band below it is. Both of these used to be the
+             last children of the scroll, so any screen with a long overview
+             pushed them past the fold and clipped them until they were scrolled
+             back into view. Everything the overlay shows at a fixed size now
+             stays whole; only the prose scrolls.
+
+             Badges first: the same row the main player shows and the same
+             adapter that fills it (PickerAdapter.bindBadgeRow) - the source's
+             own art/labels, hiding itself when the source carries none. In a
+             horizontal scroller so a source carrying many chips cannot run off
+             the side either, and not focusable so read-only chips never become
+             a stop in the D-pad chain (touch/trackpad scrolling still works). -->
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:clipToPadding="false"
+            android:descendantFocusability="blocksDescendants"
+            android:focusable="false"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/mpv_badge_row"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:visibility="gone" />
+        </HorizontalScrollView>
+
+        <!-- Which source is playing, which engine is playing it, and what mpv
+             ended up decoding. Filled from mpv's own properties once the file
+             opens. Pinned right under the badges because this line is what
+             stands where the main player's badges sit. Bounded to two lines:
+             as pinned chrome a long diagnostics string must not eat the info
+             scroll above it. -->
+        <TextView
+            android:id="@+id/mpv_engine_note"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:layout_marginBottom="2dp"
+            android:ellipsize="end"
+            android:fontFamily="@font/oswald_medium"
+            android:maxLines="2"
+            android:textColor="@color/kb_accent"
+            android:textSize="14sp"
+            android:visibility="gone" />
 
         <!-- Cast band: pinned between the info scroll and the seekbar, the same
              placement as the main player's, so avatars + names are always fully

@@ -7,6 +7,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.content.ContextCompat
+import androidx.core.content.res.ResourcesCompat
 import androidx.recyclerview.widget.RecyclerView
 import coil3.load
 import com.kennyb1201.kbstream.R
@@ -49,6 +50,21 @@ class PickerAdapter(
 
     companion object {
         /**
+         * Chip metrics lifted from the Compose StreamBadgeChip/StreamBadgeRow
+         * (16dp art, 22dp chip, 8dp corners = KBShapeSmall, 4dp gap, 11sp Oswald
+         * Medium label). The player strip and the streams picker show the same
+         * badges one screen apart, so both rows have to measure the same.
+         */
+        private const val BADGE_IMAGE_HEIGHT_DP = 16
+        private const val BADGE_CHIP_HEIGHT_DP = 22
+        private const val BADGE_CHIP_GAP_DP = 4
+        private const val BADGE_CHIP_CORNER_DP = 8
+        private const val BADGE_LABEL_SIZE_SP = 11f
+
+        /** 1sp of tracking at an 11sp label — TextView tracks in em, Compose in sp. */
+        private const val BADGE_LABEL_TRACKING_EM = 1f / BADGE_LABEL_SIZE_SP
+
+        /**
          * Fills a horizontal LinearLayout with badge chips (hosted image art,
          * KB-style), mirroring the Compose StreamBadgeChip visuals.
          */
@@ -61,40 +77,56 @@ class PickerAdapter(
             row.visibility = View.VISIBLE
             val context = row.context
             val density = context.resources.displayMetrics.density
-            badges.forEach { badge ->
+            val hPad = (3 * density).toInt()
+            val vPad = (2 * density).toInt()
+            val labelTypeface = runCatching {
+                ResourcesCompat.getFont(context, R.font.oswald_medium)
+            }.getOrNull()
+
+            /** Same label every Compose chip falls back to: the badge's own name. */
+            fun chipLabel(name: String, color: Int) = TextView(context).apply {
+                text = name
+                textSize = BADGE_LABEL_SIZE_SP
+                setTextColor(color)
+                typeface = labelTypeface
+                letterSpacing = BADGE_LABEL_TRACKING_EM
+                setPadding(hPad, 0, hPad, 0)
+            }
+
+            badges.forEachIndexed { index, badge ->
                 val filled = badge.tagStyle.equals("filled", ignoreCase = true)
+                val labelColor = badge.textColor.toArgb(fallback = 0xFFFFFFFF.toInt())
                 val chip = LinearLayout(context).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = android.view.Gravity.CENTER_VERTICAL
-                    val hPad = (3 * density).toInt()
-                    val vPad = (2 * density).toInt()
+                    minimumHeight = (BADGE_CHIP_HEIGHT_DP * density).toInt()
                     setPadding(hPad, vPad, hPad, vPad)
                     background = android.graphics.drawable.GradientDrawable().apply {
                         shape = android.graphics.drawable.GradientDrawable.RECTANGLE
-                        cornerRadius = 6 * density
+                        cornerRadius = BADGE_CHIP_CORNER_DP * density
                         setColor(if (filled) badge.tagColor.toArgb(fallback = 0x00000000) else 0x00000000)
                         setStroke(
                             (1 * density).toInt(),
                             badge.borderColor.toArgb(fallback = 0x00000000)
                         )
                     }
+                    // The Compose chip clips its art to its own rounded shape;
+                    // the outline comes from the background set just above.
+                    clipToOutline = true
                 }
                 if (badge.imageURL.isNotBlank()) {
-                    val text = TextView(context).apply {
-                        text = badge.name
-                        textSize = 10f
-                        setTextColor(
-                            badge.textColor.toArgb(fallback = 0xFFFFFFFF.toInt())
-                        )
+                    val text = chipLabel(badge.name, labelColor).apply {
                         visibility = View.GONE
                     }
                     val image = ImageView(context).apply {
                         layoutParams = LinearLayout.LayoutParams(
                             LinearLayout.LayoutParams.WRAP_CONTENT,
-                            (16 * density).toInt()
-                        ).apply { minimumWidth = (34 * density).toInt() }
+                            (BADGE_IMAGE_HEIGHT_DP * density).toInt()
+                        ).apply {
+                            minimumWidth = (34 * density).toInt()
+                            maxWidth = (92 * density).toInt()
+                        }
                         adjustViewBounds = true
-                        clipToOutline = true
                     }
                     // On load failure (dead URL, unsupported format) swap the
                     // invisible empty image for a text chip so the badge stays
@@ -111,16 +143,19 @@ class PickerAdapter(
                     chip.addView(image)
                     chip.addView(text)
                 } else {
-                    val text = TextView(context).apply {
-                        text = badge.name
-                        textSize = 10f
-                        setTextColor(
-                            badge.textColor.toArgb(fallback = 0xFFFFFFFF.toInt())
-                        )
-                    }
-                    chip.addView(text)
+                    chip.addView(chipLabel(badge.name, labelColor))
                 }
-                row.addView(chip)
+                row.addView(
+                    chip,
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        // Leave the gap on every chip but the first, the way
+                        // Arrangement.spacedBy does on the Compose row.
+                        if (index > 0) marginStart = (BADGE_CHIP_GAP_DP * density).toInt()
+                    }
+                )
             }
         }
 

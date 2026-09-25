@@ -441,21 +441,45 @@
                 android:lineSpacingExtra="2dp"
                 android:visibility="gone" />
 
-            <!-- Stream badge chips for the current source. These used to sit
-                 inside a bordered "source info" card next to a
-                 "Source: <addon>" line; the chips carry their own styling, so
-                 the card was redundant chrome over the video. The row hides
-                 itself when the source has no badges. -->
-            <LinearLayout
-                android:id="@+id/badge_row"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:visibility="gone" />
             </LinearLayout>
         </ScrollView>
+
+        <!-- Stream badge chips for the current source: the source's own
+             art/labels. These used to sit inside a bordered "source info" card
+             next to a "Source: <addon>" line; the chips carry their own
+             styling, so the card was redundant chrome over the video.
+
+             PINNED below the info scroll, exactly like the cast band just
+             below them. As the last child of the scroll they were the first
+             thing pushed past the fold whenever the title or the overview ran
+             long, so the row was clipped until it was scrolled back into view.
+             Everything the overlay shows at a fixed size now stays whole; only
+             the prose scrolls.
+
+             In a horizontal scroller with scrollbars hidden so a source
+             carrying many chips cannot run off the side either. Not focusable:
+             it is a strip of read-only chips, so it must not become a stop in
+             the D-pad chain (touch/trackpad scrolling still works). The row
+             still hides itself when the source has no badges, and a GONE row
+             measures to nothing, so the strip leaves no gap behind. -->
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:clipToPadding="false"
+            android:descendantFocusability="blocksDescendants"
+            android:focusable="false"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/badge_row"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="2dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:visibility="gone" />
+        </HorizontalScrollView>
 
         <!-- Cast band: pinned between the info scroll and the seekbar so
              avatars + names are always fully visible without scrolling. -->
