@@ -343,6 +343,12 @@ private data class PendingPlay(
             sources = allSources,
             totalEpisodesInSeason = totalEpisodesInSeason,
             runtimeMinutes = target.runtimeMinutes,
+            // The addon's own HTTP headers for this link (Referer / Origin /
+            // Cookie / User-Agent). They were modelled nowhere and passed
+            // nowhere, so a gated direct source was fetched with a bare
+            // Chrome UA and no Referer - the shape that makes a host answer
+            // with a throttled variant. See Stream.requestHeaders.
+            streamHeaders = stream.requestHeaders,
             drmLicenseUrl = stream.drm?.licenseUrl,
             drmHeaders = stream.drm?.headers.orEmpty()
         )
@@ -1705,6 +1711,7 @@ fun AppRoot() {
                                 current.target.totalEpisodesInSeason,
                             runtimeMinutes =
                                 current.target.runtimeMinutes,
+                            streamHeaders = stream.requestHeaders,
                             drmLicenseUrl = stream.drm?.licenseUrl,
                             drmHeaders = stream.drm?.headers.orEmpty()
                         )

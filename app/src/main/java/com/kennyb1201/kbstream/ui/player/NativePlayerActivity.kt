@@ -1152,8 +1152,13 @@ class NativePlayerActivity : ComponentActivity() {
     private var stallLastProgressAtMs = 0L
     private var stallLastPositionMs = -1L
     private var stallLastBufferedMs = -1L
-    private val stallNoProgressMs = 12_000L
-    private val stallMaxRecoveries = 2
+    // 12s was too impatient for a high-bitrate source on a slow line: its
+    // fill rate can sit below 1x for a minute without the host being dead,
+    // and the old value surfaced a hard error while data was still arriving.
+    // 30s matches the VOD buffer duration target, and four recoveries (was
+    // two) give a genuinely slow host room to catch up before the error.
+    private val stallNoProgressMs = 30_000L
+    private val stallMaxRecoveries = 4
     private val stallTickMs = 2_000L
 
     // History
@@ -3976,6 +3981,26 @@ class NativePlayerActivity : ComponentActivity() {
                 httpFactory
             }
 
+        // Disk read-ahead cache. With nothing on disk in front of the HTTP
+        // source, every playback (and every seek/recovery) re-fetches the
+        // head of the file from the network, so a slow host has zero headroom:
+        // the moment its fill rate dips below realtime the buffer drains and
+        // playback stalls. Wrapping the source in a SimpleCache lets
+        // already-fetched bytes come back from disk instead. Skipped for live
+        // channels (every byte is once-only) and googlevideo clips (bounded,
+        // signed ranges that must not be re-served from a stale cache).
+        val cachedFactory: androidx.media3.datasource.DataSource.Factory =
+            if (isLiveChannel || isGooglevideoStream) {
+                httpOrYoutubeFactory
+            } else {
+                androidx.media3.datasource.cache.CacheDataSource.Factory()
+                    .setCache(streamDiskCache(this))
+                    .setUpstreamDataSourceFactory(httpOrYoutubeFactory)
+                    .setFlags(
+                        androidx.media3.datasource.cache.CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR
+                    )
+            }
+
         val extraHeaders = streamHeaders
             .filterKeys { !it.equals("User-Agent", ignoreCase = true) }
             .filterValues { it.isNotBlank() }
@@ -4179,13 +4204,13 @@ class NativePlayerActivity : ComponentActivity() {
                     nativeDvSupported = nativeDvSupported
                 )
             }
-        val mediaSourceFactory = DefaultMediaSourceFactory(httpOrYoutubeFactory, extractorsFactory)
+        val mediaSourceFactory = DefaultMediaSourceFactory(cachedFactory, extractorsFactory)
         // DefaultMediaSourceFactory selects HLS/DASH by URI or MIME type and
         // otherwise falls back to progressive extraction. Build that fallback
         // explicitly so direct stream endpoints (which commonly have no file
         // extension) cannot skip the custom DV extractor.
         val progressiveMediaSourceFactory =
-            ProgressiveMediaSource.Factory(httpOrYoutubeFactory, extractorsFactory)
+            ProgressiveMediaSource.Factory(cachedFactory, extractorsFactory)
         Log.i(
             "PLAYER_DV",
             "Compat extractor configured=${extractorsFactory.javaClass.simpleName} " +
@@ -4231,8 +4256,11 @@ class NativePlayerActivity : ComponentActivity() {
         }
 
         val resolvedBufferMode = if (bufferMode == 2) {
-            // Auto: detect IPTV from parentType or .m3u8 URL
-            if (isLiveChannel || currentUrl.lowercase().endsWith(".m3u8")) 1 else 0
+            // Auto: live IPTV channels and HLS manifests take the low-latency
+            // profile. HLS is resolved through resolveMimeType instead of an
+            // endsWith(".m3u8") test, which missed every query-carrying and
+            // extension-less playlist URL.
+            if (isLiveChannel || resolveMimeType(currentUrl) == MimeTypes.APPLICATION_M3U8) 1 else 0
         } else bufferMode
         // Media3 validates minBufferMs >= bufferForPlaybackAfterRebufferMs
         // (DefaultLoadControl.Builder throws IllegalArgumentException
@@ -4275,13 +4303,16 @@ class NativePlayerActivity : ComponentActivity() {
         // The divisor was 8 until a real high-bitrate file showed what that
         // costs: on a 384MB-heap box the budget is 48MB, and at 40-60Mbps that
         // is 6-10 seconds of media -- so far short of the 30s the duration
-        // target asks for that any dip longer than a few seconds stalls. 5 is
-        // 76MB on the same box, still less than half the ~150MB unbounded
-        // buffering that caused the OOM above, and the clamp keeps every device
-        // bounded regardless of heap.
+        // target asks for that any dip longer than a few seconds stalls. 5
+        // raised it to 76MB, but a PenguPlay-class host still stalled: its
+        // ~40Mbps variant needs ~18s of media, and a 256MB-heap box had only
+        // ~51MB (about 10s). 3 gives ~85MB there and ~128MB on the 384MB box,
+        // still under the ~150MB unbounded buffering that caused the OOM
+        // above, and the clamp (48-160MB) keeps every device bounded
+        // regardless of heap. Low-bitrate streams never reach either bound.
         val maxBufferBudgetBytes =
-            (Runtime.getRuntime().maxMemory() / 5)
-                .coerceIn(24L * 1024 * 1024, 96L * 1024 * 1024)
+            (Runtime.getRuntime().maxMemory() / 3)
+                .coerceIn(48L * 1024 * 1024, 160L * 1024 * 1024)
                 .toInt()
         Log.i(
             "PLAYER_PERF",
@@ -4342,7 +4373,7 @@ class NativePlayerActivity : ComponentActivity() {
                     } else {
                         progressiveMediaSourceFactory.createMediaSource(initialMediaItem)
                     }
-                    val audioSource = ProgressiveMediaSource.Factory(httpOrYoutubeFactory)
+                    val audioSource = ProgressiveMediaSource.Factory(cachedFactory)
                         .createMediaSource(MediaItem.fromUri(audioUrl))
                     setMediaSource(MergingMediaSource(videoSource, audioSource))
                 } else if (isManifest) {
@@ -5678,6 +5709,26 @@ class NativePlayerActivity : ComponentActivity() {
         // "No data for 0ms", which made every stall look like a zero-second
         // hiccup and hid how long the source had actually gone silent.
         val quietMs = now - stallLastProgressAtMs
+
+        // If media is still buffered ahead of the playhead, this is not a
+        // drained-buffer network stall: seeking to the buffered edge (the old
+        // recovery) would DISCARD exactly the headroom we are about to play
+        // from and re-fetch it from the network, turning a merely slow source
+        // into a dead one. Keep the buffer, still count the recovery so this
+        // terminates, and wait another full window.
+        if (bufferedMs > positionMs + 1_000) {
+            stallRecoveries++
+            stallLastProgressAtMs = now
+            stallLastPositionMs = positionMs
+            stallLastBufferedMs = bufferedMs
+            Log.w(
+                "PLAYER_STALL",
+                "No playhead progress for ${quietMs}ms with ${bufferedMs - positionMs}ms still buffered (pos=${positionMs}ms buf=${bufferedMs}ms) — keeping the buffer (recovery $stallRecoveries/$stallMaxRecoveries)"
+            )
+            handler.postDelayed({ tickStallWatchdog(token) }, stallTickMs)
+            return
+        }
+
         stallRecoveries++
         stallLastProgressAtMs = now
         stallLastPositionMs = positionMs
@@ -8239,11 +8290,43 @@ class NativePlayerActivity : ComponentActivity() {
 
 // --- Utility Functions (shared with Compose path) ---
 
+/**
+ * Process-wide disk cache backing the player's read-ahead.
+ *
+ * SimpleCache must be a singleton per directory -- a second instance opened
+ * on the same folder throws -- and the player Activity is recreated while
+ * playback continues, so the instance is held here rather than per-Activity.
+ * An LRU evictor keeps a nearly-full device from growing it without bound.
+ */
+private var streamCacheSingleton: androidx.media3.datasource.cache.SimpleCache? = null
+private val streamCacheLock = Any()
+
+internal fun streamDiskCache(context: Context): androidx.media3.datasource.cache.SimpleCache {
+    synchronized(streamCacheLock) {
+        streamCacheSingleton?.let { return it }
+        val cache = androidx.media3.datasource.cache.SimpleCache(
+            java.io.File(context.cacheDir, "media_cache"),
+            androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor(256L * 1024 * 1024),
+            androidx.media3.database.StandaloneDatabaseProvider(context)
+        )
+        streamCacheSingleton = cache
+        return cache
+    }
+}
+
 private fun resolveMimeType(url: String): String? {
     val lower = url.lowercase()
     val path = lower.substringBefore('?').substringBefore('#')
     return when {
         ".m3u8" in path -> MimeTypes.APPLICATION_M3U8
+        // Extension-less HLS. Many CDN/hosted playlists carry the marker only
+        // in the query (`.../stream?type=.m3u8`) or under an `/hls/` path
+        // segment with no file extension at all. Those reached Media3 as an
+        // unknown type, were handed to the progressive extractors, and the
+        // playlist text was parsed as raw media -- the stream stalled on the
+        // first frame even though the very same URL plays elsewhere.
+        "m3u8" in lower -> MimeTypes.APPLICATION_M3U8
+        "/hls/" in path -> MimeTypes.APPLICATION_M3U8
         ".mpd" in path -> MimeTypes.APPLICATION_MPD
         // Microsoft Smooth Streaming: the manifest lives at
         // ".../stream.ism/Manifest" (live publishing points use .isml, hence the

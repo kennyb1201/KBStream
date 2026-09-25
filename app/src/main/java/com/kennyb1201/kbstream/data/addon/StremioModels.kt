@@ -107,6 +107,14 @@ data class Stream(
     @Json(name = "drm")
     val drm: StreamDrm? = null,
 
+    /**
+     * Headers this specific link needs, in the shape several HTTP addons in
+     * the wild emit even though the spec only defines the `behaviorHints`
+     * block below. Left unmodelled before, which is why an addon's own
+     * Referer/User-Agent never reached the player.
+     */
+    val headers: Map<String, String>? = null,
+
     // Resolved badge chips (KB-compatible badge packs); never arrives
     // from addon JSON — attached client-side by StreamBadgeEngine.
     val badges: List<com.kennyb1201.kbstream.data.badges.StreamBadge> = emptyList()
@@ -120,6 +128,28 @@ data class Stream(
      */
     val bingeGroup: String?
         get() = behaviorHints?.bingeGroup
+
+    /**
+     * The HTTP headers this stream's host expects on the video request — the
+     * Referer / Origin / Cookie / User-Agent a direct HTTP source is gated on.
+     *
+     * Both places addons put them are read, with the spec'd
+     * `behaviorHints.proxyHeaders.request` winning over the non-standard
+     * top-level `headers` map. Stremio and the other Stremio-protocol players
+     * send these; without them a host can answer a request with a throttled,
+     * low-bitrate or short-lived variant of the file (or drop it mid-transfer),
+     * which reads as this app buffering on a link every other app plays fine.
+     *
+     * The player already knows what to do with a non-empty map — it becomes
+     * the OkHttp source's default request properties (and mpv's
+     * `http-header-fields`) — this is just the accessor that had never been
+     * wired up for addon streams.
+     */
+    val requestHeaders: Map<String, String>
+        get() = buildMap {
+            headers?.forEach { (key, value) -> put(key, value) }
+            behaviorHints?.proxyHeaders?.request?.forEach { (key, value) -> put(key, value) }
+        }
 }
 
 /**
@@ -138,7 +168,21 @@ data class StreamBehaviorHints(
     val filename: String? = null,
 
     /** Server-provided video size in bytes. */
-    val videoSize: Long? = null
+    val videoSize: Long? = null,
+
+    /**
+     * Per-stream HTTP headers, as defined by the Stremio stream spec. `request`
+     * is what the client has to send for the video (see [Stream.requestHeaders]);
+     * `response` is recorded but not acted on — it describes headers the addon's
+     * own proxy would return, which this client never proxies through.
+     */
+    val proxyHeaders: StreamProxyHeaders? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class StreamProxyHeaders(
+    val request: Map<String, String>? = null,
+    val response: Map<String, String>? = null
 )
 
 @JsonClass(generateAdapter = true)
