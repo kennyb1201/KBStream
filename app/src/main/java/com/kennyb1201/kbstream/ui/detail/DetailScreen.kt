@@ -2794,6 +2794,40 @@ fun DetailScreen(
                                         )
                                         .focusGroup()
                                         .focusRestorer()
+                                        // UP belongs to PEOPLE, the rail
+                                        // directly above (the same fix the
+                                        // episodes rail already makes for its
+                                        // own UP). The default search is
+                                        // geometric: a chip that sits to the
+                                        // right of the cast rail's last card
+                                        // finds nothing above it and lands two
+                                        // rows up on an episode card instead.
+                                        // Asking for the people rail directly
+                                        // lets its focusRestorer land on the
+                                        // card the viewer last had there, or
+                                        // the first one - never the episodes.
+                                        .onPreviewKeyEvent {
+                                            keyEvent ->
+                                            if (
+                                                keyEvent.type !=
+                                                    KeyEventType.KeyDown ||
+                                                keyEvent.key !=
+                                                    Key.DirectionUp
+                                            ) {
+                                                false
+                                            } else {
+                                                // Only when the rail is
+                                                // composed (there is a cast
+                                                // list); otherwise the request
+                                                // throws and the press falls
+                                                // through to the default
+                                                // search.
+                                                runCatching {
+                                                    movieDetailsFocusRequester
+                                                        .requestFocus()
+                                                }.isSuccess
+                                            }
+                                        }
                                 ) {
                                     items(
                                         networks,

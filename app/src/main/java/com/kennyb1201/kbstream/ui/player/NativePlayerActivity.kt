@@ -726,7 +726,14 @@ class NativePlayerActivity : ComponentActivity() {
         }
 
         (nextUpPanel.layoutParams as? android.widget.FrameLayout.LayoutParams)?.let { params ->
-            params.width = dp(440)
+            // WRAP_CONTENT rather than a fixed 440dp: anchored to the corner,
+            // a fixed width left the card's whole right-hand side empty - the
+            // still and two short lines of text need far less than 440dp, so
+            // the card read as a wide box with its content huddled into the
+            // left of it. Hugging its own widest line (bounded by the text
+            // column's cap below) puts the card's right edge where the text
+            // ends, and that empty band goes with it.
+            params.width = ViewGroup.LayoutParams.WRAP_CONTENT
             params.height = ViewGroup.LayoutParams.WRAP_CONTENT
             params.gravity = android.view.Gravity.BOTTOM or android.view.Gravity.END
             // Low in the corner: the bottom margin is only the safe-area gap
@@ -751,7 +758,16 @@ class NativePlayerActivity : ComponentActivity() {
         // The text column follows the narrower card: less gap to the still,
         // smaller type, and tighter leading between the lines.
         (nextUpPanel.getChildAt(1) as? LinearLayout)?.let { column ->
-            (column.layoutParams as? LinearLayout.LayoutParams)?.marginStart = dp(14)
+            // The column stops filling the card and starts DEFINING it: with
+            // the panel on wrap_content there is no leftover space for a weight
+            // to hand out (and a weight there would resolve the column to
+            // zero), so it goes with the fixed width and the column now sizes
+            // to its own lines.
+            (column.layoutParams as? LinearLayout.LayoutParams)?.let { columnParams ->
+                columnParams.marginStart = dp(14)
+                columnParams.width = LinearLayout.LayoutParams.WRAP_CONTENT
+                columnParams.weight = 0f
+            }
         }
         nextUpShowTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
         nextUpEpisodeLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
@@ -759,6 +775,19 @@ class NativePlayerActivity : ComponentActivity() {
         nextUpCountdown.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
         nextUpPanel.findViewById<TextView>(R.id.next_up_kicker)
             ?.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+        // The two title lines are what the card's width comes from now, so they
+        // are hugged but capped: a long show or episode name wraps or
+        // ellipsizes (the episode title has two lines to do it in) instead of
+        // stretching the card across the picture. Fresh LayoutParams because
+        // the XML has them match_parent, which inside a wrap_content card would
+        // measure against the whole screen.
+        listOf(nextUpShowTitle, nextUpEpisodeTitle).forEach { line ->
+            line.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            line.maxWidth = dp(240)
+        }
         tighten(nextUpShowTitle, 2)
         tighten(nextUpEpisodeLabel, 3)
         tighten(nextUpEpisodeTitle, 2)

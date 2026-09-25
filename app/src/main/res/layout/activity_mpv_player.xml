@@ -613,10 +613,14 @@
          in the corner, right-aligned with the screen's own 48dp inset, and
          every field kept. The bottom inset is only a small safe-area gap
          (the control bar it used to clear is never on screen at the same time
-         as this card), so the card sits just off the bottom edge. -->
+         as this card), so the card sits just off the bottom edge. Its width is
+         wrap_content rather than the 440dp the main player starts from: the
+         card hugs its own widest line (the show title, capped at 240dp), so
+         its right edge sits where the text ends instead of leaving the whole
+         right-hand side of the card empty. -->
     <LinearLayout
         android:id="@+id/mpv_next_up_panel"
-        android:layout_width="440dp"
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom|end"
         android:layout_marginTop="24dp"
@@ -635,11 +639,13 @@
             android:contentDescription="Next episode thumbnail"
             android:scaleType="centerCrop" />
 
+        <!-- The text column DEFINES the card's width here (see the panel
+         above): no weight, no fixed width - it sizes to its own lines so the
+         card ends where the text does. -->
         <LinearLayout
-            android:layout_width="0dp"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="14dp"
-            android:layout_weight="1"
             android:orientation="vertical">
 
             <TextView
@@ -654,10 +660,11 @@
 
             <TextView
                 android:id="@+id/mpv_next_up_show_title"
-                android:layout_width="match_parent"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
                 android:ellipsize="end"
+                android:maxWidth="240dp"
                 android:fontFamily="@font/oswald_medium"
                 android:maxLines="1"
                 android:textColor="@color/kb_text_hi"
@@ -674,10 +681,11 @@
 
             <TextView
                 android:id="@+id/mpv_next_up_episode_title"
-                android:layout_width="match_parent"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
                 android:ellipsize="end"
+                android:maxWidth="240dp"
                 android:fontFamily="@font/oswald_medium"
                 android:maxLines="2"
                 android:textColor="@color/kb_text_lo"
