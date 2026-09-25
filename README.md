@@ -108,8 +108,13 @@ scripts/           # TMDB id-verification probes used while curating the
                    # 1280x720 banner and a 1024x500 feature graphic, both laid
                    # out from the same plate as the TV banner) -- rasterizing
                    # them to res/ and to docs/brand/ (run it after any design
-                   # change; nothing is hand-edited). `--preview
-                   # banner|promo|icon|logo|mark|round` prints one as ASCII.
+                   # change; nothing is hand-edited). The launcher banner ships
+                   # in two forms -- translucent (what android:banner points
+                   # at, inset so a launcher's rounded, scaled-up card cannot
+                   # clip it) and @drawable/tv_banner_plate, the same lockup on
+                   # the opaque plate. `--preview
+                   # banner|plate|promo|icon|logo|mark|round` prints one as
+                   # ASCII.
 supabase_profiles.sql  # optional dashboard table for inspecting profiles
 docs/              # Supabase RLS policy reference
 ```

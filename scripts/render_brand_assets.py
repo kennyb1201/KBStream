@@ -81,6 +81,12 @@ TEXT_LO = rgb("8891A0")
 # paints: "solid" | "lin" (p0, p1, c0, c1) | "rad" (centre, r, colour, a, gamma)
 # --------------------------------------------------------------------------- #
 
+def with_alpha(c, a):
+    """The same colour at a fraction of its alpha. The plate is drawn at full
+    strength for the opaque outputs and faded for the translucent banner."""
+    return (c[0], c[1], c[2], c[3] * a)
+
+
 def solid(c):
     return ("solid", c)
 
@@ -727,49 +733,88 @@ PLATE_MARK_GAP = 26.0   # mark across to the wordmark
 PLATE_HALO_R = 132.0
 PLATE_BEAM_H = 78.0     # half-height of the light beam at the plate's right edge
 
+# The launcher banner's safe area, and why it needs one. A TV launcher does not
+# draw the banner bare: it puts it inside its own card, with rounded corners,
+# and scales that card up while the tile holds focus. Artwork running flush to
+# the edge of the 320x180 therefore has its corners cut off by that rounding,
+# and reads as oversized beside the launchers' own banners, which are
+# transparent lockups floating in the middle of the slot. So the plate is
+# pulled in from the edge (the margin stays transparent, so any rounding crops
+# empty space instead of artwork), faded so the wallpaper reads through it, and
+# its lockup drops a notch.
+PLATE_INSET = 14.0
+PLATE_RADIUS = 13.0
+PLATE_ALPHA = 0.78
+PLATE_LOCK = 0.90
 
-def plate_layers(w, h, k=1.0):
+
+def plate_layers(w, h, k=1.0, inset=0.0, alpha=1.0, lock=1.0):
     """The KBStream plate: background, mark-as-light-source, lockup.
 
     The lockup is centred in (w, h) at design scale `k`, so a wider plate gets
     more breathing room around the same lockup rather than a stretched one.
     `k = 1.0` at 320x180 is the TV banner, bit for bit.
+
+    `inset` pulls the plate in from the canvas edge and leaves that margin
+    transparent, `alpha` fades the plate so the wallpaper reads through it, and
+    `lock` scales the lockup inside it. All three default to the store plates'
+    full-bleed, opaque, full-size form -- see PLATE_INSET for why the launcher
+    banner does not use those defaults.
     """
-    mark_d = MARK_D * k
-    word = wordmark(BOLD, "KBSTREAM", cap=PLATE_WORD_CAP * k, tracking_em=0.05)
+    scale = k * lock
+    mark_d = MARK_D * scale
+    word = wordmark(BOLD, "KBSTREAM", cap=PLATE_WORD_CAP * scale, tracking_em=0.05)
     word_w = bbox(word)[2] - bbox(word)[0]
-    tag = fitted_line(MEDIUM, TAGLINE, cap=PLATE_TAG_CAP * k, target_w=word_w)
-    gap = PLATE_MARK_GAP * k
+    tag = fitted_line(MEDIUM, TAGLINE, cap=PLATE_TAG_CAP * scale, target_w=word_w)
+    gap = PLATE_MARK_GAP * scale
     total = mark_d + gap + word_w
     x0 = (w - total) / 2.0
     mark_x = x0
     mark_y = (h - mark_d) / 2.0
     text_x = x0 + mark_d + gap
-    block_top = (h - (PLATE_WORD_CAP + PLATE_LEAD + PLATE_TAG_CAP) * k) / 2.0
+    block_top = (h - (PLATE_WORD_CAP + PLATE_LEAD + PLATE_TAG_CAP) * scale) / 2.0
 
     # The mark is the plate's light source: a halo sits behind it and a wide,
     # very faint beam opens out of the play glyph across the lockup. Both are
     # low enough that they read as depth rather than as decoration -- a plain
     # navy plate with a logo dropped on it is what looks cheap.
     tip_x, tip_y = mark_x + mark_d, h / 2.0
-    beam_h = PLATE_BEAM_H * k
-    halo_r = PLATE_HALO_R * k
+    beam_h = PLATE_BEAM_H * scale
+    halo_r = PLATE_HALO_R * scale
+    # The plate's own edge: the halo and the beam stop here rather than at the
+    # canvas, because with the margin transparent the halo would otherwise
+    # strand a warm glow out past the card.
+    ix = inset * k
+    edge = w - ix
+    if inset > 0:
+        glow_x = tip_x - mark_d / 2.0
+        halo_r = min(halo_r, glow_x - ix, edge - glow_x, (h - 2 * ix) / 2.0)
     layers = [
-        ([rect(0, 0, w, h)], lin((0, 0), (0, h), BANNER_TOP, BANNER_BOT)),
-        ([[(tip_x, tip_y), (w, tip_y - beam_h), (w, tip_y + beam_h)]],
-         lin((tip_x, tip_y), (w * 0.86, tip_y), rgb("F7CE86", 0.11), rgb("F7CE86", 0.0))),
+        ([rect(ix, ix, w - 2 * ix, h - 2 * ix, PLATE_RADIUS * k if inset > 0 else 0.0)],
+         lin((0.0, ix), (0.0, h - ix),
+             with_alpha(BANNER_TOP, alpha), with_alpha(BANNER_BOT, alpha))),
+        ([[(tip_x, tip_y), (edge, tip_y - beam_h), (edge, tip_y + beam_h)]],
+         lin((tip_x, tip_y), (edge * 0.86, tip_y), rgb("F7CE86", 0.11), rgb("F7CE86", 0.0))),
         ([circle(tip_x - mark_d / 2.0, tip_y, halo_r)],
-         rad((tip_x - mark_d / 2.0, tip_y - 6.0 * k), halo_r, BRASS, 0.16)),
+         rad((tip_x - mark_d / 2.0, tip_y - 6.0 * scale), halo_r, BRASS, 0.16)),
     ]
     layers += mark_layers(mark_d, mark_x, mark_y)
     layers.append((move(word, text_x, block_top), solid(TEXT_HI)))
-    layers.append((move(tag, text_x, block_top + (PLATE_WORD_CAP + PLATE_LEAD) * k),
+    layers.append((move(tag, text_x, block_top + (PLATE_WORD_CAP + PLATE_LEAD) * scale),
                    solid(rgb("8891A0", 0.92))))
     return layers
 
 
-def banner_layers():
-    return plate_layers(BANNER_W, BANNER_H)
+# The launcher banner in its two forms. The translucent one is the default,
+# and inset/alpha/lock are what let it survive the launcher's own card.
+BANNER_TRANSLUCENT = dict(inset=PLATE_INSET, alpha=PLATE_ALPHA, lock=PLATE_LOCK)
+BANNER_SOLID = dict(inset=PLATE_INSET, alpha=1.0, lock=PLATE_LOCK)
+
+
+def banner_layers(solid=False):
+    return plate_layers(
+        BANNER_W, BANNER_H, **(BANNER_SOLID if solid else BANNER_TRANSLUCENT)
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -819,14 +864,30 @@ def emit_banner():
     # 2x (xhdpi) for a TV launcher's overscan, so the layers have to be scaled
     # with it -- rendering the design into a 640x360 buffer would paint only the
     # top-left quarter.
-    layers = banner_layers()
-    w, h = int(BANNER_W * 2), int(BANNER_H * 2)
-    buf = render(scale_layers(layers, w / BANNER_W), w, h)
-    written = [write(os.path.join(RES, "drawable-xhdpi", "tv_banner.png"),
-                     png_bytes(buf, w, h, alpha=False))]
-    written.append(write(os.path.join(BRAND, "kbstream-banner.png"), png_bytes(buf, w, h, alpha=False)))
-    written.append(write(os.path.join(BRAND, "kbstream-banner.svg"),
-                         svg_doc(layers, BANNER_W, BANNER_H, "KBStream TV banner")))
+    #
+    # Both forms are emitted as real drawables, so preferring the solid card is
+    # a one-line change to android:banner rather than a regeneration. The
+    # translucent one is the default: it is what a launcher's own card wants,
+    # and it is the one whose edges cannot be clipped.
+    written = []
+    for name, solid in (("tv_banner", False), ("tv_banner_plate", True)):
+        layers = banner_layers(solid=solid)
+        w, h = int(BANNER_W * 2), int(BANNER_H * 2)
+        buf = render(scale_layers(layers, w / BANNER_W), w, h)
+        # Written with alpha even for the opaque plate: the margin around the
+        # plate has to stay genuinely transparent, and an RGB PNG has nowhere
+        # to put "nothing" -- it would come out black, which is a worse edge
+        # than the flush artwork this inset exists to avoid.
+        written.append(write(os.path.join(RES, "drawable-xhdpi", "%s.png" % name),
+                             png_bytes(buf, w, h, alpha=True)))
+        suffix = "-plate" if solid else ""
+        written.append(write(os.path.join(BRAND, "kbstream-banner%s.png" % suffix),
+                             png_bytes(buf, w, h, alpha=True)))
+        written.append(write(
+            os.path.join(BRAND, "kbstream-banner%s.svg" % suffix),
+            svg_doc(layers, BANNER_W, BANNER_H,
+                    "KBStream TV banner" + (" (solid plate)" if solid else "")),
+        ))
     return written
 
 
@@ -1011,6 +1072,7 @@ def ascii_preview(layers, w, h, cols=104):
 
 PREVIEWS = {
     "banner": lambda: (banner_layers(), int(BANNER_W), int(BANNER_H)),
+    "plate": lambda: (banner_layers(solid=True), int(BANNER_W), int(BANNER_H)),
     "promo": lambda: (plate_layers(1024.0, 500.0, 3.2), 1024, 500),
     "icon": lambda: (icon_layers(), int(TILE), int(TILE)),
     "round": lambda: (icon_layers(True), int(TILE), int(TILE)),
