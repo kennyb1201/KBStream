@@ -27,7 +27,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -39,6 +38,7 @@ import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBSkeletonGrid
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
+import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.heroSharedElement
 import com.kennyb1201.kbstream.ui.components.PosterSize
@@ -184,6 +184,10 @@ fun CatalogGridScreen(
             text = state.addonName,
             style = MaterialTheme.typography.labelMedium,
             color = KBTextLo,
+            // One line, like the page title above it: a long catalog name used
+            // to wrap and push the whole grid down.
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(start = 24.dp, bottom = 10.dp)
@@ -191,24 +195,21 @@ fun CatalogGridScreen(
 
         when {
             state.isLoading && state.items.isEmpty() -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(24.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator(
-                        color = KBAccent,
-                        strokeWidth = 3.dp
-                    )
-                }
+                KBStatusMessage(loading = true, message = KB_STATUS_LOADING)
             }
 
+            // The shared status card, like the empty branch below it and every
+            // other browse screen (Decade / Tag / Studio / Actor). This branch
+            // dropped a bare left-aligned grey line instead -- one branch under
+            // a branch that already used the card, in the same `when`.
             state.error != null && state.items.isEmpty() -> {
-                Text(
-                    text = "Error: ${state.error}",
-                    color = KBTextLo,
-                    modifier = Modifier.padding(24.dp)
+                KBStatusMessage(
+                    message = "Error: ${state.error}",
+                    // retryCatalogGrid, not openCatalogInGrid: the latter
+                    // returns early when the grid already holds this same
+                    // catalog, which is exactly what a failed page leaves
+                    // behind (it also clears the hasMore flag the failure set).
+                    onRetry = { viewModel.retryCatalogGrid() }
                 )
             }
 

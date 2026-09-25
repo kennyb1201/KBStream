@@ -2130,6 +2130,45 @@ Log.d(
         _catalogGrid.value = null
     }
 
+    /**
+     * Re-fetches the open grid's current page after [CatalogGridState.error].
+     *
+     * Neither existing entry point can serve as a retry: [openCatalogInGrid]
+     * returns early when the grid already holds this same catalog, and
+     * [loadMoreGridItems] refuses when the state reports no more pages --
+     * which is exactly what a failure leaves behind, since the catch block
+     * sets `hasMore = false`. So a first page that failed could only be
+     * recovered by backing out to Home and re-opening the rail. This puts the
+     * paging flag back, clears the error, and re-runs the same fetch with
+     * `isLoading` true so the grid shows its spinner while it tries.
+     */
+    fun retryCatalogGrid() {
+
+        val state =
+            _catalogGrid.value
+                ?: return
+
+        val info =
+            railInfo.values.firstOrNull { info ->
+                formatCatalogName(info.catalogRawName) == state.title &&
+                    info.addonName == state.addonName
+            }
+                ?: return
+
+        gridLoadJob?.cancel()
+
+        _catalogGrid.value =
+            state.copy(
+                isLoading = true,
+                isLoadingMore = false,
+                hasMore = true,
+                error = null
+            )
+
+        gridLoadJob =
+            fetchGridPage(info)
+    }
+
     private fun fetchGridPage(
         info: RailInfo
     ): kotlinx.coroutines.Job {

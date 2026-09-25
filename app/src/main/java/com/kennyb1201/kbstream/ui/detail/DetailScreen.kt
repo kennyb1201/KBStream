@@ -41,6 +41,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -112,6 +113,8 @@ import com.kennyb1201.kbstream.data.tmdb.tmdbImageOriginal
 import com.kennyb1201.kbstream.data.tmdb.writers
 import com.kennyb1201.kbstream.ui.components.AutoPlayLoadSplash
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBStatusMessage
+import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.heroSharedElement
 import com.kennyb1201.kbstream.ui.player.randomAiredEpisode
 import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
@@ -564,7 +567,19 @@ fun DetailScreen(
             vmLoadedSeason?.takeIf { it in seasons } != null
         )
 
-    LaunchedEffect(type, id, initialTarget?.season, initialTarget?.episode) {
+    // Bumped by the error card's retry. Both load effects key on this next to
+    // their own inputs, because re-running them is what re-opening the screen
+    // does: a retry then cannot leave the page in a state a fresh open would
+    // not have produced (the season's episode list included).
+    var detailRetryTick by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(
+        type,
+        id,
+        initialTarget?.season,
+        initialTarget?.episode,
+        detailRetryTick
+    ) {
         selectedSeason = initialTarget?.season
         userManuallyChangedSeason = false
         seasonFocusRequesters.clear()
@@ -589,7 +604,13 @@ fun DetailScreen(
         )
     }
 
-    LaunchedEffect(type, id, effectiveSeason, hasExplicitSeasonSource) {
+    LaunchedEffect(
+        type,
+        id,
+        effectiveSeason,
+        hasExplicitSeasonSource,
+        detailRetryTick
+    ) {
         if (
             normalizedType == "series" &&
             effectiveSeason != null &&
@@ -1026,31 +1047,28 @@ fun DetailScreen(
         }
 
         isLoading -> {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .padding(24.dp)
-            ) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator(
-                        color = KBAccent,
-                        strokeWidth = 3.dp
-                    )
-                }
-            }
+            // The app's one status card (spinner + word), the same shape the
+            // browse screens show while they load. This page had its own
+            // hand-rolled centred spinner, one screen away from the card.
+            KBStatusMessage(loading = true, message = KB_STATUS_LOADING)
         }
 
         error != null -> {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .padding(24.dp)
-            ) {
-                Text("Error: $error")
-            }
+            // Was a bare Text("Error: ...") in a Box with no colour at all, so
+            // it inherited the tv theme's default bright content colour and
+            // sat against the left edge while every sibling screen showed a
+            // centred card.
+            //
+            // The retry is the reason DetailViewModel.isFreshDetailLoad treats
+            // a failed load as never-fresh ("the error screen has to be able to
+            // retry"): without it a load that died was a dead end you had to
+            // back out of and re-open -- and on a Continue Watching deep link,
+            // back out of entirely. Bumping the tick re-runs the two load
+            // effects above, which is exactly what re-opening the screen does.
+            KBStatusMessage(
+                message = "Error: $error",
+                onRetry = { detailRetryTick++ }
+            )
         }
 
         meta != null -> {

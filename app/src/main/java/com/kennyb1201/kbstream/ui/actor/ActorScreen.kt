@@ -147,7 +147,13 @@ fun ActorScreen(
 
     when {
         isLoading -> KBStatusMessage(loading = true, message = KB_STATUS_LOADING)
-        error != null -> KBStatusMessage(message = "Error: $error")
+        error != null ->
+            KBStatusMessage(
+                message = "Error: $error",
+                // A failed actor load left nothing to look at, and the
+                // ViewModel's load() re-fetches from scratch.
+                onRetry = { viewModel.load(actorId) }
+            )
         person != null -> {
             val p = person!!
             val context = androidx.compose.ui.platform.LocalContext.current

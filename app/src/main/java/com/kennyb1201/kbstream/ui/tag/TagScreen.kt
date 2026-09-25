@@ -208,6 +208,10 @@ fun TagScreen(
                     item(key = "error") {
                         KBStatusMessage(
                             message = "Error: $error",
+                            // Same argument list as the LaunchedEffect above:
+                            // a failed load leaves the VM with no sections, so
+                            // its same-route guard lets this through.
+                            onRetry = { viewModel.load(id, isKeyword, type) },
                             modifier = Modifier.fillParentMaxSize()
                         )
                     }

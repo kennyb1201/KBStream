@@ -38,7 +38,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.tmdb.displayDescription
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -110,6 +109,8 @@ import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBStatusMessage
+import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.heroSharedElement
 import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
@@ -2915,25 +2916,36 @@ fun HomeScreen(
                         // instead of flashing a loader on every refresh).
                         isLoading && rails.isEmpty() -> {
                             item(key = "loading") {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(24.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    CircularProgressIndicator(
-                                        color = KBAccent,
-                                        strokeWidth = 3.dp
-                                    )
-                                }
+                                // The shared status card -- the same plate the
+                                // browse screens show while they load -- rather
+                                // than a third hand-rolled centred spinner.
+                                // fillParentMaxSize centres it in the rail
+                                // viewport, since an item otherwise sizes to its
+                                // own content height and would sit at the top.
+                                KBStatusMessage(
+                                    message = KB_STATUS_LOADING,
+                                    loading = true,
+                                    modifier = Modifier.fillParentMaxSize()
+                                )
                             }
                         }
 
-                        error != null -> {
+                        // Only when there are rails for it to sit above. With
+                        // the rail list empty this branch won over the retry
+                        // card below, so a failed cold start showed a dead grey
+                        // line instead of the card whose entire point is that
+                        // pressing OK retries -- see the empty branch.
+                        error != null && rails.isNotEmpty() -> {
                             item(key = "error") {
                                 Text(
                                     text =
                                         "Error: $error",
+                                    // Muted: a failed background refresh is status
+                                    // above the rails, not a bright
+                                    // default-coloured line shouting over them.
+                                    color = KBTextLo,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
                                     modifier =
                                         Modifier.padding(
                                             24.dp

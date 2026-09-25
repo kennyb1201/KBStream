@@ -234,6 +234,20 @@ fun StudioScreen(
                     item(key = "error") {
                         KBStatusMessage(
                             message = "Error: $error",
+                            // Same argument list as the LaunchedEffect above
+                            // (including the current chip selection, which the
+                            // VM's same-route guard compares).
+                            onRetry = {
+                                viewModel.load(
+                                    id,
+                                    isNetwork,
+                                    providerId,
+                                    networkOrCompanyId,
+                                    networkIsCompany,
+                                    originalsCompanyId,
+                                    viewModel.selectedGenreId.value
+                                )
+                            },
                             modifier = Modifier.fillParentMaxSize()
                         )
                     }

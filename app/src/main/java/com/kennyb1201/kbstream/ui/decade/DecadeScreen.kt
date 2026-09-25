@@ -222,6 +222,16 @@ fun DecadeScreen(
                     item(key = "error") {
                         KBStatusMessage(
                             message = "Error: $error",
+                            // Re-runs the load the LaunchedEffect above runs:
+                            // the VM's same-route guard only skips when it
+                            // already holds sections, and a failed load holds
+                            // none, so this really does re-fetch.
+                            onRetry = {
+                                viewModel.load(
+                                    decadeStart,
+                                    viewModel.selectedGenreId.value
+                                )
+                            },
                             modifier = Modifier.fillParentMaxSize()
                         )
                     }
