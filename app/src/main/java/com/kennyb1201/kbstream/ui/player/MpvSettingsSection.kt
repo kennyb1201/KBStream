@@ -325,14 +325,14 @@ internal class MpvSettingsSection(
      * One press of the dialogue stepper's pads; see
      * [PlayerAudioTuning.stepDialogueLevel] for what a step away from "Global"
      * starts from.
+     *
+     * The step itself is taken by the activity, not here: this panel is the only
+     * stepper left for the control now that the bar's pair is gone, and both
+     * players keep that step in one place (see
+     * MpvPlayerActivity.stepDialogueBoost).
      */
     private fun stepDialogue(delta: Int) {
-        val next = PlayerAudioTuning.stepDialogueLevel(
-            current = activity.dialogueBoostOverride(),
-            globalLevel = AppPreferences.getAudioDialogueBoost(activity),
-            delta = delta
-        )
-        activity.chooseDialogueBoost(next)
+        activity.stepDialogueBoost(delta)
         refresh()
     }
 

@@ -487,30 +487,14 @@ class NativePlayerActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         installManualSwitchFeedback()
-        installDialogueBoostStepper()
     }
 
     /**
-     * Wires the control bar's \u2212/+ dialogue-boost pair.
+     * One press of the settings panel's dialogue-boost pads - the only stepper
+     * this control has now that the bar's own pair is gone, and how the panel's
+     * rows reach it: they are built in code ([PlayerPanelSection]), and this is
+     * the one place that also handles the tunneling edge below.
      *
-     * The panels have carried a stepper for this since the level scale existed
-     * (Settings > Video & Audio owns the global level, and each player's own
-     * panel overrides it for the title), but reaching it mid-film means opening the
-     * settings panel, and what a viewer tuning voices by ear wants is a press
-     * while it plays. `setupListeners()` sits past the tooling's edit window, so
-     * the two listeners are installed here instead - from [onResume], which runs
-     * after `bindViews()` has bound the buttons and only ever restates them.
-     */
-    private fun installDialogueBoostStepper() {
-        if (!::btnDialogueDown.isInitialized || !::btnDialogueUp.isInitialized) return
-        btnDialogueDown.setOnClickListener { stepDialogueBoost(-1) }
-        btnDialogueUp.setOnClickListener { stepDialogueBoost(1) }
-    }
-
-    /**
-     * One press of that pair: a single step of the dialogue-boost scale.
-     *
-     * Everything is shared with the panels' own steppers -
      * [PlayerAudioTuning.stepDialogueLevel] decides where the step lands (a
      * step taken from "Global" starts at the level Settings is actually on, so
      * neither pad ever drops the viewer to Off), and
@@ -521,9 +505,9 @@ class NativePlayerActivity : ComponentActivity() {
      *
      * The level is then named on screen, because the first steps of the scale
      * are subtle by design (see [PlayerAudioTuning.centerGain]) and "did that
-     * do anything?" is not a question this button should leave behind.
+     * do anything?" is not a question a step should leave behind.
      */
-    private fun stepDialogueBoost(delta: Int) {
+    internal fun stepDialogueBoost(delta: Int) {
         val wasNeutral = PlayerAudioTuning.isNeutral
         val next = PlayerAudioTuning.stepDialogueLevel(
             current = PlayerTrackBridge.audioDialogueBoost,
@@ -655,18 +639,17 @@ class NativePlayerActivity : ComponentActivity() {
     // TextViews drawing a font glyph ("\u2672" for next, "\u266b" for audio, "CC",
     // "\u2699" ...), so their weight and optical centre came from whatever font the
     // device shipped instead of from the layout, and no two of them matched.
-    // The last two keep their words - a rate and a mode name ARE their state -
-    // in the bar's own typeface. Bound by id from bindViews().
+    // SPEED and ASPECT keep their words - a rate and a mode name ARE their
+    // state - in the bar's own typeface. Bound by id from bindViews(), listed
+    // in the order the bar lays them out.
     private lateinit var btnNext: ImageView
     private lateinit var btnSource: ImageView
-    private lateinit var btnPlayerSwitch: ImageView
-    private lateinit var btnPlayerExternal: ImageView
     private lateinit var btnAudio: ImageView
-    private lateinit var btnDialogueDown: ImageView
-    private lateinit var btnDialogueUp: ImageView
     private lateinit var btnSubtitle: ImageView
     private lateinit var btnSpeed: TextView
     private lateinit var btnAspect: TextView
+    private lateinit var btnPlayerSwitch: ImageView
+    private lateinit var btnPlayerExternal: ImageView
     private lateinit var btnSettings: ImageView
     private lateinit var pickerContainer: LinearLayout
     private lateinit var pickerTitle: TextView

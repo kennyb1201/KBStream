@@ -426,6 +426,17 @@
                     android:src="@drawable/ic_player_next"
                     android:visibility="gone" />
 
+                <!-- The bar is split here, exactly as the main player's is:
+                     play/pause and next sit on the left, and everything that
+                     configures the session - source onward - is one run on the
+                     right. The dialogue boost used to be a pair of buttons in
+                     that run; it lives in the settings panel now, in both
+                     players. -->
+                <View
+                    android:layout_width="0dp"
+                    android:layout_height="0dp"
+                    android:layout_weight="1" />
+
                 <!-- Source: pick a different stream for this title, in the same
                      place in the bar as the main player's button. The list the
                      session was launched with, so a pick re-opens mpv on that
@@ -434,7 +445,7 @@
                     android:id="@+id/mpv_btn_source"
                     android:layout_width="40dp"
                     android:layout_height="40dp"
-                    android:layout_marginStart="10dp"
+                    android:layout_marginEnd="8dp"
                     android:background="@drawable/control_button_bg"
                     android:contentDescription="Change source"
                     android:focusable="true"
@@ -443,48 +454,6 @@
                     android:padding="8dp"
                     android:scaleType="fitCenter"
                     android:src="@drawable/ic_player_sources" />
-
-                <!-- Switch player: the same button, the same glyph, the same
-                     place in the bar as the main player's - it hands this
-                     session back to ExoPlayer and resumes where it is. -->
-                <ImageView
-                    android:id="@+id/mpv_btn_player_switch"
-                    android:layout_width="40dp"
-                    android:layout_height="40dp"
-                    android:layout_marginStart="10dp"
-                    android:background="@drawable/control_button_bg"
-                    android:contentDescription="Switch player"
-                    android:focusable="true"
-                    android:focusableInTouchMode="true"
-                    android:nextFocusUp="@id/mpv_seekbar"
-                    android:padding="8dp"
-                    android:scaleType="fitCenter"
-                    android:src="@drawable/ic_player_switch" />
-
-                <!-- Play in another app: the main player's third engine, on
-                     this bar too, because a viewer who opened MPV for a file
-                     this TV's decoders refused may still prefer their own
-                     player. Hidden when there is nothing installed to hand
-                     the stream to. -->
-                <ImageView
-                    android:id="@+id/mpv_btn_player_external"
-                    android:layout_width="40dp"
-                    android:layout_height="40dp"
-                    android:layout_marginStart="10dp"
-                    android:background="@drawable/control_button_bg"
-                    android:contentDescription="Play in another app"
-                    android:focusable="true"
-                    android:focusableInTouchMode="true"
-                    android:nextFocusUp="@id/mpv_seekbar"
-                    android:padding="8dp"
-                    android:scaleType="fitCenter"
-                    android:src="@drawable/ic_player_external"
-                    android:visibility="gone" />
-
-                <View
-                    android:layout_width="0dp"
-                    android:layout_height="0dp"
-                    android:layout_weight="1" />
 
                 <!-- Audio track -->
                 <ImageView
@@ -499,36 +468,6 @@
                     android:padding="8dp"
                     android:scaleType="fitCenter"
                     android:src="@drawable/ic_player_audio" />
-
-                <!-- Dialogue boost: the main player's pair, in the main
-                     player's place in the bar. mpv applies the lift through its
-                     own audio filters, one press at a time, and the level it
-                     landed on is named on screen exactly as it is there. -->
-                <ImageView
-                    android:id="@+id/mpv_btn_dialogue_down"
-                    android:layout_width="40dp"
-                    android:layout_height="40dp"
-                    android:background="@drawable/control_button_bg"
-                    android:contentDescription="Dialogue boost down"
-                    android:focusable="true"
-                    android:focusableInTouchMode="true"
-                    android:padding="8dp"
-                    android:scaleType="fitCenter"
-                    android:src="@drawable/ic_player_dialogue_down" />
-
-                <ImageView
-                    android:id="@+id/mpv_btn_dialogue_up"
-                    android:layout_width="40dp"
-                    android:layout_height="40dp"
-                    android:layout_marginEnd="8dp"
-                    android:layout_marginStart="2dp"
-                    android:background="@drawable/control_button_bg"
-                    android:contentDescription="Dialogue boost up"
-                    android:focusable="true"
-                    android:focusableInTouchMode="true"
-                    android:padding="8dp"
-                    android:scaleType="fitCenter"
-                    android:src="@drawable/ic_player_dialogue_up" />
 
                 <!-- Subtitles -->
                 <ImageView
@@ -575,6 +514,43 @@
                     android:text="Fit"
                     android:textColor="@color/kb_text_hi"
                     android:textSize="12sp" />
+
+                <!-- Switch player: the same button and the same glyph the main
+                     player's bar carries in the same place - it hands this
+                     session back to ExoPlayer and resumes where it is. -->
+                <ImageView
+                    android:id="@+id/mpv_btn_player_switch"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/control_button_bg"
+                    android:contentDescription="Switch player"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/mpv_seekbar"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_switch" />
+
+                <!-- Play in another app: the main player's third engine, on
+                     this bar too, because a viewer who opened MPV for a file
+                     this TV's decoders refused may still prefer their own
+                     player. Hidden when there is nothing installed to hand
+                     the stream to. -->
+                <ImageView
+                    android:id="@+id/mpv_btn_player_external"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/control_button_bg"
+                    android:contentDescription="Play in another app"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/mpv_seekbar"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_external"
+                    android:visibility="gone" />
 
                 <!-- Stream info -->
                 <ImageView

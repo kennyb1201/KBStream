@@ -137,6 +137,7 @@ internal class PillPanelUi(private val context: Context) {
         fun pad(text: String, onClick: () -> Unit): TextView = pill(text).apply {
             gravity = android.view.Gravity.CENTER
             setPadding(0, dp(6), 0, dp(6))
+            id = View.generateViewId()
             layoutParams = LinearLayout.LayoutParams(
                 dp(40),
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -154,9 +155,22 @@ internal class PillPanelUi(private val context: Context) {
                 1f
             )
         }
-        row.addView(pad("-", onMinus))
+        val minusPad = pad("-", onMinus)
+        val plusPad = pad("+", onPlus)
+        // LEFT/RIGHT is pinned between the two pads by id instead of being left
+        // to the geometric focus search. They are the row's only focusables (the
+        // level between them is a readout, so it is deliberately not one), and
+        // the + sits at the panel's right edge: when the search comes up empty
+        // there, the press is clamped away as "nothing inside the panel that
+        // way" and the pad reads as a button the remote cannot land on. Naming
+        // the neighbour takes that geometry out of it - the pads are one step
+        // apart in both directions, whatever the row is measured to.
+        minusPad.nextFocusRightId = plusPad.id
+        plusPad.nextFocusLeftId = minusPad.id
+
+        row.addView(minusPad)
         row.addView(value)
-        row.addView(pad("+", onPlus))
+        row.addView(plusPad)
         column.addView(row)
         return value
     }

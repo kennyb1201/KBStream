@@ -647,50 +647,6 @@
                     android:src="@drawable/ic_player_sources"
                     android:visibility="visible" />
 
-                <!-- Switch player: hand this session to the other playback
-                     engine and pick up where it is. The left/right swap arrows
-                     - the glyph the source button used to carry, because this
-                     is the button that swaps the player itself. Shown only
-                     when there is another engine on this device and this
-                     stream can actually be handed over (the backup refuses
-                     live TV and DRM), so a press never dead-ends. -->
-                <ImageView
-                    android:id="@+id/btn_player_switch"
-                    android:layout_width="40dp"
-                    android:layout_height="40dp"
-                    android:layout_marginEnd="8dp"
-                    android:background="@drawable/control_button_bg"
-                    android:contentDescription="Switch player"
-                    android:focusable="true"
-                    android:focusableInTouchMode="true"
-                    android:nextFocusUp="@id/seekbar"
-                    android:padding="8dp"
-                    android:scaleType="fitCenter"
-                    android:src="@drawable/ic_player_switch"
-                    android:visibility="gone" />
-
-                <!-- Play in another app: hands this session to an installed
-                     video player (VLC, MX Player, Kodi) and keeps the rest
-                     here - watch history, Continue Watching, scrobbling and
-                     the Up Next / because-you-watched cards. Shown only when
-                     this box has such an app and this stream can be handed
-                     over at all (the external engine takes neither live TV
-                     nor a DRM session), so a press never dead-ends. -->
-                <ImageView
-                    android:id="@+id/btn_player_external"
-                    android:layout_width="40dp"
-                    android:layout_height="40dp"
-                    android:layout_marginEnd="8dp"
-                    android:background="@drawable/control_button_bg"
-                    android:contentDescription="Play in another app"
-                    android:focusable="true"
-                    android:focusableInTouchMode="true"
-                    android:nextFocusUp="@id/seekbar"
-                    android:padding="8dp"
-                    android:scaleType="fitCenter"
-                    android:src="@drawable/ic_player_external"
-                    android:visibility="gone" />
-
                 <!-- Audio track -->
                 <ImageView
                     android:id="@+id/btn_audio"
@@ -704,43 +660,6 @@
                     android:padding="8dp"
                     android:scaleType="fitCenter"
                     android:src="@drawable/ic_player_audio"
-                    android:visibility="visible" />
-
-                <!-- Dialogue boost, stepped one level per press rather than
-                     buried in the settings panel: this is a knob viewers tune
-                     BY EAR against a mix, so it has to be reachable while the
-                     film plays. − and + are one pair (2dp apart) so they read
-                     as a stepper, and each press announces the level it landed
-                     on - the lift is subtle at 1 of 4 and "did that do
-                     anything?" is the wrong thing to leave the viewer asking.
-                     Bubbles, not speakers: the button to the left is the audio
-                     track, and a speaker here would read as the same control. -->
-                <ImageView
-                    android:id="@+id/btn_dialogue_down"
-                    android:layout_width="40dp"
-                    android:layout_height="40dp"
-                    android:background="@drawable/control_button_bg"
-                    android:contentDescription="Dialogue boost down"
-                    android:focusable="true"
-                    android:focusableInTouchMode="true"
-                    android:padding="8dp"
-                    android:scaleType="fitCenter"
-                    android:src="@drawable/ic_player_dialogue_down"
-                    android:visibility="visible" />
-
-                <ImageView
-                    android:id="@+id/btn_dialogue_up"
-                    android:layout_width="40dp"
-                    android:layout_height="40dp"
-                    android:layout_marginEnd="8dp"
-                    android:layout_marginStart="2dp"
-                    android:background="@drawable/control_button_bg"
-                    android:contentDescription="Dialogue boost up"
-                    android:focusable="true"
-                    android:focusableInTouchMode="true"
-                    android:padding="8dp"
-                    android:scaleType="fitCenter"
-                    android:src="@drawable/ic_player_dialogue_up"
                     android:visibility="visible" />
 
                 <!-- Subtitles -->
@@ -794,6 +713,50 @@
                     android:text="Fit"
                     android:textColor="@color/kb_text_hi"
                     android:textSize="12sp" />
+
+                <!-- Switch player: hand this session to the other playback
+                     engine and pick up where it is. The left/right swap arrows
+                     - the glyph the source button used to carry, because this
+                     is the button that swaps the player itself. Shown only
+                     when there is another engine on this device and this
+                     stream can actually be handed over (the backup refuses
+                     live TV and DRM), so a press never dead-ends. -->
+                <ImageView
+                    android:id="@+id/btn_player_switch"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/control_button_bg"
+                    android:contentDescription="Switch player"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/seekbar"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_switch"
+                    android:visibility="gone" />
+
+                <!-- Play in another app: hands this session to an installed
+                     video player (VLC, MX Player, Kodi) and keeps the rest
+                     here - watch history, Continue Watching, scrobbling and
+                     the Up Next / because-you-watched cards. Shown only when
+                     this box has such an app and this stream can be handed
+                     over at all (the external engine takes neither live TV
+                     nor a DRM session), so a press never dead-ends. -->
+                <ImageView
+                    android:id="@+id/btn_player_external"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/control_button_bg"
+                    android:contentDescription="Play in another app"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/seekbar"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_external"
+                    android:visibility="gone" />
 
                 <!-- Stream info -->
                 <ImageView

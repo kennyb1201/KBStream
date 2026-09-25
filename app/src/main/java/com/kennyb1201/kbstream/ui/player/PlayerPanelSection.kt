@@ -256,14 +256,15 @@ internal class PlayerPanelSection(
      * at the level the global setting is actually on, so + is louder and -
      * quieter than what is playing now rather than dropping straight to Off;
      * stepping down past Off lands back on Global.
+     *
+     * The step itself is taken by the activity, not here: it is the one place
+     * that also rebuilds a TUNNELED session when a step leaves neutral (see
+     * NativePlayerActivity.restateAudioChainIfTunneling), and this panel is the
+     * only stepper left for the control now that the bar's pair is gone, so a
+     * press here has to go through it.
      */
     private fun stepDialogue(delta: Int) {
-        val next = PlayerAudioTuning.stepDialogueLevel(
-            current = PlayerTrackBridge.audioDialogueBoost,
-            globalLevel = AppPreferences.getAudioDialogueBoost(context),
-            delta = delta
-        )
-        PlayerTrackBridge.chooseAudioDialogueBoost(context, next)
+        activity.stepDialogueBoost(delta)
         refresh()
     }
 
