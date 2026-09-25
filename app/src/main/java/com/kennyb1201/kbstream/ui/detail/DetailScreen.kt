@@ -399,6 +399,7 @@ fun DetailScreen(
 
     var userManuallyChangedSeason by remember { mutableStateOf(false) }
     val episodesRowState = rememberLazyListState()
+    val seasonRowState = rememberLazyListState()
     val detailListState = rememberLazyListState()
     val seasonFocusRequesters = remember { mutableMapOf<Int, FocusRequester>() }
     val episodeFocusRequesters =
@@ -802,6 +803,38 @@ fun DetailScreen(
             !userManuallyChangedSeason
         ) {
             episodesRowState.scrollToItem(targetEpisodeIndex)
+        }
+    }
+
+    /**
+     * Whether the season chip at [index] is inside the row's visible window.
+     * The row is lazy, so a chip that has not been laid out has no
+     * FocusRequester attached yet: focusing it needs a scroll first, and a
+     * scroll that is not needed must be skipped or the row jumps.
+     */
+    fun seasonChipIsLaidOut(index: Int): Boolean =
+        index >= 0 &&
+            seasonRowState.layoutInfo.visibleItemsInfo.any { it.index == index }
+
+    /**
+     * Keeps the SELECTED season chip on screen.
+     *
+     * The chip row is lazy and used to be left wherever it started, so a
+     * viewer resuming season 13 of a 13-season show saw seasons 1-10 with no
+     * sign of where they were. Worse, because focusing a chip also SELECTS it
+     * (see onSeasonFocused), pressing UP from the episode rail landed on
+     * whichever chip sat above the rail's scroll position - season 2 - and
+     * threw them out of the season they were watching.
+     *
+     * Deliberately "scroll only when it is not already visible": an
+     * unconditional scroll would drag the row back to its start edge on every
+     * D-pad step through it (each step changes the selection), and would jump
+     * the row on an UP press that is already looking at the right chip.
+     */
+    LaunchedEffect(effectiveSeason, seasons) {
+        val selectedIndex = seasons.indexOf(effectiveSeason)
+        if (!seasonChipIsLaidOut(selectedIndex)) {
+            seasonRowState.scrollToItem(selectedIndex)
         }
     }
 
@@ -1943,6 +1976,7 @@ fun DetailScreen(
 
                             item(key = "seasonrow") {
                                 SeasonRow(
+                                    state = seasonRowState,
                                     seasons = seasons,
                                     seasonPremiereDates = seasonPremiereDates,
                                     today = today,
@@ -2342,6 +2376,68 @@ fun DetailScreen(
                                                                 }
 
                                                                 when {
+                                                                    // UP belongs to the
+                                                                    // season on screen. This
+                                                                    // rail is scrolled to the
+                                                                    // episode being resumed
+                                                                    // while the chip row
+                                                                    // starts at season 1, so
+                                                                    // the default focus
+                                                                    // search landed on season
+                                                                    // 2 - and focusing a chip
+                                                                    // SELECTS it, which threw
+                                                                    // the viewer out of the
+                                                                    // season they were in.
+                                                                    keyEvent.key ==
+                                                                        Key.DirectionUp &&
+                                                                        episodeTransitionState.edge ==
+                                                                            null -> {
+                                                                        val chipSeason =
+                                                                            effectiveSeason
+                                                                        if (
+                                                                            chipSeason ==
+                                                                                null ||
+                                                                            seasons.indexOf(
+                                                                                chipSeason
+                                                                            ) < 0
+                                                                        ) {
+                                                                            false
+                                                                        } else {
+                                                                            scope.launch {
+                                                                                // The chip row is lazy
+                                                                                // too, so an off-screen
+                                                                                // chip has no requester
+                                                                                // yet: scroll it in and
+                                                                                // let it compose. An
+                                                                                // on-screen chip is
+                                                                                // focused as-is, so the
+                                                                                // row never jumps under
+                                                                                // the viewer.
+                                                                                val chipIndex =
+                                                                                    seasons.indexOf(
+                                                                                        chipSeason
+                                                                                    )
+                                                                                if (
+                                                                                    !seasonChipIsLaidOut(
+                                                                                        chipIndex
+                                                                                    )
+                                                                                ) {
+                                                                                    seasonRowState
+                                                                                        .scrollToItem(
+                                                                                            chipIndex
+                                                                                        )
+                                                                                    delay(90)
+                                                                                }
+                                                                                runCatching {
+                                                                                    seasonFocusRequesters[
+                                                                                        chipSeason
+                                                                                    ]?.requestFocus()
+                                                                                }
+                                                                            }
+                                                                            true
+                                                                        }
+                                                                    }
+
                                                                     isFirstEpisode &&
                                                                         keyEvent.key ==
                                                                             Key.DirectionLeft &&
@@ -3570,6 +3666,7 @@ private fun SeasonChip(
 
 @Composable
 private fun SeasonRow(
+    state: LazyListState,
     seasons: List<Int>,
     seasonPremiereDates: Map<Int, LocalDate>,
     today: LocalDate,
@@ -3589,6 +3686,7 @@ private fun SeasonRow(
     ) -> Unit
 ) {
     LazyRow(
+        state = state,
         contentPadding = PaddingValues(
             start = 24.dp,
             end = 24.dp,
