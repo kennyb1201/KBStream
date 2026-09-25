@@ -35,6 +35,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * The "External player" engine: the title plays in an installed video app, but
@@ -226,6 +227,13 @@ class ExternalPlayerActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Kids Mode: end the hand-off the moment a daily limit or bedtime
+        // lands rather than leaving this picker up behind it. Once the chosen
+        // app is on top this Activity stops too, so - like watching in any
+        // other app - the time is not counted while it plays.
+        com.kennyb1201.kbstream.data.sync.KidsTimeGuard.enforceLock(this)
+
         setContentView(R.layout.activity_external_player)
 
         readIntent()
@@ -388,13 +396,19 @@ class ExternalPlayerActivity : ComponentActivity() {
      * chooser picks - and because the position is measured from the clock, the
      * session still tracks correctly even though the chooser hands back an
      * opaque result.
+     *
+     * This is also where an intro is skipped, because it is the only place one
+     * can be: once the stream is handed over, another app owns the playhead and
+     * we cannot raise the SKIP button the in-app engines draw. With auto-skip on
+     * (Settings > Interface) the resume point is moved past a segment the
+     * session is about to run into.
      */
     private fun startHandoff() {
         if (!ExternalPlayer.isAvailable(this)) {
             showRefused(
                 "No external player found",
-                "Install a video player (VLC, MX Player, Kodi) and choose it in Settings, " +
-                    "or play this title in KBStream's own player."
+                "Install any video player app (VLC, MX Player, Kodi, Just Player, ...) " +
+                    "and pick it in Settings, or play this title in KBStream's own player."
             )
             return
         }
@@ -408,14 +422,72 @@ class ExternalPlayerActivity : ComponentActivity() {
             ?: ExternalPlayer.rememberedLabel(this)
             ?: "a video player"
 
+        val skipSettings = AutoSkipRules.Settings(
+            skipIntros = AppPreferences.getAutoSkipIntro(this),
+            skipCredits = AppPreferences.getAutoSkipCredits(this)
+        )
+        // With both prefs off there is nothing a segment lookup could be used
+        // for, so the stream is handed over at once and a box that never turned
+        // auto-skip on never waits for it.
+        if (isLiveChannel || parentId.isBlank() ||
+            (!skipSettings.skipIntros && !skipSettings.skipCredits)
+        ) {
+            handOff(prompt, target, playerName, startPositionMs, skipped = null)
+            return
+        }
+
+        showHandoffCard(prompt, playerName, skipped = null)
+        lifecycleScope.launch {
+            // Bounded, and bounded generously enough for the second source: a
+            // lookup that does not answer in time simply means the segment is
+            // not skipped rather than the hand-off never happening.
+            val stamps = withTimeoutOrNull(SEGMENT_LOOKUP_TIMEOUT_MS) {
+                fetchIntroDbStamps(parentId, season, episode)
+            }.orEmpty()
+            if (isFinishing || isDestroyed) return@launch
+
+            val skipped = AutoSkipRules.handoffSkipTarget(stamps, startPositionMs, skipSettings)
+            val seekTo = skipped?.let { AutoSkipRules.targetMs(it, stamps, durationMs) }
+            if (skipped != null && seekTo != null) {
+                // The measurement has to start from the skip, or the intro would
+                // be reported as watched and the resume point written back
+                // inside the segment that was just skipped.
+                startPositionMs = seekTo
+                positionMs = seekTo
+            }
+            handOff(prompt, target, playerName, startPositionMs, skipped?.type)
+        }
+    }
+
+    /**
+     * The hand-off card: which app is about to play what, and what BACK means.
+     * [skipped] is the segment this hand-off is already starting past, if any.
+     */
+    private fun showHandoffCard(
+        prompt: Boolean,
+        playerName: String,
+        skipped: IntroDbMarkerType?
+    ) {
         handoffPlayer?.text = playerName
         handoffTitle?.text = itemTitle()
-        handoffHint?.text = if (prompt) {
+        val base = if (prompt) {
             "Pick a player, then press BACK in it when you are done"
         } else {
             "Press BACK in $playerName when you are done"
         }
+        handoffHint?.text = skipped?.let { "Skipped ${it.skippedLabel()} \u2022 $base" } ?: base
         handoffCard?.visibility = View.VISIBLE
+    }
+
+    /** Hands [seekMs] of the stream to [target] and starts the session. */
+    private fun handOff(
+        prompt: Boolean,
+        target: ExternalPlayer.Installed?,
+        playerName: String,
+        seekMs: Long,
+        skipped: IntroDbMarkerType?
+    ) {
+        showHandoffCard(prompt, playerName, skipped)
         // A fresh hand-off: nothing has left yet, and no card is up.
         leftForHandoff = false
         refused = false
@@ -423,7 +495,7 @@ class ExternalPlayerActivity : ComponentActivity() {
         val launch = ExternalPlayer.launchIntent(
             url = currentUrl,
             title = itemTitle(),
-            positionMs = startPositionMs,
+            positionMs = seekMs,
             packageName = target?.packageName,
             headers = streamHeaders
         ).apply {
@@ -452,6 +524,15 @@ class ExternalPlayerActivity : ComponentActivity() {
                 launched.exceptionOrNull()?.message ?: "The app refused to start."
             )
         }
+    }
+
+    /** "the intro", "the credits" - the segment as the card names it. */
+    private fun IntroDbMarkerType.skippedLabel(): String = when (this) {
+        IntroDbMarkerType.Intro -> "the intro"
+        IntroDbMarkerType.Recap -> "the recap"
+        IntroDbMarkerType.Outro -> "the outro"
+        IntroDbMarkerType.Credits -> "the credits"
+        else -> "the segment"
     }
 
     /**
@@ -1183,6 +1264,14 @@ class ExternalPlayerActivity : ComponentActivity() {
 
         /** Below this a "resume" is really a restart. */
         private const val MIN_RESUME_POSITION_MS = 10_000L
+
+        /**
+         * How long the hand-off waits for intro/credits stamps before giving up
+         * and handing over anyway. The lookup is two 5s-timeout HTTP requests in
+         * the worst case, and a viewer waiting on a black card is worse than an
+         * intro they have to sit through.
+         */
+        private const val SEGMENT_LOOKUP_TIMEOUT_MS = 1_500L
 
         /** Next Up's unattended-advance countdown, the same as both engines'. */
         private const val NEXT_UP_COUNTDOWN_SECONDS = 10

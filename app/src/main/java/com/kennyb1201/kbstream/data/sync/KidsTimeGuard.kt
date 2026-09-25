@@ -1,7 +1,14 @@
 package com.kennyb1201.kbstream.data.sync
 
+import android.app.Activity
+import android.app.Application
 import android.content.Context
+import android.os.Bundle
 import android.util.Log
+import androidx.activity.ComponentActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -9,6 +16,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.launch
@@ -21,10 +29,11 @@ import java.util.concurrent.TimeUnit
  * Kids Mode time guard: enforces the two per-profile time locks —
  *
  *  - dailyLimitMinutes: cumulative "screen on, app foreground" minutes per
- *    calendar day. 0 disables. Accumulation only advances while the
- *    [KidsTimeGuardClock] observers (MainActivity onStart/onStop) say the
- *    app is foregrounded, so backgrounded time doesn't burn the budget,
- *    and the day key rolls over at local midnight.
+ *    calendar day. 0 disables. Accumulation only advances while at least one
+ *    Activity is started (see [registerForegroundCallbacks]), so a film
+ *    playing in its own player Activity still burns the budget while time
+ *    spent genuinely backgrounded does not; the day key rolls over at local
+ *    midnight.
  *
  *  - bedtimeMinutes: minutes-after-midnight cutoff. The profile locks from
  *    bedtime until 4:00 AM next morning. 0 disables. A cutoff like 23:30
@@ -35,8 +44,12 @@ import java.util.concurrent.TimeUnit
  * process dies (deliberately not persisted: a force-stop resets it, which
  * is acceptable because the limit re-engages on the next launch).
  *
- * Usage: MainActivity owns the singleton and calls [onAppStart]/[onAppStop]
- * from its lifecycle; a lock overlay composable collects [state].
+ * Usage: MainActivity starts the singleton, which then registers its own
+ * application-level ActivityLifecycleCallbacks so accumulation follows the
+ * PROCESS being foregrounded - playback included, because each player is a
+ * separate Activity. A lock overlay composable collects [state], and every
+ * screen that can hold the picture calls [enforceLock] so a lock that lands
+ * mid-film ends that playback instead of only waiting behind it.
  */
 object KidsTimeGuard {
 
@@ -86,16 +99,132 @@ object KidsTimeGuard {
     @Volatile
     private var foregrounded = false
 
+    /**
+     * Number of started Activities, maintained by the application-level
+     * callbacks [registerForegroundCallbacks] installs.
+     *
+     * Deliberately NOT MainActivity's own onStart/onStop, which is how this
+     * used to work: every player is a SEPARATE Activity, so "MainActivity
+     * stopped" is what happens when a title starts playing, not when the app
+     * goes away. Reporting that as backgrounded froze the daily-limit clock
+     * for the whole of playback - and because the Up Next chain keeps a
+     * player on top, a child who just kept watching never spent a minute of
+     * the budget, so the limit never arrived at all.
+     *
+     * Touched only from Activity lifecycle callbacks, which Android dispatches
+     * on the main thread.
+     */
+    private var startedActivities = 0
+
+    private var foregroundCallbacksRegistered = false
+
     /** Initialize and start the 30s evaluation loop. */
     fun start(context: Context) {
+        val app = context.applicationContext
         if (appContext == null) {
-            appContext = context.applicationContext
+            appContext = app
         }
+        registerForegroundCallbacks(app)
         if (tickerJob?.isActive == true) return
         tickerJob = scope.launch {
             while (isActive) {
                 evaluateTicker(30)
                 delay(TimeUnit.SECONDS.toMillis(30))
+            }
+        }
+    }
+
+    /**
+     * Tracks the PROCESS being foregrounded rather than one Activity, so any
+     * started Activity - the player included - keeps the clock running.
+     */
+    private fun registerForegroundCallbacks(app: Context) {
+        if (foregroundCallbacksRegistered) return
+        val application = app as? Application ?: return
+        foregroundCallbacksRegistered = true
+        application.registerActivityLifecycleCallbacks(
+            object : Application.ActivityLifecycleCallbacks {
+                override fun onActivityStarted(activity: Activity) {
+                    val previous = startedActivities
+                    startedActivities = previous + 1
+                    if (
+                        foregroundTransition(previous, startedActivities) ==
+                        ForegroundTransition.FOREGROUNDED
+                    ) {
+                        onAppStart()
+                    }
+                }
+
+                override fun onActivityStopped(activity: Activity) {
+                    val previous = startedActivities
+                    startedActivities =
+                        (previous - 1).coerceAtLeast(0)
+                    if (
+                        foregroundTransition(previous, startedActivities) ==
+                        ForegroundTransition.BACKGROUNDED
+                    ) {
+                        onAppStop()
+                    }
+                }
+
+                override fun onActivityCreated(
+                    activity: Activity,
+                    savedInstanceState: Bundle?
+                ) = Unit
+
+                override fun onActivityResumed(activity: Activity) = Unit
+
+                override fun onActivityPaused(activity: Activity) = Unit
+
+                override fun onActivitySaveInstanceState(
+                    activity: Activity,
+                    outState: Bundle
+                ) = Unit
+
+                override fun onActivityDestroyed(activity: Activity) = Unit
+            }
+        )
+    }
+
+    /** What a move in the started-Activity count means for accumulation. */
+    internal enum class ForegroundTransition {
+        NONE,
+        FOREGROUNDED,
+        BACKGROUNDED
+    }
+
+    /**
+     * The clock runs only between the count leaving zero and returning to it:
+     * 0 -> 1 foregrounds, 1 -> 0 backgrounds, and a move that stays on the
+     * same side of zero (1 -> 2 as the player opens, 2 -> 1 when it closes)
+     * changes nothing - which is exactly what makes playback count.
+     */
+    internal fun foregroundTransition(
+        previous: Int,
+        current: Int
+    ): ForegroundTransition = when {
+        previous <= 0 && current > 0 -> ForegroundTransition.FOREGROUNDED
+        previous > 0 && current <= 0 -> ForegroundTransition.BACKGROUNDED
+        else -> ForegroundTransition.NONE
+    }
+
+    /**
+     * Ends [activity] the moment a lock engages, and straight away when one is
+     * already engaged as it starts.
+     *
+     * The MainActivity overlay cannot do this job: a playing title holds a
+     * different Activity, so a limit that arrived mid-film had no screen of
+     * its own to act on and playback simply ran to the end. Enforcement
+     * belongs to whichever Activity is holding the picture. Tied to that
+     * Activity's own lifecycle, so there is nothing to release by hand, and
+     * safe to call more than once.
+     */
+    fun enforceLock(activity: ComponentActivity) {
+        activity.lifecycleScope.launch {
+            activity.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                state.collect { lock ->
+                    if (lock.locked) activity.finish()
+                }
             }
         }
     }

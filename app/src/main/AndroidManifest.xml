@@ -30,11 +30,40 @@
         android:name="com.android.providers.tv.permission.WRITE_EPG_DATA"
         tools:ignore="ProtectedPermissions" />
 
-    <!-- Voice search: let the system speech RecognizerIntent resolve on
-         Android 11+ (package visibility filtering). -->
+    <!-- Package visibility. Android 11+ filters what this app is allowed to see,
+         and an implicit query only returns apps declared here.
+
+         Two features depend on it: voice search needs the system recogniser,
+         and the External player engine needs every installed video player's
+         picker entry. Without the VIEW intents below, queryIntentActivities is
+         filtered even when starting the intent is not, so a box with VLC
+         installed could show an empty player list - and the external engine
+         would report "no external player found" for a player sitting right
+         there. Each MIME type needs its own <intent>: multiple <data> children
+         of one element are AND-ed, not OR-ed. -->
     <queries>
         <intent>
             <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <data android:mimeType="video/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <data android:mimeType="application/x-mpegURL" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <data android:mimeType="application/vnd.apple.mpegurl" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <data android:mimeType="application/dash+xml" />
         </intent>
     </queries>
 

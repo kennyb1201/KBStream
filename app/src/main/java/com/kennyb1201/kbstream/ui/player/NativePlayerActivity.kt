@@ -2283,6 +2283,13 @@ class NativePlayerActivity : ComponentActivity() {
         // onDestroy as the safety net.
         EpgWriteGate.setPlayerActive(true)
 
+        // Kids Mode: a daily limit or bedtime that lands mid-film has to
+        // end the playback it is counting. The lock overlay lives in
+        // MainActivity, which sits behind this Activity, so without this
+        // the film simply ran to the end - and the Up Next chain then
+        // started the next episode.
+        com.kennyb1201.kbstream.data.sync.KidsTimeGuard.enforceLock(this)
+
         // Playback is the memory peak of the whole app: media3's sample buffer
         // and the codec's native allocations land on top of whatever browsing
         // left resident. Free that headroom up front instead of hoping the

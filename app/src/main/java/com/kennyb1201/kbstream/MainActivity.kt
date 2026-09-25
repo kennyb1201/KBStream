@@ -336,15 +336,11 @@ private data class PendingPlay(
 
 class MainActivity : ComponentActivity() {
 
-    override fun onStart() {
-        super.onStart()
-        runCatching { com.kennyb1201.kbstream.data.sync.KidsTimeGuard.onAppStart() }
-    }
-
-    override fun onStop() {
-        runCatching { com.kennyb1201.kbstream.data.sync.KidsTimeGuard.onAppStop() }
-        super.onStop()
-    }
+    // Kids-time accumulation is driven by KidsTimeGuard's own application-level
+    // ActivityLifecycleCallbacks, NOT by this Activity's onStart/onStop. The
+    // player is a separate Activity, so stopping here is what happens on every
+    // playback start - reporting that as "backgrounded" froze the daily-limit
+    // clock for the whole of playback. Do not reintroduce the calls.
 
     /// Latched by the exit dialog: while true, every key event is consumed
     /// here at the Activity level for a short settle window before
@@ -411,7 +407,9 @@ class MainActivity : ComponentActivity() {
         }
 
         // Kids Mode time guard: owns daily-limit/bedtime tracking and the
-        // lock overlay state. Lifecycle callbacks below drive accumulation.
+        // lock overlay state. It registers its own application-level lifecycle
+        // callbacks, so accumulation follows the PROCESS being foregrounded
+        // (playback included) instead of this Activity alone.
         runCatching {
             com.kennyb1201.kbstream.data.sync.KidsTimeGuard.start(applicationContext)
         }.onFailure {

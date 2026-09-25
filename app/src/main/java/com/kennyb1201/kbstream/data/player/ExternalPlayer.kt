@@ -34,14 +34,24 @@ object ExternalPlayer {
 
     /**
      * What we look for: any activity that accepts a video URL. The wildcard
-     * video type is wide enough to catch the real players - VLC, MX Player and
-     * Kodi all advertise it - without dragging in browsers that only handle
-     * `text/html` over `http`.
+     * video type catches the players that advertise it - VLC, MX Player and
+     * Kodi all do - without dragging in browsers that only handle `text/html`
+     * over `http`. The specific types are for the apps that instead list only
+     * the containers and playlist formats they take, which the video wildcard
+     * alone does not match: a player that registers a bare `.m3u8` handler is
+     * still a player, and the viewer expects it in the picker.
+     *
+     * The manifest's <queries> element declares the same intents, because
+     * Android 11+ filters this query by what the app is allowed to see.
      */
     private val PROBE_MIME_TYPES = arrayOf(
         "video/*",
         "video/mp4",
-        "application/x-mpegURL"
+        "video/x-matroska",
+        "video/mp2t",
+        "application/x-mpegURL",
+        "application/vnd.apple.mpegurl",
+        "application/dash+xml"
     )
 
     /**
@@ -122,12 +132,19 @@ object ExternalPlayer {
     /**
      * True when playback should ask which app to use rather than going straight
      * to [target]: the viewer asked to be prompted, or there is more than one
-     * candidate and nothing has been chosen yet.
+     * candidate and no usable choice has been made yet.
+     *
+     * "Usable" matters: a stored pick for an app that has since been uninstalled
+     * is not a choice any more. The single-candidate case stays silent either
+     * way, because asking when there is exactly one player to pick is noise -
+     * [target] falls back to it.
      */
     fun shouldPrompt(context: Context): Boolean {
         if (AppPreferences.getExternalPlayerAsk(context)) return true
-        if (AppPreferences.getExternalPlayerPackage(context) != null) return false
-        return installed(context).size > 1
+        val candidates = installed(context)
+        val remembered = AppPreferences.getExternalPlayerPackage(context)
+        if (remembered != null && candidates.any { it.packageName == remembered }) return false
+        return candidates.size > 1
     }
 
     /**

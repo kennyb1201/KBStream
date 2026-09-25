@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.player
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -113,6 +114,79 @@ class AutoSkipRulesTest {
     }
 
     // ── Identity ─────────────────────────────────────────────────────────
+
+    // ── The external engine's hand-off skip ──────────────────────────────
+
+    @Test
+    fun `an intro at the top of an episode is skipped before the hand-off`() {
+        val intro = stamp(IntroDbMarkerType.Intro, 8_000, 70_000)
+        val target = AutoSkipRules.handoffSkipTarget(listOf(intro), 0L, introsOn)
+        assertEquals(intro, target)
+    }
+
+    @Test
+    fun `a resume inside a recap skips to the end of it`() {
+        val recap = stamp(IntroDbMarkerType.Recap, 0, 90_000)
+        val target = AutoSkipRules.handoffSkipTarget(listOf(recap), 30_000L, introsOn)
+        assertEquals(recap, target)
+        assertEquals(90_000L, AutoSkipRules.targetMs(recap, listOf(recap), 0L))
+    }
+
+    @Test
+    fun `the hand-off skips nothing while both prefs are off`() {
+        val stamps = listOf(stamp(IntroDbMarkerType.Intro, 0, 60_000))
+        assertNull(AutoSkipRules.handoffSkipTarget(stamps, 0L, bothOff))
+    }
+
+    @Test
+    fun `the hand-off leaves a segment it is nowhere near`() {
+        // The credits are an hour away and the resume point is the start of the
+        // title: seeking there would skip the whole episode.
+        val credits = stamp(IntroDbMarkerType.Credits, 4_400_000, 4_460_000)
+        assertNull(AutoSkipRules.handoffSkipTarget(listOf(credits), 0L, creditsOn))
+        // ...while resuming inside them is exactly when they are skipped.
+        assertEquals(credits, AutoSkipRules.handoffSkipTarget(listOf(credits), 4_410_000L, creditsOn))
+    }
+
+    @Test
+    fun `a cold open longer than the window is not skipped`() {
+        // An intro five minutes in sits behind a cold open that is part of the
+        // episode, so the hand-off must play it rather than jump over it.
+        val intro = stamp(IntroDbMarkerType.Intro, 300_000, 360_000)
+        assertNull(AutoSkipRules.handoffSkipTarget(listOf(intro), 0L, introsOn))
+    }
+
+    @Test
+    fun `a segment already behind the resume point is left alone`() {
+        val intro = stamp(IntroDbMarkerType.Intro, 8_000, 70_000)
+        assertNull(AutoSkipRules.handoffSkipTarget(listOf(intro), 120_000L, introsOn))
+    }
+
+    @Test
+    fun `the earliest segment wins so a recap does not shadow the intro`() {
+        val recap = stamp(IntroDbMarkerType.Recap, 0, 30_000)
+        val intro = stamp(IntroDbMarkerType.Intro, 30_000, 95_000)
+        assertEquals(recap, AutoSkipRules.handoffSkipTarget(listOf(intro, recap), 0L, introsOn))
+    }
+
+    @Test
+    fun `the hand-off never skips a post-credits scene or a preview`() {
+        val scene = stamp(IntroDbMarkerType.PostCredits, 0, 40_000)
+        val preview = stamp(IntroDbMarkerType.Preview, 0, 40_000)
+        assertNull(AutoSkipRules.handoffSkipTarget(listOf(scene, preview), 0L, creditsOn))
+        assertNull(AutoSkipRules.handoffSkipTarget(listOf(scene, preview), 0L, introsOn))
+    }
+
+    @Test
+    fun `a segment starting further ahead than the window is left for the button`() {
+        // 20s in: skipped, because handing off just before an intro is exactly
+        // what auto-skip is for. 45s in: further than the window, so whatever
+        // comes before it is played rather than jumped over.
+        val nearIntro = stamp(IntroDbMarkerType.Intro, 20_000, 80_000)
+        val farIntro = stamp(IntroDbMarkerType.Intro, 45_000, 105_000)
+        assertEquals(nearIntro, AutoSkipRules.handoffSkipTarget(listOf(nearIntro), 0L, introsOn))
+        assertNull(AutoSkipRules.handoffSkipTarget(listOf(farIntro), 0L, introsOn))
+    }
 
     @Test
     fun `a segment keeps one key for the whole session`() {

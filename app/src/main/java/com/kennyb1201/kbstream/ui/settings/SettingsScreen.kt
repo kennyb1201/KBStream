@@ -208,6 +208,9 @@ fun SettingsScreen(
         )
     }
     var externalAsk by remember { mutableStateOf(AppPreferences.getExternalPlayerAsk(context)) }
+    // Set when the engine pill below is picked and there is more than one
+    // installed player to hand a title to.
+    var showExternalPlayerPicker by remember { mutableStateOf(false) }
 
     // True when this device advertises no Dolby Vision decoder, so Profile 5
     // must be stripped and color-corrected on the GPU: the conversion (and its
@@ -815,6 +818,15 @@ fun SettingsScreen(
                         KBCard(onClick = {
                             playerEngine = value
                             AppPreferences.setPlayerEngine(context, value)
+                            // Picking this engine IS picking a player, so ask
+                            // which one right away when there is a choice: the
+                            // alternative is handing the next title to whichever
+                            // app the probe happened to find first.
+                            if (value == AppPreferences.PLAYER_ENGINE_EXTERNAL &&
+                                externalPlayers.size > 1
+                            ) {
+                                showExternalPlayerPicker = true
+                            }
                         }) {
                             PillChip(label, playerEngine == value)
                         }
@@ -830,11 +842,14 @@ fun SettingsScreen(
                             "ExoPlayer only. A stream it cannot decode shows the error instead of " +
                                 "changing engine mid-title."
                         AppPreferences.PLAYER_ENGINE_EXTERNAL ->
-                            "Hands the title to an installed video app (VLC, MX Player, Kodi). " +
-                                "Everything around playback stays here - watch history, " +
-                                "Continue Watching, scrobbling and the Up Next / " +
-                                "because-you-watched cards. Request headers and DRM cannot travel " +
-                                "to another app, so a source that needs them plays in-app."
+                            "Hands the title to any video app installed on this device - you " +
+                                "pick which one below. Everything around playback stays here: " +
+                                "watch history, Continue Watching, scrobbling and the Up Next / " +
+                                "because-you-watched cards. Intros, recaps and credits are " +
+                                "skipped before the hand-off when Auto-skip below is on (another " +
+                                "app owns the screen, so there is nowhere to draw the SKIP " +
+                                "button). Request headers and DRM cannot travel to another app, " +
+                                "so a source that needs them plays in-app."
                         else ->
                             "MPV (libmpv) plays anything: its decoders fall back to software when the " +
                                 "hardware ones refuse, so \"no decoder resources\" and unsupported codecs " +
@@ -883,16 +898,40 @@ fun SettingsScreen(
                         externalPlayers.forEach { player ->
                             KBCard(onClick = {
                                 externalPackage = player.packageName
+                                // Tapping one app is an answer to "which app?", so
+                                // it turns asking off: the pick is remembered and
+                                // every title goes straight to it from now on.
+                                externalAsk = false
                                 AppPreferences.setExternalPlayer(
                                     context,
                                     player.packageName,
                                     player.label
                                 )
+                                AppPreferences.setExternalPlayerAsk(context, false)
                             }) {
                                 PillChip(player.label, externalPackage == player.packageName)
                             }
                         }
                     }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    // What happens on the next title, in one line: remembered and
+                    // silent, asking every time, or nothing chosen yet.
+                    val rememberedPlayer = externalPlayers
+                        .firstOrNull { it.packageName == externalPackage }
+                    Text(
+                        text = when {
+                            externalAsk ->
+                                "Titles will ask which app to use, every time."
+                            rememberedPlayer != null ->
+                                "Remembered - titles play in ${rememberedPlayer.label} with no " +
+                                    "prompt."
+                            else ->
+                                "Nothing picked yet: the first title opens the system chooser, " +
+                                    "and whatever you pick there is remembered."
+                        },
+                        color = if (externalAsk) KBTextLo else KBAccent,
+                        style = MaterialTheme.typography.labelSmall
+                    )
                     Spacer(modifier = Modifier.height(8.dp))
                     ToggleRow(
                         label = "Ask every time",
@@ -1197,7 +1236,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "Auto-skip Intros",
-                    description = "Skip intros and recaps the moment they start, using IntroDB timestamps. Off keeps the SKIP INTRO button, so the choice stays yours.",
+                    description = "Skip intros and recaps the moment they start, using IntroDB timestamps. Off keeps the SKIP INTRO button, so the choice stays yours. In the External player engine, which has nowhere to draw that button, the segment is skipped before the hand-off instead.",
                     checked = autoSkipIntro,
                     onToggle = {
                         autoSkipIntro = it
@@ -1209,7 +1248,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "Auto-skip Credits",
-                    description = "Jump past end credits and stop on the post-credits scene when the title has one. A low-confidence timestamp is never skipped on its own.",
+                    description = "Jump past end credits and stop on the post-credits scene when the title has one. A low-confidence timestamp is never skipped on its own. In the External player engine the credits are skipped before the hand-off instead of during playback.",
                     checked = autoSkipCredits,
                     onToggle = {
                         autoSkipCredits = it
@@ -1761,6 +1800,27 @@ fun SettingsScreen(
     }
 
 
+    if (showExternalPlayerPicker) {
+        SettingsExternalPlayerDialog(
+            players = externalPlayers,
+            selectedPackage = externalPackage,
+            askEachTime = externalAsk,
+            onPick = { player ->
+                externalPackage = player.packageName
+                externalAsk = false
+                AppPreferences.setExternalPlayer(context, player.packageName, player.label)
+                AppPreferences.setExternalPlayerAsk(context, false)
+                showExternalPlayerPicker = false
+            },
+            onAskEachTime = {
+                externalAsk = true
+                AppPreferences.setExternalPlayerAsk(context, true)
+                showExternalPlayerPicker = false
+            },
+            onDismiss = { showExternalPlayerPicker = false }
+        )
+    }
+
     if (showClearHistoryConfirm) {
         SettingsClearHistoryDialog(
             onDismiss = { showClearHistoryConfirm = false },
@@ -2291,6 +2351,89 @@ private fun SettingsClearHistoryDialog(
 }
 
 // ── Helper composables ──────────────────────────────────────────
+
+/**
+ * A labelled option row for the audio-tuning settings: description under the
+ * label, then the pills, four per line.
+ */
+/**
+ * Which installed app the External engine hands a title to.
+ *
+ * Raised the moment that engine is picked while more than one candidate is
+ * installed, because choosing the engine is choosing a player and a viewer who
+ * never comes back to this section should not end up on whichever app the probe
+ * found first. Every player the device exposes is listed - this app can only
+ * see the apps its manifest <queries> declares - plus the system's own chooser,
+ * which is the honest answer for someone who uses more than one.
+ */
+@Composable
+private fun SettingsExternalPlayerDialog(
+    players: List<ExternalPlayer.Installed>,
+    selectedPackage: String?,
+    askEachTime: Boolean,
+    onPick: (ExternalPlayer.Installed) -> Unit,
+    onAskEachTime: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .width(640.dp)
+                .background(KBSurface, RoundedCornerShape(18.dp))
+                .border(1.dp, KBAccent.copy(alpha = 0.38f), RoundedCornerShape(18.dp))
+                .padding(horizontal = 22.dp, vertical = 20.dp)
+        ) {
+            Text(
+                text = "PLAY TITLES IN WHICH APP?",
+                color = KBAccent,
+                style = MaterialTheme.typography.headlineSmall
+            )
+            Text(
+                text = "Every video player installed on this device. Your pick is remembered " +
+                    "for every title - no prompt each time - and KBStream keeps the session " +
+                    "either way: watch history, scrobbling and the end-of-episode cards all " +
+                    "stay here. Change it any time under Playback, or pick Ask every time to " +
+                    "be shown the system chooser instead.",
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(top = 16.dp)
+            ) {
+                players.forEach { player ->
+                    KBCard(
+                        onClick = { onPick(player) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        PillChip(player.label, selectedPackage == player.packageName)
+                    }
+                }
+                KBCard(
+                    onClick = onAskEachTime,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    PillChip("Ask every time (system chooser)", askEachTime)
+                }
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.padding(top = 18.dp)
+            ) {
+                KBCard(onClick = onDismiss) {
+                    Text(
+                        text = "DONE",
+                        color = KBAccent,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                    )
+                }
+            }
+        }
+    }
+}
 
 /**
  * A labelled option row for the audio-tuning settings: description under the

@@ -492,6 +492,12 @@ class MpvPlayerActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Kids Mode: a daily limit or bedtime that lands mid-film has to end
+        // the playback it is counting. The lock overlay lives in MainActivity,
+        // behind this Activity, so without this the film simply ran to the end.
+        com.kennyb1201.kbstream.data.sync.KidsTimeGuard.enforceLock(this)
+
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(R.layout.activity_mpv_player)
 

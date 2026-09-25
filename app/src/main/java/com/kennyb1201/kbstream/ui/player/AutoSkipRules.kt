@@ -62,6 +62,38 @@ internal object AutoSkipRules {
     }
 
     /**
+     * How far ahead of the resume point a segment may begin and still be skipped
+     * up front by [handoffSkipTarget]. A recap opens the episode at 0:00 and an
+     * intro is a few seconds in, so this covers both without reaching across a
+     * cold open that is part of the episode itself.
+     */
+    const val HANDOFF_AHEAD_WINDOW_MS = 30_000L
+
+    /**
+     * The segment an external hand-off should start past, or null.
+     *
+     * ExoPlayer and MPV raise a SKIP button the moment the playhead reaches a
+     * segment. The External engine cannot: another app owns the screen, so
+     * there is nowhere to draw one and no way to seek once we have let go. The
+     * hand-off is therefore the last moment a segment can be skipped at all,
+     * and a segment the session is about to run into — or is already inside,
+     * which is what resuming into a recap looks like — is skipped up front.
+     * That is what turning auto-skip on asked for; with both prefs off this is
+     * never consulted.
+     *
+     * [positionMs] is the resume point, and the earliest qualifying segment
+     * wins so a recap never shadows the intro that follows it.
+     */
+    fun handoffSkipTarget(
+        stamps: List<IntroDbStamp>,
+        positionMs: Long,
+        settings: Settings
+    ): IntroDbStamp? = stamps
+        .filter { shouldAutoSkip(it, settings) }
+        .filter { positionMs < it.endMs && it.startMs <= positionMs + HANDOFF_AHEAD_WINDOW_MS }
+        .minByOrNull { it.startMs }
+
+    /**
      * Identity of one segment, so it is auto-skipped at most once per session —
      * seeking back into an intro deliberately must not be fought.
      */
