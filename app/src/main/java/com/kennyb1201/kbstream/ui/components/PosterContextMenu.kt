@@ -150,6 +150,41 @@ object ManualSourceSelection {
 }
 
 /**
+ * One-shot handoff from a poster menu's "Play from Beginning" row to the
+ * detail screen, the same way [ManualSourceSelection] hands "Play Manually"
+ * over: a poster menu can only navigate into the detail screen, and the
+ * play target (position included) is built there. While it is fresh, the
+ * detail screen starts the title at position 0 instead of resuming the saved
+ * watch history - so the player never falls back to the progress either.
+ */
+object PlayFromBeginningSelection {
+    var requested: Boolean = false
+        private set
+
+    private var requestedAtMs: Long = 0L
+
+    /** Same window as [ManualSourceSelection]: long enough for a navigation
+     *  (including a TMDB id lookup), short enough that a stray request cannot
+     *  outlive the press that made it. */
+    private const val VALID_FOR_MS = 12_000L
+
+    fun request() {
+        requested = true
+        requestedAtMs = System.currentTimeMillis()
+    }
+
+    /** Reads the request once and clears it, whether or not it was still fresh. */
+    fun consume(): Boolean {
+        val wanted =
+            requested &&
+                System.currentTimeMillis() - requestedAtMs <= VALID_FOR_MS
+        requested = false
+        requestedAtMs = 0L
+        return wanted
+    }
+}
+
+/**
  * Shared long-press overlay menu for poster cards on every screen (Home
  * rails, actor credits, studio/network rails, genre/keyword rails, ...).
  *
@@ -213,34 +248,54 @@ fun PosterContextMenu(
         mutableIntStateOf(-1)
     }
 
-    // Every title poster menu offers "Play Manually", derived from the
-    // caller's own "Go to Details" row - same navigation, just without
-    // auto-selecting a source - and dropped in right after it. Deriving it
-    // here rather than at each of the ~15 call sites means a long press on a
-    // poster means the same thing on every screen (Home rails, actor credits,
-    // studio/network and genre rails, decade rails, KB folders, the catalog
-    // grid, search results and the detail screen's own rails). Callers that
-    // already list their own row - Continue Watching and the episode menus,
-    // which open the picker for one specific episode - keep their wording and
-    // their position; menus with no "Go to Details" at all, such as the
-    // browse chips, get no row.
+    // Every title poster menu offers "Play Manually" and "Play from
+    // Beginning", derived from the caller's own "Go to Details" row - same
+    // navigation, just without auto-selecting a source, and starting this
+    // title over instead of resuming it - dropped in right after it.
+    // Deriving them here rather than at each of the ~15 call sites means a
+    // long press on a poster means the same thing on every screen (Home
+    // rails, actor credits, studio/network and genre rails, decade rails, KB
+    // folders, the catalog grid, search results and the detail screen's own
+    // rails). "Play from Beginning" is offered whether or not the title has
+    // progress: the press is what decides to start over, and a menu that
+    // sometimes has the row and sometimes does not is harder to use than one
+    // that always does. Callers that already list their own row - Continue
+    // Watching and the episode menus, which play one specific episode - keep
+    // their wording and their position; menus with no "Go to Details" at all,
+    // such as the browse chips, get no row.
     val rows = buildList {
         val alreadyOffered =
             actions.any { it.label == "Play Manually" }
+        val alreadyOfferedFromBeginning =
+            actions.any { it.label == "Play from Beginning" }
         actions.forEach { action ->
             add(action)
-            if (
-                !alreadyOffered &&
-                action.label == "Go to Details"
-            ) {
-                add(
-                    PosterContextAction(
-                        label = "Play Manually",
-                        description = "Pick a source instead of auto-selecting"
-                    ) {
-                        action.onClick()
-                    }
-                )
+            if (action.label == "Go to Details") {
+                if (!alreadyOffered) {
+                    add(
+                        PosterContextAction(
+                            label = "Play Manually",
+                            description = "Pick a source instead of auto-selecting"
+                        ) {
+                            action.onClick()
+                        }
+                    )
+                }
+                if (!alreadyOfferedFromBeginning) {
+                    add(
+                        PosterContextAction(
+                            label = "Play from Beginning",
+                            description =
+                                "Start this title over, ignoring saved progress"
+                        ) {
+                            // Read by the detail screen this row navigates to
+                            // (see PlayFromBeginningSelection), so the title
+                            // starts at 0 rather than at the saved position.
+                            PlayFromBeginningSelection.request()
+                            action.onClick()
+                        }
+                    )
+                }
             }
         }
     }

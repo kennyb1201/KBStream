@@ -115,6 +115,7 @@ import com.kennyb1201.kbstream.ui.player.randomAiredEpisode
 import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
+import com.kennyb1201.kbstream.ui.components.PlayFromBeginningSelection
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
@@ -806,6 +807,9 @@ fun DetailScreen(
         }
     }
 
+    /** Index of [season] in the chip row, or -1 when the row has no such chip. */
+    fun seasonChipIndex(season: Int?): Int = seasons.indexOf(season)
+
     /**
      * Whether the season chip at [index] is inside the row's visible window.
      * The row is lazy, so a chip that has not been laid out has no
@@ -817,25 +821,86 @@ fun DetailScreen(
             seasonRowState.layoutInfo.visibleItemsInfo.any { it.index == index }
 
     /**
+     * Scrolls the chip row until the chip at [index] is really on screen.
+     *
+     * Retried rather than fired once, because the row is a lazy row inside
+     * the detail list: until it has measured, "scroll there" is a request
+     * with nothing to apply to yet, and a single fire-and-forget call is
+     * exactly how a viewer resuming season 13 of a 13-season show ended up
+     * with a chip row still showing seasons 1-10. An already-visible chip
+     * returns on the first pass, so a scroll that is not needed never
+     * happens - which matters, because every D-pad step through the chips
+     * moves the selection and would otherwise drag the row backwards.
+     */
+    suspend fun bringSeasonChipIntoView(index: Int) {
+        if (index < 0) {
+            return
+        }
+
+        repeat(25) {
+            if (seasonChipIsLaidOut(index)) {
+                return
+            }
+            // Wrapped because a row that has not attached yet has nothing to
+            // apply the position to, which is exactly the case the retry is
+            // here for.
+            runCatching {
+                seasonRowState.scrollToItem(index)
+            }
+            delay(40L)
+        }
+    }
+
+    /**
+     * Puts focus on one season chip, scrolling it in first and retrying until
+     * the chip actually takes the focus.
+     *
+     * Both halves are needed:
+     *
+     *  - the scroll, because a lazy row only composes the chips it shows, so
+     *    a chip that is off screen has no FocusRequester attached and
+     *    requestFocus() silently no-ops; and
+     *  - the retry, because the request can land in the same frame the chip
+     *    is being composed - the first attempt is the one that races the
+     *    layout it just asked for.
+     *
+     * Without this, UP from the episode rail fell through to the default
+     * focus search, which picked whichever chip happened to sit above the
+     * rail (season 2) and - since focusing a chip also SELECTS it (see
+     * onSeasonFocused) - threw the viewer out of the season they were in.
+     */
+    suspend fun focusSeasonChip(season: Int) {
+        val index = seasonChipIndex(season)
+        if (index < 0) {
+            return
+        }
+
+        bringSeasonChipIntoView(index)
+
+        repeat(10) {
+            val requester = seasonFocusRequesters[season]
+            if (
+                requester != null &&
+                runCatching {
+                    requester.requestFocus()
+                }.isSuccess
+            ) {
+                return
+            }
+            delay(40L)
+        }
+    }
+
+    /**
      * Keeps the SELECTED season chip on screen.
      *
      * The chip row is lazy and used to be left wherever it started, so a
      * viewer resuming season 13 of a 13-season show saw seasons 1-10 with no
-     * sign of where they were. Worse, because focusing a chip also SELECTS it
-     * (see onSeasonFocused), pressing UP from the episode rail landed on
-     * whichever chip sat above the rail's scroll position - season 2 - and
-     * threw them out of the season they were watching.
-     *
-     * Deliberately "scroll only when it is not already visible": an
-     * unconditional scroll would drag the row back to its start edge on every
-     * D-pad step through it (each step changes the selection), and would jump
-     * the row on an UP press that is already looking at the right chip.
+     * sign of where they were. Skipped when the chip is already visible, so
+     * walking the row never snaps it back to its start edge.
      */
     LaunchedEffect(effectiveSeason, seasons) {
-        val selectedIndex = seasons.indexOf(effectiveSeason)
-        if (!seasonChipIsLaidOut(selectedIndex)) {
-            seasonRowState.scrollToItem(selectedIndex)
-        }
+        bringSeasonChipIntoView(seasonChipIndex(effectiveSeason))
     }
 
     fun focusSeasonOrEpisode(): Boolean {
@@ -1005,10 +1070,23 @@ fun DetailScreen(
             val playLabel: String
             val playTarget: StreamsTarget
 
-            // Home's long-press "Play from Beginning" arrives as this target: the
-            // user asked to start over, so it wins over the saved progress the
-            // target would otherwise resume from.
-            val wantsBeginning = initialTarget?.startFromBeginning == true
+            // Two ways a viewer can ask to start over, and both win over the
+            // saved progress the target would otherwise resume from: Home's
+            // Continue Watching row opens this screen with a target that
+            // already carries the flag, while a poster menu's "Play from
+            // Beginning" on any other screen can only raise a one-shot request
+            // and navigate here (see PlayFromBeginningSelection). Read once, as
+            // this title's screen appears; declared before the auto-play effect
+            // below so it has landed by the time that effect reads it.
+            var startOver by remember(type, id) {
+                mutableStateOf(false)
+            }
+            LaunchedEffect(type, id) {
+                startOver = PlayFromBeginningSelection.consume()
+            }
+
+            val wantsBeginning =
+                initialTarget?.startFromBeginning == true || startOver
 
             if (type == "movie") {
                 val hasResume =
@@ -1216,6 +1294,7 @@ fun DetailScreen(
             LaunchedEffect(
                 initialTarget,
                 manualPick,
+                startOver,
                 isLoading,
                 meta,
                 tmdbDetail,
@@ -1230,17 +1309,20 @@ fun DetailScreen(
                 ) return@LaunchedEffect
                 if (
                     !manualPick &&
+                    !startOver &&
                     initialTarget == null
                 ) return@LaunchedEffect
                 if (
                     normalizedType == "series" &&
                     (episodesLoading || episodes.isEmpty())
                 ) return@LaunchedEffect
-                // A manual pick is a fresh start: unlike the Continue Watching
-                // deep link it has no progress to wait for, so a movie does
-                // not need resume info to be ready before opening.
+                // A manual pick and a "play from the beginning" are both
+                // fresh starts: unlike the Continue Watching deep link they
+                // have no progress to wait for, so a movie does not need
+                // resume info to be ready before opening.
                 if (
                     !manualPick &&
+                    !startOver &&
                     normalizedType != "series" &&
                     resumeInfo == null
                 ) return@LaunchedEffect
@@ -2366,28 +2448,35 @@ fun DetailScreen(
                                                             .focusRequester(
                                                                 focusRequester
                                                             )
-                                                            .onKeyEvent {
+                                                            // Preview, not the ordinary key pass:
+                                                            // the focus system moves focus with
+                                                            // the same key, and a handler that runs
+                                                            // afterwards can only correct where
+                                                            // focus landed, never prevent the wrong
+                                                            // chip from being focused and selected
+                                                            // on the way.
+                                                            .onPreviewKeyEvent {
                                                                 keyEvent ->
                                                                 if (
                                                                     keyEvent.type !=
                                                                         KeyEventType.KeyDown
                                                                 ) {
-                                                                    return@onKeyEvent false
+                                                                    return@onPreviewKeyEvent false
                                                                 }
 
                                                                 when {
                                                                     // UP belongs to the
                                                                     // season on screen. This
-                                                                    // rail is scrolled to the
-                                                                    // episode being resumed
-                                                                    // while the chip row
-                                                                    // starts at season 1, so
-                                                                    // the default focus
-                                                                    // search landed on season
-                                                                    // 2 - and focusing a chip
-                                                                    // SELECTS it, which threw
-                                                                    // the viewer out of the
-                                                                    // season they were in.
+                                                                    // rail can be scrolled to
+                                                                    // an episode deep into a
+                                                                    // late season while the
+                                                                    // chip row starts at
+                                                                    // season 1, and the
+                                                                    // default focus search
+                                                                    // lands on whichever chip
+                                                                    // sits above the rail -
+                                                                    // season 2 - which also
+                                                                    // SELECTS it.
                                                                     keyEvent.key ==
                                                                         Key.DirectionUp &&
                                                                         episodeTransitionState.edge ==
@@ -2397,42 +2486,16 @@ fun DetailScreen(
                                                                         if (
                                                                             chipSeason ==
                                                                                 null ||
-                                                                            seasons.indexOf(
+                                                                            seasonChipIndex(
                                                                                 chipSeason
                                                                             ) < 0
                                                                         ) {
                                                                             false
                                                                         } else {
                                                                             scope.launch {
-                                                                                // The chip row is lazy
-                                                                                // too, so an off-screen
-                                                                                // chip has no requester
-                                                                                // yet: scroll it in and
-                                                                                // let it compose. An
-                                                                                // on-screen chip is
-                                                                                // focused as-is, so the
-                                                                                // row never jumps under
-                                                                                // the viewer.
-                                                                                val chipIndex =
-                                                                                    seasons.indexOf(
-                                                                                        chipSeason
-                                                                                    )
-                                                                                if (
-                                                                                    !seasonChipIsLaidOut(
-                                                                                        chipIndex
-                                                                                    )
-                                                                                ) {
-                                                                                    seasonRowState
-                                                                                        .scrollToItem(
-                                                                                            chipIndex
-                                                                                        )
-                                                                                    delay(90)
-                                                                                }
-                                                                                runCatching {
-                                                                                    seasonFocusRequesters[
-                                                                                        chipSeason
-                                                                                    ]?.requestFocus()
-                                                                                }
+                                                                                focusSeasonChip(
+                                                                                    chipSeason
+                                                                                )
                                                                             }
                                                                             true
                                                                         }
@@ -3458,6 +3521,62 @@ fun DetailScreen(
                                         )
                                     }
                                     lastEpisodeFocusRequester?.requestFocus()
+                                }
+                            )
+
+                            add(
+                                PosterContextAction(
+                                    label = "Play from Beginning",
+                                    description =
+                                        "Start this episode over from the beginning"
+                                ) {
+                                    val selected = target
+                                    episodeMenu = null
+
+                                    val epSuffix =
+                                        selected.episodeTitle?.let {
+                                            " • $it"
+                                        } ?: ""
+
+                                    // The same target the row below plays, with the
+                                    // one difference that matters: position 0, plus
+                                    // the flag that stops the player falling back to
+                                    // the saved watch history.
+                                    onNavigateStreams(
+                                        StreamsTarget(
+                                            contentType = "series",
+                                            streamId =
+                                                selected.streamId,
+                                            title =
+                                                "$displayName S${selected.season} E${selected.episode}$epSuffix",
+                                            displayName =
+                                                displayName,
+                                            season =
+                                                selected.season,
+                                            episode =
+                                                selected.episode,
+                                            resumePositionMs = 0L,
+                                            startFromBeginning = true,
+                                            totalEpisodesInSeason =
+                                                selected
+                                                    .seasonEpisodeNumbers
+                                                    .size,
+                                            runtimeMinutes =
+                                                selected.runtimeMinutes
+                                                    ?.takeIf {
+                                                        it > 0
+                                                    }
+                                        ),
+                                        id,
+                                        type,
+                                        m.poster,
+                                        backdropUrl,
+                                        clearLogoUrl,
+                                        selected.overview
+                                            ?: m.description,
+                                        tmdbDetail?.credits?.cast
+                                            .orEmpty()
+                                    )
                                 }
                             )
 
