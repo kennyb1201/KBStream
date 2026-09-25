@@ -286,10 +286,35 @@ fun SettingsScreen(
     BackHandler { onBack() }
 
     Row(modifier = Modifier.fillMaxSize().background(KBVoid)) {
-        SettingsNavRail(
-            selected = selectedPane,
-            onSelect = { selectedPane = it }
-        )
+        // The rail is taller than a 1080p TV once every section is on it:
+        // the SETTINGS heading plus ten rows is ~620dp of content against
+        // ~540dp of screen (1080p at 2px/dp), so its last entries - About -
+        // ran off the bottom edge with nothing to scroll, i.e. unreachable
+        // from the D-pad (there is no scrollbar and no way to swipe).
+        //
+        // The scroll wraps AROUND the rail rather than sitting on the rail's
+        // own Column, and that placement is doing work: under the unbounded
+        // height a verticalScroll hands its content, the rail's own
+        // fillMaxHeight() falls back to its content height, which is exactly
+        // what this container then scrolls. Focus needs no handling - a
+        // focused row is brought into view by its scrollable ancestor, so
+        // walking down the rail to About just works.
+        //
+        // The pane colour is repeated here because the rail's background now
+        // stops at its content on a panel tall enough to fit every row
+        // (a 4K set), where this scrollable does not scroll at all.
+        val railScroll = rememberScrollState()
+        Column(
+            modifier = Modifier
+                .fillMaxHeight()
+                .background(KBSurface)
+                .verticalScroll(railScroll)
+        ) {
+            SettingsNavRail(
+                selected = selectedPane,
+                onSelect = { selectedPane = it }
+            )
+        }
         SettingsContentHost(
             title = selectedPane.label
         ) {

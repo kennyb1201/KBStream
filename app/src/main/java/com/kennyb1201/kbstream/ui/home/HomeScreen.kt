@@ -294,8 +294,14 @@ private fun TopActionItem(
  * a generic avatar (same precedence as the picker: an uploaded or linked image
  * wins, otherwise the index's hue pair).
  *
- * 26dp of avatar inside the same 8dp-ish vertical padding as the word chips
- * keeps the bar one uniform height.
+ * The avatar is the one control on this bar that is a picture rather than a
+ * word, and at 26dp it read as too small from the couch - the word chips
+ * around it are ~32dp of type set at 13sp. [avatarSize] is that size again,
+ * picked for the same viewing distance rather than for the chip.
+ *
+ * The chip's own padding absorbs the difference, so the bar gains a little
+ * height and nothing else moves: the avatar still leads the bar before
+ * SEARCH, and the focus ring still comes from the chip's own chrome.
  */
 @Composable
 private fun TopProfileItem(
@@ -312,6 +318,10 @@ private fun TopProfileItem(
         avatarIndex.coerceIn(0, ProfileManager.AVATAR_COUNT - 1)
     ]
 
+    // One size for both branches: the linked image and the generic tile are the
+    // same control, so they must measure the same.
+    val avatarSize = 38.dp
+
     TopBarChip(
         onClick = onClick,
         onDismiss = onDismiss,
@@ -321,7 +331,7 @@ private fun TopProfileItem(
         Box(
             modifier = Modifier.padding(
                 horizontal = 10.dp,
-                vertical = 4.dp
+                vertical = 1.dp
             ),
             contentAlignment = Alignment.Center
         ) {
@@ -334,20 +344,20 @@ private fun TopProfileItem(
                     contentDescription = name,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
-                        .size(26.dp)
+                        .size(avatarSize)
                         .clip(CircleShape)
                 )
             } else {
                 Box(
                     modifier = Modifier
-                        .size(26.dp)
+                        .size(avatarSize)
                         .clip(CircleShape)
                         .background(Color(avatarBg)),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = name.take(1).uppercase(),
-                        fontSize = 13.sp,
+                        fontSize = 17.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color(avatarFg)
                     )
