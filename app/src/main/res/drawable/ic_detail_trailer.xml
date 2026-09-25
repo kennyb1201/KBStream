@@ -1,16 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Trailer. A 16:9 screen with the bar's own play mark inside it, drawn as
-     geometry like the rest of the row (see ic_detail_shuffle) instead of the
-     Material film-strip glyph - a film strip is perforations and sprocket
-     holes, which is mush at header-row size, and it matched nothing else on
-     the screen.
+<!-- Trailer: a clapperboard, not a screen.
 
-     Frame is four bars, 2.2 units like every other bar (the same construction
-     ic_player_subtitle uses for its caption box, at a wider aspect so the two
-     cannot be mistaken for each other), and the mark inside is the play
-     triangle from ic_player_play: a vertical base with the tip to the right,
-     here 4.4 units tall so it sits in the frame with a unit of clearance.
-     Carries kb_text_hi (#FFF3EFE4) baked in. -->
+     The previous mark was a 16:9 frame with the play triangle inside it, and
+     next to the row's real play button it read as a second, quieter play
+     button - a plain box around a small triangle says nothing about a
+     trailer. The slate is the one shape that says "preview" on its own, and
+     it is still built the way everything else on this row is (see
+     ic_detail_shuffle): 24x24 viewport, 2.2-unit bars, the same isoceles
+     triangle for any mark that points.
+
+     The lid is the board's own top bar, split into two teeth by a 2.2-unit
+     notch - wide enough to survive the 18dp render, where the 1.1-unit
+     notches of a three-tooth lid would close up into a solid bar. The board
+     is three bars (two sides, one base) around a 12.8 x 10.2 inner area, and
+     the play mark inside is the square-sided triangle the frame's mark used
+     (5.6 on a side), centred in that area - 2.3 units of clearance above and
+     below it, and 3.6 either side, so the tip sits clear of the base bar. Carries kb_text_hi (#FFF3EFE4) baked in. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
@@ -18,17 +23,20 @@
     android:viewportHeight="24">
     <path
         android:fillColor="#FFF3EFE4"
-        android:pathData="M2.6,6.6h18.8v2.2H2.6z" />
+        android:pathData="M3.4,4.4h7.5v2.2h-7.5z" />
     <path
         android:fillColor="#FFF3EFE4"
-        android:pathData="M2.6,15.2h18.8v2.2H2.6z" />
+        android:pathData="M13.1,4.4h7.5v2.2h-7.5z" />
     <path
         android:fillColor="#FFF3EFE4"
-        android:pathData="M2.6,6.6h2.2v10.8H2.6z" />
+        android:pathData="M3.4,6.6h2.2v10.2H3.4z" />
     <path
         android:fillColor="#FFF3EFE4"
-        android:pathData="M19.2,6.6h2.2v10.8h-2.2z" />
+        android:pathData="M18.4,6.6h2.2v10.2h-2.2z" />
     <path
         android:fillColor="#FFF3EFE4"
-        android:pathData="M9.8,9.8v4.4l4.4,-2.2Z" />
+        android:pathData="M3.4,16.8h17.2v2.2H3.4z" />
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M9.2,8.9v5.6l5.6,-2.8z" />
 </vector>
