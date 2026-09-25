@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.player
 
 import android.content.Context
+import android.util.AttributeSet
 import android.util.Log
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -33,7 +34,11 @@ import kotlin.math.pow
  * mpv's callbacks arrive on its own event thread. Everything this class
  * forwards is posted to the main thread, because every listener updates views.
  */
-class MpvPlayerView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
+class MpvPlayerView @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null,
+    defStyleAttr: Int = 0
+) : SurfaceView(context, attrs, defStyleAttr), SurfaceHolder.Callback,
     MPVLib.EventObserver {
 
     /** A stream to play, with everything mpv needs to open it. */

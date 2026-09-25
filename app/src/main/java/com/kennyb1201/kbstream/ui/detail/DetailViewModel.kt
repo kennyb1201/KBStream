@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.detail
 
 import android.app.Application
+import android.os.SystemClock
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -12,8 +13,10 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
+import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.sync.KidsMode
+import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbCollectionDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
@@ -41,6 +44,44 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+
+/**
+ * Ceiling on the add-on meta probe, which stands between the Detail screen and
+ * its first paint (see the probe loop in `DetailViewModel.load`).
+ *
+ * A meta document is one cached JSON lookup and a healthy add-on answers in
+ * well under a second, so both of these are far above any honest response. They
+ * exist because the candidates are walked IN ORDER and each one rides the
+ * shared add-on client's 25s call timeout: without a ceiling, a single add-on
+ * that accepted the connection and then went quiet held the whole screen for
+ * its timeout, and several of them for the sum of them.
+ *
+ * Running out of either lands on the same soft fallback — the add-on meta only
+ * refines TMDB's own detail (clearlogo, IMDb rating, website), so the screen
+ * still paints.
+ */
+private const val META_PROBE_CALL_TIMEOUT_MS = 10_000L
+private const val META_PROBE_BUDGET_MS = 20_000L
+
+/**
+ * How long a COMPLETED load keeps ownership of this screen's state.
+ *
+ * Re-entering a detail page - back from the stream picker or the player, back
+ * from an actor/studio/tag page, or simply re-opening the same card - used to
+ * tear the whole screen down and fetch everything again, which put the spinner
+ * back in front of a title the user had just been looking at. Inside this
+ * window the remote phases are skipped and the retained state is reused
+ * instead (see [DetailViewModel.load]).
+ *
+ * The LOCAL watch state is deliberately not skipped: the fast path still
+ * re-reads the Room rows (resume, per-episode progress, completed ids). Those
+ * are the one thing playback can change while this screen is away, and they
+ * are what makes the checkmarks and the RESUME row correct on the way back
+ * from the player. Remote documents - the TMDB detail and the add-on meta -
+ * do not move in a minute, so gating them costs nothing.
+ */
+private const val DETAIL_FRESH_WINDOW_MS = 60_000L
 
 fun computeEpisodeWatched(
     parentId: String,
@@ -171,6 +212,31 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
     /** Normalized media type of the loaded detail ("movie"/"series"), used
      *  to resolve the title's IMDB twin for local-history lookups. */
     private var mediaType: String = "movie"
+
+    /**
+     * The (normalized type, id) whose completed load put the state currently
+     * in the flows there, and when that load finished (elapsedRealtime).
+     * Together with [_error] and [_isLoading] these are the freshness gate's
+     * inputs - see [isFreshDetailLoad] and [DETAIL_FRESH_WINDOW_MS].
+     */
+    private var loadedDetailKey: String? = null
+    private var loadedDetailAtMs: Long = 0L
+
+    /**
+     * True when [_resumeInfo] was read from local history rather than from the
+     * Simkl/MDBList cloud sessions. The freshness gate's fast path re-reads
+     * local rows only, so it has to know whether a row that is now missing
+     * means "finished or cleared elsewhere" (drop the RESUME row) or "was
+     * never local" (leave the cloud-derived row alone).
+     */
+    private var resumeFromLocalHistory = false
+
+    /**
+     * MDBList's watched-episode set for the loaded title (the snapshot read in
+     * [load]). Kept as a field so a local-only refresh can rebuild the merged
+     * episode keys without paying for the cloud snapshot again.
+     */
+    private var mdbListWatchedEpisodes: Set<Pair<Int, Int>> = emptySet()
 
     // Hot reactive StateFlow checking if stream addons are configured and present globally
     val hasStreamAddons: StateFlow<Boolean> = addonManager.streamAddons
@@ -348,12 +414,190 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Whether the state already in the flows was produced by a completed load
+     * of this exact (type, id) and is recent enough to reuse.
+     *
+     * Everything here is a reason NOT to reuse: a different title, a load
+     * still in flight (a second entry must not read half-written state), a
+     * failed one (the error screen has to be able to retry), a load that never
+     * produced a TMDB detail (the kids-mode block clears it deliberately), and
+     * the window itself, which re-anchors on every real load so a page that
+     * stays open still revalidates once a minute.
+     */
+    private fun isFreshDetailLoad(detailKey: String): Boolean {
+        if (loadedDetailKey != detailKey) return false
+        if (_isLoading.value || _error.value != null) return false
+        if (_tmdbDetail.value == null) return false
+
+        return SystemClock.elapsedRealtime() - loadedDetailAtMs < DETAIL_FRESH_WINDOW_MS
+    }
+
+    /**
+     * Reads this title's LOCAL watch state and publishes it: the resume row,
+     * the per-episode in-progress map, the completed-episode ids.
+     *
+     * Extracted from the load body because there are two callers now - the
+     * full load and the freshness gate's fast path - and they must not drift:
+     * the fast path's whole claim to correctness is that it refreshes exactly
+     * the half of the screen playback can change. Everything it touches is a
+     * Room read, which is what makes that claim affordable.
+     *
+     * @param cloudResumeFallback when local history has no in-progress row,
+     *   derive a display-only resume row from the paused Simkl/MDBList cloud
+     *   session (a network read the fast path deliberately skips).
+     * @return the completed rows, for rebuilding the merged episode keys.
+     */
+    private suspend fun refreshLocalWatchState(
+        parentId: String,
+        normalizedType: String,
+        tmdbId: Int?,
+        cloudResumeFallback: Boolean
+    ): List<WatchHistoryEntity> {
+        /*
+         * Ids this title is reachable under: the route's own flavor plus the
+         * twin the TMDB detail just resolved ("tmdb:<n>" for an imdb route,
+         * the imdb id for a tmdb route). Playback history is written under
+         * whichever flavor started it, so reading only the route's flavor hid
+         * progress, resume rows and episode checkmarks made from the other one
+         * - the same show opened from Search ("tmdb:<n>") looked untouched
+         * next to the copy opened from an add-on catalog ("tt...").
+         */
+        val historyParentIds = localHistoryParentIds(parentId)
+
+        val localResume = runCatching {
+            historyDao.getResumeForParents(historyParentIds)
+        }.getOrNull()
+
+        if (localResume != null && localResume.positionMs > 0L) {
+            _resumeInfo.value = localResume
+            resumeFromLocalHistory = true
+        } else if (resumeFromLocalHistory) {
+            // The row this screen was showing is gone - the title was finished
+            // or cleared while the screen was away - so drop it rather than
+            // leave a RESUME row pointing at a position the device no longer
+            // has.
+            _resumeInfo.value = null
+            resumeFromLocalHistory = false
+        }
+
+        // Simkl cloud-session fallback: when local history has no in-progress
+        // position for this title, derive a display-only resume row from the
+        // paused Simkl playback session so Detail shows RESUME + progress for
+        // cloud-tracked progress too.
+        if (_resumeInfo.value == null && cloudResumeFallback) {
+            _resumeInfo.value = simklPlaybackResumeFor(
+                id = parentId,
+                type = normalizedType,
+                tmdbId = tmdbId
+            ) ?: mdbListPlaybackResumeFor(
+                id = parentId,
+                type = normalizedType,
+                tmdbId = tmdbId
+            )
+        }
+
+        // Per-episode in-progress map for the episode cards: every card derives
+        // its own progress bar / time left from its episodeStreamId instead of
+        // only the single latest row.
+        _inProgressByStreamId.value = runCatching {
+            historyDao.getInProgressForParents(historyParentIds)
+        }.getOrDefault(emptyList())
+            // Rows arrive newest-first and toMap keeps the LAST entry per key
+            // - reverse so the newest row wins per streamId.
+            .reversed()
+            .flatMap { row ->
+                // Index each row by its own streamId AND by the route-flavored
+                // episode id: a row written under the title's other id flavor
+                // carries "tt123:2:5" while this screen's cards compare
+                // "tmdb:456:2:5".
+                buildList {
+                    row.episodeStreamId
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { add(it to row) }
+
+                    val season = row.season
+                    val episode = row.episode
+                    if (season != null && episode != null) {
+                        add("$parentId:$season:$episode" to row)
+                    }
+                }
+            }
+            .toMap()
+
+        val localCompletedEntries = runCatching {
+            historyDao.getCompletedForParents(historyParentIds)
+        }.getOrDefault(emptyList())
+        _completedEpisodeIds.value = localCompletedEntries.map { it.id }.toSet()
+
+        return localCompletedEntries
+    }
+
+    /**
+     * The merged watched-episode key set (local history + Simkl + MDBList) for
+     * [parentId]. Shared by the full load and the freshness gate's fast path
+     * so both publish the same keys from the same inputs.
+     */
+    private fun publishWatchedEpisodeKeys(
+        parentId: String,
+        localCompletedEntries: List<WatchHistoryEntity>
+    ) {
+        _watchedEpisodeKeys.value =
+            WatchedEpisodeState.buildMergedWatchedKeys(
+                parentId = parentId,
+                localCompletedEntries = localCompletedEntries,
+                simklCompletedEpisodes = _simklWatchedEpisodes.value
+            ) + mdbListWatchedEpisodes.map { (season, episode) ->
+                "$parentId:$season:$episode"
+            }
+    }
+
     fun load(
         type: String,
         id: String,
         initialSeason: Int? = null,
         initialMeta: Meta? = null
     ) {
+        val normalizedType = normalizeMediaType(type)
+        // The active profile is part of the key: the state being reused is
+        // profile-scoped (watched badges, and the Kids Mode gate that decides
+        // whether the title may be open at all), so a profile switch has to
+        // invalidate it instead of letting a stricter profile reuse a looser
+        // one's page. Legacy/global stores (- no profile yet) share a bucket.
+        val profileKey = ProfileStorage.activeProfileId(app) ?: "default"
+        val detailKey = "$profileKey|$normalizedType|$id"
+
+        /*
+         * Freshness gate: a page reopened inside the window repaints from the
+         * state this ViewModel already holds. The ViewModel is keyed per
+         * (type, id) and outlives the composable, so that state is this
+         * title's own - the wipe below is what made a revisit as slow as a
+         * first visit, and it is what is skipped here.
+         *
+         * The local watch state is re-read (Room, no network) because
+         * playback is the one thing that plausibly changed while the screen
+         * was away; everything remote keeps until the window expires.
+         */
+        if (isFreshDetailLoad(detailKey)) {
+            Log.e(
+                "KBStream",
+                "detail load skipped (fresh " +
+                    "${SystemClock.elapsedRealtime() - loadedDetailAtMs}ms) " +
+                    "type=$normalizedType id=$id"
+            )
+            viewModelScope.launch {
+                val localCompletedEntries = refreshLocalWatchState(
+                    parentId = id,
+                    normalizedType = normalizedType,
+                    tmdbId = _tmdbDetail.value?.id,
+                    cloudResumeFallback = false
+                )
+                publishWatchedEpisodeKeys(id, localCompletedEntries)
+                refreshPosterWatchedStatus(normalizedType)
+            }
+            return
+        }
+
         imdbId = id
         _meta.value = initialMeta
         _tmdbDetail.value = null
@@ -376,11 +620,14 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         _selectedPersonError.value = null
 
         viewModelScope.launch {
+            // Timed for the diagnostics perf block. "The detail screen
+            // sometimes takes a while" is otherwise only a feeling, and the
+            // numbers are what turn it into a phase worth fixing.
+            val loadStartedAt = SystemClock.elapsedRealtime()
             _isLoading.value = true
             _error.value = null
 
             try {
-                val normalizedType = normalizeMediaType(type)
                 mediaType = normalizedType
                 Log.e("KBStream", "detail load start type=$normalizedType id=$id initialSeason=$initialSeason")
 
@@ -435,72 +682,17 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 // external-ids lookup resolves.
                 fetchMdbListRatings(normalizedType)
 
-                /*
-                 * Ids this title is reachable under: the route's own flavor
-                 * plus the twin the TMDB detail just resolved ("tmdb:<n>" for
-                 * an imdb route, the imdb id for a tmdb route). Playback
-                 * history is written under whichever flavor started it, so
-                 * reading only the route's flavor hid progress, resume rows
-                 * and episode checkmarks made from the other one - the same
-                 * show opened from Search ("tmdb:<n>") looked untouched next
-                 * to the copy opened from an add-on catalog ("tt...").
-                 */
-                val historyParentIds = localHistoryParentIds(id)
-
-                val localResume = runCatching {
-                    historyDao.getResumeForParents(historyParentIds)
-                }.getOrNull()
-
-                // Simkl cloud-session fallback: when local history has no
-                // in-progress position for this title, derive a display-only
-                // resume row from the paused Simkl playback session so Detail
-                // shows RESUME + progress for cloud-tracked progress too.
-                _resumeInfo.value =
-                    if (localResume != null && localResume.positionMs > 0L) {
-                        localResume
-                    } else {
-                        simklPlaybackResumeFor(
-                            id = id,
-                            type = normalizedType,
-                            tmdbId = tmdbDetailResult.getOrNull()?.id
-                        ) ?: mdbListPlaybackResumeFor(
-                            id = id,
-                            type = normalizedType,
-                            tmdbId = tmdbDetailResult.getOrNull()?.id
-                        )
-                    }
-                // Per-episode in-progress map for the episode cards: every
-                // card derives its own progress bar / time left from its
-                // episodeStreamId instead of only the single latest row.
-                _inProgressByStreamId.value = runCatching {
-                    historyDao.getInProgressForParents(historyParentIds)
-                }.getOrDefault(emptyList())
-                    // Rows arrive newest-first and toMap keeps the LAST entry
-                    // per key — reverse so the newest row wins per streamId.
-                    .reversed()
-                    .flatMap { row ->
-                        // Index each row by its own streamId AND by the
-                        // route-flavored episode id: a row written under the
-                        // title's other id flavor carries "tt123:2:5" while
-                        // this screen's cards compare "tmdb:456:2:5".
-                        buildList {
-                            row.episodeStreamId
-                                ?.takeIf { it.isNotBlank() }
-                                ?.let { add(it to row) }
-
-                            val season = row.season
-                            val episode = row.episode
-                            if (season != null && episode != null) {
-                                add("$id:$season:$episode" to row)
-                            }
-                        }
-                    }
-                    .toMap()
-
-                val localCompletedEntries = runCatching {
-                    historyDao.getCompletedForParents(historyParentIds)
-                }.getOrDefault(emptyList())
-                _completedEpisodeIds.value = localCompletedEntries.map { it.id }.toSet()
+                // Local watch state for this title (resume row, per-episode
+                // in-progress map, completed ids) plus the Simkl/MDBList cloud
+                // fallbacks for the resume row. Read through the shared reader
+                // because the freshness gate's fast path re-runs exactly this
+                // half of the load and nothing else.
+                val localCompletedEntries = refreshLocalWatchState(
+                    parentId = id,
+                    normalizedType = normalizedType,
+                    tmdbId = tmdbDetailResult.getOrNull()?.id,
+                    cloudResumeFallback = true
+                )
 
                 // 2. Fetch Simkl watch states utilizing the resolved TMDB show ID safely
                 val simklCompleted = if (
@@ -571,15 +763,12 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                     emptySet()
                 }
 
+                // Kept so the freshness gate's local-only refresh can rebuild
+                // the merged keys without re-reading the cloud snapshot.
+                mdbListWatchedEpisodes = mdbListCompleted
+
                 // 3. Build merged keys *before* evaluating target episodes or seasons
-                _watchedEpisodeKeys.value =
-                    WatchedEpisodeState.buildMergedWatchedKeys(
-                        parentId = id,
-                        localCompletedEntries = localCompletedEntries,
-                        simklCompletedEpisodes = simklCompleted
-                    ) + mdbListCompleted.map { (season, episode) ->
-                        "$id:$season:$episode"
-                    }
+                publishWatchedEpisodeKeys(id, localCompletedEntries)
 
                 // 4. Handle Meta addon loading asynchronously in background
                 val addons = addonsDeferred.await()
@@ -599,10 +788,28 @@ Log.e(
 var resolvedMeta: Meta? = null
 var lastMetaError: Throwable? = null
 
+val probeDeadline = SystemClock.elapsedRealtime() + META_PROBE_BUDGET_MS
 for (metaAddon in metaAddons) {
+    val budgetLeft = probeDeadline - SystemClock.elapsedRealtime()
+    if (budgetLeft <= 0L) {
+        Log.e(
+            "KBStream",
+            "detail meta: probe budget ${META_PROBE_BUDGET_MS}ms spent, " +
+                "skipping ${metaAddon.name} id=$id"
+        )
+        break
+    }
+
+    // withTimeoutOrNull deliberately sits INSIDE runCatching: the timeout's
+    // own cancellation is caught where it is raised and turns into a null
+    // response, so it reaches the handler below as "no meta" rather than as a
+    // failure - and, more importantly, never escapes this scope as a
+    // cancellation of the whole load.
     val result = runCatching {
         val baseUrl = metaAddon.manifestUrl.substringBeforeLast("/manifest.json")
-        repository.getMeta(baseUrl, normalizedType, id)
+        withTimeoutOrNull(minOf(META_PROBE_CALL_TIMEOUT_MS, budgetLeft)) {
+            repository.getMeta(baseUrl, normalizedType, id)
+        }
     }
 
     result.onSuccess { response ->
@@ -615,7 +822,7 @@ for (metaAddon in metaAddons) {
         } else {
             Log.e(
                 "KBStream",
-                "detail meta empty addon=${metaAddon.name} id=$id"
+                "detail meta empty or timed out addon=${metaAddon.name} id=$id"
             )
         }
     }.onFailure { error ->
@@ -861,11 +1068,19 @@ for (metaAddon in metaAddons) {
                             "videos=${detail?.videos?.results?.size}"
                     )
                     val collectionId = detail?.belongsToCollection?.id
-                    if (collectionId != null) {
-                        runCatching { tmdbRepository.getCollection(collectionId) }
-                            .onSuccess { collection -> _collection.value = collection }
+                    // The collection row is the only thing this call feeds,
+                    // and nothing else on the load path reads it - so it runs
+                    // in the background instead of holding the spinner for
+                    // another round trip. The poster-watched refresh DOES read
+                    // the collection's parts, so it moves in here behind it
+                    // rather than being left behind to race it.
+                    viewModelScope.launch {
+                        if (collectionId != null) {
+                            runCatching { tmdbRepository.getCollection(collectionId) }
+                                .onSuccess { collection -> _collection.value = collection }
+                        }
+                        refreshPosterWatchedStatus(normalizedType)
                     }
-                    refreshPosterWatchedStatus(normalizedType)
                     fetchExtraReviews(normalizedType)
                 }
 
@@ -883,6 +1098,16 @@ for (metaAddon in metaAddons) {
                 Log.e("KBStream", "detail load failed", e)
             } finally {
                 _isLoading.value = false
+                // Hand the state to the freshness gate - but only if this load
+                // produced a usable page. A failed one has to retry, and the
+                // kids-mode block deliberately empties the detail.
+                loadedDetailKey = if (_error.value == null) detailKey else null
+                loadedDetailAtMs = SystemClock.elapsedRealtime()
+                PerfTrace.record(
+                    label = "detail.load",
+                    ms = SystemClock.elapsedRealtime() - loadStartedAt,
+                    ok = _error.value == null
+                )
                 Log.e("KBStream", "detail load finished type=$type id=$id")
             }
         }
