@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -33,7 +34,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.abs
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.tmdb.displayDescription
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
@@ -187,20 +190,26 @@ private fun formatTimeLeft(remainingMinutes: Int?): String? {
     }
 }
 
+/**
+ * One chip of the top bar: the shared surface chrome and nothing else.
+ *
+ * The bar holds two kinds of chip now - word chips and the profile avatar - and
+ * they must stay identical in size, focus ring and press behaviour, so the
+ * chrome lives here once instead of being copied per chip.
+ */
 @Composable
-private fun TopActionItem(
-    label: String,
+private fun TopBarChip(
     onClick: () -> Unit,
     onDismiss: () -> Unit,
-    modifier: Modifier = Modifier
+    onFocusChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
 ) {
-    var focused by remember { mutableStateOf(false) }
-
     androidx.tv.material3.Surface(
         onClick = onClick,
         modifier = modifier
             .onFocusChanged {
-                focused = it.isFocused
+                onFocusChange(it.isFocused)
             }
             .onPreviewKeyEvent { event ->
                 if (
@@ -245,6 +254,25 @@ private fun TopActionItem(
             focusedScale = 1f
         )
     ) {
+        content()
+    }
+}
+
+@Composable
+private fun TopActionItem(
+    label: String,
+    onClick: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var focused by remember { mutableStateOf(false) }
+
+    TopBarChip(
+        onClick = onClick,
+        onDismiss = onDismiss,
+        onFocusChange = { focused = it },
+        modifier = modifier
+    ) {
         Text(
             text = label,
             fontSize = 13.sp,
@@ -254,6 +282,78 @@ private fun TopActionItem(
                 vertical = 8.dp
             )
         )
+    }
+}
+
+/**
+ * The top bar's profile button: the active profile's avatar instead of its name.
+ *
+ * The name was a word taking a chip's worth of width to say what the avatar
+ * already says, and the avatar is the mark the viewer just chose on the picker -
+ * so the bar carries the same one, and the name survives only as the initial on
+ * a generic avatar (same precedence as the picker: an uploaded or linked image
+ * wins, otherwise the index's hue pair).
+ *
+ * 26dp of avatar inside the same 8dp-ish vertical padding as the word chips
+ * keeps the bar one uniform height.
+ */
+@Composable
+private fun TopProfileItem(
+    name: String,
+    avatarIndex: Int,
+    customAvatarUrl: String?,
+    onClick: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var focused by remember { mutableStateOf(false) }
+    val itemContext = LocalContext.current
+    val (avatarBg, avatarFg) = ProfileManager.AVATAR_COLORS[
+        avatarIndex.coerceIn(0, ProfileManager.AVATAR_COUNT - 1)
+    ]
+
+    TopBarChip(
+        onClick = onClick,
+        onDismiss = onDismiss,
+        onFocusChange = { focused = it },
+        modifier = modifier
+    ) {
+        Box(
+            modifier = Modifier.padding(
+                horizontal = 10.dp,
+                vertical = 4.dp
+            ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (customAvatarUrl != null) {
+                AsyncImage(
+                    model = ImageRequest.Builder(itemContext)
+                        .data(customAvatarUrl)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = name,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(26.dp)
+                        .clip(CircleShape)
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(26.dp)
+                        .clip(CircleShape)
+                        .background(Color(avatarBg)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = name.take(1).uppercase(),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(avatarFg)
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -269,13 +369,18 @@ private fun TopActionBar(
 ) {
     // Quick profile switch lives on the top bar: the button IS the active
     // profile, so it's obvious what's running and one click swaps profiles
-    // (ProfilePicker → setActive → Home rails reload). Falls back to
-    // PROFILES before any profile exists.
+    // (ProfilePicker → setActive → Home rails reload). Before any profile
+    // exists the active one is null and the chip has nothing to show - it falls
+    // back to the letter tile, exactly like the picker's fallback.
+    //
+    // It leads the bar instead of trailing the words, because the avatar is the
+    // identity control the viewer reaches for first. SEARCH keeps the row's
+    // first-focus requester, so opening the bar still lands there and a single
+    // D-pad left reaches the profile.
     val activeProfile by
-        com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile
+        ProfileManager.activeProfile
             .collectAsStateWithLifecycle()
-    val profileLabel = activeProfile?.name?.uppercase()
-        ?.takeIf { it.isNotBlank() } ?: "PROFILES"
+    val profileName = activeProfile?.name?.takeIf { it.isNotBlank() } ?: "PROFILES"
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -286,6 +391,15 @@ private fun TopActionBar(
         horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically
     ) {
+        TopProfileItem(
+            name = profileName,
+            avatarIndex = activeProfile?.avatarIndex ?: 0,
+            customAvatarUrl = activeProfile?.customAvatarUrl ?: activeProfile?.avatarData,
+            onClick = onSwitchProfile,
+            onDismiss = onDismiss,
+            modifier = Modifier.padding(end = 8.dp)
+        )
+
         TopActionItem(
             label = "SEARCH",
             onClick = onSearch,
@@ -305,13 +419,6 @@ private fun TopActionBar(
         TopActionItem(
             label = "LIBRARY",
             onClick = onOpenLibrary,
-            onDismiss = onDismiss,
-            modifier = Modifier.padding(end = 8.dp)
-        )
-
-        TopActionItem(
-            label = profileLabel,
-            onClick = onSwitchProfile,
             onDismiss = onDismiss,
             modifier = Modifier.padding(end = 8.dp)
         )
