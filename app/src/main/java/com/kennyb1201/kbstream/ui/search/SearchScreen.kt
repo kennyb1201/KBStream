@@ -72,7 +72,10 @@ import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterCard
+import com.kennyb1201.kbstream.data.library.HiddenTitles
+import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
@@ -106,16 +109,45 @@ fun SearchScreen(
     viewModel: SearchViewModel = viewModel()
 ) {
     val query by viewModel.searchQuery.collectAsStateWithLifecycle()
-    val results by viewModel.results.collectAsStateWithLifecycle()
+    val resultsRaw by viewModel.results.collectAsStateWithLifecycle()
     val actorResults by viewModel.actorResults.collectAsStateWithLifecycle()
     val studioResults by viewModel.studioResults.collectAsStateWithLifecycle()
     val collectionResults by viewModel.collectionResults.collectAsStateWithLifecycle()
-    val addonResultGroups by viewModel.addonResultGroups.collectAsStateWithLifecycle()
+    val addonResultGroupsRaw by viewModel.addonResultGroups.collectAsStateWithLifecycle()
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
     val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val recentSearches by viewModel.recentSearches.collectAsStateWithLifecycle()
     val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
+    // Hidden titles are dropped as Search reads its own results, so a
+    // result hidden from its long-press menu leaves both the TMDB rows
+    // and the add-on rails without a re-query, and a rail the user
+    // emptied out is dropped instead of rendering as a gap.
+    val hiddenTitleKeys = rememberHiddenTitleKeys()
+    fun resultIsHidden(result: SearchTitleResult): Boolean {
+        val tmdbId = result.id.removePrefix("tmdb:").toIntOrNull()
+        val imdb =
+            tmdbId?.let { resolvedIds[viewModel.lookupKey(it, result.type)] }
+        return HiddenTitles.hides(
+            hiddenTitleKeys,
+            result.type,
+            result.id,
+            imdb
+        )
+    }
+    val results = remember(resultsRaw, resolvedIds, hiddenTitleKeys) {
+        resultsRaw.filterNot(::resultIsHidden)
+    }
+    val addonResultGroups = remember(
+        addonResultGroupsRaw,
+        resolvedIds,
+        hiddenTitleKeys
+    ) {
+        addonResultGroupsRaw.mapNotNull { group ->
+            val visible = group.results.filterNot(::resultIsHidden)
+            group.takeIf { visible.isNotEmpty() }?.copy(results = visible)
+        }
+    }
     val suggestions by viewModel.suggestions.collectAsStateWithLifecycle()
     val browseCategories by viewModel.browseCategories.collectAsStateWithLifecycle()
     val browseSubmenuLoading by viewModel.browseSubmenuLoading.collectAsStateWithLifecycle()
@@ -529,6 +561,16 @@ fun SearchScreen(
 
             PosterContextMenu(
                 title = result.name,
+                hideTarget = hideTarget(
+                    result.name,
+                    result.type,
+                    result.poster,
+                    listOf(
+                        result.id,
+                        resultIds.imdbId,
+                        resultIds.tmdbId?.toString()
+                    )
+                ),
                 actions = listOf(
                     PosterContextAction(
                         label = if (resultInLibrary) {

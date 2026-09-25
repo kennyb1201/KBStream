@@ -40,7 +40,11 @@ import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterSize
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
+import com.kennyb1201.kbstream.data.library.HiddenTitles
+import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -61,11 +65,30 @@ fun CollectionScreen(
     onNavigateDetail: (type: String, id: String) -> Unit,
     viewModel: CollectionViewModel = viewModel()
 ) {
-    val collection by viewModel.collection.collectAsStateWithLifecycle()
+    val collectionRaw by viewModel.collection.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
     val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
     val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
+    // A hidden film drops out of its franchise rail too.
+    val hiddenTitleKeys = rememberHiddenTitleKeys()
+    val collection =
+        remember(collectionRaw, resolvedIds, hiddenTitleKeys) {
+            collectionRaw?.let { detail ->
+                detail.copy(
+                    parts = detail.parts.filterNot { part ->
+                        HiddenTitles.hides(
+                            hiddenTitleKeys,
+                            "movie",
+                            part.id.toString(),
+                            resolvedIds[
+                                viewModel.lookupKey(part.id, "movie")
+                            ]
+                        )
+                    }
+                )
+            }
+        }
 
     // Long-press context menu for collection part posters.
     var menuPart by remember {
@@ -237,6 +260,19 @@ fun CollectionScreen(
                 title = part.title
                     ?: part.name
                     ?: "",
+                hideTarget = hideTarget(
+                    part.title ?: part.name ?: "",
+                    "movie",
+                    part.posterPath
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { "${TmdbRepository.POSTER_BASE}$it" },
+                    listOf(
+                        part.id.toString(),
+                        resolvedIds[
+                            viewModel.lookupKey(part.id, "movie")
+                        ]
+                    )
+                ),
                 actions = listOf(
                     PosterContextAction(
                         label = "Go to Details",

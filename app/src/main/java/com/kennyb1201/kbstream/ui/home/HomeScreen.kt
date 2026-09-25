@@ -104,6 +104,7 @@ import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.tmdb.movieStatusTag
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
+import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
@@ -112,8 +113,10 @@ import com.kennyb1201.kbstream.ui.components.LandscapeCard
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.kb.KBHomeCollectionRail
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
+import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
@@ -1981,10 +1984,44 @@ fun HomeScreen(
     // paint for a frame before the empty list landed.
     val railsBuiltForProfile by viewModel.railsProfileId.collectAsStateWithLifecycle()
     val railsRaw by viewModel.rails.collectAsStateWithLifecycle()
-    val rails = if (railsBuiltForProfile == activeProfileId) railsRaw else emptyList()
+    // Hidden titles are dropped as Home reads its own data, so a long-press
+    // Hide on a rail takes the title off the whole screen at once - the
+    // rails, Continue Watching, Up Next and the hero - and a rail the user
+    // emptied out is dropped with it instead of leaving a gap. The key set
+    // re-reads whenever the store changes (see rememberHiddenTitleKeys).
+    val hiddenTitleKeys = rememberHiddenTitleKeys()
+    val rails = remember(
+        railsRaw,
+        railsBuiltForProfile,
+        activeProfileId,
+        hiddenTitleKeys
+    ) {
+        val built =
+            if (railsBuiltForProfile == activeProfileId) railsRaw else emptyList()
+        built.mapNotNull { rail ->
+            val visible = rail.items.filterNot { meta ->
+                HiddenTitles.hides(hiddenTitleKeys, meta.type, meta.id)
+            }
+            rail.takeIf { visible.isNotEmpty() }?.copy(items = visible)
+        }
+    }
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
     val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
-    val upNext by viewModel.upNext.collectAsStateWithLifecycle()
+    val upNextRaw by viewModel.upNext.collectAsStateWithLifecycle()
+    // A hidden show's Continue Watching / Up Next cards come from history and
+    // from Simkl rather than from the rails above, so they are filtered here
+    // too - including the Upcoming rail's announced episodes.
+    val upNext = remember(upNextRaw, hiddenTitleKeys) {
+        upNextRaw.filterNot { item ->
+            HiddenTitles.hides(
+                hiddenTitleKeys,
+                item.parentType
+                    ?: if (item.season != null) "series" else "movie",
+                item.parentId,
+                item.id
+            )
+        }
+    }
     val upcomingSchedule by
         viewModel.upcomingSchedule.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
@@ -3113,6 +3150,17 @@ fun HomeScreen(
         continueWatchingMenu?.let { menuItem ->
             PosterContextMenu(
                 title = menuItem.title,
+                // The card is a SHOW, not the episode: hiding it takes the
+                // show off every screen, so the show's own id and the row's
+                // stream key both go in (a card with no parent id still
+                // hides itself from Continue Watching).
+                hideTarget = hideTarget(
+                    menuItem.showTitle ?: menuItem.title,
+                    menuItem.parentType
+                        ?: if (menuItem.season != null) "series" else "movie",
+                    menuItem.poster,
+                    listOf(menuItem.parentId, menuItem.id)
+                ),
                 subtitle = buildString {
                     val seasonEpisode = listOfNotNull(
                         menuItem.season?.let { "S%02d".format(it) },
@@ -3266,6 +3314,16 @@ fun HomeScreen(
 
             PosterContextMenu(
                 title = target.meta.name,
+                hideTarget = hideTarget(
+                    target.meta.name,
+                    target.meta.type,
+                    target.meta.poster,
+                    listOf(
+                        target.meta.id,
+                        railIds.imdbId,
+                        railIds.tmdbId?.toString()
+                    )
+                ),
                 actions = listOf(
                     PosterContextAction(
                         label = if (railInLibrary) {

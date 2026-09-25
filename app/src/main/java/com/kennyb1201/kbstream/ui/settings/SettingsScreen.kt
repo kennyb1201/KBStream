@@ -34,6 +34,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
+import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import com.kennyb1201.kbstream.data.update.AppUpdater
 import androidx.compose.ui.Alignment
@@ -76,6 +77,7 @@ internal enum class SettingsPane(val label: String) {
     INTEGRATIONS("Integrations"),
     PLAYBACK("Playback"),
     INTERFACE("Interface"),
+    HIDDEN("Hidden titles"),
     VIDEO("Video & Audio"),
     LANGUAGE("Language"),
     SUBTITLES("Subtitles"),
@@ -1547,6 +1549,10 @@ fun SettingsScreen(
                 )
                 }
 
+                if (selectedPane == SettingsPane.HIDDEN) {
+                    HiddenTitlesSection()
+                }
+
                 if (selectedPane == SettingsPane.VIDEO) {
                 Text(
                     text = "Network Buffer",
@@ -2585,4 +2591,86 @@ private fun NavigationRow(
             )
         }
     }
+}
+
+/**
+ * The way back from Hide.
+ *
+ * Hiding is a long-press on a poster, so the hidden title is gone from every
+ * screen that could have offered that menu again - this pane is the only
+ * door out of the state, and it lists the titles themselves rather than the
+ * ids they were hidden under.
+ */
+@Composable
+private fun HiddenTitlesSection() {
+    val context = LocalContext.current
+    val entries by HiddenTitles.entries.collectAsStateWithLifecycle()
+
+    // Another screen's Hide row may have run since this pane was last built
+    // (and a profile switch changes which file is read at all).
+    LaunchedEffect(Unit) {
+        HiddenTitles.ensureLoaded(context)
+    }
+
+    if (entries.isEmpty()) {
+        Text(
+            text = "Nothing is hidden. Long-press any poster and choose HIDE " +
+                "to take that title off every screen.",
+            color = KBTextLo,
+            style = MaterialTheme.typography.bodySmall
+        )
+        return
+    }
+
+    Text(
+        text = "${entries.size} hidden " +
+            if (entries.size == 1) "title" else "titles",
+        color = KBTextHi,
+        style = MaterialTheme.typography.bodySmall
+    )
+    Spacer(modifier = Modifier.height(6.dp))
+
+    entries.forEach { entry ->
+        KBCard(
+            onClick = { HiddenTitles.unhide(context, entry.keys) },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(KBSurfaceRaised, RoundedCornerShape(10.dp))
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = entry.title.ifBlank { "Untitled" },
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(
+                        text = if (entry.mediaType == "series") "Series" else "Movie",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+                Text(
+                    text = "SHOW",
+                    color = KBAccent,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(start = 12.dp)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+    }
+
+    Spacer(modifier = Modifier.height(4.dp))
+
+    NavigationRow(
+        label = "Show everything again",
+        description = "Unhide all ${entries.size} of them",
+        onClick = { HiddenTitles.unhideAll(context) }
+    )
 }

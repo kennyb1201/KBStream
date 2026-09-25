@@ -107,6 +107,7 @@ import com.kennyb1201.kbstream.data.tmdb.director
 import com.kennyb1201.kbstream.data.tmdb.displaySeasonName
 import com.kennyb1201.kbstream.data.tmdb.list
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
+import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.tmdb.tmdbImageOriginal
 import com.kennyb1201.kbstream.data.tmdb.writers
 import com.kennyb1201.kbstream.ui.components.AutoPlayLoadSplash
@@ -119,8 +120,10 @@ import com.kennyb1201.kbstream.ui.components.PlayFromBeginningSelection
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
+import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
+import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -452,6 +455,8 @@ fun DetailScreen(
     val collection by viewModel.collection.collectAsStateWithLifecycle()
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
     val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
+    // Titles this profile hid, so the rails on this screen drop them too.
+    val hiddenTitleKeys = rememberHiddenTitleKeys()
     val resolvedPosterIds by viewModel.resolvedPosterIds.collectAsStateWithLifecycle()
     val completedEpisodeIds by viewModel.completedEpisodeIds.collectAsStateWithLifecycle()
     val watchedEpisodeKeys by viewModel.watchedEpisodeKeys.collectAsStateWithLifecycle()
@@ -3047,6 +3052,17 @@ fun DetailScreen(
                             tmdbDetail?.recommendations
                                 ?.results
                                 .orEmpty()
+                                // A hidden title stays out of More Like
+                                // This as well - otherwise the one rail
+                                // that is all about the title you just
+                                // hid is the first place it comes back.
+                                .filterNot { rec ->
+                                    HiddenTitles.hides(
+                                        hiddenTitleKeys,
+                                        normalizedType,
+                                        "tmdb:${rec.id}"
+                                    )
+                                }
 
                         if (recs.isNotEmpty()) {
                             item(key = "recsheader") {
@@ -3217,6 +3233,20 @@ fun DetailScreen(
 
                     PosterContextMenu(
                         title = target.name.ifBlank { "Untitled" },
+                        hideTarget = hideTarget(
+                            target.name.ifBlank { "Untitled" },
+                            target.mediaType,
+                            viewModel.currentPosterUrl(),
+                            listOf(
+                                "tmdb:${target.tmdbId}",
+                                resolvedPosterIds[
+                                    viewModel.posterLookupKey(
+                                        target.tmdbId,
+                                        menuMediaType
+                                    )
+                                ]
+                            )
+                        ),
                         actions = listOf(
                             PosterContextAction(
                                 label = if (inLibrary) {

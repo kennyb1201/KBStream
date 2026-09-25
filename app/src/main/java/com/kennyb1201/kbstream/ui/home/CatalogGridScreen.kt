@@ -38,7 +38,10 @@ import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterSize
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
+import com.kennyb1201.kbstream.data.library.HiddenTitles
+import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -62,7 +65,23 @@ fun CatalogGridScreen(
     onItemClick: (MetaPreview) -> Unit,
     onBack: () -> Unit
 ) {
-    val grid by viewModel.catalogGrid.collectAsStateWithLifecycle()
+    val gridRaw by viewModel.catalogGrid.collectAsStateWithLifecycle()
+    // Hidden titles leave the grid the same way they leave the rails;
+    // the list re-reads whenever the store changes.
+    val hiddenTitleKeys = rememberHiddenTitleKeys()
+    val grid = remember(gridRaw, hiddenTitleKeys) {
+        gridRaw?.let { state ->
+            state.copy(
+                items = state.items.filterNot { meta ->
+                    HiddenTitles.hides(
+                        hiddenTitleKeys,
+                        meta.type,
+                        meta.id
+                    )
+                }
+            )
+        }
+    }
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
     val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
 
@@ -280,6 +299,12 @@ fun CatalogGridScreen(
 
         PosterContextMenu(
             title = target.name,
+            hideTarget = hideTarget(
+                target.name,
+                target.type,
+                target.poster,
+                listOf(target.id)
+            ),
             actions = listOf(
                 PosterContextAction(
                     label = "Go to Details",

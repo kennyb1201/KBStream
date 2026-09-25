@@ -52,7 +52,10 @@ import com.kennyb1201.kbstream.ui.components.PosterSize
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
+import com.kennyb1201.kbstream.data.library.HiddenTitles
+import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
@@ -81,13 +84,36 @@ fun StudioScreen(
     onNavigateDetail: (String, String) -> Unit = { _, _ -> },
     viewModel: StudioViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
-    val sections by viewModel.sections.collectAsStateWithLifecycle()
+    val sectionsRaw by viewModel.sections.collectAsStateWithLifecycle()
     val browseGenres by viewModel.browseGenres.collectAsStateWithLifecycle()
     val selectedGenreId by viewModel.selectedGenreId.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
     val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
     val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
+    val hiddenTitleKeys = rememberHiddenTitleKeys()
+    // Hidden titles are filtered out of the rails as they are read, so a
+    // long-press Hide empties the rail it was pressed on (and the whole
+    // screen, when that was the only rail left).
+    val sections = remember(sectionsRaw, resolvedIds, hiddenTitleKeys) {
+        sectionsRaw.mapNotNull { section ->
+            val visible = section.items.filterNot { railItem ->
+                val mediaType = when (railItem.mediaType.lowercase()) {
+                    "tv", "series" -> "series"
+                    else -> "movie"
+                }
+                HiddenTitles.hides(
+                    hiddenTitleKeys,
+                    mediaType,
+                    railItem.item.id.toString(),
+                    resolvedIds[
+                        viewModel.lookupKey(railItem.item.id, mediaType)
+                    ]
+                )
+            }
+            section.takeIf { visible.isNotEmpty() }?.copy(items = visible)
+        }
+    }
     val pagingStates by viewModel.pagingStates.collectAsStateWithLifecycle()
     val logoUrl by viewModel.logoUrl.collectAsStateWithLifecycle()
     val companyInfo by viewModel.companyInfo.collectAsStateWithLifecycle()
@@ -259,6 +285,24 @@ fun StudioScreen(
                 title = studioItem.item.title
                     ?: studioItem.item.name
                     ?: "",
+                hideTarget = hideTarget(
+                    studioItem.item.title
+                        ?: studioItem.item.name
+                        ?: "",
+                    studioItem.mediaType,
+                    studioItem.item.posterPath
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { "${TmdbRepository.POSTER_BASE}$it" },
+                    listOf(
+                        studioItem.item.id.toString(),
+                        resolvedIds[
+                            viewModel.lookupKey(
+                                studioItem.item.id,
+                                menuMediaType
+                            )
+                        ]
+                    )
+                ),
                 actions = listOf(
                     PosterContextAction(
                         label = "Go to Details",

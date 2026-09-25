@@ -56,7 +56,10 @@ import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
+import com.kennyb1201.kbstream.data.library.HiddenTitles
+import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -80,7 +83,28 @@ fun LibraryScreen(
         androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
     val context = LocalContext.current
-    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val stateRaw by viewModel.uiState.collectAsStateWithLifecycle()
+    // A hidden title leaves My List, the merged All list and every
+    // personal list at once. Filtered here rather than in the store so
+    // the rows the user is looking at update on the spot.
+    val hiddenTitleKeys = rememberHiddenTitleKeys()
+    fun hiddenItem(item: LibraryItem): Boolean =
+        HiddenTitles.hides(
+            hiddenTitleKeys,
+            item.mediaType,
+            item.imdbId,
+            item.tmdbId?.toString()
+        )
+    val state = remember(stateRaw, hiddenTitleKeys) {
+        stateRaw.copy(
+            localItems = stateRaw.localItems.filterNot(::hiddenItem),
+            allItems = stateRaw.allItems.filterNot(::hiddenItem),
+            watchlistItems =
+                stateRaw.watchlistItems.filterNot(::hiddenItem),
+            selectedListItems =
+                stateRaw.selectedListItems.filterNot(::hiddenItem)
+        )
+    }
 
     val topFocusRequester = remember { FocusRequester() }
 
@@ -308,6 +332,12 @@ private fun LibraryItemMenu(
     PosterContextMenu(
         title = item.title,
         subtitle = subtitle,
+        hideTarget = hideTarget(
+            item.title,
+            item.mediaType,
+            item.posterUrl,
+            listOf(item.imdbId, item.tmdbId?.toString())
+        ),
         actions = buildList {
             item.navigationId?.let { id ->
                 add(

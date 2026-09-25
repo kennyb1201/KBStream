@@ -17,7 +17,10 @@ import com.kennyb1201.kbstream.data.kb.KBContentItem
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
+import com.kennyb1201.kbstream.data.library.HiddenTitles
+import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 
 /**
@@ -111,6 +114,12 @@ fun KBFolderScreen(
         } ?: false
         PosterContextMenu(
             title = item.title ?: "Untitled",
+            hideTarget = hideTarget(
+                item.title ?: "Untitled",
+                item.type,
+                item.posterUrl,
+                listOf(item.id, item.tmdbId?.toString())
+            ),
             actions = listOf(
                 PosterContextAction(
                     label = "Open in Grid",

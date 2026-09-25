@@ -21,6 +21,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -28,6 +29,7 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -41,6 +43,7 @@ import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
+import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -100,6 +103,52 @@ data class PosterContextAction(
     val isDestructive: Boolean = false,
     val onClick: () -> Unit
 )
+
+/**
+ * What a long-press menu needs in order to hide the title it was opened on:
+ * the id spellings the caller knows for it, plus enough of the artwork to
+ * draw the row in Settings → Hidden titles after the title itself is gone
+ * from every rail that could have shown it.
+ */
+data class HideTarget(
+    val title: String,
+    val mediaType: String?,
+    val posterUrl: String?,
+    val ids: List<String?>
+)
+
+/**
+ * Builds the hide target for one title, or null when the caller has no id to
+ * key it on — a menu for an unidentifiable item simply gets no Hide row
+ * instead of one that would hide nothing.
+ */
+fun hideTarget(
+    title: String,
+    mediaType: String?,
+    posterUrl: String?,
+    ids: List<String?>
+): HideTarget? {
+    val usable = ids.filterNotNull().mapNotNull { HiddenTitles.normalizeId(it) }
+    if (usable.isEmpty()) return null
+    return HideTarget(
+        title = title.trim(),
+        mediaType = mediaType,
+        posterUrl = posterUrl?.takeIf { it.isNotBlank() },
+        ids = ids
+    )
+}
+
+/**
+ * The active profile's hidden titles, re-read whenever the store changes, so
+ * a screen that hid a title from its own long-press menu drops it on the next
+ * frame without any other plumbing.
+ */
+@Composable
+fun rememberHiddenTitleKeys(): Set<String> {
+    val context = LocalContext.current
+    val version by HiddenTitles.version.collectAsStateWithLifecycle()
+    return remember(version) { HiddenTitles.keys(context) }
+}
 
 /**
  * One-shot handoff from a context-menu action to the navigation layer. The
@@ -210,8 +259,16 @@ fun PosterContextMenu(
     title: String,
     subtitle: String? = null,
     actions: List<PosterContextAction>,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /**
+     * The title this menu was opened on, when the caller can identify it.
+     * Adds the destructive "Hide" row that removes it from every screen; see
+     * [hideTarget] and [HiddenTitles].
+     */
+    hideTarget: HideTarget? = null
 ) {
+    val context = LocalContext.current
+
     val firstRowFocusRequester = remember {
         FocusRequester()
     }
@@ -297,6 +354,33 @@ fun PosterContextMenu(
                     )
                 }
             }
+        }
+
+        // Hide is always the LAST row and always destructive: it is the one
+        // action here that takes the menu's own subject off the screen, so it
+        // sits below everything a viewer reaches for and never at a D-pad
+        // distance they could hit while aiming at something else.
+        hideTarget?.let { target ->
+            add(
+                PosterContextAction(
+                    label = "Hide",
+                    description = "Remove this title from every screen",
+                    isDestructive = true
+                ) {
+                    HiddenTitles.hide(
+                        context = context,
+                        title = target.title,
+                        mediaType = target.mediaType,
+                        posterUrl = target.posterUrl,
+                        ids = target.ids
+                    )
+                    // The caller's dismiss restores focus to the poster that
+                    // was long-pressed; that card is on its way out of the
+                    // composition, so Compose moves focus on to the nearest
+                    // poster that is still there.
+                    onDismiss()
+                }
+            )
         }
     }
 

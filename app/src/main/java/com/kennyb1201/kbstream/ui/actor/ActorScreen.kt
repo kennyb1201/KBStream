@@ -61,7 +61,10 @@ import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterSize
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
+import com.kennyb1201.kbstream.data.library.HiddenTitles
+import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
@@ -479,6 +482,26 @@ fun ActorScreen(
                             title = credit.title
                                 ?: credit.name
                                 ?: "",
+                            hideTarget = hideTarget(
+                                credit.title
+                                    ?: credit.name
+                                    ?: "",
+                                credit.mediaType ?: "movie",
+                                credit.posterPath
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?.let {
+                                        "${TmdbRepository.POSTER_BASE}$it"
+                                    },
+                                listOf(
+                                    credit.id.toString(),
+                                    resolvedCreditIds[
+                                        viewModel.creditLookupKey(
+                                            credit.id,
+                                            credit.mediaType ?: "movie"
+                                        )
+                                    ]
+                                )
+                            ),
                             actions = listOf(
                                 PosterContextAction(
                                     label = "Go to Details",
