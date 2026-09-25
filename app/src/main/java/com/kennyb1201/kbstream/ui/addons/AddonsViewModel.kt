@@ -15,6 +15,7 @@ import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
 import com.kennyb1201.kbstream.data.kb.KBProfilePrefs
 import com.kennyb1201.kbstream.data.kb.KBRepository
 import com.kennyb1201.kbstream.data.kb.moveRailToEnd
+import com.kennyb1201.kbstream.data.kb.toggleCollectionPin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -326,20 +327,12 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun toggleCollectionPinned(key: String) {
-        // Pin is COLLECTIONS-ONLY. A catalog that reached the pinned list kept
-        // its place above every collection with no control able to take it
-        // back out, so never write one in the first place.
-        if (!KBHomeOrderPrefs.isCollectionKey(key)) return
-        persistHomeOrder { prefs ->
-            if (prefs.pinned.contains(key)) {
-                prefs.copy(pinned = prefs.pinned - key)
-            } else {
-                prefs.copy(
-                    pinned = prefs.pinned + key,
-                    order = prefs.order - key
-                )
-            }
-        }
+        // Rule and rationale live with the other pure arrangement transforms
+        // (see [toggleCollectionPin] in KBHomeOrderPrefs): pinning lifts the
+        // key into the pinned block, unpinning puts it back at the head of the
+        // order block — rather than leaving it in neither list, which reads as
+        // never-arranged and hides the rail.
+        persistHomeOrder { prefs -> toggleCollectionPin(prefs, key) }
     }
 
     fun toggleCollectionHidden(key: String) {

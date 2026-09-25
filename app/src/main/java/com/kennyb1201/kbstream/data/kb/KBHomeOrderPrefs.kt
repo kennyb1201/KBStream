@@ -80,6 +80,37 @@ internal fun moveRailToEnd(
 }
 
 /**
+ * Pin or unpin one COLLECTION. Non-collection keys are returned unchanged
+ * (a catalog has no pin control, and one sitting in `pinned` could never be
+ * taken back out — see [moveRailToEnd]).
+ *
+ * Pinning lifts the key to the head of the pinned block and takes it out of the
+ * order block. Unpinning puts it back at the HEAD of the order block, which is
+ * directly under the rails still pinned — where the user was looking.
+ *
+ * That unpin half is the part worth spelling out, because getting it wrong is
+ * silent: a key in NEITHER list is what "never arranged" means, and a
+ * never-arranged collection is hidden by default. So an unpin that merely
+ * removed the key from [KBHomeOrder.pinned] did not un-pin the rail, it deleted
+ * it from Home and dropped its manager row into the HIDDEN section.
+ */
+internal fun toggleCollectionPin(value: KBHomeOrder, key: String): KBHomeOrder {
+    if (!KBHomeOrderPrefs.isCollectionKey(key)) return value
+    val prefs = normalizeHomeOrder(value)
+    return if (key in prefs.pinned) {
+        prefs.copy(
+            pinned = prefs.pinned - key,
+            order = listOf(key) + prefs.order.filter { it != key }
+        )
+    } else {
+        prefs.copy(
+            pinned = prefs.pinned + key,
+            order = prefs.order - key
+        )
+    }
+}
+
+/**
  * Read-time repair for arrangements written before pinned was
  * collections-only: catalog keys sitting in [KBHomeOrder.pinned] are moved to
  * the head of the order block, in the sequence they were pinned in.

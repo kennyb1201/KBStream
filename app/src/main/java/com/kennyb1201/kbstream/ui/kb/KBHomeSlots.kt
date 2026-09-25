@@ -39,6 +39,8 @@ import com.kennyb1201.kbstream.data.kb.KBFolder
 import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.home.Rail
+import com.kennyb1201.kbstream.ui.home.RailHorizontalStartPadding
+import com.kennyb1201.kbstream.ui.home.TvSafeAreaHorizontal
 import com.kennyb1201.kbstream.ui.theme.CardShape
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -50,8 +52,9 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
  * Placement of imported KB collections among the addon catalog rails on
  * Home. A collection anchors to the addon rail it precedes in the stored
  * merged order (from the Collections manager), pinned collections lead
- * right after Continue Watching, and unarranged collections render after
- * the last addon rail.
+ * right after the HARDCODED rails (Top Today, or the kids "Top Kids"
+ * pair — never above them), and unarranged collections render after the
+ * last addon rail.
  */
 object KBHomeSlots {
 
@@ -110,6 +113,20 @@ object KBHomeSlots {
             addonKeyByRail[(entry as HomeEntry.AddonRail).rail] in topTodayKeys
         }
 
+        // Hardcoded rails: rows this app builds itself instead of fetching them
+        // from an addon manifest, which is exactly what a null baseUrl means
+        // (the kids-profile "Top Kids Movies / Shows" pair). They have no
+        // manifest to key them against, so they can never be arranged by the
+        // user — and without this they fell through to the tail, where a
+        // PINNED collection displaced them from the top of Home. They belong
+        // with the Top Today rows: hardcoded first, then whatever is pinned.
+        val hardcodedRails = addonEntries.filter { entry ->
+            (entry as HomeEntry.AddonRail).rail.baseUrl == null
+        }
+        val hardcodedKeys = hardcodedRails
+            .map { entry -> addonKeyByRail[(entry as HomeEntry.AddonRail).rail] }
+            .toSet()
+
         // Pinned block: collections first-class, but addon catalog keys can
         // be pinned too (manager's jump-to-top writes them here). Hidden
         // keys never render. Top Today rails stay ABOVE this block.
@@ -139,6 +156,7 @@ object KBHomeSlots {
         for (key in arrangement.order) {
             if (key in pinnedKeys) continue
             if (key in topTodayKeys) continue
+            if (key in hardcodedKeys) continue
             if (key in pinnedAddonKeys) continue
             val collection = collectionByKey[key]
             if (collection != null) {
@@ -163,6 +181,7 @@ object KBHomeSlots {
             val railKey = addonKeyByRail[(entry as HomeEntry.AddonRail).rail]
             if (entry !in placedRails &&
                 railKey !in topTodayKeys &&
+                railKey !in hardcodedKeys &&
                 railKey !in pinnedAddonKeys
             ) {
                 tail += entry
@@ -178,7 +197,7 @@ object KBHomeSlots {
             }
         }
 
-        return topTodayRails + pinned + middle + tail
+        return topTodayRails + hardcodedRails + pinned + middle + tail
     }
 
     /**
@@ -244,7 +263,7 @@ fun KBHomeCollectionRail(
 ) {
     Column(
         modifier = Modifier.padding(
-            start = 12.dp,
+            start = TvSafeAreaHorizontal,
             top = 0.dp,
             bottom = 8.dp
         )
@@ -256,8 +275,20 @@ fun KBHomeCollectionRail(
             modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
         )
 
+        // The SAME gutter a catalog rail uses (HomeScreen's TvSafeAreaHorizontal
+        // plus RailHorizontalStartPadding), shared rather than retyped so the
+        // two cannot drift again. The collection rail used to start its first
+        // card at the safe-area inset ALONE, which left 12dp less room than
+        // every other rail: the focused first tile scaled up and glowed
+        // straight off the left edge of the screen, so a collection always
+        // looked a little clipped compared with the catalog rail below it.
         LazyRow(
-            contentPadding = PaddingValues(start = 0.dp, end = 12.dp, top = 4.dp, bottom = 12.dp),
+            contentPadding = PaddingValues(
+                start = RailHorizontalStartPadding,
+                end = TvSafeAreaHorizontal,
+                top = 4.dp,
+                bottom = 12.dp
+            ),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             items(

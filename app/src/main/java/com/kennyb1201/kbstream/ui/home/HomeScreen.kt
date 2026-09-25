@@ -156,7 +156,7 @@ private val HomeHeroHeight = 300.dp
 private val RailTopContentPadding = 4.dp
 private val RailBottomContentPadding = 12.dp
 
-private val RailHorizontalStartPadding = 12.dp
+internal val RailHorizontalStartPadding = 12.dp
 private val RailSectionGap = 20.dp
 
 // KB parity: MODERN_ROW_HEADER_FOCUS_INSET. When a row takes focus, its
@@ -176,7 +176,7 @@ private val CollectionHeroLogoHeight = 120.dp
 
 private val PosterFocusHeadroom = 24.dp
 
-private val TvSafeAreaHorizontal = 12.dp
+internal val TvSafeAreaHorizontal = 12.dp
 private val TvSafeAreaVertical = 0.dp
 
 /**
