@@ -64,6 +64,9 @@ import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBShapeCard
+import com.kennyb1201.kbstream.ui.theme.KBShapePanel
+import com.kennyb1201.kbstream.ui.theme.KBShapePill
 import com.kennyb1201.kbstream.ui.theme.KBSuccess
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -92,7 +95,7 @@ internal fun AddonListCard(
 ) {
     Surface(
         onClick = onClick,
-        shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(12.dp)),
+        shape = ClickableSurfaceDefaults.shape(shape = KBShapeCard),
         colors = ClickableSurfaceDefaults.colors(
             containerColor = if (selected) KBSurfaceRaised else KBSurfaceRaised.copy(alpha = 0.72f),
             contentColor = KBTextHi,
@@ -108,11 +111,11 @@ internal fun AddonListCard(
                     1.dp,
                     if (selected) KBAccent.copy(alpha = 0.4f) else Color.Transparent
                 ),
-                shape = RoundedCornerShape(12.dp)
+                shape = KBShapeCard
             ),
             focusedBorder = Border(
                 border = BorderStroke(2.dp, KBAccent),
-                shape = RoundedCornerShape(12.dp)
+                shape = KBShapeCard
             )
         ),
         glow = ClickableSurfaceDefaults.glow(
@@ -183,8 +186,8 @@ internal fun AddonListCard(
             if (!addon.enabled) {
                 Box(
                     modifier = Modifier
-                        .background(KBTextLo.copy(alpha = 0.14f), RoundedCornerShape(999.dp))
-                        .border(1.dp, KBTextLo.copy(alpha = 0.4f), RoundedCornerShape(999.dp))
+                        .background(KBTextLo.copy(alpha = 0.14f), KBShapePill)
+                        .border(1.dp, KBTextLo.copy(alpha = 0.4f), KBShapePill)
                         .padding(horizontal = 8.dp, vertical = 3.dp)
                 ) {
                     Text(
@@ -199,8 +202,8 @@ internal fun AddonListCard(
             if (addon.catalogs.isNotEmpty()) {
                 Box(
                     modifier = Modifier
-                        .background(KBAccent.copy(alpha = 0.16f), RoundedCornerShape(999.dp))
-                        .border(1.dp, KBAccent.copy(alpha = 0.45f), RoundedCornerShape(999.dp))
+                        .background(KBAccent.copy(alpha = 0.16f), KBShapePill)
+                        .border(1.dp, KBAccent.copy(alpha = 0.45f), KBShapePill)
                         .padding(horizontal = 8.dp, vertical = 3.dp)
                 ) {
                     Text(
@@ -226,8 +229,8 @@ internal fun HealthBadge(healthy: Boolean) {
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .padding(start = 8.dp)
-            .background(color.copy(alpha = 0.16f), RoundedCornerShape(999.dp))
-            .border(1.dp, color.copy(alpha = 0.5f), RoundedCornerShape(999.dp))
+            .background(color.copy(alpha = 0.16f), KBShapePill)
+            .border(1.dp, color.copy(alpha = 0.5f), KBShapePill)
             .padding(horizontal = 8.dp, vertical = 3.dp)
     ) {
         Box(
@@ -558,7 +561,7 @@ internal fun ActionButton(
         }
     } else {
         Surface(
-            shape = RoundedCornerShape(12.dp),
+            shape = KBShapeCard,
             colors = SurfaceDefaults.colors(
                 containerColor = KBSurface.copy(alpha = 0.50f),
                 contentColor = KBTextLo.copy(alpha = 0.50f)
@@ -624,7 +627,7 @@ internal fun SmallAction(
         }
     } else {
         Surface(
-            shape = RoundedCornerShape(12.dp),
+            shape = KBShapeCard,
             colors = SurfaceDefaults.colors(
                 containerColor = KBSurface.copy(alpha = 0.50f),
                 contentColor = KBTextLo.copy(alpha = 0.50f)
@@ -678,7 +681,7 @@ internal fun AddonTile(
     Box(
         modifier = Modifier
             .size(size)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(KBShapeCard)
             .background(KBVoid),
         contentAlignment = Alignment.Center
     ) {
@@ -788,8 +791,8 @@ internal fun FilterAddonsDialog(
         Column(
             modifier = Modifier
                 .width(620.dp)
-                .background(KBSurface, RoundedCornerShape(18.dp))
-                .border(1.dp, KBAccent.copy(alpha = 0.38f), RoundedCornerShape(18.dp))
+                .background(KBSurface, KBShapePanel)
+                .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapePanel)
                 .padding(22.dp)
         ) {
             Text(
@@ -849,8 +852,8 @@ internal fun EmptyAddons(
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier
-                .background(KBSurface, RoundedCornerShape(18.dp))
-                .border(1.dp, KBAccent.copy(alpha = 0.22f), RoundedCornerShape(18.dp))
+                .background(KBSurface, KBShapePanel)
+                .border(1.dp, KBAccent.copy(alpha = 0.22f), KBShapePanel)
                 .padding(horizontal = 30.dp, vertical = 28.dp)
         ) {
             Text(

@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -51,6 +50,8 @@ import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBShapeCard
+import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -373,8 +374,8 @@ fun LibraryAddToListDialog(
         Column(
             modifier = Modifier
                 .width(560.dp)
-                .background(KBSurface, RoundedCornerShape(18.dp))
-                .border(1.dp, KBAccent.copy(alpha = 0.38f), RoundedCornerShape(18.dp))
+                .background(KBSurface, KBShapePanel)
+                .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapePanel)
                 .padding(22.dp)
         ) {
             Text(
@@ -472,7 +473,7 @@ private fun PickerRow(
     modifier: Modifier = Modifier
 ) {
     var focused by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(12.dp)
+    val shape = KBShapeCard
 
     // One TV clickable Surface, not `.focusable().clickable()`: that stack is
     // two focus targets, so the first D-pad press only landed focus and the

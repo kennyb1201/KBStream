@@ -69,6 +69,21 @@ val KBSteel = Color(0xFF3E5C76)  // desaturated navy — next up
 val KBPlum = Color(0xFF6E4E7E)   // muted aubergine — new season
 
 val CardShape = RoundedCornerShape(12.dp())
+
+// The corner scale. Radii had drifted to fourteen distinct literals
+// (2/3/4/5/6/8/10/12/13/14/16/18/20/999) with no rule behind which surface
+// got which: two dialogs a screen apart at 16 and 18 and 20, the same inner
+// row at 14 on one screen and 12 on the next. Two dp of corner is invisible
+// at ten feet, so the drift bought nothing and only made the code
+// unpredictable. Everything now comes from this scale. The only literals left
+// are the 2–5dp hairline radii on progress bars and dividers, where the shape
+// of a few-dp-tall bar genuinely does depend on the exact value.
+val KBShapePanel = RoundedCornerShape(18.dp()) // dialogs, panels, hero cards
+val KBShapeCard = CardShape // cards, tiles, inner rows, list rows
+val KBShapeChip = RoundedCornerShape(10.dp()) // rating / badge chips
+val KBShapeSmall = RoundedCornerShape(8.dp()) // small pills, poster fans
+val KBShapePill = RoundedCornerShape(999.dp()) // avatars, fully-round pills
+
 private fun Int.dp() = androidx.compose.ui.unit.Dp(this.toFloat())
 
 val OswaldFamily = FontFamily(

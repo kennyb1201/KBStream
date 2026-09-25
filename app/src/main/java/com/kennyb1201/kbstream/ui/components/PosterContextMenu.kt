@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -46,6 +45,8 @@ import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBShapeCard
+import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
@@ -384,7 +385,7 @@ fun PosterContextMenu(
         }
     }
 
-    val dialogShape = RoundedCornerShape(20.dp)
+    val dialogShape = KBShapePanel
 
     // Dismiss on system Back. BackHandler is used instead of key-event
     // intercepts because the Activity back dispatcher consumes the Back key
@@ -615,7 +616,7 @@ private fun ContextMenuActionRow(
         mutableStateOf(false)
     }
 
-    val rowShape = RoundedCornerShape(12.dp)
+    val rowShape = KBShapeCard
 
     Surface(
         onClick = onClick,

@@ -24,7 +24,6 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Mic
@@ -66,6 +65,7 @@ import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
+import com.kennyb1201.kbstream.ui.components.KBSectionHeader
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.data.library.LibraryIds
@@ -83,6 +83,9 @@ import com.kennyb1201.kbstream.ui.components.rememberLongPressModifier
 import com.kennyb1201.kbstream.ui.components.PosterSize
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBShapeCard
+import com.kennyb1201.kbstream.ui.theme.KBShapeChip
+import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -261,7 +264,7 @@ fun SearchScreen(
             if (suggestions.isNotEmpty()) {
                 item(key = "suggestions") {
                     Column {
-                        SectionHeader(title = "Suggestions")
+                        KBSectionHeader(title = "Suggestions")
                         LazyRow(
                             contentPadding = PaddingValues(
                                 top = 2.dp,
@@ -288,7 +291,7 @@ fun SearchScreen(
             if (query.isBlank() && recentSearches.isNotEmpty()) {
                 item(key = "recent_section") {
                     Column {
-                        SectionHeader(title = "Recent searches")
+                        KBSectionHeader(title = "Recent searches")
                         LazyRow(
                             contentPadding = PaddingValues(
                                 top = 2.dp,
@@ -371,7 +374,7 @@ fun SearchScreen(
             if (!isLoading && results.isNotEmpty()) {
                 item(key = "titles_section") {
                     Column {
-                        SectionHeader(title = "Titles")
+                        KBSectionHeader(title = "Titles")
                         LazyRow(
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                             contentPadding = PaddingValues(
@@ -862,8 +865,8 @@ private fun SearchHero(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(KBSurface, RoundedCornerShape(16.dp))
-            .border(1.dp, KBTextLo.copy(alpha = 0.25f), RoundedCornerShape(16.dp))
+            .background(KBSurface, KBShapePanel)
+            .border(1.dp, KBTextLo.copy(alpha = 0.25f), KBShapePanel)
             .padding(14.dp)
     ) {
         Text(
@@ -904,7 +907,7 @@ private fun SearchHero(
                     }
             },
             shape = ClickableSurfaceDefaults.shape(
-                shape = RoundedCornerShape(10.dp)
+                shape = KBShapeChip
             ),
             colors = ClickableSurfaceDefaults.colors(
                 containerColor = KBSurfaceRaised,
@@ -920,11 +923,11 @@ private fun SearchHero(
             border = ClickableSurfaceDefaults.border(
                 border = Border(
                     border = BorderStroke(1.dp, KBTextLo.copy(alpha = 0.35f)),
-                    shape = RoundedCornerShape(10.dp)
+                    shape = KBShapeChip
                 ),
                 focusedBorder = Border(
                     border = BorderStroke(2.dp, KBAccent),
-                    shape = RoundedCornerShape(10.dp)
+                    shape = KBShapeChip
                 )
             ),
             glow = ClickableSurfaceDefaults.glow(
@@ -993,17 +996,6 @@ private fun SearchHero(
     }
 }
 
-@Composable
-private fun SectionHeader(title: String) {
-    Text(
-        text = title,
-        style = MaterialTheme.typography.titleMedium,
-        color = KBTextHi,
-        fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.padding(bottom = 6.dp)
-    )
-}
-
 // Edge inset shared by the search screen's column and every rail's
 // contentPadding. Living in contentPadding (rather than a parent modifier
 // padding) keeps the ends of each rail inside the LazyRow's clip bounds so
@@ -1033,7 +1025,7 @@ private fun SearchBrowseBrowser(
     val returnChip = viewModel.browseReturnChip
 
     Column(modifier = Modifier.padding(top = 8.dp)) {
-        SectionHeader(title = "Browse")
+        KBSectionHeader(title = "Browse")
 
         // Sidebar: one scrollable category row (the "separate categories"
         // strip; selecting one reveals its submenu below).
@@ -1149,7 +1141,7 @@ private fun SearchRail(
     content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit
 ) {
     Column {
-        SectionHeader(title = title)
+        KBSectionHeader(title = title)
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             contentPadding = PaddingValues(
@@ -1393,8 +1385,8 @@ private fun SearchMessagePanel(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(KBSurface, RoundedCornerShape(14.dp))
-            .border(1.dp, KBTextLo.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
+            .background(KBSurface, KBShapeCard)
+            .border(1.dp, KBTextLo.copy(alpha = 0.25f), KBShapeCard)
             .padding(14.dp)
     ) {
         Text(

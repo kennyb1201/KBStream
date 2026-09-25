@@ -19,7 +19,6 @@ import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -55,6 +54,8 @@ import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBShapeCard
+import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -763,7 +764,7 @@ private fun ProfileChip(
         // tv-material3 clickable Surface wants a ClickableSurfaceShape,
         // not a foundation Shape (non-clickable Surfaces do take Shape —
         // hence the disabled-pill usages elsewhere compile fine).
-        shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(18.dp)),
+        shape = ClickableSurfaceDefaults.shape(shape = KBShapePanel),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.06f),
         colors = ClickableSurfaceDefaults.colors(
             containerColor = if (selected) KBAccent.copy(alpha = 0.25f) else KBSurfaceRaised,
@@ -774,7 +775,7 @@ private fun ProfileChip(
         border = ClickableSurfaceDefaults.border(
             focusedBorder = Border(
                 border = BorderStroke(2.dp, KBAccent),
-                shape = RoundedCornerShape(18.dp)
+                shape = KBShapePanel
             )
         )
     ) {
@@ -809,7 +810,7 @@ private fun ProfileActionButton(
         }
     } else {
         Surface(
-            shape = RoundedCornerShape(12.dp),
+            shape = KBShapeCard,
             colors = SurfaceDefaults.colors(
                 containerColor = KBSurface.copy(alpha = 0.50f),
                 contentColor = KBTextLo.copy(alpha = 0.50f)

@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -24,11 +23,13 @@ import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBSectionHeader
 import com.kennyb1201.kbstream.ui.components.KBTextField
+import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
-import com.kennyb1201.kbstream.ui.theme.KBDanger
 
 /**
  * Settings → Sync section: Supabase-backed cross-device sync.
@@ -55,7 +56,7 @@ fun SyncSection() {
         busy = authState is SupabaseSync.AuthState.SigningIn
     }
 
-    SectionHeader(title = "Sync (Beta)")
+    KBSectionHeader(title = "Sync (Beta)")
 
     val credentialsValid =
         email.isNotBlank() && password.length >= 6
@@ -197,7 +198,7 @@ private fun SyncActionButton(
         }
     } else {
         Surface(
-            shape = RoundedCornerShape(12.dp),
+            shape = KBShapeCard,
             colors = SurfaceDefaults.colors(
                 containerColor = KBSurface.copy(alpha = 0.50f),
                 contentColor = KBTextLo.copy(alpha = 0.50f)
@@ -214,13 +215,4 @@ private fun SyncActionButton(
     }
 }
 
-@Composable
-private fun SectionHeader(title: String) {
-    Text(
-        text = title,
-        style = MaterialTheme.typography.titleMedium,
-        color = KBTextHi,
-        fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.padding(bottom = 6.dp)
-    )
-}
+

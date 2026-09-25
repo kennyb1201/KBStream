@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterSize
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
@@ -158,13 +159,8 @@ fun CatalogGridScreen(
             .fillMaxSize()
             .background(KBVoid)
     ) {
-        Text(
+        KBPageTitle(
             text = state.title,
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            color = KBTextHi,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(

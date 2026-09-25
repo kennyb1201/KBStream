@@ -18,7 +18,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -68,6 +67,7 @@ import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.tag.RailPagingState
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import kotlinx.coroutines.delay
@@ -458,11 +458,11 @@ private fun DecadeHeader(
                             .zIndex((posterUrls.size - index).toFloat())
                             .offset(x = (-12 * index).dp)
                             .rotate(rotations[index])
-                            .clip(RoundedCornerShape(8.dp))
+                            .clip(KBShapeSmall)
                             .border(
                                 1.dp,
                                 Color.White.copy(alpha = 0.25f),
-                                RoundedCornerShape(8.dp)
+                                KBShapeSmall
                             )
                             .width(widths[index])
                             .height(heights[index])

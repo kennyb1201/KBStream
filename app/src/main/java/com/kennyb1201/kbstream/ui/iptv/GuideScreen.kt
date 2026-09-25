@@ -93,16 +93,21 @@ import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.notifications.ReminderRules
 import com.kennyb1201.kbstream.work.ReminderWorker
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBRust
+import com.kennyb1201.kbstream.ui.theme.KBShapeCard
+import com.kennyb1201.kbstream.ui.theme.KBShapeChip
+import com.kennyb1201.kbstream.ui.theme.KBShapePanel
+import com.kennyb1201.kbstream.ui.theme.KBShapePill
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
-import com.kennyb1201.kbstream.ui.theme.KBDanger
-import com.kennyb1201.kbstream.ui.theme.KBRust
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -1272,8 +1277,8 @@ Spacer(modifier = Modifier.height(14.dp))
                             .align(Alignment.TopCenter)
                             .padding(top = 24.dp)
                             .width(560.dp)
-                            .background(KBSurfaceRaised, RoundedCornerShape(16.dp))
-                            .border(1.dp, KBAccent.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
+                            .background(KBSurfaceRaised, KBShapePanel)
+                            .border(1.dp, KBAccent.copy(alpha = 0.5f), KBShapePanel)
                             .padding(16.dp)
                     ) {
                         Text(
@@ -1374,14 +1379,14 @@ Spacer(modifier = Modifier.height(14.dp))
                         it.channel.tvgChno?.trim() == digitEntry
                     }
                     Surface(
-                        shape = RoundedCornerShape(12.dp),
+                        shape = KBShapeCard,
                         colors = SurfaceDefaults.colors(
                             containerColor = KBSurfaceRaised.copy(alpha = 0.97f),
                             contentColor = KBTextHi
                         ),
                         border = Border(
                             border = BorderStroke(1.dp, KBAccent.copy(alpha = 0.55f)),
-                            shape = RoundedCornerShape(12.dp)
+                            shape = KBShapeCard
                         ),
                         modifier = Modifier
                             .align(Alignment.BottomStart)
@@ -1546,7 +1551,7 @@ private fun SetupPanel(
                     Modifier
                 }
             )
-            .background(KBSurface, RoundedCornerShape(18.dp))
+            .background(KBSurface, KBShapePanel)
             .padding(18.dp)
     ) {
         Text(
@@ -1803,13 +1808,7 @@ private fun GuideHeader(
         verticalAlignment = Alignment.Top
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.headlineLarge,
-                color = KBTextHi,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            KBPageTitle(text = title)
 
             val meta = buildList {
                 add("$channelCount channels")
@@ -1876,7 +1875,7 @@ private fun CompactSetupDiagnostics(
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
+        shape = KBShapeCard,
         colors = SurfaceDefaults.colors(
             containerColor = KBVoid.copy(alpha = 0.30f),
             contentColor = KBTextLo
@@ -1978,7 +1977,7 @@ private fun ChannelRowCard(
         animationSpec = tween(durationMillis = 140),
         label = "channelRowAccentAlpha"
     )
-    val rowShape = RoundedCornerShape(12.dp)
+    val rowShape = KBShapeCard
 
     KBCard(
     onClick = onClick,
@@ -2021,7 +2020,7 @@ private fun ChannelRowCard(
                 modifier = Modifier
                     .width(3.dp)
                     .height(34.dp)
-                    .clip(RoundedCornerShape(999.dp))
+                    .clip(KBShapePill)
                     .background(KBAccent.copy(alpha = accentAlpha))
             )
 
@@ -2114,7 +2113,7 @@ private fun ChannelLogo(
         modifier = modifier
             .width(48.dp)
             .height(48.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .clip(KBShapeChip)
             .background(KBVoid.copy(alpha = 0.6f)),
         contentAlignment = Alignment.Center
     ) {
@@ -2155,7 +2154,7 @@ private fun GuideDetailPanel(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(KBSurface, RoundedCornerShape(18.dp))
+            .background(KBSurface, KBShapePanel)
             .padding(16.dp)
     ) {
         Row(verticalAlignment = Alignment.Top) {
@@ -2225,14 +2224,14 @@ private fun GuideDetailPanel(
             } else {
                 upcoming.forEach { program ->
                     Surface(
-                        shape = RoundedCornerShape(10.dp),
+                        shape = KBShapeChip,
                         colors = SurfaceDefaults.colors(
                             containerColor = KBSurfaceRaised.copy(alpha = 0.95f),
                             contentColor = KBTextHi
                         ),
                         border = Border(
                             border = BorderStroke(1.dp, KBTextLo.copy(alpha = 0.18f)),
-                            shape = RoundedCornerShape(10.dp)
+                            shape = KBShapeChip
                         )
                     ) {
                         Row(
@@ -2328,7 +2327,7 @@ private fun ProgramCard(
 ) {
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(14.dp),
+        shape = KBShapeCard,
         colors = SurfaceDefaults.colors(
             containerColor = KBSurfaceRaised,
             contentColor = KBTextHi
@@ -2372,14 +2371,14 @@ private fun ProgramCard(
                         .padding(top = 8.dp)
                         .fillMaxWidth()
                         .height(3.dp)
-                        .clip(RoundedCornerShape(999.dp))
+                        .clip(KBShapePill)
                         .background(KBVoid.copy(alpha = 0.55f))
                 ) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(fraction.coerceIn(0.02f, 1f))
                             .fillMaxHeight()
-                            .clip(RoundedCornerShape(999.dp))
+                            .clip(KBShapePill)
                             .background(KBAccent)
                     )
                 }
@@ -2413,7 +2412,7 @@ private fun CenterMessage(
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier
-                .background(KBSurface, RoundedCornerShape(16.dp))
+                .background(KBSurface, KBShapePanel)
                 .padding(horizontal = 22.dp, vertical = 18.dp)
         ) {
             if (showSpinner) {
@@ -2446,14 +2445,14 @@ private fun InlineErrorChip(
 ) {
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(999.dp),
+        shape = KBShapePill,
         colors = SurfaceDefaults.colors(
             containerColor = KBSurfaceRaised.copy(alpha = 0.96f),
             contentColor = KBTextHi
         ),
         border = Border(
             border = BorderStroke(1.dp, KBAccent.copy(alpha = 0.45f)),
-            shape = RoundedCornerShape(999.dp)
+            shape = KBShapePill
         )
     ) {
         Text(
@@ -2541,8 +2540,8 @@ private fun ChannelActionsDialog(
         Column(
             modifier = Modifier
                 .width(430.dp)
-                .background(KBSurfaceRaised, RoundedCornerShape(18.dp))
-                .border(1.dp, KBAccent.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
+                .background(KBSurfaceRaised, KBShapePanel)
+                .border(1.dp, KBAccent.copy(alpha = 0.45f), KBShapePanel)
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
@@ -2600,8 +2599,8 @@ private fun CatchupDialog(
         Column(
             modifier = Modifier
                 .width(560.dp)
-                .background(KBSurfaceRaised, RoundedCornerShape(18.dp))
-                .border(1.dp, KBAccent.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
+                .background(KBSurfaceRaised, KBShapePanel)
+                .border(1.dp, KBAccent.copy(alpha = 0.45f), KBShapePanel)
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
@@ -2731,8 +2730,8 @@ private fun ChannelSearchDialog(
         Column(
             modifier = Modifier
                 .width(560.dp)
-                .background(KBSurfaceRaised, RoundedCornerShape(18.dp))
-                .border(1.dp, KBAccent.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
+                .background(KBSurfaceRaised, KBShapePanel)
+                .border(1.dp, KBAccent.copy(alpha = 0.45f), KBShapePanel)
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
@@ -2962,8 +2961,8 @@ private fun HiddenItemsDialog(
             modifier = Modifier
                 .width(720.dp)
                 .height(650.dp)
-                .background(KBSurface, RoundedCornerShape(18.dp))
-                .border(1.dp, KBAccent.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
+                .background(KBSurface, KBShapePanel)
+                .border(1.dp, KBAccent.copy(alpha = 0.45f), KBShapePanel)
                 .padding(20.dp)
         ) {
             Text(
@@ -3158,7 +3157,7 @@ private fun HiddenManagerRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(KBSurfaceRaised, RoundedCornerShape(12.dp))
+            .background(KBSurfaceRaised, KBShapeCard)
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

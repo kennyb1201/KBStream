@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -22,6 +21,7 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.tmdb.TmdbGenre
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -84,7 +84,7 @@ private fun DiscoverFilterChip(
     onClick: () -> Unit
 ) {
     var focused by remember { mutableStateOf(focusedInitial) }
-    val shape = RoundedCornerShape(14.dp)
+    val shape = KBShapeCard
 
     Surface(
         onClick = onClick,

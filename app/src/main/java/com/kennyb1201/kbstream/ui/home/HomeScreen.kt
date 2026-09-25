@@ -125,10 +125,11 @@ import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
-import com.kennyb1201.kbstream.ui.theme.KBSuccess
 import com.kennyb1201.kbstream.ui.theme.KBPlum
 import com.kennyb1201.kbstream.ui.theme.KBRust
+import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import com.kennyb1201.kbstream.ui.theme.KBSteel
+import com.kennyb1201.kbstream.ui.theme.KBSuccess
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
@@ -223,7 +224,7 @@ private fun TopBarChip(
                 }
             },
         shape = androidx.tv.material3.ClickableSurfaceDefaults.shape(
-            shape = RoundedCornerShape(6.dp)
+            shape = KBShapeSmall
         ),
         colors = androidx.tv.material3.ClickableSurfaceDefaults.colors(
             containerColor = Color.Transparent,
@@ -239,14 +240,14 @@ private fun TopBarChip(
                     1.dp,
                     Color.Transparent
                 ),
-                shape = RoundedCornerShape(6.dp)
+                shape = KBShapeSmall
             ),
             focusedBorder = androidx.tv.material3.Border(
                 border = androidx.compose.foundation.BorderStroke(
                     2.dp,
                     KBAccent
                 ),
-                shape = RoundedCornerShape(6.dp)
+                shape = KBShapeSmall
             )
         ),
         glow = androidx.tv.material3.ClickableSurfaceDefaults.glow(),

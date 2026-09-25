@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -47,6 +46,7 @@ import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
@@ -329,8 +329,8 @@ private fun CollectionHeader(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(KBSurface, RoundedCornerShape(20.dp))
-            .border(1.dp, KBTextLo.copy(alpha = 0.25f), RoundedCornerShape(20.dp))
+            .background(KBSurface, KBShapePanel)
+            .border(1.dp, KBTextLo.copy(alpha = 0.25f), KBShapePanel)
             .padding(18.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -435,8 +435,8 @@ private fun CollectionMessagePanel(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(KBSurface, RoundedCornerShape(16.dp))
-            .border(1.dp, KBTextLo.copy(alpha = 0.25f), RoundedCornerShape(16.dp))
+            .background(KBSurface, KBShapePanel)
+            .border(1.dp, KBTextLo.copy(alpha = 0.25f), KBShapePanel)
             .padding(18.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {

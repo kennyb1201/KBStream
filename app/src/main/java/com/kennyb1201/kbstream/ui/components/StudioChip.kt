@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -26,6 +25,7 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 
 /**
@@ -38,7 +38,7 @@ fun StudioChip(
     logoPath: String?,
     onClick: () -> Unit
 ) {
-    val cardShape = RoundedCornerShape(10.dp)
+    val cardShape = KBShapeChip
 
     Surface(
         onClick = onClick,

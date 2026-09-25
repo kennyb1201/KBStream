@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -79,6 +78,8 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import kotlinx.coroutines.launch
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBShapeCard
+import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 
 @OptIn(ExperimentalFoundationApi::class)
 private class ActorBringIntoViewSpec(
@@ -220,7 +221,7 @@ fun ActorScreen(
                                     modifier = Modifier
                                         .width(96.dp)
                                         .height(144.dp)
-                                        .clip(RoundedCornerShape(12.dp))
+                                        .clip(KBShapeCard)
                                         .background(KBSurfaceRaised)
                                 ) {
                                     if (headerPortraitUrl != null) {
@@ -314,7 +315,7 @@ fun ActorScreen(
                                             Surface(
                                                 onClick = { bioExpanded = !bioExpanded },
                                                 shape = ClickableSurfaceDefaults.shape(
-                                                    shape = RoundedCornerShape(8.dp)
+                                                    shape = KBShapeSmall
                                                 ),
                                                 colors = ClickableSurfaceDefaults.colors(
                                                     containerColor = Color.Transparent,
@@ -333,14 +334,14 @@ fun ActorScreen(
                                                             1.dp,
                                                             KBTextLo.copy(alpha = 0.35f)
                                                         ),
-                                                        shape = RoundedCornerShape(8.dp)
+                                                        shape = KBShapeSmall
                                                     ),
                                                     focusedBorder = Border(
                                                         border = BorderStroke(
                                                             2.dp,
                                                             KBAccent
                                                         ),
-                                                        shape = RoundedCornerShape(8.dp)
+                                                        shape = KBShapeSmall
                                                     )
                                                 ),
                                                 glow = ClickableSurfaceDefaults.glow(

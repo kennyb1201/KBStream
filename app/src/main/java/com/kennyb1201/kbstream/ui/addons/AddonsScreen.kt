@@ -29,7 +29,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -96,10 +95,15 @@ import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.data.addon.ManifestCatalog
 import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBShapeCard
+import com.kennyb1201.kbstream.ui.theme.KBShapeChip
+import com.kennyb1201.kbstream.ui.theme.KBShapePanel
+import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import com.kennyb1201.kbstream.ui.theme.KBSuccess
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -199,12 +203,7 @@ fun AddonsScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "ADD-ONS",
-                        color = KBTextHi,
-                        style = MaterialTheme.typography.headlineLarge,
-                        fontWeight = FontWeight.SemiBold
-                    )
+                    KBPageTitle(text = "ADD-ONS")
                     Text(
                         text = when (addons.size) {
                             0 -> "No add-ons installed"
@@ -298,7 +297,7 @@ fun AddonsScreen(
                             containerColor = KBSurface.copy(alpha = 0.94f),
                             contentColor = KBTextHi
                         ),
-                        shape = RoundedCornerShape(16.dp),
+                        shape = KBShapePanel,
                         modifier = Modifier.weight(0.55f).fillMaxHeight()
                     ) {
                         if (filteredAddons.isEmpty()) {
@@ -353,7 +352,7 @@ fun AddonsScreen(
                             containerColor = KBSurface.copy(alpha = 0.94f),
                             contentColor = KBTextHi
                         ),
-                        shape = RoundedCornerShape(16.dp),
+                        shape = KBShapePanel,
                         modifier = Modifier.weight(0.45f).fillMaxHeight()
                     ) {
                         if (selectedAddon == null) {
@@ -657,8 +656,8 @@ private fun AddAddonDialog(
         Column(
             modifier = Modifier
                 .width(760.dp)
-                .background(KBSurface, RoundedCornerShape(18.dp))
-                .border(1.dp, KBAccent.copy(alpha = 0.38f), RoundedCornerShape(18.dp))
+                .background(KBSurface, KBShapePanel)
+                .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapePanel)
                 .padding(22.dp)
         ) {
             Text(
@@ -703,8 +702,8 @@ private fun AddAddonDialog(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(KBSurfaceRaised, RoundedCornerShape(12.dp))
-                        .border(1.dp, KBAccent.copy(alpha = 0.32f), RoundedCornerShape(12.dp))
+                        .background(KBSurfaceRaised, KBShapeCard)
+                        .border(1.dp, KBAccent.copy(alpha = 0.32f), KBShapeCard)
                         .padding(12.dp)
                 ) {
                     if (qrBitmap != null) {
@@ -713,7 +712,7 @@ private fun AddAddonDialog(
                             contentDescription = "Pairing QR code",
                             modifier = Modifier
                                 .size(120.dp)
-                                .background(Color.White, RoundedCornerShape(8.dp))
+                                .background(Color.White, KBShapeSmall)
                                 .padding(6.dp)
                         )
                     }
@@ -814,8 +813,8 @@ private fun RenameAddonDialog(
         Column(
             modifier = Modifier
                 .width(620.dp)
-                .background(KBSurface, RoundedCornerShape(18.dp))
-                .border(1.dp, KBAccent.copy(alpha = 0.38f), RoundedCornerShape(18.dp))
+                .background(KBSurface, KBShapePanel)
+                .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapePanel)
                 .padding(22.dp)
         ) {
             Text(
@@ -856,8 +855,8 @@ private fun ConfirmRemoveDialog(
         Column(
             modifier = Modifier
                 .width(620.dp)
-                .background(KBSurface, RoundedCornerShape(18.dp))
-                .border(1.dp, KBAccent.copy(alpha = 0.38f), RoundedCornerShape(18.dp))
+                .background(KBSurface, KBShapePanel)
+                .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapePanel)
                 .padding(22.dp)
         ) {
             Text(
@@ -1159,8 +1158,8 @@ private fun CatalogManagerDialog(
             modifier = Modifier
                 .width(860.dp)
                 .fillMaxHeight(0.88f)
-                .background(KBVoid, RoundedCornerShape(18.dp))
-                .border(1.dp, KBAccent.copy(alpha = 0.38f), RoundedCornerShape(18.dp))
+                .background(KBVoid, KBShapePanel)
+                .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapePanel)
                 .padding(18.dp)
         ) {
             // Header
@@ -1406,8 +1405,8 @@ private fun ConfirmRemoveCollectionDialog(
         Column(
             modifier = Modifier
                 .width(620.dp)
-                .background(KBSurface, RoundedCornerShape(18.dp))
-                .border(1.dp, KBDanger.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
+                .background(KBSurface, KBShapePanel)
+                .border(1.dp, KBDanger.copy(alpha = 0.45f), KBShapePanel)
                 .padding(22.dp)
         ) {
             Text(
@@ -1454,7 +1453,7 @@ private fun UnifiedManagerRow(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(KBShapeCard)
             .background(KBSurface)
             .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
@@ -1628,7 +1627,7 @@ private data class CatalogManagerDialogRow(
 @Composable
 private fun RailKindChip(isCollection: Boolean) {
     Surface(
-        shape = RoundedCornerShape(6.dp),
+        shape = KBShapeSmall,
         colors = SurfaceDefaults.colors(
             containerColor = if (isCollection) {
                 KBAccent.copy(alpha = 0.22f)
@@ -1675,7 +1674,7 @@ private fun CatalogIconButton(
         }
     } else {
         Surface(
-            shape = RoundedCornerShape(12.dp),
+            shape = KBShapeCard,
             colors = SurfaceDefaults.colors(
                 containerColor = KBSurface.copy(alpha = 0.50f),
                 contentColor = KBTextLo.copy(alpha = 0.50f)
@@ -1715,7 +1714,7 @@ private fun CatalogToggle(
                 modifier = Modifier
                     .width(46.dp)
                     .height(26.dp)
-                    .clip(RoundedCornerShape(13.dp))
+                    .clip(KBShapeCard)
                     .background(
                         if (checked) {
                             KBAccent.copy(alpha = 0.30f)
@@ -1730,7 +1729,7 @@ private fun CatalogToggle(
                         } else {
                             KBTextLo.copy(alpha = 0.45f)
                         },
-                        RoundedCornerShape(13.dp)
+                        KBShapeCard
                     )
             ) {
                 // Knob
@@ -1739,7 +1738,7 @@ private fun CatalogToggle(
                         .align(if (checked) Alignment.CenterEnd else Alignment.CenterStart)
                         .padding(3.dp)
                         .size(20.dp)
-                        .clip(RoundedCornerShape(10.dp))
+                        .clip(KBShapeChip)
                         .background(if (checked) KBAccent else KBTextLo)
                 )
             }
@@ -1772,8 +1771,8 @@ private fun RenameCatalogDialog(
         Column(
             modifier = Modifier
                 .width(620.dp)
-                .background(KBSurface, RoundedCornerShape(18.dp))
-                .border(1.dp, KBAccent.copy(alpha = 0.38f), RoundedCornerShape(18.dp))
+                .background(KBSurface, KBShapePanel)
+                .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapePanel)
                 .padding(22.dp)
         ) {
             Text(

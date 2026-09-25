@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -52,6 +51,8 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import com.kennyb1201.kbstream.ui.theme.KBShapeCard
+import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 
 @Composable
 fun StreamsScreen(
@@ -384,7 +385,7 @@ private fun StreamCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(14.dp))
+                .clip(KBShapeCard)
                 // Glass cards: translucent so the backdrop shows through,
                 // with the focused row noticeably more opaque so the selected
                 // source stays crisp against a busy frame.
@@ -402,7 +403,7 @@ private fun StreamCard(
                     } else {
                         Color.Transparent
                     },
-                    shape = RoundedCornerShape(14.dp)
+                    shape = KBShapeCard
                 )
                 .padding(horizontal = 18.dp, vertical = 15.dp)
         ) {
@@ -465,12 +466,12 @@ private fun StreamsHeroState(
             modifier = Modifier
                 .background(
                     KBSurface.copy(alpha = 0.82f),
-                    RoundedCornerShape(18.dp)
+                    KBShapePanel
                 )
                 .border(
                     1.dp,
                     KBTextLo.copy(alpha = 0.14f),
-                    RoundedCornerShape(18.dp)
+                    KBShapePanel
                 )
                 .padding(horizontal = 26.dp, vertical = 22.dp)
         ) {

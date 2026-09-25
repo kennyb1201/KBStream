@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -88,9 +87,10 @@ import com.kennyb1201.kbstream.ui.streams.StreamsViewModel
 import com.kennyb1201.kbstream.ui.decade.DecadeScreen
 import com.kennyb1201.kbstream.ui.studio.StudioScreen
 import com.kennyb1201.kbstream.ui.tag.TagScreen
-import com.kennyb1201.kbstream.ui.theme.KBStreamTheme
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBShapePanel
+import com.kennyb1201.kbstream.ui.theme.KBStreamTheme
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
@@ -2121,8 +2121,8 @@ private fun UpdateAvailablePopup(isPlaying: Boolean) {
         Column(
             modifier = Modifier
                 .width(560.dp)
-                .background(KBSurface, RoundedCornerShape(18.dp))
-                .border(1.dp, KBAccent.copy(alpha = 0.38f), RoundedCornerShape(18.dp))
+                .background(KBSurface, KBShapePanel)
+                .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapePanel)
                 .padding(22.dp)
         ) {
             Text(
@@ -2187,8 +2187,8 @@ private fun ExitConfirmDialog(
         Column(
             modifier = Modifier
                 .width(620.dp)
-                .background(KBSurface, RoundedCornerShape(18.dp))
-                .border(1.dp, KBAccent.copy(alpha = 0.38f), RoundedCornerShape(18.dp))
+                .background(KBSurface, KBShapePanel)
+                .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapePanel)
                 .padding(22.dp)
         ) {
             Text(

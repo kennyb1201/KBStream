@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -22,9 +21,10 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.badges.StreamBadge
+import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 
 /** Height of one badge chip row (chips: 20dp image + padding). */
-private val BadgeChipShape = RoundedCornerShape(6.dp)
+private val BadgeChipShape = KBShapeSmall
 private const val BADGE_ROW_HEIGHT = 22
 
 private fun String.toBadgeColorOrNull(): Color? {

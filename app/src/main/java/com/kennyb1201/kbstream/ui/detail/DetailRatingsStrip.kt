@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -27,6 +26,7 @@ import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.mdblist.MdbListRatings
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 
@@ -120,7 +120,7 @@ internal fun MdbListRatingsStrip(ratings: MdbListRatings) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
+                        .clip(KBShapeChip)
                         .background(KBSurfaceRaised)
                         .padding(horizontal = 12.dp, vertical = 9.dp)
                 ) {

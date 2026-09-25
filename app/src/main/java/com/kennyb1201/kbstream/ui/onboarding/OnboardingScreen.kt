@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
@@ -52,6 +51,8 @@ import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBShapeCard
+import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -168,7 +169,7 @@ fun OnboardingScreen(
 
             androidx.tv.material3.Surface(
                 onClick = onFinish,
-                shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(14.dp)),
+                shape = ClickableSurfaceDefaults.shape(shape = KBShapeCard),
                 colors = ClickableSurfaceDefaults.colors(
                     containerColor = KBAccent,
                     contentColor = KBVoid,
@@ -243,7 +244,7 @@ private fun OnboardingAccountPanel() {
 
     val signedIn = authState as? SupabaseSync.AuthState.SignedIn
     val credentialsValid = email.isNotBlank() && password.length >= 6
-    val shape = RoundedCornerShape(20.dp)
+    val shape = KBShapePanel
     // Only ever "the KBStream account" in front of the user: which backend
     // stores it is our business, not theirs.
 
@@ -267,7 +268,7 @@ private fun OnboardingAccountPanel() {
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
                         .size(40.dp)
-                        .background(KBAccent.copy(alpha = 0.16f), RoundedCornerShape(12.dp))
+                        .background(KBAccent.copy(alpha = 0.16f), KBShapeCard)
                 ) {
                     Icon(
                         imageVector = if (signedIn != null) {
@@ -402,7 +403,7 @@ private fun OnboardingActionButton(
         }
     } else {
         androidx.tv.material3.Surface(
-            shape = RoundedCornerShape(12.dp),
+            shape = KBShapeCard,
             colors = SurfaceDefaults.colors(
                 containerColor = KBSurface.copy(alpha = 0.50f),
                 contentColor = KBTextLo.copy(alpha = 0.50f)
@@ -429,7 +430,7 @@ private fun OnboardingCard(
 ) {
     androidx.tv.material3.Surface(
         onClick = onClick,
-        shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(20.dp)),
+        shape = ClickableSurfaceDefaults.shape(shape = KBShapePanel),
         colors = ClickableSurfaceDefaults.colors(
             containerColor = KBSurface.copy(alpha = 0.95f),
             contentColor = KBTextHi,
@@ -442,11 +443,11 @@ private fun OnboardingCard(
         border = ClickableSurfaceDefaults.border(
             border = Border(
                 border = BorderStroke(1.dp, KBAccent.copy(alpha = 0.28f)),
-                shape = RoundedCornerShape(20.dp)
+                shape = KBShapePanel
             ),
             focusedBorder = Border(
                 border = BorderStroke(2.dp, KBAccent),
-                shape = RoundedCornerShape(20.dp)
+                shape = KBShapePanel
             )
         ),
         glow = ClickableSurfaceDefaults.glow(
@@ -464,8 +465,8 @@ private fun OnboardingCard(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
                     .size(58.dp)
-                    .background(KBAccent.copy(alpha = 0.16f), RoundedCornerShape(16.dp))
-                    .border(1.dp, KBAccent.copy(alpha = 0.4f), RoundedCornerShape(16.dp))
+                    .background(KBAccent.copy(alpha = 0.16f), KBShapePanel)
+                    .border(1.dp, KBAccent.copy(alpha = 0.4f), KBShapePanel)
             ) {
                 Icon(
                     imageVector = icon,

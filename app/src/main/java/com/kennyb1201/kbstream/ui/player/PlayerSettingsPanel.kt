@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Slider
 import androidx.compose.runtime.Composable
@@ -32,6 +31,8 @@ import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBShapePanel
+import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -98,7 +99,7 @@ fun SettingsPanel(
             modifier = Modifier
                 .width(360.dp)
                 .padding(24.dp)
-                .background(KBSurfaceRaised, RoundedCornerShape(16.dp))
+                .background(KBSurfaceRaised, KBShapePanel)
                 .padding(20.dp)
                 .focusRequester(focusRequester)
                 .verticalScroll(rememberScrollState())
@@ -521,7 +522,7 @@ private fun PillChip(label: String, selected: Boolean) {
         modifier = Modifier
             .background(
                 if (selected) KBAccent else KBSurface,
-                RoundedCornerShape(6.dp)
+                KBShapeSmall
             )
             .padding(horizontal = 12.dp, vertical = 6.dp)
     )
@@ -561,7 +562,7 @@ private fun ToggleRow(
                 modifier = Modifier
                     .background(
                         if (checked) KBAccent else KBSurface,
-                        RoundedCornerShape(6.dp)
+                        KBShapeSmall
                     )
                     .padding(horizontal = 12.dp, vertical = 6.dp)
             )

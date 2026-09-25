@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.kb
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -19,7 +20,6 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -45,12 +45,16 @@ import com.kennyb1201.kbstream.data.kb.KBFolder
 import com.kennyb1201.kbstream.data.kb.KBRail
 import com.kennyb1201.kbstream.data.tmdb.HeroArtwork
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBStatusMessage
+import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
+import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.LandscapeCard
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.home.HomeHeroArtwork
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
@@ -156,7 +160,7 @@ private fun TabChip(
             modifier = Modifier
                 .background(
                     if (selected) KBAccent.copy(alpha = 0.22f) else KBSurface,
-                    RoundedCornerShape(14.dp)
+                    KBShapeCard
                 )
                 .padding(horizontal = 14.dp, vertical = 5.dp)
         ) {
@@ -170,36 +174,33 @@ private fun TabChip(
     }
 }
 
+/**
+ * Loading / error / empty state for a KB collection, as the app's shared
+ * [KBStatusMessage] card.
+ *
+ * These were two functions with identical bodies ([FolderLoading] and
+ * [FolderErrorMessage]) wrapping a plain centred line of text; a collection
+ * that failed to load looked exactly like one that was legitimately empty, and
+ * neither matched the status card every other browse screen shows. The
+ * `weight` is what makes the card centre in the space the rails would have
+ * used — KBStatusMessage itself defaults to fillMaxSize, and inside a Column
+ * that would run past the bottom of the screen instead of filling what is
+ * left below the hero and source tabs.
+ */
 @Composable
-private fun FolderLoading(label: String) {
-    Box(
+private fun ColumnScope.FolderStatus(
+    message: String,
+    loading: Boolean = false,
+    icon: String = "⚠️"
+) {
+    KBStatusMessage(
+        message = message,
+        loading = loading,
+        icon = icon,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(24.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = label,
-            color = KBTextLo,
-            style = MaterialTheme.typography.bodyMedium
-        )
-    }
-}
-
-@Composable
-private fun FolderErrorMessage(message: String) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(24.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = message,
-            color = KBTextLo,
-            style = MaterialTheme.typography.bodyMedium
-        )
-    }
+            .weight(1f)
+    )
 }
 
 /**
@@ -572,9 +573,11 @@ private fun FollowHomeLayout(
         SourceTabs(state, selectedSourceId, onSelectSource)
 
         when {
-            state.isLoading -> FolderLoading("Loading collection…")
-            state.error != null -> FolderErrorMessage(state.error.orEmpty())
-            visibleRails.isEmpty() -> FolderErrorMessage("Nothing to show here yet.")
+            state.isLoading ->
+                FolderStatus(KB_STATUS_LOADING, loading = true)
+            state.error != null -> FolderStatus(state.error.orEmpty())
+            visibleRails.isEmpty() ->
+                FolderStatus("Nothing to show here yet.", icon = KB_STATUS_ICON_EMPTY)
             else -> {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
@@ -656,9 +659,11 @@ private fun RowsLayout(
         SourceTabs(state, selectedSourceId, onSelectSource)
 
         when {
-            state.isLoading -> FolderLoading("Loading collection…")
-            state.error != null -> FolderErrorMessage(state.error.orEmpty())
-            visibleRails.isEmpty() -> FolderErrorMessage("Nothing to show here yet.")
+            state.isLoading ->
+                FolderStatus(KB_STATUS_LOADING, loading = true)
+            state.error != null -> FolderStatus(state.error.orEmpty())
+            visibleRails.isEmpty() ->
+                FolderStatus("Nothing to show here yet.", icon = KB_STATUS_ICON_EMPTY)
             else -> {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
@@ -736,9 +741,11 @@ private fun GridLayout(
         }
 
         when {
-            state.isLoading -> FolderLoading("Loading collection…")
-            state.error != null -> FolderErrorMessage(state.error.orEmpty())
-            gridItems.isEmpty() -> FolderErrorMessage("Nothing to show here yet.")
+            state.isLoading ->
+                FolderStatus(KB_STATUS_LOADING, loading = true)
+            state.error != null -> FolderStatus(state.error.orEmpty())
+            gridItems.isEmpty() ->
+                FolderStatus("Nothing to show here yet.", icon = KB_STATUS_ICON_EMPTY)
             else -> {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(6),

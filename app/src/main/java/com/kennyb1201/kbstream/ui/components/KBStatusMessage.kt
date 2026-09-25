@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -15,6 +14,7 @@ import androidx.compose.ui.unit.dp
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 
@@ -49,7 +49,7 @@ fun KBStatusMessage(
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
-                .background(KBSurface, RoundedCornerShape(12.dp))
+                .background(KBSurface, KBShapeCard)
                 .padding(horizontal = 20.dp, vertical = 16.dp)
         ) {
             if (loading) {

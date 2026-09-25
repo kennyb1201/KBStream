@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -29,12 +28,14 @@ import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.simkl.SimklWatchedCounts
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBRust
+import com.kennyb1201.kbstream.ui.theme.KBShapeCard
+import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
-import com.kennyb1201.kbstream.ui.theme.KBRust
 
 @Composable
 fun SimklConnectScreen(
@@ -75,7 +76,7 @@ fun SimklConnectScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .widthIn(max = 760.dp)
-                    .background(KBSurface, RoundedCornerShape(18.dp))
+                    .background(KBSurface, KBShapePanel)
                     .padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
@@ -161,7 +162,7 @@ fun SimklConnectScreen(
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(KBSurfaceRaised, RoundedCornerShape(14.dp))
+                                .background(KBSurfaceRaised, KBShapeCard)
                                 .padding(horizontal = 18.dp, vertical = 20.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
@@ -245,7 +246,7 @@ private fun SimklWatchedCountTile(
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = modifier
-            .background(KBSurfaceRaised, RoundedCornerShape(14.dp))
+            .background(KBSurfaceRaised, KBShapeCard)
             .padding(horizontal = 14.dp, vertical = 14.dp)
     ) {
         Text(
@@ -274,7 +275,7 @@ private fun SimklStatusPanel(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(KBSurfaceRaised, RoundedCornerShape(14.dp))
+            .background(KBSurfaceRaised, KBShapeCard)
             .padding(16.dp)
     ) {
         Text(
@@ -300,7 +301,7 @@ private fun SimklInfoBlock(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(KBSurfaceRaised, RoundedCornerShape(14.dp))
+            .background(KBSurfaceRaised, KBShapeCard)
             .padding(16.dp)
     ) {
         Text(

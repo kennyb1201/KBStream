@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -52,10 +51,11 @@ import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBShapePanel
+import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
-import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 
 /**
  * Full-screen profile picker shown at launch when profiles exist. D-pad
@@ -213,8 +213,8 @@ fun ProfilePickerScreen(
             Column(
                 modifier = Modifier
                     .width(420.dp)
-                    .background(KBSurfaceRaised, RoundedCornerShape(18.dp))
-                    .border(1.dp, KBAccent.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
+                    .background(KBSurfaceRaised, KBShapePanel)
+                    .border(1.dp, KBAccent.copy(alpha = 0.45f), KBShapePanel)
                     .padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {

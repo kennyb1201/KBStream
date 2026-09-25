@@ -21,7 +21,6 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -54,6 +53,7 @@ import com.kennyb1201.kbstream.data.library.LibraryList
 import com.kennyb1201.kbstream.data.library.LibrarySource
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.data.library.HiddenTitles
@@ -64,6 +64,8 @@ import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBShapeCard
+import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -140,12 +142,7 @@ fun LibraryScreen(
             verticalAlignment = Alignment.Bottom,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text(
-                text = "LIBRARY",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                color = KBAccent
-            )
+            KBPageTitle(text = "LIBRARY", color = KBAccent)
             Spacer(modifier = Modifier.weight(1f))
             Text(
                 text = buildList {
@@ -418,7 +415,7 @@ private fun LibraryFilterChip(
     modifier: Modifier = Modifier
 ) {
     var focused by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(14.dp)
+    val shape = KBShapeCard
 
     Surface(
         onClick = onClick,
@@ -569,7 +566,7 @@ private fun ListsPane(
                 Surface(
                     onClick = { onListSelect(list) },
                     shape = ClickableSurfaceDefaults.shape(
-                        shape = RoundedCornerShape(12.dp)
+                        shape = KBShapeCard
                     ),
                     colors = ClickableSurfaceDefaults.colors(
                         containerColor = when {
@@ -702,7 +699,7 @@ private fun LibraryPosterCard(
                             .padding(6.dp)
                             .background(
                                 Color.Black.copy(alpha = 0.65f),
-                                RoundedCornerShape(10.dp)
+                                KBShapeChip
                             )
                             .padding(horizontal = 6.dp, vertical = 1.dp)
                     )

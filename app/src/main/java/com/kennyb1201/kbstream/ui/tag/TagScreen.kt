@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -67,6 +66,7 @@ import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import kotlinx.coroutines.delay
@@ -448,11 +448,11 @@ private fun TagHeader(
                             .zIndex((posterUrls.size - index).toFloat())
                             .offset(x = (-12 * index).dp)
                             .rotate(rotations[index])
-                            .clip(RoundedCornerShape(8.dp))
+                            .clip(KBShapeSmall)
                             .border(
                                 1.dp,
                                 Color.White.copy(alpha = 0.25f),
-                                RoundedCornerShape(8.dp)
+                                KBShapeSmall
                             )
                             .width(widths[index])
                             .height(heights[index])

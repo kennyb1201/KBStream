@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
@@ -59,6 +58,9 @@ import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.player.PlayerAudioTuning
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBShapeChip
+import com.kennyb1201.kbstream.ui.theme.KBShapePanel
+import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -361,7 +363,7 @@ fun SettingsScreen(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(KBSurfaceRaised, RoundedCornerShape(8.dp))
+                            .background(KBSurfaceRaised, KBShapeSmall)
                             .padding(horizontal = 14.dp, vertical = 10.dp)
                     ) {
                         Text(
@@ -468,7 +470,7 @@ fun SettingsScreen(
                                         style = MaterialTheme.typography.labelSmall,
                                         fontWeight = FontWeight.SemiBold,
                                         modifier = Modifier
-                                            .background(KBSurface, RoundedCornerShape(6.dp))
+                                            .background(KBSurface, KBShapeSmall)
                                             .padding(horizontal = 14.dp, vertical = 8.dp)
                                     )
                                 }
@@ -490,7 +492,7 @@ fun SettingsScreen(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(KBSurfaceRaised, RoundedCornerShape(8.dp))
+                            .background(KBSurfaceRaised, KBShapeSmall)
                             .padding(horizontal = 14.dp, vertical = 10.dp)
                     ) {
                         Text(
@@ -633,7 +635,7 @@ fun SettingsScreen(
                             KBCard(
                                 onClick = { importBadgePack() },
                                 modifier = Modifier
-                                    .background(KBSurfaceRaised, RoundedCornerShape(6.dp))
+                                    .background(KBSurfaceRaised, KBShapeSmall)
                             ) {
                                 Text(
                                     text = if (badgeImporting) "Importing…" else "Import",
@@ -650,7 +652,7 @@ fun SettingsScreen(
                                     },
                                     modifier = Modifier
                                         .padding(start = 8.dp)
-                                        .background(KBSurfaceRaised, RoundedCornerShape(6.dp))
+                                        .background(KBSurfaceRaised, KBShapeSmall)
                                 ) {
                                     Text(
                                         text = "Remove",
@@ -1629,7 +1631,7 @@ fun SettingsScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(KBSurfaceRaised, RoundedCornerShape(8.dp))
+                            .background(KBSurfaceRaised, KBShapeSmall)
                             .padding(horizontal = 14.dp, vertical = 10.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
@@ -1653,7 +1655,7 @@ fun SettingsScreen(
                             modifier = Modifier
                                 .background(
                                     if (enableTunneling) KBAccent else KBSurface,
-                                    RoundedCornerShape(6.dp)
+                                    KBShapeSmall
                                 )
                                 .padding(horizontal = 14.dp, vertical = 8.dp)
                         )
@@ -1673,7 +1675,7 @@ fun SettingsScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(KBSurfaceRaised, RoundedCornerShape(8.dp))
+                                .background(KBSurfaceRaised, KBShapeSmall)
                                 .padding(horizontal = 14.dp, vertical = 10.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
@@ -1697,7 +1699,7 @@ fun SettingsScreen(
                                 modifier = Modifier
                                     .background(
                                         if (enablePip) KBAccent else KBSurface,
-                                        RoundedCornerShape(6.dp)
+                                        KBShapeSmall
                                     )
                                     .padding(horizontal = 14.dp, vertical = 8.dp)
                             )
@@ -1930,12 +1932,12 @@ private fun SettingsNavRail(
                                 selectedHere -> KBAccent.copy(alpha = 0.22f)
                                 else -> androidx.compose.ui.graphics.Color.Transparent
                             },
-                            RoundedCornerShape(10.dp)
+                            KBShapeChip
                         )
                         .border(
                             width = if (selectedHere) 1.dp else 0.dp,
                             color = if (selectedHere) KBAccent else androidx.compose.ui.graphics.Color.Transparent,
-                            shape = RoundedCornerShape(10.dp)
+                            shape = KBShapeChip
                         )
                         .padding(horizontal = 14.dp, vertical = 12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1998,7 +2000,7 @@ private fun AboutSection() {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(KBSurfaceRaised, RoundedCornerShape(8.dp))
+                    .background(KBSurfaceRaised, KBShapeSmall)
                     .padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
                 Text(
@@ -2101,7 +2103,7 @@ private fun SyncHealthSection() {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(KBSurfaceRaised, RoundedCornerShape(8.dp))
+                    .background(KBSurfaceRaised, KBShapeSmall)
                     .padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
                 Text(
@@ -2144,7 +2146,7 @@ private fun SyncHealthSection() {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(KBSurfaceRaised, RoundedCornerShape(8.dp))
+                    .background(KBSurfaceRaised, KBShapeSmall)
                     .padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
                 Text(
@@ -2195,7 +2197,7 @@ private fun SyncHealthSection() {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(KBSurfaceRaised, RoundedCornerShape(8.dp))
+                    .background(KBSurfaceRaised, KBShapeSmall)
                     .padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
                 Text(
@@ -2306,7 +2308,7 @@ private fun UpdateRow() {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(KBSurfaceRaised, RoundedCornerShape(10.dp))
+                    .background(KBSurfaceRaised, KBShapeChip)
                     .padding(horizontal = 16.dp, vertical = 14.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
@@ -2345,8 +2347,8 @@ private fun SettingsClearHistoryDialog(
             Column(
                 modifier = Modifier
                     .width(560.dp)
-                    .background(KBSurface, RoundedCornerShape(18.dp))
-                    .border(1.dp, KBAccent.copy(alpha = 0.38f), RoundedCornerShape(18.dp))
+                    .background(KBSurface, KBShapePanel)
+                    .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapePanel)
                     .padding(horizontal = 22.dp, vertical = 20.dp)
             ) {
                 Text(
@@ -2417,8 +2419,8 @@ private fun SettingsExternalPlayerDialog(
         Column(
             modifier = Modifier
                 .width(640.dp)
-                .background(KBSurface, RoundedCornerShape(18.dp))
-                .border(1.dp, KBAccent.copy(alpha = 0.38f), RoundedCornerShape(18.dp))
+                .background(KBSurface, KBShapePanel)
+                .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapePanel)
                 .padding(horizontal = 22.dp, vertical = 20.dp)
         ) {
             Text(
@@ -2521,12 +2523,12 @@ private fun PillChip(label: String, selected: Boolean) {
                 if (focused) {
                     Modifier.background(
                         if (selected) KBAccent else KBAccent.copy(alpha = 0.3f),
-                        RoundedCornerShape(6.dp)
+                        KBShapeSmall
                     )
                 } else {
                     Modifier.background(
                         if (selected) KBAccent else KBSurface,
-                        RoundedCornerShape(6.dp)
+                        KBShapeSmall
                     )
                 }
             )
@@ -2552,7 +2554,7 @@ private fun ToggleRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(KBSurfaceRaised, RoundedCornerShape(8.dp))
+                .background(KBSurfaceRaised, KBShapeSmall)
                 .padding(horizontal = 14.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
@@ -2576,7 +2578,7 @@ private fun ToggleRow(
                 modifier = Modifier
                     .background(
                         if (displayChecked) KBAccent else KBSurface,
-                        RoundedCornerShape(6.dp)
+                        KBShapeSmall
                     )
                     .alpha(if (enabled) 1f else 0.35f)
                     .padding(horizontal = 14.dp, vertical = 8.dp)
@@ -2598,7 +2600,7 @@ private fun NavigationRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(KBSurfaceRaised, RoundedCornerShape(10.dp))
+                .background(KBSurfaceRaised, KBShapeChip)
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
@@ -2670,7 +2672,7 @@ private fun HiddenTitlesSection() {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(KBSurfaceRaised, RoundedCornerShape(10.dp))
+                    .background(KBSurfaceRaised, KBShapeChip)
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically

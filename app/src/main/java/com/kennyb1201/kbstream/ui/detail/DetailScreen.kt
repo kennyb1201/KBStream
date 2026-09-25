@@ -127,6 +127,9 @@ import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBShapeCard
+import com.kennyb1201.kbstream.ui.theme.KBShapeChip
+import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -1806,7 +1809,7 @@ fun DetailScreen(
                                             // that the header hook below cannot fix (it
                                             // only fires when item 0 scrolled fully out).
                                             shape = ClickableSurfaceDefaults.shape(
-                                                shape = RoundedCornerShape(8.dp)
+                                                shape = KBShapeSmall
                                             ),
                                             colors = ClickableSurfaceDefaults.colors(
                                                 containerColor = Color.Transparent,
@@ -1825,14 +1828,14 @@ fun DetailScreen(
                                                         1.dp,
                                                         KBTextLo.copy(alpha = 0.35f)
                                                     ),
-                                                    shape = RoundedCornerShape(8.dp)
+                                                    shape = KBShapeSmall
                                                 ),
                                                 focusedBorder = Border(
                                                     border = BorderStroke(
                                                         2.dp,
                                                         KBAccent
                                                     ),
-                                                    shape = RoundedCornerShape(8.dp)
+                                                    shape = KBShapeSmall
                                                 )
                                             ),
                                             glow = ClickableSurfaceDefaults.glow(
@@ -3745,7 +3748,7 @@ private fun DetailFactCard(
 ) {
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(10.dp),
+        shape = KBShapeChip,
         colors = SurfaceDefaults.colors(
             containerColor =
                 KBSurfaceRaised.copy(alpha = 0.96f),
@@ -4147,7 +4150,7 @@ private fun StudioCard(
     onClick: () -> Unit
 ) {
     val cardShape =
-        RoundedCornerShape(10.dp)
+        KBShapeChip
 
     Surface(
         onClick = onClick,
@@ -4665,7 +4668,7 @@ private fun EpisodesStatusMessage(
             .fillMaxWidth()
             .background(
                 KBSurface,
-                RoundedCornerShape(10.dp)
+                KBShapeChip
             )
             .padding(
                 horizontal = 12.dp,
@@ -4997,12 +5000,12 @@ private fun ReviewOverlay(
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clip(RoundedCornerShape(14.dp))
+                                    .clip(KBShapeCard)
                                     .background(KBSurface)
                                     .border(
                                         1.dp,
                                         KBAccent.copy(alpha = 0.45f),
-                                        RoundedCornerShape(14.dp)
+                                        KBShapeCard
                                     )
                                     .clickable { spoilerRevealed = true }
                                     .padding(horizontal = 18.dp, vertical = 22.dp)
