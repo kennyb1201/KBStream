@@ -237,6 +237,9 @@ class XmltvImporter(
         // This is the single heaviest guide write (re-keying every imported
         // row), so it is the one most worth deferring past playback.
         EpgWriteGate.holdWhilePlaying()
+        // Kept outside the try so the failure can be rethrown WITH the cause
+        // (see the !swapped branch below).
+        var swapFailure: Throwable? = null
         val swapped = try {
             dao.swapStagedGuideIntoLive(
                 sourceUrl = sourceUrl,
@@ -249,6 +252,7 @@ class XmltvImporter(
             throw cancellation
         } catch (swapError: Throwable) {
             Log.e(TAG, "IMPORT SWAP FAILED source=$sourceUrl", swapError)
+            swapFailure = swapError
             false
         }
 
@@ -262,8 +266,13 @@ class XmltvImporter(
 
         if (!swapped) {
             // Nothing was promoted; surface the failure so the caller's retry
-            // logic still sees the import as unsuccessful.
-            error("guide swap failed for source=$sourceUrl")
+            // logic still sees the import as unsuccessful. The cause is
+            // attached deliberately: this write is the heaviest of the import
+            // and the most likely to lose the profile-scoped database, and the
+            // caller recognises a swap by walking the cause chain
+            // (data/db/DatabaseSwapRetry.kt). A bare message here would read as
+            // a real failure and the guide would be left empty.
+            throw IllegalStateException("guide swap failed for source=$sourceUrl", swapFailure)
         }
     } catch (error: Throwable) {
         // The staged rows may be half-written; they live under the staging

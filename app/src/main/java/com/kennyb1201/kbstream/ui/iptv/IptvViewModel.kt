@@ -6,6 +6,8 @@ import android.content.SharedPreferences
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kennyb1201.kbstream.data.db.retryOnDatabaseSwap
+import com.kennyb1201.kbstream.data.db.withDatabaseSwapRetry
 import com.kennyb1201.kbstream.data.iptv.EpgMatchType
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.iptv.IptvChannel
@@ -290,7 +292,21 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             // recovered when the import finished). Query the cached data
             // right away; importGuideInternal() bumps the refresh tick when
             // done, which re-runs this query against the fresh import.
+            // A guide read can lose its database mid-query: the guide file is
+            // per-profile and its instance is retired across a profile change
+            // (see data/db/DatabaseSwapRetry.kt). Retrying HERE, inside the
+            // request, re-runs the query through a freshly resolved DAO and
+            // keeps this flow alive. Without it the exception took the whole
+            // lineup flow down — and the lineup flow is what the guide screen
+            // shows, so it stayed empty for the rest of the screen's life.
             else -> observeGuideRequest(currentPlaylist, request)
+                .retryOnDatabaseSwap { attempt, error ->
+                    Log.w(
+                        TAG,
+                        "GUIDE QUERY RETRY $attempt after database swap",
+                        error
+                    )
+                }
         }
     }.stateIn(
         viewModelScope,
@@ -767,56 +783,33 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Imports one EPG source, retrying once when the failure is the
+     * Imports one EPG source, re-running it while the failure is the
      * profile-scoped guide database being swapped underneath the import.
      *
      * A running import holds a database connection for minutes, and the guide
      * database retires an instance across a profile change (or a tombstone
      * re-request). When that lands mid-import the batch write dies with Room's
-     * "attempt to re-open an already-closed object" / SQLITE_BUSY, which used to
-     * surface as a permanent error banner and no guide. Re-running is safe: the
-     * import stages every row under its own source key and only promotes on a
-     * complete parse, and by the retry the database layer has settled on one
-     * instance, so the retry finishes the import.
+     * "connection pool has been closed" / "already-closed object" / SQLITE_BUSY,
+     * which surfaced as a permanent error banner and no guide. Re-running is
+     * safe: the import stages every row under its own source key and only
+     * promotes on a complete parse, and by a later attempt the database layer
+     * has settled on one instance, so the attempt finishes the import.
      *
-     * Only transient database symptoms are retried, and only once — a real
-     * failure (network, malformed guide) still fails loudly.
+     * It used to retry exactly ONCE, which is not enough for a source whose
+     * import is long enough to outlive more than one swap: the second failure
+     * became the banner the user was left holding, with the guide still empty
+     * on every entry. Only swap symptoms are retried, and only a bounded
+     * number of times — a real failure (network, malformed guide) still fails
+     * loudly on its first attempt.
      */
     private suspend fun importGuideSource(url: String) {
-        try {
-            repository.importGuide(url)
-        } catch (t: Throwable) {
-            if (t is CancellationException) throw t
-            if (!isTransientDatabaseError(t)) throw t
-            Log.w(TAG, "GUIDE IMPORT RETRY after database swap source=$url", t)
-            repository.importGuide(url)
-        }
-    }
-
-    /**
-     * True when [t] is the scoped database being closed or swapped under a
-     * running operation rather than a real failure: Room reports a closed
-     * connection pool / an already-closed handle, and SQLite reports a busy
-     * database held by the instance that is being replaced.
-     */
-    private fun isTransientDatabaseError(t: Throwable): Boolean {
-        var current: Throwable? = t
-        var depth = 0
-        while (current != null && depth < 8) {
-            if (current::class.java.simpleName == "SQLiteDatabaseLockedException") return true
-            val message = current.message.orEmpty()
-            if (
-                message.contains("already-closed object") ||
-                message.contains("connection pool has been closed") ||
-                message.contains("database is locked") ||
-                message.contains("SQLITE_BUSY")
-            ) {
-                return true
+        withDatabaseSwapRetry(
+            onRetry = { attempt, error ->
+                Log.w(TAG, "GUIDE IMPORT RETRY $attempt after database swap source=$url", error)
             }
-            current = current.cause
-            depth++
+        ) {
+            repository.importGuide(url)
         }
-        return false
     }
 
     private fun refreshIfNeeded() {
