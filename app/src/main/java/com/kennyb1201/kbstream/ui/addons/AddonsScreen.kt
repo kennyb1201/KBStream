@@ -80,6 +80,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Border
 import coil3.compose.SubcomposeAsyncImage
 import coil3.request.ImageRequest
@@ -140,13 +141,13 @@ fun AddonsScreen(
     viewModel: AddonsViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
     val context = LocalContext.current
-    val addons by viewModel.addons.collectAsState()
-    val isLoading by viewModel.isLoading.collectAsState()
-    val refreshing by viewModel.refreshing.collectAsState()
-    val error by viewModel.error.collectAsState()
-    val status by viewModel.status.collectAsState()
-    val health by viewModel.health.collectAsState()
-    val checkingHealth by viewModel.checkingHealth.collectAsState()
+    val addons by viewModel.addons.collectAsStateWithLifecycle()
+    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val refreshing by viewModel.refreshing.collectAsStateWithLifecycle()
+    val error by viewModel.error.collectAsStateWithLifecycle()
+    val status by viewModel.status.collectAsStateWithLifecycle()
+    val health by viewModel.health.collectAsStateWithLifecycle()
+    val checkingHealth by viewModel.checkingHealth.collectAsStateWithLifecycle()
     val catalogConfigurations by viewModel.catalogConfigurations.collectAsState()
 
     var urlInput by remember { mutableStateOf("") }

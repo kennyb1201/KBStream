@@ -77,6 +77,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
@@ -142,16 +143,16 @@ fun GuideScreen(
     // Channels whose guide row has actually been queried. Used to keep a
     // channel that is merely still loading from being labelled "No program
     // data" (see resolvedGuideChannelIds in the ViewModel).
-    val resolvedGuideIds by viewModel.resolvedGuideChannelIds.collectAsState()
-    val isLoading by viewModel.isLoading.collectAsState()
-    val isImportingGuide by viewModel.isImportingGuide.collectAsState()
-    val error by viewModel.error.collectAsState()
-    val guideError by viewModel.guideError.collectAsState()
-    val playlistUrl by viewModel.playlistUrl.collectAsState()
+    val resolvedGuideIds by viewModel.resolvedGuideChannelIds.collectAsStateWithLifecycle()
+    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val isImportingGuide by viewModel.isImportingGuide.collectAsStateWithLifecycle()
+    val error by viewModel.error.collectAsStateWithLifecycle()
+    val guideError by viewModel.guideError.collectAsStateWithLifecycle()
+    val playlistUrl by viewModel.playlistUrl.collectAsStateWithLifecycle()
     val epgUrl by viewModel.epgUrl.collectAsState()
-    val playlistName by viewModel.playlistName.collectAsState()
-    val extraPlaylistUrls by viewModel.extraPlaylistUrls.collectAsState()
-    val extraEpgUrls by viewModel.extraEpgUrls.collectAsState()
+    val playlistName by viewModel.playlistName.collectAsStateWithLifecycle()
+    val extraPlaylistUrls by viewModel.extraPlaylistUrls.collectAsStateWithLifecycle()
+    val extraEpgUrls by viewModel.extraEpgUrls.collectAsStateWithLifecycle()
 
     val channelListState = rememberLazyListState()
     val firstChannelFocusRequester = remember { FocusRequester() }
@@ -209,7 +210,7 @@ fun GuideScreen(
     // held here while the program list dialog is up; programs stream in
     // from the ViewModel (empty until the provider answers).
     var catchupChannel by remember { mutableStateOf<IptvChannelWithEpg?>(null) }
-    val catchupPrograms by viewModel.catchupPrograms.collectAsState()
+    val catchupPrograms by viewModel.catchupPrograms.collectAsStateWithLifecycle()
 
     // Programme reminders: set from the channel menu ("REMIND ME: <next>").
     // A poller fires an in-guide banner when a reminder's programme starts;
@@ -305,7 +306,7 @@ fun GuideScreen(
         group !in hiddenGroups
     }
 }
-    val hiddenChannelIds by viewModel.hiddenChannelIds.collectAsState()
+    val hiddenChannelIds by viewModel.hiddenChannelIds.collectAsStateWithLifecycle()
     val groups = remember(unhiddenChannels, favorites, recentChannelKeys) {
         buildList {
             add("All")
@@ -509,7 +510,7 @@ fun GuideScreen(
     // The ViewModel debounces the query and searches the EPG table; here the
     // hits are mapped onto VISIBLE channels only, so a channel the user hid
     // cannot resurface through a program match.
-    val programSearchRows by viewModel.programSearchResults.collectAsState()
+    val programSearchRows by viewModel.programSearchResults.collectAsStateWithLifecycle()
     LaunchedEffect(searchQuery, showSearch) {
         if (!showSearch) return@LaunchedEffect
         viewModel.searchPrograms(searchQuery)

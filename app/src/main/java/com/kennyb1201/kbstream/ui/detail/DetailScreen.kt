@@ -76,6 +76,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.Border
 import androidx.tv.material3.Card
@@ -415,8 +416,8 @@ fun DetailScreen(
     var seasonSwapSinkArmed by remember { mutableStateOf(false) }
 
     val meta by viewModel.meta.collectAsState()
-    val mdbListRatings by viewModel.mdbListRatings.collectAsState()
-    val allReviews by viewModel.allReviews.collectAsState()
+    val mdbListRatings by viewModel.mdbListRatings.collectAsStateWithLifecycle()
+    val allReviews by viewModel.allReviews.collectAsStateWithLifecycle()
     val tmdbDetail by viewModel.tmdbDetail.collectAsState()
     // The trailer the button offers IS the trailer the button plays: one pick,
     // one rule. Movies almost always carry a video typed exactly "Trailer", so
@@ -431,30 +432,30 @@ fun DetailScreen(
     val isLoading by viewModel.isLoading.collectAsState()
     val episodes by viewModel.episodes.collectAsState()
     val episodesLoading by viewModel.episodesLoading.collectAsState()
-    val episodeError by viewModel.episodeError.collectAsState()
+    val episodeError by viewModel.episodeError.collectAsStateWithLifecycle()
     val resumeInfo by viewModel.resumeInfo.collectAsState()
     // All in-progress rows for this title, keyed by episodeStreamId: lets
     // EVERY in-progress episode card show its own progress bar / time left,
     // not just the single most recent one in resumeInfo.
-    val inProgressByStreamId by viewModel.inProgressByStreamId.collectAsState()
-    val collection by viewModel.collection.collectAsState()
-    val watchedKeys by viewModel.watchedKeys.collectAsState()
-    val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsState()
-    val resolvedPosterIds by viewModel.resolvedPosterIds.collectAsState()
-    val completedEpisodeIds by viewModel.completedEpisodeIds.collectAsState()
-    val watchedEpisodeKeys by viewModel.watchedEpisodeKeys.collectAsState()
-    val simklWatchedEpisodes by viewModel.simklWatchedEpisodes.collectAsState()
-    val simklSeriesWatched by viewModel.simklSeriesWatched.collectAsState()
-    val error by viewModel.error.collectAsState()
+    val inProgressByStreamId by viewModel.inProgressByStreamId.collectAsStateWithLifecycle()
+    val collection by viewModel.collection.collectAsStateWithLifecycle()
+    val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
+    val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
+    val resolvedPosterIds by viewModel.resolvedPosterIds.collectAsStateWithLifecycle()
+    val completedEpisodeIds by viewModel.completedEpisodeIds.collectAsStateWithLifecycle()
+    val watchedEpisodeKeys by viewModel.watchedEpisodeKeys.collectAsStateWithLifecycle()
+    val simklWatchedEpisodes by viewModel.simklWatchedEpisodes.collectAsStateWithLifecycle()
+    val simklSeriesWatched by viewModel.simklSeriesWatched.collectAsStateWithLifecycle()
+    val error by viewModel.error.collectAsStateWithLifecycle()
     val vmTargetEpisode by viewModel.targetEpisode.collectAsState()
     val vmLoadedSeason by viewModel.loadedSeason.collectAsState()
-    val vmPlayButtonText by viewModel.playButtonText.collectAsState()
+    val vmPlayButtonText by viewModel.playButtonText.collectAsStateWithLifecycle()
 
     fun clearEpisodeTransitionState() {
         episodeTransitionState = EpisodeTransitionState()
     }
 
-    val hasStreamAddons by viewModel.hasStreamAddons.collectAsState()
+    val hasStreamAddons by viewModel.hasStreamAddons.collectAsStateWithLifecycle()
 
     val normalizedType = when (type.lowercase()) {
         "tv", "show" -> "series"
@@ -2104,7 +2105,7 @@ fun DetailScreen(
 
                                                     val isWatchedCached
                                                             by isWatchedFlow
-                                                                .collectAsState()
+                                                                .collectAsStateWithLifecycle()
 
                                                     val isEpisodeWatched =
                                                         remember(

@@ -22,7 +22,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,6 +38,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.MaterialTheme
@@ -73,7 +73,7 @@ fun ProfileEditScreen(
     onDone: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val profiles by ProfileManager.profiles.collectAsState()
+    val profiles by ProfileManager.profiles.collectAsStateWithLifecycle()
 
     // Manage mode: when opened with a null id (Settings entry point or the
     // picker's Manage tile), an internal chip row switches between editing

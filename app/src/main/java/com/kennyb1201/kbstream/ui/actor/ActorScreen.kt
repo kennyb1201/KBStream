@@ -26,7 +26,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,6 +43,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
@@ -100,14 +100,14 @@ fun ActorScreen(
     viewModel: ActorViewModel = viewModel()
 ) {
     val scope = rememberCoroutineScope()
-    val person by viewModel.person.collectAsState()
-    val resolvedCreditIds by viewModel.resolvedCreditIds.collectAsState()
-    val watchedKeys by viewModel.watchedKeys.collectAsState()
-    val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsState()
-    val isLoading by viewModel.isLoading.collectAsState()
-    val error by viewModel.error.collectAsState()
-    val topWorkBackdropUrl by viewModel.topWorkBackdropUrl.collectAsState()
-    val topWorkCredit by viewModel.topWorkCredit.collectAsState()
+    val person by viewModel.person.collectAsStateWithLifecycle()
+    val resolvedCreditIds by viewModel.resolvedCreditIds.collectAsStateWithLifecycle()
+    val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
+    val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
+    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val error by viewModel.error.collectAsStateWithLifecycle()
+    val topWorkBackdropUrl by viewModel.topWorkBackdropUrl.collectAsStateWithLifecycle()
+    val topWorkCredit by viewModel.topWorkCredit.collectAsStateWithLifecycle()
 
     LaunchedEffect(actorId) {
         viewModel.load(actorId)

@@ -36,7 +36,6 @@ import kotlin.math.abs
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.kennyb1201.kbstream.data.tmdb.displayDescription
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -271,7 +270,7 @@ private fun TopActionBar(
     // PROFILES before any profile exists.
     val activeProfile by
         com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile
-            .collectAsState()
+            .collectAsStateWithLifecycle()
     val profileLabel = activeProfile?.name?.uppercase()
         ?.takeIf { it.isNotBlank() } ?: "PROFILES"
     Row(
