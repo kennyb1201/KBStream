@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.util.Log
+import com.kennyb1201.kbstream.data.memory.evictOldest
 import com.kennyb1201.kbstream.ui.player.NativePlayerActivity
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -61,23 +62,11 @@ object TrailerPlayerLauncher {
      * there is no concurrent writer to race the eviction.
      */
     private fun pruneCaches() {
+        // Shared with the TMDB caches (data.memory.evictOldest): same rule, and
+        // these two maps differ only in where the timestamp lives -- the source
+        // in its value's cachedAt, the failure in the value itself.
         evictOldest(sourceCache, { it.cachedAt }, MAX_SOURCE_ENTRIES)
         evictOldest(resolutionFailures, { it }, MAX_FAILURE_ENTRIES)
-    }
-
-    /** Drops the oldest entries of [cache] until it is back at or below [max]. */
-    private fun <V> evictOldest(
-        cache: java.util.concurrent.ConcurrentHashMap<String, V>,
-        stamp: (V) -> Long,
-        max: Int
-    ) {
-        val over = cache.size - max
-        if (over <= 0) return
-        // sortedBy snapshots the entries, so removing while walking is safe.
-        cache.entries
-            .sortedBy { stamp(it.value) }
-            .take(over)
-            .forEach { cache.remove(it.key) }
     }
 
     /** Drops any cached source for [videoId] so the next resolve fetches a fresh signed URL. */

@@ -9,6 +9,7 @@ import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheDao
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
+import com.kennyb1201.kbstream.data.memory.evictOldest
 import com.kennyb1201.kbstream.data.sync.KidsMode
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.squareup.moshi.JsonAdapter
@@ -233,27 +234,17 @@ class TmdbRepository private constructor(context: Context) :
      *
      * Called from the lookup paths rather than from the dozen write sites:
      * growth can only happen through a lookup, and the size check makes this
-     * free while a cache is under its cap.
+     * free while a cache is under its cap. The eviction itself is [evictOldest]
+     * (data.memory), shared with the trailer source cache so the sizing rule is
+     * written once.
      */
     private fun pruneMemoryCaches() {
-        evictOldest(detailCache, MAX_DETAIL_ENTRIES)
-        evictOldest(seasonEpisodesCache, MAX_SEASON_ENTRIES)
-        evictOldest(imdbResolutionMemoryCache, MAX_RESOLUTION_ENTRIES)
-        evictOldest(tmdbResolutionMemoryCache, MAX_RESOLUTION_ENTRIES)
-    }
-
-    /** Drops the oldest entries until [cache] is back at or below [max]. */
-    private fun <V> evictOldest(
-        cache: ConcurrentHashMap<String, Pair<Long, V>>,
-        max: Int
-    ) {
-        val over = cache.size - max
-        if (over <= 0) return
-        // sortedBy snapshots the entries, so removing while walking is safe.
-        cache.entries
-            .sortedBy { it.value.first }
-            .take(over)
-            .forEach { cache.remove(it.key) }
+        // All four maps keep their timestamp in Pair.first, which is the stamp
+        // evictOldest orders by.
+        evictOldest(detailCache, { it.first }, MAX_DETAIL_ENTRIES)
+        evictOldest(seasonEpisodesCache, { it.first }, MAX_SEASON_ENTRIES)
+        evictOldest(imdbResolutionMemoryCache, { it.first }, MAX_RESOLUTION_ENTRIES)
+        evictOldest(tmdbResolutionMemoryCache, { it.first }, MAX_RESOLUTION_ENTRIES)
     }
 
     /**
