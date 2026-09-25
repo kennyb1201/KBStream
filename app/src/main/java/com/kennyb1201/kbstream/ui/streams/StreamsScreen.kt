@@ -43,6 +43,7 @@ import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
 import com.kennyb1201.kbstream.ui.components.StreamBadgeRow
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -69,6 +70,7 @@ fun StreamsScreen(
 ) {
     val streams by viewModel.streams.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val loadedKey by viewModel.loadedKey.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     /*
@@ -84,12 +86,21 @@ fun StreamsScreen(
         onStreamSelected(selected, allSources)
     }
 
+    // A picker opened by "Play Manually" (or by the detail screen's episode
+    // long-press) is the ONE place Auto-select must not fire: the viewer asked
+    // to choose a source, and auto-selecting the top result instead just
+    // flashed the picker and jumped into the player. MainActivity marks the
+    // targets it resolves in the background and the Continue Watching route; this
+    // covers the routes that only open the picker. [loadedKey] is the same
+    // "contentType:streamId" key the request carried.
+    val manualPick = ManualSourceSelection.isPendingPickFor(loadedKey)
+
     // Auto-play: when streams finish loading and autoplay is on, auto-select the
     // top result. Fire only once per target: after the user backs out of the
     // player, MainActivity marks this target as already-played and passes
     // suppressAutoSelect=true so the player isn't relaunched in a loop.
-    LaunchedEffect(isLoading, streams) {
-        if (!isLoading && streams.isNotEmpty() && !suppressAutoSelect && AppPreferences.getAutoSelectStream(context)) {
+    LaunchedEffect(isLoading, streams, manualPick) {
+        if (!isLoading && streams.isNotEmpty() && !suppressAutoSelect && !manualPick && AppPreferences.getAutoSelectStream(context)) {
             // Skip dead placeholder streams (blank URLs) at the top of the
             // list — picking one would silently do nothing and look like
             // auto-select is broken.

@@ -1,45 +1,59 @@
 package com.kennyb1201.kbstream.data.history
 
 import android.content.Context
+import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import kotlinx.coroutines.flow.Flow
 
+/**
+ * The app-facing watch-history access layer, over the profile-scoped
+ * [WatchHistoryDatabase].
+ *
+ * Every call goes through [WatchHistoryDatabase.withScopedDao] /
+ * [WatchHistoryDatabase.observeScopedDao]: the history database is a
+ * per-profile FILE whose Room instance is retired when the active profile
+ * changes, and an operation caught mid-flight by that retirement fails with
+ * Room's "connection pool has been closed" rather than a real error - the
+ * history twin of the guide-database race (see data/db/DatabaseSwapRetry.kt).
+ * Retrying re-resolves the DAO against the instance the database layer settled
+ * on instead of surfacing the swap as a failure.
+ *
+ * That matters most for [continueWatchingParentsFlow], which Home subscribes to
+ * for as long as it is on screen: one unretried failure used to take the whole
+ * subscription down and leave Continue Watching dead until Home was rebuilt.
+ *
+ * The DAO itself is resolved per access (never captured): the scoped Room
+ * instance is bound to the ACTIVE profile's file, so a repository built before
+ * a switch would otherwise keep reading the closed previous profile's DB.
+ */
 class WatchHistoryRepository(private val appContext: Context) {
-
-    // Resolved per access: the scoped Room instance is bound to the ACTIVE
-    // profile's database file. Capturing one DAO at construction kept this
-    // repository attached to the profile that was active when it was built -
-    // after a profile switch (or first-profile creation, which closes the
-    // scoped DB) reads/writes hit the closed or previous profile's DB. With
-    // per-access resolution every call rebinds to the active profile.
-    private val dao: WatchHistoryDao
-        get() = WatchHistoryDatabase
-            .getInstanceScoped(appContext)
-            .watchHistoryDao()
 
     // 1. Recent history rows as a flow factory (same per-access rebinding
     //    rationale as [continueWatchingParentsFlow] - no caller in the app
     //    currently subscribes, kept for API parity).
     fun recentHistoryFlow(): Flow<List<WatchHistoryEntity>> =
-        dao.observeRecent()
+        WatchHistoryDatabase.observeScopedDao(appContext) { it.observeRecent() }
 
-    // 2. Continue Watching parents as a FLOW FACTORY, not a captured
-    //    StateFlow: Room flows are bound to the DAO (and thus to the DB
-    //    file) that created them. A captured StateFlow kept the Home
-    //    pipeline subscribed to the previous profile's DB after a profile
-    //    switch or first-profile creation (which closes the scoped
-    //    instance) - continue watching then went stale/local-only until a
-    //    full rebuild. Each call re-resolves the active profile's DAO, and
-    //    flatMapLatest on the caller side re-subscribes whenever the
-    //    upstream profile-change signal fires.
+    // 2. Continue Watching parents as a FLOW FACTORY, not a captured StateFlow:
+    //    Room flows are bound to the DAO (and thus to the DB file) that created
+    //    them. A captured StateFlow kept the Home pipeline subscribed to the
+    //    previous profile's DB after a profile switch or first-profile creation
+    //    (which closes the scoped instance) - continue watching then went
+    //    stale/local-only until a full rebuild. Each call re-resolves the active
+    //    profile's DAO, and the caller flatMapLatest's on the profile-change
+    //    signal so a switch re-subscribes.
     fun continueWatchingParentsFlow(): Flow<List<WatchHistoryEntity>> =
-        dao.observeContinueWatchingParents()
+        WatchHistoryDatabase.observeScopedDao(appContext) { it.observeContinueWatchingParents() }
 
     suspend fun upsert(entry: WatchHistoryEntity) {
-        com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueueHistory(entry)
-        dao.upsert(entry)
+        // Enqueued outside the retry: the outbox is keyed by row id, so a
+        // re-enqueue would be harmless, but the sync side is not what a swap
+        // interrupted.
+        SupabaseSync.enqueueHistory(entry)
+        WatchHistoryDatabase.withScopedDao(appContext) { it.upsert(entry) }
     }
 
-    suspend fun getById(id: String): WatchHistoryEntity? = dao.getById(id)
+    suspend fun getById(id: String): WatchHistoryEntity? =
+        WatchHistoryDatabase.withScopedDao(appContext) { it.getById(id) }
 
     /**
      * One-shot suspend read of the Continue Watching parent rows. Backs
@@ -47,10 +61,12 @@ class WatchHistoryRepository(private val appContext: Context) {
      * so the rail can render before the enriched pipeline finishes.
      */
     suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity> =
-        dao.getContinueWatchingParentsSnapshot()
+        WatchHistoryDatabase.withScopedDao(appContext) {
+            it.getContinueWatchingParentsSnapshot()
+        }
 
     suspend fun deleteById(id: String) {
-        dao.deleteById(id)
+        WatchHistoryDatabase.withScopedDao(appContext) { it.deleteById(id) }
     }
 
     /**
@@ -63,10 +79,12 @@ class WatchHistoryRepository(private val appContext: Context) {
         parentId: String,
         season: Int
     ) {
-        dao.deleteCompletedForParentSeason(
-            parentId = parentId,
-            season = season
-        )
+        WatchHistoryDatabase.withScopedDao(appContext) {
+            it.deleteCompletedForParentSeason(
+                parentId = parentId,
+                season = season
+            )
+        }
     }
 
     /**
@@ -80,11 +98,13 @@ class WatchHistoryRepository(private val appContext: Context) {
         season: Int,
         episode: Int
     ) {
-        dao.deleteCompletedForParentSeasonEpisode(
-            parentId = parentId,
-            season = season,
-            episode = episode
-        )
+        WatchHistoryDatabase.withScopedDao(appContext) {
+            it.deleteCompletedForParentSeasonEpisode(
+                parentId = parentId,
+                season = season,
+                episode = episode
+            )
+        }
     }
 
     /**
@@ -93,16 +113,19 @@ class WatchHistoryRepository(private val appContext: Context) {
      * history used for watched badges and episode counts.
      */
     suspend fun deleteResumeRowsForParent(parentId: String) {
-        dao.deleteResumeRowsForParent(parentId)
+        WatchHistoryDatabase.withScopedDao(appContext) {
+            it.deleteResumeRowsForParent(parentId)
+        }
     }
 
     /**
-     * Every row with a saved resume position — used to rebuild the TV
+     * Every row with a saved resume position - used to rebuild the TV
      * launcher Continue Watching rail and for backup/restore.
      */
-    suspend fun getAll(): List<WatchHistoryEntity> = dao.getAll()
+    suspend fun getAll(): List<WatchHistoryEntity> =
+        WatchHistoryDatabase.withScopedDao(appContext) { it.getAll() }
 
     suspend fun clearAll() {
-        dao.clearAll()
+        WatchHistoryDatabase.withScopedDao(appContext) { it.clearAll() }
     }
 }

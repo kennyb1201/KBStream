@@ -1364,8 +1364,15 @@ fun DetailScreen(
                 if (manualPick) {
                     // Handed on rather than consumed here: MainActivity is what
                     // reads this, to open the picker for the target instead of
-                    // auto-selecting a source.
-                    ManualSourceSelection.request()
+                    // auto-selecting a source. The target rides along so the
+                    // picker it opens does not then auto-select the top result
+                    // and jump to the player - with Auto-select on, "Play
+                    // Manually" is the one action that must reach the picker,
+                    // and this is the only route that knows the target before
+                    // MainActivity builds the screen.
+                    ManualSourceSelection.request(
+                        "${playTarget.contentType}:${playTarget.streamId}"
+                    )
                 }
                 onNavigateStreams(
                     playTarget,

@@ -185,9 +185,48 @@ object ManualSourceSelection {
      *  cannot outlive the press that made it. */
     private const val VALID_FOR_MS = 12_000L
 
-    fun request() {
+    /**
+     * The target the request is FOR, as the same raw "contentType:streamId"
+     * key [com.kennyb1201.kbstream.ui.streams.StreamsViewModel] stamps on the
+     * streams it loads (see [isPendingPickFor]). Null when the requester only
+     * navigates and does not build the target itself - a poster menu row: the
+     * target is resolved later on the detail screen, which re-raises the
+     * request with the key in hand.
+     *
+     * Deliberately NOT cleared by [consume]: neither MainActivity nor the
+     * detail screen has any use for the target, and the only screen that does
+     * is the picker it opens - which is exactly the screen that has to know it
+     * must not auto-select a source for it.
+     */
+    private var pickedKey: String? = null
+    private var pickedAtMs: Long = 0L
+
+    /**
+     * When a request was raised WITHOUT knowing its target — a poster menu
+     * row, or the detail screen's episode-card long-press. [consume] clears
+     * the request itself, and the consumer (MainActivity) has no use for the
+     * target anyway: the only screen that has to act on it is the picker, and
+     * a keyless request can only mean the picker it opens is a manual pick.
+     * Kept past [consume] for the same reason [pickedKey] is, and ages out on
+     * its own.
+     */
+    private var keylessAtMs: Long = 0L
+
+    fun request(targetKey: String? = null) {
         requested = true
         requestedAtMs = System.currentTimeMillis()
+        if (targetKey != null) {
+            pickedKey = targetKey
+            pickedAtMs = requestedAtMs
+            keylessAtMs = 0L
+        } else {
+            // A requester that does not know the target yet (a poster menu
+            // row, or the episode-card long-press) starts a fresh request, so
+            // a target left over from an earlier pick must not answer for it.
+            pickedKey = null
+            pickedAtMs = 0L
+            keylessAtMs = requestedAtMs
+        }
     }
 
     /** Reads the request once and clears it, whether or not it was still fresh. */
@@ -198,6 +237,32 @@ object ManualSourceSelection {
         requested = false
         requestedAtMs = 0L
         return wanted
+    }
+
+    /**
+     * True while the picker opened for [targetKey] belongs to a "Play
+     * Manually" request, so that opening it must NOT auto-select the top
+     * source even with Auto-select turned on. With Auto-select on, "Play
+     * Manually" is the one action that is supposed to reach the picker; the
+     * poster menu already suppresses the picker's own autoplay for the
+     * Continue-Watching route, but the route that goes through the detail
+     * screen only opened the picker - the picker then auto-selected the top
+     * result and jumped straight to the player, so the picker was never
+     * usable.
+     *
+     * Read-only, so the picker can ask this from composition without a side
+     * effect; the request ages out on its own (a later, unrelated pick for the
+     * same target inside the window is still the same target and suppressing
+     * its autoplay is what the viewer just asked for).
+     */
+    fun isPendingPickFor(targetKey: String?): Boolean {
+        if (targetKey == null) return false
+        val now = System.currentTimeMillis()
+        val key = pickedKey
+        if (key != null) return key == targetKey && now - pickedAtMs <= VALID_FOR_MS
+        // No target carried: the request was raised by a screen that only
+        // navigates, and any picker opened while it is fresh is that pick.
+        return keylessAtMs != 0L && now - keylessAtMs <= VALID_FOR_MS
     }
 }
 

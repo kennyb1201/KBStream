@@ -1,18 +1,24 @@
 package com.kennyb1201.kbstream.data.history
 
 import android.content.Context
+import android.util.Log
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.kennyb1201.kbstream.data.db.RoomBusyTimeout
+import com.kennyb1201.kbstream.data.db.retryOnDatabaseSwap
+import com.kennyb1201.kbstream.data.db.withDatabaseSwapRetry
 import com.kennyb1201.kbstream.data.cache.ImdbResolutionDao
 import com.kennyb1201.kbstream.data.cache.ImdbResolutionEntity
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheDao
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheEntity
 import com.kennyb1201.kbstream.data.cache.WatchedStatusDao
 import com.kennyb1201.kbstream.data.cache.WatchedStatusEntity
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 
 @Database(
     entities = [
@@ -31,6 +37,8 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
     abstract fun tmdbJsonCacheDao(): TmdbJsonCacheDao
 
     companion object {
+        private const val TAG = "WATCH_HISTORY_DB"
+
         @Volatile
         private var instance: WatchHistoryDatabase? = null
 
@@ -145,9 +153,7 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
          * [getInstance] remains for global caches (tmdb_json_cache).
          */
         fun getInstanceScoped(context: Context): WatchHistoryDatabase {
-            val dbName = com.kennyb1201.kbstream.data.sync.ProfileStorage.dbNameForActive(
-                context, "kbstream_watch_history"
-            )
+            val dbName = activeFileName(context)
             synchronized(this) {
                 profileInstance?.let { if (profileInstanceName == dbName) return it }
                 // Same file, retired moments ago and not closed yet: take that
@@ -194,6 +200,73 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                 profileInstance = null
                 profileInstanceName = null
             }
+        }
+
+        /**
+         * The database FILE the ACTIVE profile's history lives in.
+         *
+         * A caller that holds a DAO across a long operation uses this to
+         * notice that the active profile changed (mirrors
+         * [com.kennyb1201.kbstream.data.iptv.db.IptvDatabase.activeFileName]).
+         */
+        fun activeFileName(context: Context): String =
+            com.kennyb1201.kbstream.data.sync.ProfileStorage.dbNameForActive(
+                context, "kbstream_watch_history"
+            )
+
+        /**
+         * Runs [block] against the ACTIVE profile's history DAO, re-running it
+         * while the failure is the scoped instance being retired underneath it
+         * — Room's "connection pool has been closed" / "already-closed
+         * object" / SQLITE_BUSY, which is what a profile switch looks like to
+         * an operation that is already running (see
+         * data/db/DatabaseSwapRetry.kt). The history twin of the guide
+         * database's retry: without it the very same race reads as a real
+         * failure — a dead Continue Watching rail, a resume point that never
+         * loads, or a lost progress row.
+         *
+         * The active FILE is pinned before the first attempt. A retry after
+         * the user switched profile would otherwise resolve the NEW profile's
+         * DAO and file the departing profile's row under it — the "poisoned
+         * row" PoisonSweep exists to clean up. A switch therefore rethrows
+         * instead of retrying.
+         */
+        suspend fun <T> withScopedDao(
+            context: Context,
+            block: suspend (WatchHistoryDao) -> T
+        ): T {
+            val pinnedName = activeFileName(context)
+            return withDatabaseSwapRetry(
+                onRetry = { attempt, error ->
+                    Log.w(TAG, "HISTORY DB RETRY $attempt after database swap", error)
+                }
+            ) {
+                if (activeFileName(context) != pinnedName) {
+                    throw IllegalStateException(
+                        "profile changed during watch-history operation " +
+                            "(was $pinnedName, now ${activeFileName(context)})"
+                    )
+                }
+                block(getInstanceScoped(context).watchHistoryDao())
+            }
+        }
+
+        /**
+         * The [Flow] form of [withScopedDao]. [build] is invoked on every
+         * (re-)collection against a DAO resolved then, so a retry re-queries
+         * the instance the database layer settled on instead of re-collecting
+         * a flow still bound to the retired one.
+         *
+         * Reads are deliberately NOT pinned to a profile: a genuine switch
+         * should re-target them at the new profile's history.
+         */
+        fun <T> observeScopedDao(
+            context: Context,
+            build: (WatchHistoryDao) -> Flow<T>
+        ): Flow<T> = flow {
+            emitAll(build(getInstanceScoped(context).watchHistoryDao()))
+        }.retryOnDatabaseSwap { attempt, error ->
+            Log.w(TAG, "HISTORY FLOW RETRY $attempt after database swap", error)
         }
 
         /**
