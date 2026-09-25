@@ -3161,6 +3161,12 @@ fun HomeScreen(
                     menuItem.poster,
                     listOf(menuItem.parentId, menuItem.id)
                 ),
+                // No "Add to Library" / "Add to list" here: these cards are
+                // an in-progress episode, and the library actions belong to
+                // the SHOW - they live on the show's own poster menu (the
+                // rails) and on its detail page. Repeating them on a card
+                // that only offers one episode's resume just cluttered the
+                // menu the viewer opens to keep watching.
                 subtitle = buildString {
                     val seasonEpisode = listOfNotNull(
                         menuItem.season?.let { "S%02d".format(it) },
@@ -3178,61 +3184,6 @@ fun HomeScreen(
                         }
                 }.ifBlank { null },
                 actions = listOf(
-                    PosterContextAction(
-                        label = "Add to Library",
-                        description = "Save the show to My List" +
-                            (if (viewModel.simklConnectedForLibrary()) ", Simkl" else "") +
-                            (if (viewModel.mdbListConnectedForLibrary()) " and MDBList" else "")
-                    ) {
-                        val selectedItem = menuItem
-                        continueWatchingMenu = null
-                        val showType = selectedItem.parentType?.lowercase()
-                            ?: selectedItem.id.substringBefore(':').lowercase()
-                        // parentId is the SHOW's own id ("tt12345" or
-                        // "tmdb:123"); the row's id is a stream key
-                        // ("tt12345:2:5"). Split whichever one the item
-                        // actually has: the old numeric-TMDB-only read
-                        // produced a null id for IMDB-keyed shows, and an
-                        // add with no id at all was dropped silently — the
-                        // press looked like it did nothing.
-                        val showIds = LibraryIds.splitFirst(
-                            selectedItem.parentId,
-                            selectedItem.id
-                        )
-                        viewModel.addToLibrary(
-                            mediaType = showType,
-                            imdbId = showIds.imdbId,
-                            tmdbId = showIds.tmdbId,
-                            title = selectedItem.showTitle ?: selectedItem.title,
-                            posterUrl = selectedItem.poster
-                        )
-                    },
-                    PosterContextAction(
-                        label = "Add to list…",
-                        description = "Pick a personal list or watchlist"
-                    ) {
-                        val selectedItem = menuItem
-                        continueWatchingMenu = null
-                        // parentId is the SHOW's own id ("tt12345" or
-                        // "tmdb:123"); the row's id is a stream key
-                        // ("tt12345:2:5"). Split whichever one the item
-                        // actually has: the old numeric-TMDB-only read
-                        // produced a null id for IMDB-keyed shows, and an
-                        // add with no id at all was dropped silently — the
-                        // press looked like it did nothing.
-                        val showIds = LibraryIds.splitFirst(
-                            selectedItem.parentId,
-                            selectedItem.id
-                        )
-                        addToListTarget = LibraryAddTarget(
-                            mediaType = selectedItem.parentType?.lowercase()
-                                ?: selectedItem.id.substringBefore(':').lowercase(),
-                            imdbId = showIds.imdbId,
-                            tmdbId = showIds.tmdbId,
-                            title = selectedItem.showTitle ?: selectedItem.title,
-                            posterUrl = selectedItem.poster
-                        )
-                    },
                     PosterContextAction(
                         label = "Go to Details",
                         description = "Open this title's detail page"
