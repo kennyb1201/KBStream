@@ -110,6 +110,7 @@ import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.heroSharedElement
 import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.LandscapeCard
@@ -3074,6 +3075,14 @@ fun HomeScreen(
                                                     }
 
                                                 val posterModifier = Modifier
+                                                    // Outermost, so the
+                                                    // shared bounds are
+                                                    // what the flight
+                                                    // animates.
+                                                    .heroSharedElement(
+                                                        meta.type,
+                                                        meta.id
+                                                    )
                                                     .offset(y = (-3).dp)
                                                     .focusRequester(requester)
                                                     .width(cardWidth)

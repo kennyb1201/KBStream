@@ -53,6 +53,8 @@ import com.kennyb1201.kbstream.ui.addons.AddonsScreen
 import com.kennyb1201.kbstream.ui.collection.CollectionScreen
 import com.kennyb1201.kbstream.ui.components.AutoPlayLoadSplash
 import com.kennyb1201.kbstream.ui.components.KBFeedbackHost
+import com.kennyb1201.kbstream.ui.components.KBHeroTransition
+import com.kennyb1201.kbstream.ui.components.LocalKBHeroTransition
 import com.kennyb1201.kbstream.ui.components.LocalKBFeedback
 import com.kennyb1201.kbstream.ui.components.rememberKBFeedbackState
 import com.kennyb1201.kbstream.ui.components.KBCard
@@ -101,8 +103,11 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
@@ -554,6 +559,7 @@ class MainActivity : ComponentActivity() {
         const val TAG_STARTUP = "STARTUP"
     }
 
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun AppRoot() {
 
@@ -924,6 +930,11 @@ fun AppRoot() {
     // Keying on the screen KIND rather than its value means navigating between
     // two Detail pages, or re-targeting one, does not replay a full-screen
     // transition; only an actual screen change does.
+    // SharedTransitionLayout owns the shared-element registry the poster ->
+    // Detail hero flight is built on; the AnimatedContent below supplies the
+    // per-screen visibility scope. Both are needed, which is why the hero
+    // transition can only be constructed inside the content lambda.
+    SharedTransitionLayout {
     AnimatedContent(
         targetState = screen,
         contentKey = { it.typeName() },
@@ -955,6 +966,25 @@ fun AppRoot() {
         },
         label = "screen"
     ) { current ->
+    // See KBHeroTransition: this lambda is the only place where the shared
+    // registry and the animated-visibility scope are both in hand — and it is
+    // also the per-screen boundary, so the scope is published here as an
+    // ambient value. Every poster that can open a Detail page opts in with a
+    // single Modifier.heroSharedElement(type, id); no screen has to grow a
+    // parameter to join the flight.
+    CompositionLocalProvider(
+        LocalKBHeroTransition provides if (transitionMs == 0) {
+            // Reduced motion: the screen change is already a hard cut, so a
+            // poster that flew across it would be the one thing still moving.
+            null
+        } else {
+            KBHeroTransition(
+                sharedScope = this@SharedTransitionLayout,
+                visibilityScope = this,
+                durationMs = transitionMs
+            )
+        }
+    ) {
     when (current) {
 
         is Screen.ProfilePicker -> {
@@ -2027,6 +2057,7 @@ fun AppRoot() {
             }
         }
     }
+    } // closes CompositionLocalProvider( LocalKBHeroTransition provides … )
 
     // Loading splash while autoselect resolves sources in the background —
     // mirrors the player's first-load splash (backdrop + pulsing clearlogo) —
@@ -2041,6 +2072,7 @@ fun AppRoot() {
     }
     }
     } // closes AnimatedContent( targetState = screen ) { current -> ... }
+    } // closes SharedTransitionLayout
 }
 
 @Composable

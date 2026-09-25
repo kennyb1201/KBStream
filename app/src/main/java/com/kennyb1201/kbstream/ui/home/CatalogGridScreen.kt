@@ -40,6 +40,7 @@ import com.kennyb1201.kbstream.ui.components.KBSkeletonGrid
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.PosterCard
+import com.kennyb1201.kbstream.ui.components.heroSharedElement
 import com.kennyb1201.kbstream.ui.components.PosterSize
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.data.library.HiddenTitles
@@ -254,6 +255,10 @@ fun CatalogGridScreen(
                                     menuTarget = meta
                                 },
                                 modifier = Modifier
+                                    // Opts this tile into the poster ->
+                                    // Detail hero flight (shared key is
+                                    // type:id, same as the rail posters).
+                                    .heroSharedElement(meta.type, meta.id)
                                     .size(
                                         width = posterSize.width,
                                         height = posterSize.height

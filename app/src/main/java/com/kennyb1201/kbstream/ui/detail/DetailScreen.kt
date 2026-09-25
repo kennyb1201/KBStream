@@ -112,6 +112,7 @@ import com.kennyb1201.kbstream.data.tmdb.tmdbImageOriginal
 import com.kennyb1201.kbstream.data.tmdb.writers
 import com.kennyb1201.kbstream.ui.components.AutoPlayLoadSplash
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.heroSharedElement
 import com.kennyb1201.kbstream.ui.player.randomAiredEpisode
 import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
@@ -1379,7 +1380,12 @@ fun DetailScreen(
             },
                     contentDescription = displayName,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier
+                        // Outermost so the recorded bounds are the
+                        // full-bleed hero itself. Same key the poster
+                        // declared, which is what pairs the two ends.
+                        .heroSharedElement(type, id)
+                        .fillMaxSize()
                 )
 
                 Box(
