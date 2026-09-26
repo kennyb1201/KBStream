@@ -10,6 +10,8 @@ import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.data.airdates.AirDateCorrection
+import com.kennyb1201.kbstream.data.airdates.TvmazeAirDateRepository
 import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
@@ -447,6 +449,12 @@ class HomeViewModel(
 
     private val tmdbRepository =
         TmdbRepository.getInstance(application)
+
+    // Second-source air dates (see [AirDateCorrection]). Display-only, and
+    // empty whenever that source has nothing - which leaves TMDB's own dates
+    // in place.
+    private val airDateRepository =
+        TvmazeAirDateRepository.getInstance(application)
 
     private val tmdbHeroArtworkRepository =
         TmdbHeroArtworkRepository(application)
@@ -2610,33 +2618,60 @@ Log.d(
         items: List<UpNextItem>
     ): List<UpcomingEpisode> {
         val now = System.currentTimeMillis()
-        val startOfToday = LocalDate.now(ZoneId.systemDefault())
+        val today = LocalDate.now(ZoneId.systemDefault())
+        val startOfToday = today
             .atStartOfDay(ZoneId.systemDefault())
             .toInstant()
             .toEpochMilli()
         val seenParents = HashSet<String>()
         val upcoming = ArrayList<UpcomingEpisode>()
 
+        // Second-source air dates for the shows on the rail, fetched up front
+        // (concurrently, and failing open per show) so the loop below never
+        // waits on the network once per card.
+        val sourceDatesByParent = loadSourceAirDates(items)
+
         for (item in items) {
             val air = item.nextEpisodeAir ?: continue
-            val season = air.seasonNumber ?: continue
-            val episode = air.episodeNumber ?: continue
+            var season = air.seasonNumber ?: continue
+            var episode = air.episodeNumber ?: continue
             val parentId = item.parentId?.takeIf { it.isNotBlank() } ?: continue
             val parentType = item.parentType?.takeIf { it.isNotBlank() } ?: continue
-            val epochMs = parseTmdbAirDate(air.airDate) ?: continue
+
+            val sourceDates = sourceDatesByParent[parentId].orEmpty()
+            var airDateText = AirDateCorrection.correctAirDate(
+                primary = air.airDate,
+                secondary = sourceDates[
+                    AirDateCorrection.episodeKey(season, episode)
+                ],
+                today = today
+            )
+            var epochMs = parseTmdbAirDate(airDateText) ?: continue
+
+            if (epochMs < startOfToday && sourceDates.isNotEmpty()) {
+                // The episode TMDB still calls "next" has already aired, so its
+                // date was stale. The show's real next episode is the earliest
+                // one the second source has ahead of today; when it has none,
+                // the show has nothing upcoming and belongs in Continue
+                // Watching instead.
+                val replacement =
+                    AirDateCorrection.nextAiring(sourceDates, today) ?: continue
+                season = replacement.season
+                episode = replacement.episode
+                airDateText = replacement.airDate
+                epochMs = parseTmdbAirDate(replacement.airDate) ?: continue
+            }
+
             // Air dates carry no time (midnight), so compare against the
             // start of today: an episode airing later today still shows
             // (labelled "Today"); anything before today has aired.
             if (epochMs < startOfToday) continue
             if (!seenParents.add(parentId)) continue
 
-            val airLabel = formatAirDateLabel(air.airDate)
-            val airFull = try {
-                LocalDate.parse(air.airDate)
-                    .format(DateTimeFormatter.ofPattern("EEE, MMM d"))
-            } catch (_: Exception) {
-                ""
-            }
+            val airLabel = formatAirDateLabel(airDateText)
+            val airFull = AirDateCorrection.parse(airDateText)
+                ?.format(DateTimeFormatter.ofPattern("EEE, MMM d"))
+                ?: ""
 
             upcoming.add(
                 UpcomingEpisode(
@@ -2655,7 +2690,14 @@ Log.d(
                     // backfill from the cached season episodes before
                     // giving up (Simkl tracks watched state, it has no
                     // unaired-episode metadata, so TMDB is the only source).
-                    episodeTitle = air.name?.takeIf { it.isNotBlank() }
+                    // The card may now name an episode later than TMDB's
+                    // next_episode_to_air (see the replacement above), so
+                    // TMDB's own title only applies while the episode is still
+                    // the one it pointed at.
+                    episodeTitle = air.name
+                        ?.takeIf {
+                            it.isNotBlank() && episode == air.episodeNumber
+                        }
                         ?: fallbackUpcomingEpisodeTitle(
                             tmdbId = item.tmdbId,
                             season = season,
@@ -2695,6 +2737,59 @@ Log.d(
                 ?.trim()
                 ?.takeIf { it.isNotBlank() }
         }.getOrNull()
+    }
+
+    /**
+     * Second-source air dates for every show on the rail, keyed by the parent
+     * id the rail's items already carry, in the `"season:episode"` shape
+     * [AirDateCorrection] expects.
+     *
+     * Fails open per show: a show the source doesn't know - or a lookup that
+     * fails - simply has no entry, and the rail then uses TMDB's own date. The
+     * lookups run concurrently because the rail waits on this before it can
+     * render; the repository rate-limits them.
+     */
+    private suspend fun loadSourceAirDates(
+        items: List<UpNextItem>
+    ): Map<String, Map<String, String>> {
+        val targets = LinkedHashMap<String, String>()
+
+        for (item in items) {
+            if (item.nextEpisodeAir == null) continue
+            val parentId =
+                item.parentId?.takeIf { it.isNotBlank() } ?: continue
+            if (targets.containsKey(parentId)) continue
+
+            // The source is looked up by IMDB id; a "tmdb:<n>" parent has to
+            // be resolved, which the resolution table caches.
+            val imdbId = parentId
+                .takeIf { it.startsWith("tt", ignoreCase = true) }
+                ?: item.tmdbId?.let { tmdbId ->
+                    runCatching {
+                        tmdbRepository.resolveImdbId(
+                            tmdbId,
+                            item.parentType ?: "series"
+                        )
+                    }.getOrNull()
+                }
+                ?: continue
+
+            targets[parentId] = imdbId
+        }
+
+        if (targets.isEmpty()) return emptyMap()
+
+        val resolved =
+            java.util.concurrent.ConcurrentHashMap<String, Map<String, String>>()
+        coroutineScope {
+            targets.map { (parentId, imdbId) ->
+                async {
+                    resolved[parentId] =
+                        airDateRepository.episodeAirDates(imdbId)
+                }
+            }.awaitAll()
+        }
+        return resolved
     }
 
     private fun parseTmdbAirDate(raw: String?): Long? {

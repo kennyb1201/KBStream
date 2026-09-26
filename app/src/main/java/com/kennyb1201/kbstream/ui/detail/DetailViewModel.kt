@@ -9,6 +9,9 @@ import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.VideoEntry
+import com.kennyb1201.kbstream.data.airdates.AirDateCorrection
+import com.kennyb1201.kbstream.data.airdates.AirDateCorrections
+import com.kennyb1201.kbstream.data.airdates.TvmazeAirDateRepository
 import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
@@ -112,6 +115,9 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         get() = WatchHistoryDatabase.getInstanceScoped(app).watchHistoryDao()
     private val watchHistoryRepository = WatchHistoryRepository(app)
     private val watchedStatusRepository = WatchedStatusRepository(app)
+    // Second-source air dates (see [AirDateCorrection]). Display-only: it
+    // never writes back to history, watch state or the metadata caches.
+    private val airDateRepository = TvmazeAirDateRepository.getInstance(app)
 
     private val _meta = MutableStateFlow<Meta?>(null)
     val meta: StateFlow<Meta?> = _meta.asStateFlow()
@@ -133,6 +139,15 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
     private val _isSyntheticDetail = MutableStateFlow(false)
     val isSyntheticDetail: StateFlow<Boolean> = _isSyntheticDetail
     val tmdbDetail: StateFlow<TmdbDetail?> = _tmdbDetail.asStateFlow()
+
+    /**
+     * Air dates a second metadata source has that disagree with TMDB's - see
+     * [AirDateCorrection]. Empty until (and unless) that lookup answers, and
+     * empty is always a no-op: the screen renders exactly as it did before.
+     */
+    private val _airDateCorrections = MutableStateFlow(AirDateCorrections.NONE)
+    val airDateCorrections: StateFlow<AirDateCorrections> =
+        _airDateCorrections.asStateFlow()
 
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -602,6 +617,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         _meta.value = initialMeta
         _tmdbDetail.value = null
         _isSyntheticDetail.value = false
+        _airDateCorrections.value = AirDateCorrections.NONE
         _episodes.value = emptyList()
         _episodeError.value = null
         _episodesLoading.value = false
@@ -646,6 +662,17 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 tmdbDetailResult.onSuccess { earlyDetail ->
                     if (earlyDetail != null && _tmdbDetail.value == null) {
                         _tmdbDetail.value = earlyDetail
+                    }
+                }
+
+                // Second-source air dates, fired right behind the early
+                // publish so the lookup can never sit in front of first
+                // paint. It lands whenever it lands: episodes already on
+                // screen are re-dated when it arrives.
+                if (normalizedType == "series") {
+                    val airDateParentId = id
+                    viewModelScope.launch {
+                        loadAirDateCorrections(airDateParentId)
                     }
                 }
 
@@ -1214,13 +1241,30 @@ for (metaAddon in metaAddons) {
             )
 
         fun isSeasonReleased(season: Int): Boolean {
-            val premiere = _tmdbDetail.value?.seasons
+            val detail = _tmdbDetail.value
+            val premiere = detail?.seasons
                 ?.firstOrNull { it.seasonNumber == season }
                 ?.airDate
                 ?: return true
-            return runCatching { java.time.LocalDate.parse(premiere) }
-                .map { !it.isAfter(java.time.LocalDate.now()) }
-                .getOrDefault(true)
+            val seasonDate = runCatching { java.time.LocalDate.parse(premiere) }
+                .getOrNull()
+                ?: return true
+
+            // TMDB's per-season air_date can lag behind the show's own
+            // next_episode_to_air (American Horror Story: 13 carried Oct 1
+            // while the pointer said Sep 25 - the date the Home Upcoming rail
+            // showed). Believe whichever is earlier, which can only make a
+            // season count as released, never the reverse.
+            val pointerDate = detail.nextEpisodeToAir
+                ?.takeIf { it.seasonNumber == season }
+                ?.airDate
+                ?.let { runCatching { java.time.LocalDate.parse(it) }.getOrNull() }
+            val effective = when {
+                pointerDate != null && pointerDate.isBefore(seasonDate) -> pointerDate
+                else -> seasonDate
+            }
+
+            return !effective.isAfter(java.time.LocalDate.now())
         }
 
         fun seasonEpisodeNumbers(season: Int): List<Int> {
@@ -1281,7 +1325,7 @@ for (metaAddon in metaAddons) {
                         .filter { it.season == season && it.episode != null }
                         .sortedBy { it.episode ?: 0 }
                     val parentId = imdbId
-                    _episodes.value = videos.map { v ->
+                    val syntheticEpisodes = videos.map { v ->
                         ResolvedEpisode(
                             streamId = "$parentId:${season}:${v.episode}",
                             episodeNumber = v.episode!!,
@@ -1293,6 +1337,7 @@ for (metaAddon in metaAddons) {
                             voteAverage = null
                         )
                     }
+                    _episodes.value = applyAirDateCorrections(syntheticEpisodes, season)
                     _loadedSeason.value = season
                     val targetEp = _episodes.value.firstOrNull { ep ->
                         val isWatched = computeEpisodeWatched(
@@ -1333,7 +1378,7 @@ for (metaAddon in metaAddons) {
             try {
                 val seasonEpisodes = tmdbRepository.getSeasonEpisodes(tvId, season, imdbId)
                 if (latestEpisodeSeasonRequest == season) {
-                    _episodes.value = seasonEpisodes
+                    _episodes.value = applyAirDateCorrections(seasonEpisodes, season)
                     _episodeError.value = null
                     _loadedSeason.value = season
 
@@ -1379,6 +1424,76 @@ for (metaAddon in metaAddons) {
                 if (latestEpisodeSeasonRequest == season) {
                     _episodesLoading.value = false
                 }
+            }
+        }
+    }
+
+    /**
+     * Fetches the second source's air dates for this show and re-dates the
+     * episode list already on screen.
+     *
+     * Silent about failure by design: the repository answers an empty map for
+     * an unknown show, a blocked network or an outage, and an empty map leaves
+     * TMDB's dates in place (see [AirDateCorrection]).
+     */
+    private suspend fun loadAirDateCorrections(parentId: String) {
+        if (imdbId != parentId) return
+
+        val detail = _tmdbDetail.value ?: return
+        if (detail.id <= 0) return
+
+        // This source is looked up by IMDB id, while the screen's parent id is
+        // usually the "tmdb:<n>" form; resolveImdbId caches its answer in the
+        // resolution table, so this is free after the first open.
+        val imdbIdForSource = imdbId
+            .takeIf { it.startsWith("tt", ignoreCase = true) }
+            ?: runCatching { tmdbRepository.resolveImdbId(detail.id, "series") }
+                .getOrNull()
+        if (imdbIdForSource.isNullOrBlank()) return
+
+        val dates = airDateRepository.episodeAirDates(imdbIdForSource)
+        // The load may have moved on to another title while this was in
+        // flight; publishing then would re-date the wrong screen.
+        if (dates.isEmpty() || imdbId != parentId) return
+
+        _airDateCorrections.value = AirDateCorrections(
+            episodeDates = dates,
+            seasonPremieres = AirDateCorrection.seasonPremieresFrom(dates)
+        )
+
+        val season = _loadedSeason.value
+        if (season != null && _episodes.value.isNotEmpty()) {
+            _episodes.value = applyAirDateCorrections(_episodes.value, season)
+        }
+    }
+
+    /**
+     * TMDB's dates for [episodes] with the second source's corrections applied.
+     *
+     * Idempotent, so it is safe to run again once corrections arrive after the
+     * episodes do: a date that has already been corrected is no longer in the
+     * future, so the second pass leaves it alone.
+     */
+    private fun applyAirDateCorrections(
+        episodes: List<ResolvedEpisode>,
+        season: Int
+    ): List<ResolvedEpisode> {
+        val corrections = _airDateCorrections.value
+        if (corrections.episodeDates.isEmpty()) return episodes
+
+        val today = java.time.LocalDate.now()
+        return episodes.map { episode ->
+            val corrected = AirDateCorrection.correctAirDate(
+                primary = episode.airDate,
+                secondary = corrections.episodeDates[
+                    AirDateCorrection.episodeKey(season, episode.episodeNumber)
+                ],
+                today = today
+            )
+            if (corrected == episode.airDate) {
+                episode
+            } else {
+                episode.copy(airDate = corrected)
             }
         }
     }

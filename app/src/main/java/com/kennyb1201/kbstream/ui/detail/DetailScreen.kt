@@ -93,6 +93,7 @@ import coil3.request.crossfade
 import coil3.size.Size
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Meta
+import com.kennyb1201.kbstream.data.airdates.AirDateCorrection
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbCastMember
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
@@ -465,6 +466,10 @@ fun DetailScreen(
         ?: meta?.logo?.takeIf { it.isNotBlank() }
     val isLoading by viewModel.isLoading.collectAsState()
     val episodes by viewModel.episodes.collectAsState()
+    // Air dates from a second metadata source (see AirDateCorrection). TMDB's
+    // own dates are volunteer-edited and lag a currently-airing season, which
+    // is what dimmed a live season's chip and badged its episodes UNAVAILABLE.
+    val airDateCorrections by viewModel.airDateCorrections.collectAsState()
     val episodesLoading by viewModel.episodesLoading.collectAsState()
     val episodeError by viewModel.episodeError.collectAsStateWithLifecycle()
     val resumeInfo by viewModel.resumeInfo.collectAsState()
@@ -513,16 +518,72 @@ fun DetailScreen(
     // released (e.g. Silo S4). Keep their premiere dates so the UI can dim
     // those chips and explain why the episode list is empty instead of a
     // bare "No episodes found for this season."
+    //
+    // A season's own air_date can be STALE, though: one that is already
+    // running sometimes still carries its original announced premiere.
+    // American Horror Story: 13 shipped "2026-10-01" while the show's own
+    // next_episode_to_air said "2026-09-25" - the date the Home Upcoming
+    // rail showed, and the right one. So fold that show-level pointer in and
+    // let the EARLIER date win: it can only make a season look more
+    // released, never less.
+    //
+    // That pointer only helps when TMDB's two answers disagree. When they
+    // agree and are BOTH stale, a second metadata source supplies the date
+    // (see AirDateCorrection); its answer wins only when TMDB still claims a
+    // date that has already passed.
     val today = remember { LocalDate.now() }
-    val seasonPremiereDates = remember(tmdbDetail) {
-        tmdbDetail?.seasons.orEmpty()
-            .mapNotNull { season ->
-                val raw = season.airDate ?: return@mapNotNull null
-                val date = runCatching { LocalDate.parse(raw) }.getOrNull()
-                    ?: return@mapNotNull null
-                season.seasonNumber to date
+    val seasonPremiereDates = remember(tmdbDetail, airDateCorrections) {
+        val bySeason = LinkedHashMap<Int, LocalDate>()
+
+        fun offer(seasonNumber: Int, raw: String?) {
+            val date = raw
+                ?.takeIf { it.isNotBlank() }
+                ?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+                ?: return
+            val existing = bySeason[seasonNumber]
+            if (existing == null || date.isBefore(existing)) {
+                bySeason[seasonNumber] = date
             }
-            .toMap()
+        }
+
+        tmdbDetail?.seasons.orEmpty().forEach { season ->
+            offer(season.seasonNumber, season.airDate)
+        }
+        // Held in a local: `tmdbDetail` is a delegated property, which Kotlin
+        // cannot smart cast, and the lambda below needs it non-null.
+        val nextEpisode = tmdbDetail?.nextEpisodeToAir
+        nextEpisode?.seasonNumber?.let { seasonNumber ->
+            offer(seasonNumber, nextEpisode.airDate)
+        }
+
+        AirDateCorrection.correctPremieres(
+            primary = bySeason,
+            secondary = airDateCorrections.seasonPremieres,
+            today = today
+        )
+    }
+
+    // The seasons where the season row and the show-level pointer disagree,
+    // i.e. the season rows are the stale source. Per-episode dates for those
+    // seasons cannot be trusted either, so an episode card keeps its date but
+    // drops the UNAVAILABLE verdict (see [EpisodeCard]).
+    val seasonsWithStaleDates = remember(tmdbDetail) {
+        val pointer = tmdbDetail?.nextEpisodeToAir
+        val seasonNumber = pointer?.seasonNumber
+        val rowDate = tmdbDetail?.seasons.orEmpty()
+            .firstOrNull { it.seasonNumber == seasonNumber }
+            ?.airDate
+
+        if (
+            seasonNumber != null &&
+            !pointer?.airDate.isNullOrBlank() &&
+            rowDate != null &&
+            rowDate != pointer.airDate
+        ) {
+            setOf(seasonNumber)
+        } else {
+            emptySet()
+        }
     }
 
     fun seasonUnavailable(season: Int): Boolean =
@@ -2376,6 +2437,8 @@ fun DetailScreen(
                                                         ep = ep,
                                                         isWatched =
                                                             isEpisodeWatched,
+                                                        airDatesTrusted =
+                                                            effectiveSeason !in seasonsWithStaleDates,
                                                         progressFraction = run {
                                                             // Per-episode progress first (any
                                                             // in-progress episode), then the
@@ -4293,7 +4356,14 @@ private fun EpisodeCard(
     onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     fallbackImageUrl: String? = null,
-    progressFraction: Float = 0f
+    progressFraction: Float = 0f,
+    /**
+     * False when TMDB's dates for this season are known to be contradicted
+     * elsewhere (see seasonsWithStaleDates): a future air date then no longer
+     * marks the card UNAVAILABLE, because the row is stale rather than the
+     * episode unaired.
+     */
+    airDatesTrusted: Boolean = true
 ) {
     val posterUrl = remember(ep.thumbnail, fallbackImageUrl) {
         ep.thumbnail?.takeIf {
@@ -4303,8 +4373,8 @@ private fun EpisodeCard(
         } ?: ""
     }
 
-    val isUnavailable = remember(ep.airDate) {
-        isEpisodeUnavailable(ep.airDate)
+    val isUnavailable = remember(ep.airDate, airDatesTrusted) {
+        airDatesTrusted && isEpisodeUnavailable(ep.airDate)
     }
 
     PosterCard(
