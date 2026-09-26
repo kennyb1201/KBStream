@@ -930,8 +930,9 @@ class SimklRepository(
      */
     suspend fun deletePlaybackSessionsForParent(
         parentId: String,
-        title: String? = null
-    ): Int = deletePlaybackSessionsForParentImpl(parentId, title)
+        title: String? = null,
+        seasonsEpisodes: Set<Pair<Int, Int>>? = null
+    ): Int = deletePlaybackSessionsForParentImpl(parentId, title, seasonsEpisodes)
 
     /**
      * Deletes every open Simkl playback session for a title whose watched

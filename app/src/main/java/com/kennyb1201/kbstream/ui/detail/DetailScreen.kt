@@ -3617,9 +3617,14 @@ fun DetailScreen(
                                             selected.episode
                                         )
                                     } else {
+                                        // The stream id is this episode's
+                                        // progress-row identity, so the
+                                        // cleanup matches even if the
+                                        // numbers disagree with the source.
                                         viewModel.markEpisodeWatched(
                                             selected.season,
-                                            selected.episode
+                                            selected.episode,
+                                            selected.streamId
                                         )
                                     }
                                     lastEpisodeFocusRequester?.requestFocus()

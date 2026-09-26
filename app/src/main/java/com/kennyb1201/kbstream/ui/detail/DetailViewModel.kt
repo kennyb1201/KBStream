@@ -1592,7 +1592,15 @@ for (metaAddon in metaAddons) {
      */
     fun markSeasonWatched(
         season: Int,
-        episodeNumbers: List<Int>
+        episodeNumbers: List<Int>,
+        /**
+         * [WatchHistoryEntity.episodeStreamId] values for the marked
+         * episodes, when the caller knows them (an episode card does; a
+         * season chip only has numbers). See
+         * [WatchHistoryDao.deleteResumeRowsForParentsStreamIds] for why they
+         * are the stronger identity for the progress-row cleanup below.
+         */
+        episodeStreamIds: List<String> = emptyList()
     ) {
         val parentId = imdbId
         if (parentId.isBlank() || season < 0) return
@@ -1673,13 +1681,42 @@ for (metaAddon in metaAddons) {
             // is a different row from the marker.
             runCatching {
                 val parents = localHistoryParentIds(parentId)
+
+                var removedByNumber = 0
                 validEpisodes.forEach { episode ->
-                    historyDao.deleteResumeRowsForParentsSeasonEpisode(
-                        parentIds = parents,
-                        season = season,
-                        episode = episode
-                    )
+                    removedByNumber +=
+                        historyDao.deleteResumeRowsForParentsSeasonEpisode(
+                            parentIds = parents,
+                            season = season,
+                            episode = episode
+                        )
                 }
+
+                // Second pass, by the identity the UI actually keys progress
+                // on (inProgressByStreamId[ep.streamId]). A row whose
+                // season/episode numbers disagree with the card's never
+                // matched the loop above, so the bar outlived the mark.
+                val streamIds =
+                    episodeStreamIds
+                        .map { it.trim() }
+                        .filter { it.isNotBlank() }
+                        .distinct()
+                val removedByStreamId =
+                    if (streamIds.isEmpty()) {
+                        0
+                    } else {
+                        historyDao.deleteResumeRowsForParentsStreamIds(
+                            parentIds = parents,
+                            streamIds = streamIds
+                        )
+                    }
+
+                Log.i(
+                    "KBStream",
+                    "markSeasonWatched resume cleanup s=$season " +
+                        "eps=$validEpisodes streams=${streamIds.size} " +
+                        "byNumber=$removedByNumber byStreamId=$removedByStreamId"
+                )
             }.onFailure { e ->
                 Log.e(
                     "KBStream",
@@ -1739,6 +1776,38 @@ for (metaAddon in metaAddons) {
                     Log.e(
                         "KBStream",
                         "markSeasonWatched simkl failed s=$season",
+                        e
+                    )
+                }
+            }
+
+            // 3b. Close the paused SIMKL sessions for the marked episodes.
+            // pushWatchedSeason's own cleanup only closes a session already
+            // past 95% - it is shared with the player's completion path,
+            // where a mostly-unwatched session must survive - but an EXPLICIT
+            // mark makes that episode's session stale whatever its progress.
+            // A session paused short of that threshold was therefore never
+            // closed, and it kept feeding the rail a Continue Watching card
+            // at its old position. Scoped to these episodes: a paused session
+            // on another episode of the same show is still in progress and
+            // belongs on the rail.
+            if (
+                simklRepository.isConfigured() &&
+                simklRepository.hasToken()
+            ) {
+                runCatching {
+                    simklRepository.deletePlaybackSessionsForParent(
+                        parentId = parentId,
+                        title = showName.takeIf { it.isNotBlank() },
+                        seasonsEpisodes =
+                            validEpisodes
+                                .map { episode -> season to episode }
+                                .toSet()
+                    )
+                }.onFailure { e ->
+                    Log.e(
+                        "KBStream",
+                        "markSeasonWatched simkl session cleanup failed s=$season",
                         e
                     )
                 }
@@ -2270,6 +2339,52 @@ for (metaAddon in metaAddons) {
                 )
             }
 
+            // 6. Whole-show push to the trackers. Closing the paused session
+            // above is NOT enough: Simkl's Continue Watching feed is built
+            // from two tables, and for a series the card normally comes from
+            // the "watching" library (getContinueWatching's
+            // source = "watching", carrying a next-episode pointer) rather
+            // than from the playback table this function used to be the only
+            // one to touch. So a fully-marked show stayed in "watching" and
+            // came straight back on the next rail refresh. The whole-show
+            // write moves it to Simkl's completed list, and its impl closes
+            // any open playback session too - leaving step 5 as the
+            // belt-and-braces for a push that fails.
+            if (
+                simklRepository.isConfigured() &&
+                simklRepository.hasToken()
+            ) {
+                runCatching {
+                    simklRepository.pushWatchedShow(
+                        showImdbId = parentId,
+                        title = showName.takeIf { it.isNotBlank() },
+                        tmdbId = showTmdbId
+                    )
+                }.onFailure { e ->
+                    Log.e(
+                        "KBStream",
+                        "markSeriesWatched simkl show push failed",
+                        e
+                    )
+                }
+            }
+
+            if (MdbListClient.isConfigured(getApplication())) {
+                runCatching {
+                    MdbListClient.pushWatchedShow(
+                        getApplication(),
+                        imdbId = parentId.takeIf { it.startsWith("tt") },
+                        tmdbId = showTmdbId
+                    )
+                }.onFailure { e ->
+                    Log.e(
+                        "KBStream",
+                        "markSeriesWatched mdblist show push failed",
+                        e
+                    )
+                }
+            }
+
             refreshPostersAfterWatchedChange()
         }
     }
@@ -2337,11 +2452,14 @@ for (metaAddon in metaAddons) {
      */
     fun markEpisodeWatched(
         season: Int,
-        episode: Int
+        episode: Int,
+        episodeStreamId: String? = null
     ) {
         markSeasonWatched(
             season = season,
-            episodeNumbers = listOf(episode)
+            episodeNumbers = listOf(episode),
+            episodeStreamIds =
+                episodeStreamId?.let { listOf(it) }.orEmpty()
         )
     }
 

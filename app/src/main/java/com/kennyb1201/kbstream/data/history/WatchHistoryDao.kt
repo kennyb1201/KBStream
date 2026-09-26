@@ -249,7 +249,35 @@ suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity>
         parentIds: List<String>,
         season: Int,
         episode: Int
+    ): Int
+
+    /**
+     * Identity-based form of [deleteResumeRowsForParentsSeasonEpisode].
+     *
+     * Season/episode numbers are not the identity the rest of the app uses
+     * for an episode's progress: DetailScreen maps an episode card to its
+     * progress row by [WatchHistoryEntity.episodeStreamId], and the player
+     * stores exactly the stream id it was launched with. Matching on that is
+     * immune to the numbering disagreement a season/episode match can hit (an
+     * add-on's numbering against TMDB's, specials, a 0-based source), which
+     * is how a marked-watched episode could keep its resume bar.
+     *
+     * Returns the number of rows removed, so callers can tell "nothing to
+     * clean" apart from "the match missed".
+     */
+    @Query(
+        """
+        DELETE FROM watch_history
+        WHERE parentId IN (:parentIds)
+          AND episodeStreamId IN (:streamIds)
+          AND positionMs > 0
+          AND isCompleted = 0
+        """
     )
+    suspend fun deleteResumeRowsForParentsStreamIds(
+        parentIds: List<String>,
+        streamIds: List<String>
+    ): Int
 
     @Query("UPDATE watch_history SET backdropUrl = :backdropUrl WHERE id = :id AND (backdropUrl IS NULL OR backdropUrl = '')")
     suspend fun updateBackdropIfMissing(id: String, backdropUrl: String)

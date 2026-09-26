@@ -110,7 +110,14 @@ suspend fun SimklRepository.deletePlaybackSessionImpl(
  */
 suspend fun SimklRepository.deletePlaybackSessionsForParentImpl(
     parentId: String,
-    title: String? = null
+    title: String? = null,
+    /**
+     * When set, only sessions for these (season, episode) pairs are closed.
+     * Marking ONE episode - or one season - watched must not take a paused
+     * session on a *different* episode with it: that show is still being
+     * watched, just not there. Null means every episode of the parent.
+     */
+    seasonsEpisodes: Set<Pair<Int, Int>>? = null
 ): Int {
 
     if (
@@ -141,6 +148,12 @@ suspend fun SimklRepository.deletePlaybackSessionsForParentImpl(
                         imdb = ref.imdb,
                         tmdb = ref.tmdb,
                         title = title
+                    )
+                }
+                .filter { item ->
+                    playbackSessionMatchesEpisodeScope(
+                        item = item,
+                        seasonsEpisodes = seasonsEpisodes
                     )
                 }
 
@@ -277,6 +290,35 @@ suspend fun SimklRepository.deleteOpenPlaybackSessionsForWatchedImpl(
         )
         0
     }
+}
+
+/**
+ * Whether a paused session belongs to the episodes that are being marked.
+ *
+ * [seasonsEpisodes] null means "every episode of the parent" - the whole-show
+ * sweep a series mark wants. Otherwise the session must name one of the marked
+ * episodes exactly, because a paused session on ANOTHER episode is still in
+ * progress and belongs on the rail: marking S3E1 watched must not take S3E2's
+ * resume point with it.
+ *
+ * A session carrying no episode numbers is left alone rather than deleted on
+ * a guess.
+ */
+internal fun playbackSessionMatchesEpisodeScope(
+    item: SimklPlaybackItem,
+    seasonsEpisodes: Set<Pair<Int, Int>>?
+): Boolean {
+    if (seasonsEpisodes == null) return true
+
+    val sessionSeason =
+        item.episode?.season
+            ?: return false
+
+    val sessionEpisode =
+        item.episode?.episode
+            ?: return false
+
+    return (sessionSeason to sessionEpisode) in seasonsEpisodes
 }
 
 private fun playbackItemMatchesParent(
