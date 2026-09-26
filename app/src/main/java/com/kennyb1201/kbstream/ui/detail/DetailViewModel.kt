@@ -20,6 +20,7 @@ import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.sync.KidsMode
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
+import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbCollectionDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
@@ -1647,24 +1648,31 @@ for (metaAddon in metaAddons) {
                     return@forEach
                 }
 
-                runCatching {
-                    historyDao.upsert(
-                        WatchHistoryEntity(
-                            id = key,
-                            parentId = parentId,
-                            type = "series",
-                            name = showName,
-                            poster = posterUrl,
-                            streamUrl = null,
-                            positionMs = 0L,
-                            durationMs = 1L,
-                            season = season,
-                            episode = episode,
-                            updatedAt = now,
-                            isCompleted = true,
-                            completedAt = now
-                        )
+                val row =
+                    WatchHistoryEntity(
+                        id = key,
+                        parentId = parentId,
+                        type = "series",
+                        name = showName,
+                        poster = posterUrl,
+                        streamUrl = null,
+                        positionMs = 0L,
+                        durationMs = 1L,
+                        season = season,
+                        episode = episode,
+                        updatedAt = now,
+                        isCompleted = true,
+                        completedAt = now
                     )
+
+                runCatching {
+                    historyDao.upsert(row)
+                }.onSuccess {
+                    // Mirror the marker itself. The player keys its resume row
+                    // for an episode the same way, so when the cloud still
+                    // holds that resume write the marker has to reach it too,
+                    // or a pull applies the resume row back OVER this marker.
+                    runCatching { SupabaseSync.enqueueHistory(row) }
                 }.onFailure { e ->
                     Log.e(
                         "KBStream",
@@ -1681,6 +1689,11 @@ for (metaAddon in metaAddons) {
             // is a different row from the marker.
             runCatching {
                 val parents = localHistoryParentIds(parentId)
+
+                // Captured BEFORE the deletes: these are the rows whose CLOUD
+                // copies have to end too (see [endCloudResumeRows]).
+                val resumeRowsBefore =
+                    historyDao.getInProgressForParents(parents)
 
                 var removedByNumber = 0
                 validEpisodes.forEach { episode ->
@@ -1717,6 +1730,8 @@ for (metaAddon in metaAddons) {
                         "eps=$validEpisodes streams=${streamIds.size} " +
                         "byNumber=$removedByNumber byStreamId=$removedByStreamId"
                 )
+
+                endCloudResumeRows(resumeRowsBefore)
             }.onFailure { e ->
                 Log.e(
                     "KBStream",
@@ -2257,6 +2272,13 @@ for (metaAddon in metaAddons) {
                     historyDao.upsertAll(
                         rows
                     )
+                }.onSuccess {
+                    // Same mirror as the per-episode mark: the markers have to
+                    // reach the cloud, or a stale resume write for the same
+                    // episode key outranks them on the next pull.
+                    rows.forEach { row ->
+                        runCatching { SupabaseSync.enqueueHistory(row) }
+                    }
                 }.onFailure { e ->
                     Log.e(
                         "KBStream",
@@ -2270,9 +2292,16 @@ for (metaAddon in metaAddons) {
             // the in-memory copies the hero / episode chips read, so the page
             // stops offering "Resume S5E3" on an episode that is now watched.
             runCatching {
-                historyDao.deleteResumeRowsForParents(
-                    localHistoryParentIds(parentId)
-                )
+                val parents = localHistoryParentIds(parentId)
+
+                // Every in-progress row for the show, captured before the
+                // delete so their cloud copies can end with them.
+                val resumeRowsBefore =
+                    historyDao.getInProgressForParents(parents)
+
+                historyDao.deleteResumeRowsForParents(parents)
+
+                endCloudResumeRows(resumeRowsBefore)
             }.onFailure { e ->
                 Log.e(
                     "KBStream",
@@ -2387,6 +2416,44 @@ for (metaAddon in metaAddons) {
 
             refreshPostersAfterWatchedChange()
         }
+    }
+
+    /**
+     * Ends the CLOUD copies of resume rows a mark-watched just deleted
+     * locally.
+     *
+     * A local delete used to be invisible to the sync layer, and the pull
+     * merge rules the other way: `applyHistoryRow` lets the remote row win
+     * whenever it is newer than the local one, and a DELETED local row has no
+     * timestamp at all - so any surviving cloud copy came straight back on the
+     * next pull or realtime event. That is how an episode the user had just
+     * marked watched came back with its progress bar (and with its Continue
+     * Watching card), while the completed marker stayed put: the marker is a
+     * different row, so the checkmark and the bar showed at once.
+     *
+     * Only ids that are GONE locally are sent: when the completed marker
+     * reused the resume row's id, the row still exists and its cloud copy must
+     * stay - the caller has just republished it as the completed version.
+     */
+    private suspend fun endCloudResumeRows(candidates: List<WatchHistoryEntity>) {
+        if (candidates.isEmpty()) return
+
+        val removedIds =
+            candidates
+                .map { it.id }
+                .distinct()
+                .filter { id ->
+                    runCatching { historyDao.getById(id) }
+                        .getOrNull() == null
+                }
+
+        if (removedIds.isEmpty()) return
+
+        SupabaseSync.deleteHistoryRows(removedIds)
+        Log.i(
+            "KBStream",
+            "resume cleanup: ended ${removedIds.size} cloud row(s)"
+        )
     }
 
     /**

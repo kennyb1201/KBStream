@@ -33,6 +33,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
+import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import com.kennyb1201.kbstream.data.update.AppUpdater
@@ -1887,6 +1888,14 @@ fun SettingsScreen(
                 clearingHistory = true
                 backupScope.launch {
                     runCatching {
+                        // Clear the CLOUD half FIRST, and wait for it. A wipe
+                        // that ran after the local clear left a window where
+                        // the cloud still held the rows, and the pull merge (a
+                        // remote row beats a DELETED local row, which has no
+                        // timestamp) restored every resume bar + card and
+                        // completed marker - which is why a show came back
+                        // with its progress bar after a reset.
+                        SupabaseSync.clearWatchStateForActiveProfile()
                         WatchHistoryRepository(context).clearAll()
                         WatchedStatusRepository(context)
                             .clearLocalWatchState(clearSimklAuth = false)

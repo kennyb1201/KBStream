@@ -11,6 +11,7 @@ import io.github.jan.supabase.gotrue.auth
 import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.Columns
+import io.github.jan.supabase.postgrest.query.filter.FilterOperator
 import io.github.jan.supabase.realtime.Realtime
 import io.github.jan.supabase.realtime.channel
 import io.github.jan.supabase.realtime.postgresChangeFlow
@@ -644,6 +645,128 @@ object SupabaseSync {
         val row = OutboxItem(TABLE_HISTORY, "item_id", scopedKey(entity.id, profileId), payload)
         outbox.put(row)
         scheduleFlush()
+    }
+
+    /**
+     * Deletes watch-history rows [ids] from the cloud, for a local delete that
+     * has to STICK.
+     *
+     * A local row deletion was previously invisible to the sync layer, and the
+     * pull merge ruled the other way: [applyHistoryRow] lets the remote row win
+     * whenever it is newer than the local one, and a DELETED local row has no
+     * timestamp at all — so any surviving cloud copy came straight back on the
+     * next pull or realtime event. That is how a resume row a "mark as watched"
+     * had just cleared returned with its progress bar, and with it the Continue
+     * Watching card, while the completed marker stayed behind (the marker is a
+     * different row, so the checkmark and the bar showed at once).
+     *
+     * The pending outbox writes for those keys are dropped first: a queued
+     * upload of the same row would otherwise land after the delete and put it
+     * back. Fire-and-forget, and a no-op when signed out — with no cloud copy
+     * there is nothing that can resurrect the row.
+     */
+    fun deleteHistoryRows(
+        ids: List<String>,
+        profileId: String? = currentProfileId()
+    ) {
+        if (ids.isEmpty()) return
+        if (!isSignedIn()) return
+
+        val scopedIds =
+            ids.mapNotNull { id -> id.trim().takeIf { it.isNotBlank() } }
+                .distinct()
+                .map { id -> scopedKey(id, profileId) }
+        if (scopedIds.isEmpty()) return
+
+        outbox.removeKeys(TABLE_HISTORY, "item_id", scopedIds)
+
+        scope.launch {
+            val c = client ?: return@launch
+            for (chunk in scopedIds.chunked(50)) {
+                try {
+                    c.from(TABLE_HISTORY).delete {
+                        filter { isIn("item_id", chunk) }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "deleteHistoryRows failed: ${e.message}")
+                    recordSyncError("Delete", e)
+                } catch (t: Throwable) {
+                    CrashReporter.recordNonFatal(
+                        t,
+                        mapOf("source" to "delete_history_rows")
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Wipes this profile's watch history + watched markers in the CLOUD.
+     *
+     * The Settings "Clear Continue Watching" reset cleared only the local
+     * Room rows, so the pull merge immediately put everything back: the
+     * remote copy is newer than the deleted local row (which has no timestamp
+     * at all), so `pullHistory` re-inserted every resume row, and the resume
+     * bar plus its Continue Watching card reappeared on the next sync - while
+     * the completed markers came back too, so the episode card showed a
+     * checkmark WITH a progress bar.
+     *
+     * Pending outbox writes for the profile are dropped first (see
+     * [OutboxQueue.removeProfileScoped]); a queued progress write would
+     * otherwise flush after the wipe and resurrect the row. Then the cloud
+     * rows are deleted by their profile-scoped key, so only this profile's
+     * state is touched. Fire-and-forget, and a no-op when signed out - with
+     * no cloud copy there is nothing that can resurrect the rows.
+     */
+    suspend fun clearWatchStateForActiveProfile() {
+        val pid = currentProfileId()
+        if (!isSignedIn()) return
+
+        // Drop the queued writes BEFORE the deletes: otherwise the flush loop
+        // can push the row we are about to delete right between the two.
+        outbox.removeProfileScoped(TABLE_HISTORY, "item_id", pid)
+        outbox.removeProfileScoped(TABLE_WATCHED, "item_key", pid)
+
+        // Suspending on purpose: the caller clears the LOCAL rows only once
+        // the cloud wipe has finished, so there is no window where local is
+        // empty while the cloud still holds the rows a pull would restore.
+        withContext(Dispatchers.IO) {
+            val c = client ?: return@withContext
+            runCatching {
+                c.from(TABLE_HISTORY).delete {
+                    filter { scopeToProfile("item_id", pid) }
+                }
+            }.onFailure { e ->
+                Log.w(TAG, "clearWatchState history failed: ${e.message}")
+                (e as? Exception)?.let { recordSyncError("Clear", it) }
+            }
+            runCatching {
+                c.from(TABLE_WATCHED).delete {
+                    filter { scopeToProfile("item_key", pid) }
+                }
+            }.onFailure { e ->
+                Log.w(TAG, "clearWatchState watched failed: ${e.message}")
+                (e as? Exception)?.let { recordSyncError("Clear", it) }
+            }
+            Log.i(TAG, "clearWatchState: wiped cloud watch state profile=$pid")
+        }
+    }
+
+    /**
+     * Filter that matches only rows [column] scoped to [pid]. A null profile
+     * means the legacy un-namespaced rows, matched as "everything NOT
+     * scoped" so an old install clears its own data without touching the
+     * namespaced rows of any profile.
+     */
+    private fun io.github.jan.supabase.postgrest.query.filter.PostgrestFilterBuilder.scopeToProfile(
+        column: String,
+        pid: String?
+    ) {
+        if (pid != null) {
+            like(column, "${SyncKeys.SCOPE_PREFIX}$pid:%")
+        } else {
+            filterNot(column, FilterOperator.LIKE, "${SyncKeys.SCOPE_PREFIX}%")
+        }
     }
 
     fun enqueueWatched(entity: WatchedStatusEntity, profileId: String? = currentProfileId()) {

@@ -100,6 +100,62 @@ class OutboxQueueTest {
     }
 
     @Test
+    fun `removeKeys drops only the listed keys in that table and column`() {
+        val queue = OutboxQueue()
+        queue.put(item("p:a:tt1", "h1", table = "sync_watch_history", keyColumn = "item_id"))
+        queue.put(item("p:a:tt2", "h2", table = "sync_watch_history", keyColumn = "item_id"))
+        queue.put(item("p:a:tt1", "w1"))
+
+        val removed = queue.removeKeys(
+            "sync_watch_history",
+            "item_id",
+            listOf("p:a:tt1")
+        )
+
+        assertEquals(1, removed)
+        assertEquals(2, queue.size)
+        assertEquals(
+            setOf("p:a:tt2", "p:a:tt1"),
+            queue.snapshot().map { it.key }.toSet()
+        )
+        // The watched marker for the same raw id is untouched: it lives in a
+        // different table.
+        assertTrue(queue.snapshot().any { it.payload["marker"].toString().trim('"') == "w1" })
+    }
+
+    @Test
+    fun `removeProfileScoped drops a profile's rows and leaves siblings alone`() {
+        val queue = OutboxQueue()
+        queue.put(item("p:a:movie::tt1", "a-history", table = "sync_watch_history", keyColumn = "item_id"))
+        queue.put(item("p:a:tt1", "a-watched"))
+        queue.put(item("p:b:movie::tt1", "b-history", table = "sync_watch_history", keyColumn = "item_id"))
+        queue.put(item("p:a:display_prefs", "prefs", table = "sync_prefs", keyColumn = "pref_key"))
+
+        val history = queue.removeProfileScoped("sync_watch_history", "item_id", "a")
+        val watched = queue.removeProfileScoped("sync_watched_status", "item_key", "a")
+
+        assertEquals(1, history)
+        assertEquals(1, watched)
+        // Profile b's history and profile a's prefs blob survive.
+        assertEquals(
+            setOf("p:b:movie::tt1", "p:a:display_prefs"),
+            queue.snapshot().map { it.key }.toSet()
+        )
+    }
+
+    @Test
+    fun `removeProfileScoped with a null profile only matches legacy rows`() {
+        val queue = OutboxQueue()
+        queue.put(item("movie::tt1", "legacy", table = "sync_watch_history", keyColumn = "item_id"))
+        queue.put(item("p:a:movie::tt1", "scoped", table = "sync_watch_history", keyColumn = "item_id"))
+
+        val removed = queue.removeProfileScoped("sync_watch_history", "item_id", null)
+
+        assertEquals(1, removed)
+        assertEquals("p:a:movie::tt1", queue.snapshot().single().key)
+    }
+
+    @Test
     fun `snapshot is a copy, not a live view`() {
         val queue = OutboxQueue()
         queue.put(item("p:a:movie::tt1", "v1"))

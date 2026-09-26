@@ -54,6 +54,56 @@ internal class OutboxQueue(
         return removed
     }
 
+    /**
+     * Drops every pending write for [keys] in [table]/[keyColumn].
+     *
+     * Used when a local row is DELETED rather than rewritten: the cloud needs
+     * that deletion, so a queued upload of the same key must not be flushed
+     * afterwards and resurrect the row. Unlike [remove] this is unconditional
+     * — there is no "newer write" to protect, the row is going away.
+     *
+     * Returns how many pending writes went.
+     */
+    fun removeKeys(table: String, keyColumn: String, keys: Collection<String>): Int {
+        var removed = 0
+        keys.forEach { key ->
+            if (rows.remove(id(table, keyColumn, key)) != null) removed++
+        }
+        if (removed > 0) onChange(rows.size)
+        return removed
+    }
+
+    /**
+     * Drops every pending write in [table]/[keyColumn] that belongs to
+     * [profileId].
+     *
+     * The Settings "Clear Continue Watching" reset uses this: a queued
+     * progress write for the profile would otherwise flush AFTER the reset and
+     * push the very row the user just cleared, which the next pull restores.
+     * Matched with the same profile-scope rule the sync layer uses, so a
+     * sibling profile's pending writes are never touched.
+     *
+     * Returns how many pending writes went.
+     */
+    fun removeProfileScoped(
+        table: String,
+        keyColumn: String,
+        profileId: String?
+    ): Int {
+        var removed = 0
+        rows.values.forEach { row ->
+            if (
+                row.table == table &&
+                row.keyColumn == keyColumn &&
+                SyncKeys.matchesProfile(row.key, profileId)
+            ) {
+                if (rows.remove(id(row), row)) removed++
+            }
+        }
+        if (removed > 0) onChange(rows.size)
+        return removed
+    }
+
     fun snapshot(): List<OutboxItem> = rows.values.toList()
 
     fun id(row: OutboxItem): String = id(row.table, row.keyColumn, row.key)

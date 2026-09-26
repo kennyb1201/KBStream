@@ -1,0 +1,57 @@
+[
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/home/HomeViewModel.kt",
+    "old": "        trimmed.startsWith(\"simkl:\") -> trimmed.removePrefix(\"simkl:\")\n        else -> trimmed\n    }\n}\n",
+    "new": "        trimmed.startsWith(\"simkl:\") -> trimmed.removePrefix(\"simkl:\")\n        else -> trimmed\n    }\n}\n\n/** Id prefixes that are internal lookup keys, never part of a title. */\nprivate val RAW_ID_PREFIXES = setOf(\"tmdb\", \"imdb\", \"simkl\", \"tvdb\", \"trakt\")\n\n/**\n * True when [value] is an internal media id rather than a name.\n *\n * Cards reach the rail titled with one of these when the source's own name\n * field was missing or its enrichment failed: \"tmdb:12345\", \"tt0111161\", or a\n * bare \"12345\". The tell is that the same failure is what leaves the card\n * with no artwork, so those two symptoms travel together - which is why a\n * bare number is only an id when the card has NO poster. Real titles are\n * numbers too (\"1917\", \"2012\"), and the prefixed forms are unambiguous.\n */\ninternal fun looksLikeRawMediaId(\n    value: String,\n    hasArtwork: Boolean = true\n): Boolean {\n    val trimmed = value.trim()\n    if (trimmed.isEmpty()) return false\n\n    // tt0111161\n    if (\n        trimmed.startsWith(\"tt\", ignoreCase = true) &&\n        trimmed.length > 2 &&\n        trimmed.substring(2).all { it.isDigit() }\n    ) {\n        return true\n    }\n\n    // tmdb:12345 / imdb:tt0111161 / simkl:123 / tvdb:456\n    val prefix = trimmed.substringBefore(\":\", missingDelimiterValue = \"\")\n    if (prefix.lowercase() in RAW_ID_PREFIXES) {\n        val rest = trimmed.substringAfter(\":\", missingDelimiterValue = \"\")\n        if (rest.isNotEmpty() && rest.substringAfter(\"tt\").all { it.isDigit() }) {\n            return true\n        }\n    }\n\n    // Bare number: only an id when nothing identifies the card as a real\n    // title, i.e. it has no artwork either.\n    return !hasArtwork && trimmed.all { it.isDigit() }\n}\n\n/**\n * A card's display title, or null when there is no real name to show.\n *\n * Blank and id-like names both mean \"this card has no title\". Callers fall\n * back to a resolved name or skip the card; putting an internal id on screen\n * is what made the phantom duplicates so confusing - they could not even be\n * paired with the right card by name.\n */\ninternal fun upNextDisplayTitleOrNull(\n    raw: String?,\n    hasArtwork: Boolean = true\n): String? {\n    val trimmed = raw?.trim().orEmpty()\n    if (trimmed.isEmpty()) return null\n    if (looksLikeRawMediaId(trimmed, hasArtwork)) return null\n    return trimmed\n}\n"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/home/HomeViewModel.kt",
+    "old": "        // Never fall back to the navigation id: \"tmdb:12345\" is not a title.\n        // The cards that used to show one are precisely the ones whose\n        // enrichment failed, so they carried no poster either - a blank tile\n        // with an internal id on it, sitting next to the same show's real\n        // card. A session with no name of any kind is dropped instead; it is\n        // still paused on the tracker, so it comes back with a real title as\n        // soon as enrichment succeeds.\n        val displayTitle =\n            detail?.name?.takeIf { it.isNotBlank() }\n                ?: detail?.title?.takeIf { it.isNotBlank() }\n                ?: session.title?.takeIf { it.isNotBlank() }\n                ?: return null",
+    "new": "        // Never fall back to the navigation id, and never accept one as the\n        // name either: \"tmdb:12345\" is not a title. The tracker's own title\n        // field carries a raw id when ITS enrichment failed, which is also why\n        // these cards arrive with no poster - a blank tile with an internal id\n        // on it, sitting next to the same show's real card.\n        val hasArtwork = !posterUrl.isNullOrBlank()\n        val displayTitle =\n            upNextDisplayTitleOrNull(detail?.name, hasArtwork)\n                ?: upNextDisplayTitleOrNull(detail?.title, hasArtwork)\n                ?: upNextDisplayTitleOrNull(session.title, hasArtwork)\n                ?: return null"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/home/HomeViewModel.kt",
+    "old": "        var posterUrl =\n            item.posterUrl\n",
+    "new": "        var posterUrl =\n            item.posterUrl\n\n        // Name resolved from TMDB, used when the tracker's own title is\n        // missing or is an internal id (see [upNextDisplayTitleOrNull]).\n        var resolvedName: String? = null\n"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/home/HomeViewModel.kt",
+    "old": "                backdropUrl =\n                    detail.backdropPath\n                        ?.takeIf { it.isNotBlank() }\n                        ?.let { \"https://image.tmdb.org/t/p/w780$it\" }\n\n                showTitle =\n                    if (item.mediaType == \"series\") {\n                        detail.name\n                    } else {\n                        null\n                    }\n",
+    "new": "                backdropUrl =\n                    detail.backdropPath\n                        ?.takeIf { it.isNotBlank() }\n                        ?.let { \"https://image.tmdb.org/t/p/w780$it\" }\n\n                resolvedName =\n                    upNextDisplayTitleOrNull(\n                        detail.name,\n                        !posterUrl.isNullOrBlank()\n                    )\n                        ?: upNextDisplayTitleOrNull(\n                            detail.title,\n                            !posterUrl.isNullOrBlank()\n                        )\n\n                showTitle =\n                    if (item.mediaType == \"series\") {\n                        detail.name\n                    } else {\n                        null\n                    }\n"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/home/HomeViewModel.kt",
+    "old": "        if (\n            posterUrl?.isBlank() == true\n        ) {\n            posterUrl = null\n        }\n\n        return UpNextItem(\n\n            id =\n                \"simkl:${item.id}\",\n\n            title =\n                item.title,",
+    "new": "        if (\n            posterUrl?.isBlank() == true\n        ) {\n            posterUrl = null\n        }\n\n        // The tracker's title, or the name TMDB resolved, or no card at all.\n        // A Simkl item whose title is a bare id is the same phantom the\n        // MDBList builder drops: nothing recognisable to show.\n        val displayTitle =\n            upNextDisplayTitleOrNull(\n                item.title,\n                !posterUrl.isNullOrBlank()\n            )\n                ?: resolvedName\n                ?: return null\n\n        return UpNextItem(\n\n            id =\n                \"simkl:${item.id}\",\n\n            title =\n                displayTitle,"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/home/HomeViewModel.kt",
+    "old": "        var episodeRating: Double? = null\n        var episodeThumbnail: String? = null\n        var backdropUrl: String? = entry.backdropUrl\n",
+    "new": "        var episodeRating: Double? = null\n        var episodeThumbnail: String? = null\n        var backdropUrl: String? = entry.backdropUrl\n\n        // Name resolved from TMDB, used when the stored row's name is missing\n        // or is an internal id (see [upNextDisplayTitleOrNull]).\n        var resolvedLocalName: String? = null\n"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/home/HomeViewModel.kt",
+    "old": "                backdropUrl =\n                    tmdbDetail?.backdropPath\n                        ?.takeIf { it.isNotBlank() }\n                        ?.let { \"https://image.tmdb.org/t/p/w780$it\" }\n",
+    "new": "                backdropUrl =\n                    tmdbDetail?.backdropPath\n                        ?.takeIf { it.isNotBlank() }\n                        ?.let { \"https://image.tmdb.org/t/p/w780$it\" }\n\n                resolvedLocalName =\n                    upNextDisplayTitleOrNull(\n                        tmdbDetail?.name,\n                        !entry.poster.isNullOrBlank()\n                    )\n                        ?: upNextDisplayTitleOrNull(\n                            tmdbDetail?.title,\n                            !entry.poster.isNullOrBlank()\n                        )\n"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/home/HomeViewModel.kt",
+    "old": "            title = entry.name,\n            poster = entry.poster,\n            badge = UpNextBadge.CONTINUE_WATCHING,\n\n            showTitle =\n                if (isEpisodePlayback) entry.name else null,\n",
+    "new": "            title =\n                upNextDisplayTitleOrNull(\n                    entry.name,\n                    !entry.poster.isNullOrBlank() || !backdropUrl.isNullOrBlank()\n                )\n                    ?: resolvedLocalName\n                    // No name at all: skip this card. The same show's enriched\n                    // twin (Simkl / MDBList) still gets one, and the row stays\n                    // resumable from Detail - a card titled with an internal\n                    // id is worse than no card.\n                    ?: return@async null,\n            poster = entry.poster,\n            badge = UpNextBadge.CONTINUE_WATCHING,\n\n            showTitle =\n                if (isEpisodePlayback) entry.name else null,\n"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/home/HomeViewModel.kt",
+    "old": "            nextEpisodeAir = capturedNextEpisodeAir,\n\n            tmdbId = capturedTmdbId\n        )\n            }\n        }\n    }.awaitAll()\n}\n",
+    "new": "            nextEpisodeAir = capturedNextEpisodeAir,\n\n            tmdbId = capturedTmdbId\n        )\n            }\n        }\n    }.awaitAll().filterNotNull()\n}\n"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/home/HomeViewModel.kt",
+    "old": "        val items = history.map { entry ->\n            UpNextItem(",
+    "new": "        val items = history.mapNotNull { entry ->\n            UpNextItem("
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/home/HomeViewModel.kt",
+    "old": "                title = entry.name,\n                poster = entry.poster,\n                badge = UpNextBadge.CONTINUE_WATCHING,\n                showTitle = if (entry.season != null && entry.episode != null) {",
+    "new": "                title =\n                    upNextDisplayTitleOrNull(\n                        entry.name,\n                        !entry.poster.isNullOrBlank()\n                    )\n                        ?: return@mapNotNull null,\n                poster = entry.poster,\n                badge = UpNextBadge.CONTINUE_WATCHING,\n                showTitle = if (entry.season != null && entry.episode != null) {"
+  }
+]

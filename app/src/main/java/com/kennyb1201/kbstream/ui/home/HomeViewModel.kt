@@ -258,6 +258,67 @@ internal fun upNextIdentifier(rawId: String?): String? {
     }
 }
 
+/** Id prefixes that are internal lookup keys, never part of a title. */
+private val RAW_ID_PREFIXES = setOf("tmdb", "imdb", "simkl", "tvdb", "trakt")
+
+/**
+ * True when [value] is an internal media id rather than a name.
+ *
+ * Cards reach the rail titled with one of these when the source's own name
+ * field was missing or its enrichment failed: "tmdb:12345", "tt0111161", or a
+ * bare "12345". The tell is that the same failure is what leaves the card
+ * with no artwork, so those two symptoms travel together - which is why a
+ * bare number is only an id when the card has NO poster. Real titles are
+ * numbers too ("1917", "2012"), and the prefixed forms are unambiguous.
+ */
+internal fun looksLikeRawMediaId(
+    value: String,
+    hasArtwork: Boolean = true
+): Boolean {
+    val trimmed = value.trim()
+    if (trimmed.isEmpty()) return false
+
+    // tt0111161
+    if (
+        trimmed.startsWith("tt", ignoreCase = true) &&
+        trimmed.length > 2 &&
+        trimmed.substring(2).all { it.isDigit() }
+    ) {
+        return true
+    }
+
+    // tmdb:12345 / imdb:tt0111161 / simkl:123 / tvdb:456
+    val prefix = trimmed.substringBefore(":", missingDelimiterValue = "")
+    if (prefix.lowercase() in RAW_ID_PREFIXES) {
+        val rest = trimmed.substringAfter(":", missingDelimiterValue = "")
+        if (rest.isNotEmpty() && rest.substringAfter("tt").all { it.isDigit() }) {
+            return true
+        }
+    }
+
+    // Bare number: only an id when nothing identifies the card as a real
+    // title, i.e. it has no artwork either.
+    return !hasArtwork && trimmed.all { it.isDigit() }
+}
+
+/**
+ * A card's display title, or null when there is no real name to show.
+ *
+ * Blank and id-like names both mean "this card has no title". Callers fall
+ * back to a resolved name or skip the card; putting an internal id on screen
+ * is what made the phantom duplicates so confusing - they could not even be
+ * paired with the right card by name.
+ */
+internal fun upNextDisplayTitleOrNull(
+    raw: String?,
+    hasArtwork: Boolean = true
+): String? {
+    val trimmed = raw?.trim().orEmpty()
+    if (trimmed.isEmpty()) return null
+    if (looksLikeRawMediaId(trimmed, hasArtwork)) return null
+    return trimmed
+}
+
 /** Title key: the fallback identity of a show when its ids disagree. */
 internal fun upNextTitleKey(item: UpNextItem): String =
     "title:${upNextMediaType(item.parentType)}:${item.title.trim().lowercase()}"
@@ -2884,7 +2945,7 @@ Log.d(
         }
         if (history.isEmpty()) return
 
-        val items = history.map { entry ->
+        val items = history.mapNotNull { entry ->
             UpNextItem(
                 id = buildString {
                     append("history:")
@@ -2892,7 +2953,12 @@ Log.d(
                     entry.season?.let { append(":s$it") }
                     entry.episode?.let { append(":e$it") }
                 },
-                title = entry.name,
+                title =
+                    upNextDisplayTitleOrNull(
+                        entry.name,
+                        !entry.poster.isNullOrBlank()
+                    )
+                        ?: return@mapNotNull null,
                 poster = entry.poster,
                 badge = UpNextBadge.CONTINUE_WATCHING,
                 showTitle = if (entry.season != null && entry.episode != null) {
@@ -2997,6 +3063,10 @@ Log.d(
         var episodeRating: Double? = null
         var episodeThumbnail: String? = null
         var backdropUrl: String? = entry.backdropUrl
+
+        // Name resolved from TMDB, used when the stored row's name is missing
+        // or is an internal id (see [upNextDisplayTitleOrNull]).
+        var resolvedLocalName: String? = null
 
         // Movie resume rows can predate backdrop persistence or come from a
         // caller that only supplied a poster. Restore the artwork from the
@@ -3106,6 +3176,16 @@ Log.d(
                         ?.takeIf { it.isNotBlank() }
                         ?.let { "https://image.tmdb.org/t/p/w780$it" }
 
+                resolvedLocalName =
+                    upNextDisplayTitleOrNull(
+                        tmdbDetail?.name,
+                        !entry.poster.isNullOrBlank()
+                    )
+                        ?: upNextDisplayTitleOrNull(
+                            tmdbDetail?.title,
+                            !entry.poster.isNullOrBlank()
+                        )
+
                 // Capture the show's next aired episode for the Upcoming
                 // rail — the detail response is already in hand here.
                 capturedNextEpisodeAir = tmdbDetail?.nextEpisodeToAir
@@ -3214,7 +3294,17 @@ Log.d(
                 entry.episode?.let { append(":e$it") }
             },
 
-            title = entry.name,
+            title =
+                upNextDisplayTitleOrNull(
+                    entry.name,
+                    !entry.poster.isNullOrBlank() || !backdropUrl.isNullOrBlank()
+                )
+                    ?: resolvedLocalName
+                    // No name at all: skip this card. The same show's enriched
+                    // twin (Simkl / MDBList) still gets one, and the row stays
+                    // resumable from Detail - a card titled with an internal
+                    // id is worse than no card.
+                    ?: return@async null,
             poster = entry.poster,
             badge = UpNextBadge.CONTINUE_WATCHING,
 
@@ -3285,7 +3375,7 @@ Log.d(
         )
             }
         }
-    }.awaitAll()
+    }.awaitAll().filterNotNull()
 }
 
                         // Publish local cards first: the enriched local rows
@@ -3668,17 +3758,16 @@ Log.d(
             "Resume - ${formatSeasonEpisode(resolvedSeason, resolvedEpisode)}"
         }
 
-        // Never fall back to the navigation id: "tmdb:12345" is not a title.
-        // The cards that used to show one are precisely the ones whose
-        // enrichment failed, so they carried no poster either - a blank tile
-        // with an internal id on it, sitting next to the same show's real
-        // card. A session with no name of any kind is dropped instead; it is
-        // still paused on the tracker, so it comes back with a real title as
-        // soon as enrichment succeeds.
+        // Never fall back to the navigation id, and never accept one as the
+        // name either: "tmdb:12345" is not a title. The tracker's own title
+        // field carries a raw id when ITS enrichment failed, which is also why
+        // these cards arrive with no poster - a blank tile with an internal id
+        // on it, sitting next to the same show's real card.
+        val hasArtwork = !posterUrl.isNullOrBlank()
         val displayTitle =
-            detail?.name?.takeIf { it.isNotBlank() }
-                ?: detail?.title?.takeIf { it.isNotBlank() }
-                ?: session.title?.takeIf { it.isNotBlank() }
+            upNextDisplayTitleOrNull(detail?.name, hasArtwork)
+                ?: upNextDisplayTitleOrNull(detail?.title, hasArtwork)
+                ?: upNextDisplayTitleOrNull(session.title, hasArtwork)
                 ?: return null
 
         return UpNextItem(
@@ -3734,6 +3823,10 @@ Log.d(
 
         var posterUrl =
             item.posterUrl
+
+        // Name resolved from TMDB, used when the tracker's own title is
+        // missing or is an internal id (see [upNextDisplayTitleOrNull]).
+        var resolvedName: String? = null
 
         val recencyTimestamp =
             parseTimestampMillis(
@@ -3843,6 +3936,16 @@ var episodesTotal: Int? = null
                     detail.backdropPath
                         ?.takeIf { it.isNotBlank() }
                         ?.let { "https://image.tmdb.org/t/p/w780$it" }
+
+                resolvedName =
+                    upNextDisplayTitleOrNull(
+                        detail.name,
+                        !posterUrl.isNullOrBlank()
+                    )
+                        ?: upNextDisplayTitleOrNull(
+                            detail.title,
+                            !posterUrl.isNullOrBlank()
+                        )
 
                 showTitle =
                     if (item.mediaType == "series") {
@@ -4038,13 +4141,24 @@ episodesTotal =
             posterUrl = null
         }
 
+        // The tracker's title, or the name TMDB resolved, or no card at all.
+        // A Simkl item whose title is a bare id is the same phantom the
+        // MDBList builder drops: nothing recognisable to show.
+        val displayTitle =
+            upNextDisplayTitleOrNull(
+                item.title,
+                !posterUrl.isNullOrBlank()
+            )
+                ?: resolvedName
+                ?: return null
+
         return UpNextItem(
 
             id =
                 "simkl:${item.id}",
 
             title =
-                item.title,
+                displayTitle,
 
             poster =
                 posterUrl,
