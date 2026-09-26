@@ -136,22 +136,35 @@ else
   )
 fi
 
-# Sanity-check that the video decoders really landed in the static lib, so a
-# silent configure failure cannot ship an audio-only "video" build.
+# Sanity-check that the decoders really landed in the static lib, so a silent
+# configure failure cannot ship an audio-only "video" build.
+#
+# Deliberately informational: it reads the archive with llvm-nm, and a tool or
+# archive-format mismatch there must not fail an otherwise-good AAR. It prints
+# how many ff_*_decoder symbols it can see, so an archive genuinely built
+# without our decoder list is distinguishable from an llvm-nm invocation that
+# could not read the archive at all.
 NM="${ANDROID_NDK}/toolchains/llvm/prebuilt/${HOST_PLATFORM}/bin/llvm-nm"
-if [[ -x "$NM" ]]; then
-  log "verifying decoder symbols in ${FFMPEG_LIBS}/arm64-v8a/libavcodec.a"
+FFMPEG_LIBS_ARM64="${FFMPEG_LIBS}/arm64-v8a/libavcodec.a"
+if [[ -x "$NM" && -f "$FFMPEG_LIBS_ARM64" ]]; then
+  log "verifying decoder symbols in ${FFMPEG_LIBS_ARM64}"
+  NM_OUT="$("$NM" --defined-only "$FFMPEG_LIBS_ARM64" 2>&1 || true)"
+  printf '  %s ff_*_decoder symbols visible to llvm-nm\n' \
+    "$(printf '%s\n' "$NM_OUT" | grep -c 'ff_.*_decoder' || true)"
   for symbol in ff_h264_decoder ff_hevc_decoder ff_mpeg4_decoder ff_vc1_decoder \
                 ff_wmv3_decoder ff_vp9_decoder ff_aac_decoder; do
-    if "$NM" --defined-only "${FFMPEG_LIBS}/arm64-v8a/libavcodec.a" 2>/dev/null \
-        | grep -qw "$symbol"; then
+    if printf '%s\n' "$NM_OUT" | grep -qw "$symbol"; then
       printf '  ok   %s\n' "$symbol"
     else
       printf '  MISS %s\n' "$symbol"
     fi
   done
+  if ! printf '%s\n' "$NM_OUT" | grep -q 'ff_.*_decoder'; then
+    printf '  note: llvm-nm reported no decoder symbols; first lines of its output:\n'
+    printf '%s\n' "$NM_OUT" | head -5 | sed 's/^/    /'
+  fi
 else
-  log "llvm-nm not found at ${NM}; skipping the decoder symbol check"
+  log "llvm-nm not found at ${NM}, or ${FFMPEG_LIBS_ARM64} is missing; skipping the decoder symbol check"
 fi
 
 # --- Build the extension AAR ----------------------------------------------
@@ -175,9 +188,21 @@ log "assembling :lib-decoder-ffmpeg:assembleRelease"
   ./gradlew :lib-decoder-ffmpeg:assembleRelease --stacktrace
 )
 
-AAR_DIR="${MEDIA3}/libraries/decoder_ffmpeg/build/outputs/aar"
-BUILT_AAR="$(find "$AAR_DIR" -maxdepth 1 -name '*.aar' -print -quit 2>/dev/null || true)"
-[[ -n "$BUILT_AAR" ]] || die "no AAR produced under $AAR_DIR"
+# Locate the AAR wherever Gradle actually wrote it. It is NOT under
+# ${MEDIA3}/libraries/decoder_ffmpeg/build/outputs/aar: media3's
+# gradle.properties sets "buildDir=buildout", which redirects each module's
+# build directory to <projectDir>/buildout. Hardcoding build/outputs/aar
+# therefore found nothing on every run -- even when Gradle had just printed
+# BUILD SUCCESSFUL -- and the step died with "no AAR produced".
+BUILT_AAR="$(find "$MEDIA3" -type f -name '*.aar' \
+  \( -path '*decoder_ffmpeg*' -o -path '*lib-decoder-ffmpeg*' \) \
+  -print 2>/dev/null | head -1 || true)"
+if [[ -z "$BUILT_AAR" ]]; then
+  printf 'error: no decoder_ffmpeg AAR found under %s; AARs present:\n' "$MEDIA3" >&2
+  find "$MEDIA3" -type f -name '*.aar' -print 2>/dev/null >&2 || true
+  exit 1
+fi
+log "found AAR ${BUILT_AAR}"
 
 mkdir -p "$(dirname "$OUTPUT")"
 cp "$BUILT_AAR" "$OUTPUT"

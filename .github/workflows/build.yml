@@ -126,9 +126,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build/ffmpeg-ext
-          key: ffmpeg-ext-${{ runner.os }}-${{ env.MEDIA3_TAG }}-${{ hashFiles('scripts/build_ffmpeg_video.sh') }}
+          # v2: the v1 entries cached a media3 checkout built when the script
+          # looked for the AAR in the wrong place (build/, not media3's
+          # buildout/); restoring one would keep the stale build alive, so the
+          # prefix is bumped to force one clean rebuild under the fixed script.
+          key: ffmpeg-ext-v2-${{ runner.os }}-${{ env.MEDIA3_TAG }}-${{ hashFiles('scripts/build_ffmpeg_video.sh') }}
           restore-keys: |
-            ffmpeg-ext-${{ runner.os }}-${{ env.MEDIA3_TAG }}-
+            ffmpeg-ext-v2-${{ runner.os }}-${{ env.MEDIA3_TAG }}-
 
       - name: Build FFmpeg video extension (optional)
         continue-on-error: true
@@ -150,6 +154,20 @@ jobs:
           path: libs/media3-ffmpeg-decoder.aar
           if-no-files-found: ignore
           retention-days: 30
+
+      # The build and upload steps above are both continue-on-error, so a
+      # failed cross-compile leaves a green run with no artifact and no
+      # explanation. This keeps the release buildable (the app falls back to
+      # the audio-only extension) but makes the absence explicit, with a red
+      # error annotation pointing at the step that failed.
+      - name: Verify FFmpeg extension (optional)
+        if: always()
+        run: |
+          if [[ -s libs/media3-ffmpeg-decoder.aar ]]; then
+            echo "media3-ffmpeg-decoder.aar built: $(wc -c < libs/media3-ffmpeg-decoder.aar) bytes"
+          else
+            echo "::error::media3-ffmpeg-decoder.aar was not produced, so this release's APK falls back to the audio-only FFmpeg extension. See the 'Build FFmpeg video extension (optional)' step above."
+          fi
 
       - name: Restore release keystore
         run: |
