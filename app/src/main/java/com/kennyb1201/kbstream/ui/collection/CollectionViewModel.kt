@@ -164,12 +164,12 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
 
             if (resolved.isEmpty()) return
 
-            _resolvedIds.value = resolved.associate { (tmdbId, imdbId) ->
-                lookupKey(tmdbId, "movie") to imdbId!!
-            }
+            _resolvedIds.value = resolved.mapNotNull { (tmdbId, imdbId) ->
+                imdbId?.let { lookupKey(tmdbId, "movie") to it }
+            }.toMap()
 
             watchedStatusRepository.preload(
-                resolved.map { (_, imdbId) -> imdbId!! to "movie" }.distinct()
+                resolved.mapNotNull { (_, imdbId) -> imdbId?.let { it to "movie" } }.distinct()
             )
         } catch (e: Exception) {
             Log.e("COLLECTION_VM", "resolveAndPreload failed: ${e.message}", e)

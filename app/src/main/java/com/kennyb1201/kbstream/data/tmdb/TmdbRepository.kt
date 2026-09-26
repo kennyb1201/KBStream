@@ -2140,14 +2140,15 @@ class TmdbRepository private constructor(context: Context) :
         suspend fun pickSmartLogo(company: Boolean): String? {
             val ranked = rankLogos(fetchLogos(company))
             val best = ranked.firstOrNull() ?: return null
-            val path = if (isSolidBadge(best.filePath!!)) {
+            val bestPath = best.filePath ?: return null
+            val path = if (isSolidBadge(bestPath)) {
                 ranked.firstOrNull { candidate ->
                     candidate.filePath != null && !isSolidBadge(candidate.filePath)
-                }?.filePath ?: best.filePath
+                }?.filePath ?: bestPath
             } else {
-                best.filePath
+                bestPath
             }
-            return path?.let { TmdbRepository.LOGO_BASE + it }
+            return TmdbRepository.LOGO_BASE + path
         }
 
         if (isNetwork) {

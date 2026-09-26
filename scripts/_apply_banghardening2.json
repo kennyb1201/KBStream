@@ -1,0 +1,38 @@
+[
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/decade/DecadeViewModel.kt",
+    "old": "            val newResolvedIds = resolved.associate { (tmdbId, mediaType, imdbId) ->\n                lookupKey(tmdbId, mediaType) to imdbId!!\n            }\n            _resolvedIds.value = _resolvedIds.value + newResolvedIds\n\n            val preloadItems = resolved\n                .map { (_, mediaType, imdbId) -> imdbId!! to mediaType }\n                .distinct()",
+    "new": "            val newResolvedIds = resolved.mapNotNull { (tmdbId, mediaType, imdbId) ->\n                imdbId?.let { lookupKey(tmdbId, mediaType) to it }\n            }.toMap()\n            _resolvedIds.value = _resolvedIds.value + newResolvedIds\n\n            val preloadItems = resolved\n                .mapNotNull { (_, mediaType, imdbId) -> imdbId?.let { it to mediaType } }\n                .distinct()"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/studio/StudioViewModel.kt",
+    "old": "            _resolvedIds.value = resolved.associate { (tmdbId, mediaType, imdbId) ->\n                lookupKey(tmdbId, mediaType) to imdbId!!\n            }\n\n            val preloadItems = resolved\n                .map { (_, mediaType, imdbId) -> imdbId!! to mediaType }\n                .distinct()",
+    "new": "            _resolvedIds.value = resolved.mapNotNull { (tmdbId, mediaType, imdbId) ->\n                imdbId?.let { lookupKey(tmdbId, mediaType) to it }\n            }.toMap()\n\n            val preloadItems = resolved\n                .mapNotNull { (_, mediaType, imdbId) -> imdbId?.let { it to mediaType } }\n                .distinct()"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/data/tmdb/TmdbRepository.kt",
+    "old": "            val path = if (isSolidBadge(best.filePath!!)) {\n                ranked.firstOrNull { candidate ->\n                    candidate.filePath != null && !isSolidBadge(candidate.filePath)\n                }?.filePath ?: best.filePath\n            } else {\n                best.filePath\n            }\n            return path?.let { TmdbRepository.LOGO_BASE + it }",
+    "new": "            val bestPath = best.filePath ?: return null\n            val path = if (isSolidBadge(bestPath)) {\n                ranked.firstOrNull { candidate ->\n                    candidate.filePath != null && !isSolidBadge(candidate.filePath)\n                }?.filePath ?: bestPath\n            } else {\n                bestPath\n            }\n            return TmdbRepository.LOGO_BASE + path"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/addons/AddonsHomeManagerDialog.kt",
+    "old": "        if (row.isCollection) {\n            onCollectionMove(row.key, delta)\n        } else {\n            onCatalogMove(row.config!!, delta)\n        }",
+    "new": "        if (row.isCollection) {\n            onCollectionMove(row.key, delta)\n        } else {\n            row.config?.let { onCatalogMove(it, delta) }\n        }"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/addons/AddonsHomeManagerDialog.kt",
+    "old": "        if (row.isCollection) {\n            onCollectionHide(row.collectionKey.orEmpty())\n        } else {\n            onToggle(row.config!!, !row.config.catalog.showOnHome)\n        }",
+    "new": "        if (row.isCollection) {\n            onCollectionHide(row.collectionKey.orEmpty())\n        } else {\n            row.config?.let { onToggle(it, !it.catalog.showOnHome) }\n        }",
+    "count": 2
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/addons/AddonsHomeManagerDialog.kt",
+    "old": "                        onRename = {\n                            if (!row.isCollection) onRename(row.config!!)\n                        }",
+    "new": "                        onRename = {\n                            if (!row.isCollection) row.config?.let { onRename(it) }\n                        }"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/data/update/AppUpdater.kt",
+    "old": "                        val obj = JSONObject(response.body!!.string())",
+    "new": "                        val obj = JSONObject(response.body?.string().orEmpty())"
+  }
+]

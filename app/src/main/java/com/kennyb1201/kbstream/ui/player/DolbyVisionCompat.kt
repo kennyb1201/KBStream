@@ -1080,8 +1080,8 @@ internal object DolbyVisionCompat {
         for (i in 0 until numStRps.toInt()) {
             val ndp = skipStRefPicSet(br, i, numStRps.toInt(), numDeltaPocs)
                 ?: return SpsRewriteOutcome.Failed("st-ref-pic-set")
-            if (numDeltaPocs == null) numDeltaPocs = LongArray(numStRps.toInt())
-            numDeltaPocs!![i] = ndp
+            val deltaPocs = numDeltaPocs ?: LongArray(numStRps.toInt()).also { numDeltaPocs = it }
+            deltaPocs[i] = ndp
         }
         if (br.readBits(1) == 1L) { // long_term_ref_pics_present_flag
             val numLt = br.readUe()

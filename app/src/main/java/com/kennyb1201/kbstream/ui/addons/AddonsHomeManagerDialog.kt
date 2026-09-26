@@ -233,7 +233,7 @@ internal fun CatalogManagerDialog(
         if (row.isCollection) {
             onCollectionMove(row.key, delta)
         } else {
-            onCatalogMove(row.config!!, delta)
+            row.config?.let { onCatalogMove(it, delta) }
         }
     }
 
@@ -270,7 +270,7 @@ internal fun CatalogManagerDialog(
         if (row.isCollection) {
             onCollectionHide(row.collectionKey.orEmpty())
         } else {
-            onToggle(row.config!!, !row.config.catalog.showOnHome)
+            row.config?.let { onToggle(it, !it.catalog.showOnHome) }
         }
     }
 
@@ -307,7 +307,7 @@ internal fun CatalogManagerDialog(
         if (row.isCollection) {
             onCollectionHide(row.collectionKey.orEmpty())
         } else {
-            onToggle(row.config!!, !row.config.catalog.showOnHome)
+            row.config?.let { onToggle(it, !it.catalog.showOnHome) }
         }
     }
 
@@ -537,7 +537,7 @@ internal fun CatalogManagerDialog(
                         },
                         onMove = { slot, delta -> moveRow(row, slot, delta) },
                         onRename = {
-                            if (!row.isCollection) onRename(row.config!!)
+                            if (!row.isCollection) row.config?.let { onRename(it) }
                         }
                     )
                 }

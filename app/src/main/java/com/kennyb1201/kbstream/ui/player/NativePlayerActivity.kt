@@ -1486,11 +1486,12 @@ class NativePlayerActivity : ComponentActivity() {
         val now = System.currentTimeMillis()
         val isFresh = cached != null && now - cached.fetchedAtMillis < ZAP_EPG_TTL_MS
         val noSource = epgUrl.isBlank() || epgChannelId.isNullOrBlank()
-        return if (isFresh || noSource) {
+        val resolvedEpgChannelId = epgChannelId
+        return if (isFresh || noSource || resolvedEpgChannelId == null) {
             cached ?: ZapEpgInfo(now = null, next = null, fetchedAtMillis = now)
         } else {
             withContext(Dispatchers.IO) {
-                loadZapEpg(epgUrl, epgChannelId!!)
+                loadZapEpg(epgUrl, resolvedEpgChannelId)
             }
         }
     }
@@ -4589,7 +4590,7 @@ class NativePlayerActivity : ComponentActivity() {
             }
             mediaSession =
                 MediaSession.Builder(this, sessionPlayer)
-                    .setId("kbstream-" + System.nanoTime() + "-" + sessionSequence++)
+                    .setId("kbstream-" + System.nanoTime() + "-" + sessionSequence.getAndIncrement())
                     .setSessionActivity(pendingIntentForSession())
                     .build()
 
@@ -8481,7 +8482,7 @@ class NativePlayerActivity : ComponentActivity() {
 
     companion object {
 
-        private var sessionSequence = 0
+        private val sessionSequence = java.util.concurrent.atomic.AtomicInteger(0)
 
         private fun isLikelyRetryable(error: PlaybackException): Boolean = when (error.errorCode) {
             PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,

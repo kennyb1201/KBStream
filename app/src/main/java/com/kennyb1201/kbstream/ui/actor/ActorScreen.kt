@@ -147,6 +147,7 @@ fun ActorScreen(
         lastCreditFocusRequester?.requestFocus()
     }
 
+    val loadedPerson = person
     when {
         // Poster-shaped placeholders, like every other browse page. The
         // actor's rails then arrive at their real size instead of a lone
@@ -166,8 +167,8 @@ fun ActorScreen(
                 // ViewModel's load() re-fetches from scratch.
                 onRetry = { viewModel.load(actorId) }
             )
-        person != null -> {
-            val p = person!!
+        loadedPerson != null -> {
+            val p = loadedPerson
             val context = androidx.compose.ui.platform.LocalContext.current
             val sortedCredits = remember(p) { viewModel.sortedCredits(p) }
             val backdropUrl = topWorkBackdropUrl
@@ -305,13 +306,14 @@ fun ActorScreen(
                                 .focusRestorer(),
                             contentPadding = PaddingValues(top = 16.dp, bottom = 48.dp)
                         ) {
-                            if (!p.biography.isNullOrBlank()) {
+                            val biography = p.biography.orEmpty()
+                            if (biography.isNotBlank()) {
                                 item(key = "biography") {
                                     Column(modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 20.dp)) {
                                         var bioExpanded by remember { mutableStateOf(false) }
                                         var bioOverflows by remember { mutableStateOf(false) }
                                         Text(
-                                            p.biography!!,
+                                            biography,
                                             color = KBTextHi,
                                             style = MaterialTheme.typography.bodyLarge,
                                             maxLines = if (bioExpanded) Int.MAX_VALUE else 4,

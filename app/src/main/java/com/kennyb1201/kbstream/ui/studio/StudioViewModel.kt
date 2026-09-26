@@ -147,13 +147,15 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         // rails need the brand's company id to keep the MOVIES rails alive
         // once a genre chip is active.
         val networkCompanyId = if (currentNetworkIsCompany) null else currentOriginalsCompanyId
+        val providerId = currentProviderId
+        val networkOrCompanyId = currentNetworkOrCompanyId
         return when {
             // A watch-provider base needs the provider id; entries whose
             // header id is the company itself use the company kind.
-            currentProviderId != null -> CrossBase("provider", currentProviderId!!)
-            currentNetworkOrCompanyId != null -> CrossBase(
+            providerId != null -> CrossBase("provider", providerId)
+            networkOrCompanyId != null -> CrossBase(
                 if (currentNetworkIsCompany) "company" else "network",
-                currentNetworkOrCompanyId!!,
+                networkOrCompanyId,
                 companyId = networkCompanyId
             )
             // Plain network/studio page: header id IS the dimension.
@@ -268,14 +270,16 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             try {
+                val genreId = currentGenreId
+                val crossBase = crossGenreBase()
                 val result = when {
                     // Genre chip active: genre ANDed onto the base dimension
                     // (provider rails skip originals, which are not the chip's
                     // target and would just repeat it).
-                    currentGenreId != null && crossGenreBase() != null ->
+                    genreId != null && crossBase != null ->
                         tmdbRepository.getInitialCrossGenreSections(
-                            base = crossGenreBase()!!,
-                            genreId = currentGenreId!!
+                            base = crossBase,
+                            genreId = genreId
                         )
                     // Service pages discover through watch-provider rails
                     // (movies + series) instead of network/company rails.
@@ -339,11 +343,13 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch {
             try {
+                val genreId = currentGenreId
+                val crossBase = crossGenreBase()
                 val page: TagRailPage = when {
-                    currentGenreId != null && crossGenreBase() != null ->
+                    genreId != null && crossBase != null ->
                         tmdbRepository.getCrossGenreRailPage(
-                            base = crossGenreBase()!!,
-                            genreId = currentGenreId!!,
+                            base = crossBase,
+                            genreId = genreId,
                             title = title,
                             page = pageNumber
                         )
@@ -454,12 +460,12 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 return
             }
 
-            _resolvedIds.value = resolved.associate { (tmdbId, mediaType, imdbId) ->
-                lookupKey(tmdbId, mediaType) to imdbId!!
-            }
+            _resolvedIds.value = resolved.mapNotNull { (tmdbId, mediaType, imdbId) ->
+                imdbId?.let { lookupKey(tmdbId, mediaType) to it }
+            }.toMap()
 
             val preloadItems = resolved
-                .map { (_, mediaType, imdbId) -> imdbId!! to mediaType }
+                .mapNotNull { (_, mediaType, imdbId) -> imdbId?.let { it to mediaType } }
                 .distinct()
 
             watchedStatusRepository.preload(preloadItems)

@@ -1,0 +1,7 @@
+[
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/home/HomeScreen.kt",
+    "old": "                if (shouldLoadMore) {\n                    onLoadMore(railKey!!)\n                }",
+    "new": "                if (shouldLoadMore) {\n                    railKey?.let { onLoadMore(it) }\n                }"
+  }
+]

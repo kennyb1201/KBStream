@@ -1,0 +1,62 @@
+[
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/detail/DetailViewModel.kt",
+    "old": "                    val syntheticEpisodes = videos.map { v ->\n                        ResolvedEpisode(\n                            streamId = \"$parentId:${season}:${v.episode}\",\n                            episodeNumber = v.episode!!,\n                            name = v.title,",
+    "new": "                    val syntheticEpisodes = videos.mapNotNull { v ->\n                        val episodeNumber = v.episode ?: return@mapNotNull null\n                        ResolvedEpisode(\n                            streamId = \"$parentId:${season}:$episodeNumber\",\n                            episodeNumber = episodeNumber,\n                            name = v.title,"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/detail/DetailScreen.kt",
+    "old": "    when {\n        // A Continue Watching / Up Next deep link opens this screen only to",
+    "new": "    val loadedMeta = meta\n    when {\n        // A Continue Watching / Up Next deep link opens this screen only to"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/detail/DetailScreen.kt",
+    "old": "        meta != null -> {\n            val m = meta!!",
+    "new": "        loadedMeta != null -> {\n            val m = loadedMeta"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/detail/DetailScreen.kt",
+    "old": "                val hasResume =\n                    resumeInfo != null &&\n                        resumeInfo!!.positionMs > 0",
+    "new": "                val hasResume = resumeInfo?.positionMs?.let { it > 0 } == true"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/actor/ActorScreen.kt",
+    "old": "    when {\n        // Poster-shaped placeholders, like every other browse page. The",
+    "new": "    val loadedPerson = person\n    when {\n        // Poster-shaped placeholders, like every other browse page. The"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/actor/ActorScreen.kt",
+    "old": "        person != null -> {\n            val p = person!!",
+    "new": "        loadedPerson != null -> {\n            val p = loadedPerson"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/actor/ActorScreen.kt",
+    "old": "                            if (!p.biography.isNullOrBlank()) {",
+    "new": "                            val biography = p.biography.orEmpty()\n                            if (biography.isNotBlank()) {"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/actor/ActorScreen.kt",
+    "old": "                                        Text(\n                                            p.biography!!,",
+    "new": "                                        Text(\n                                            biography,"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+    "old": "        val noSource = epgUrl.isBlank() || epgChannelId.isNullOrBlank()\n        return if (isFresh || noSource) {\n            cached ?: ZapEpgInfo(now = null, next = null, fetchedAtMillis = now)\n        } else {\n            withContext(Dispatchers.IO) {\n                loadZapEpg(epgUrl, epgChannelId!!)\n            }\n        }",
+    "new": "        val noSource = epgUrl.isBlank() || epgChannelId.isNullOrBlank()\n        val resolvedEpgChannelId = epgChannelId\n        return if (isFresh || noSource || resolvedEpgChannelId == null) {\n            cached ?: ZapEpgInfo(now = null, next = null, fetchedAtMillis = now)\n        } else {\n            withContext(Dispatchers.IO) {\n                loadZapEpg(epgUrl, resolvedEpgChannelId)\n            }\n        }"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+    "old": ".setId(\"kbstream-\" + System.nanoTime() + \"-\" + sessionSequence++)",
+    "new": ".setId(\"kbstream-\" + System.nanoTime() + \"-\" + sessionSequence.getAndIncrement())"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+    "old": "        private var sessionSequence = 0",
+    "new": "        private val sessionSequence = java.util.concurrent.atomic.AtomicInteger(0)"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/DolbyVisionCompat.kt",
+    "old": "            if (numDeltaPocs == null) numDeltaPocs = LongArray(numStRps.toInt())\n            numDeltaPocs!![i] = ndp",
+    "new": "            val deltaPocs = numDeltaPocs ?: LongArray(numStRps.toInt()).also { numDeltaPocs = it }\n            deltaPocs[i] = ndp"
+  }
+]

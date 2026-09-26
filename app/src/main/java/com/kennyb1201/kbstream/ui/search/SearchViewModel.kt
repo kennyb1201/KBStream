@@ -267,17 +267,19 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
             if (resolved.isEmpty()) return@launch
 
-            _resolvedIds.value = _resolvedIds.value + resolved.associate {
+            _resolvedIds.value = _resolvedIds.value + resolved.mapNotNull {
                 (tmdbId, mediaType, imdbId) ->
-                lookupKey(tmdbId, mediaType) to imdbId!!
-            }
+                imdbId?.let { lookupKey(tmdbId, mediaType) to it }
+            }.toMap()
 
             // Fill the watched checkmark + eye badge for the freshly
             // resolved tiles from the same cached Simkl state every other
             // screen preloads.
             preloadWatchedKeysFor(
                 resolved
-                    .map { (_, mediaType, imdbId) -> imdbId!! to mediaType }
+                    .mapNotNull { (_, mediaType, imdbId) ->
+                        imdbId?.let { it to mediaType }
+                    }
                     .distinct()
             )
         }

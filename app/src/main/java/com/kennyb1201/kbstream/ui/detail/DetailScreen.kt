@@ -1094,6 +1094,7 @@ fun DetailScreen(
         }
     }
 
+    val loadedMeta = meta
     when {
         // A Continue Watching / Up Next deep link opens this screen only to
         // hand the player the title's backdrop/overview/cast - it auto-plays
@@ -1141,8 +1142,8 @@ fun DetailScreen(
             )
         }
 
-        meta != null -> {
-            val m = meta!!
+        loadedMeta != null -> {
+            val m = loadedMeta
 
             val displayName = remember(m, tmdbDetail) {
                 m.name.ifBlank {
@@ -1192,9 +1193,7 @@ fun DetailScreen(
                 initialTarget?.startFromBeginning == true || startOver
 
             if (type == "movie") {
-                val hasResume =
-                    resumeInfo != null &&
-                        resumeInfo!!.positionMs > 0
+                val hasResume = resumeInfo?.positionMs?.let { it > 0 } == true
 
                 playLabel =
                     if (hasResume) "RESUME" else "PLAY"

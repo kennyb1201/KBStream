@@ -634,8 +634,9 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
 
             if (resolvedPairs.isEmpty()) return
 
-            val resolved = resolvedPairs.filter { it.second != null }
-                .associate { it.first to it.second!! }
+            val resolved = resolvedPairs.mapNotNull { (key, imdbId) ->
+                imdbId?.let { key to it }
+            }.toMap()
 
             _resolvedIds.value = alreadyResolved + resolved
 

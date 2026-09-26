@@ -264,13 +264,13 @@ class TagViewModel(application: Application) : AndroidViewModel(application) {
                 return
             }
 
-            val newResolvedIds = resolved.associate { (tmdbId, mediaType, imdbId) ->
-                lookupKey(tmdbId, mediaType) to imdbId!!
-            }
+            val newResolvedIds = resolved.mapNotNull { (tmdbId, mediaType, imdbId) ->
+                imdbId?.let { lookupKey(tmdbId, mediaType) to it }
+            }.toMap()
             _resolvedIds.value = _resolvedIds.value + newResolvedIds
 
             val preloadItems = resolved
-                .map { (_, mediaType, imdbId) -> imdbId!! to mediaType }
+                .mapNotNull { (_, mediaType, imdbId) -> imdbId?.let { it to mediaType } }
                 .distinct()
 
             watchedStatusRepository.preload(preloadItems)

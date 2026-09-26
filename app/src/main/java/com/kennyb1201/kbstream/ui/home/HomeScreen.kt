@@ -3537,7 +3537,7 @@ private fun InfiniteRailPageHandler(
                         lastVisibleIndex >= totalItems - threshold
 
                 if (shouldLoadMore) {
-                    onLoadMore(railKey!!)
+                    railKey?.let { onLoadMore(it) }
                 }
             }
     }

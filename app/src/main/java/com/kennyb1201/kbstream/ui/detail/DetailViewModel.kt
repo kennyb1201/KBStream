@@ -1209,9 +1209,10 @@ for ((metaAddon, response, error) in probeResults) {
 
         if (seasons.isEmpty()) return
 
+        val resumeSeason = _resumeInfo.value?.season?.takeIf { it > 0 && it in seasons }
         val targetSeason = when {
             initialSeason != null && initialSeason in seasons -> initialSeason
-            _resumeInfo.value?.season?.let { it > 0 && it in seasons } == true -> _resumeInfo.value!!.season!!
+            resumeSeason != null -> resumeSeason
             else -> {
                 val latestLocal = localCompletedEntries
                     .mapNotNull { entry ->
@@ -1357,10 +1358,11 @@ for ((metaAddon, response, error) in probeResults) {
                         .filter { it.season == season && it.episode != null }
                         .sortedBy { it.episode ?: 0 }
                     val parentId = imdbId
-                    val syntheticEpisodes = videos.map { v ->
+                    val syntheticEpisodes = videos.mapNotNull { v ->
+                        val episodeNumber = v.episode ?: return@mapNotNull null
                         ResolvedEpisode(
-                            streamId = "$parentId:${season}:${v.episode}",
-                            episodeNumber = v.episode!!,
+                            streamId = "$parentId:${season}:$episodeNumber",
+                            episodeNumber = episodeNumber,
                             name = v.title,
                             overview = v.overview ?: v.description,
                             thumbnail = v.thumbnail,

@@ -331,7 +331,7 @@ object AppUpdater {
                     .build()
                 client.newCall(request).execute().use { response ->
                     if (response.isSuccessful) {
-                        val obj = JSONObject(response.body!!.string())
+                        val obj = JSONObject(response.body?.string().orEmpty())
                         val code = obj.getLong("versionCode")
                         val name = obj.optString("versionName", "unknown")
                         val sha = obj.optString("sha256", "").trim()

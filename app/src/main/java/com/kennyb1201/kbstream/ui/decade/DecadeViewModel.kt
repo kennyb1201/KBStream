@@ -166,10 +166,11 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
             _pagingStates.value = emptyMap()
 
             try {
-                val result = if (currentGenreId != null) {
+                val genreId = currentGenreId
+                val result = if (genreId != null) {
                     tmdbRepository.getInitialCrossGenreSections(
                         base = CrossBase("decade", decadeStart),
-                        genreId = currentGenreId!!
+                        genreId = genreId
                     )
                 } else {
                     tmdbRepository.getInitialDecadeSections(decadeStart)
@@ -214,11 +215,12 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch {
             try {
+                val genreId = currentGenreId
                 val page: TagRailPage =
-                    if (currentGenreId != null) {
+                    if (genreId != null) {
                         tmdbRepository.getCrossGenreRailPage(
                             base = CrossBase("decade", decadeStart),
-                            genreId = currentGenreId!!,
+                            genreId = genreId,
                             title = title,
                             page = pageNumber
                         )
@@ -306,13 +308,13 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
                 return
             }
 
-            val newResolvedIds = resolved.associate { (tmdbId, mediaType, imdbId) ->
-                lookupKey(tmdbId, mediaType) to imdbId!!
-            }
+            val newResolvedIds = resolved.mapNotNull { (tmdbId, mediaType, imdbId) ->
+                imdbId?.let { lookupKey(tmdbId, mediaType) to it }
+            }.toMap()
             _resolvedIds.value = _resolvedIds.value + newResolvedIds
 
             val preloadItems = resolved
-                .map { (_, mediaType, imdbId) -> imdbId!! to mediaType }
+                .mapNotNull { (_, mediaType, imdbId) -> imdbId?.let { it to mediaType } }
                 .distinct()
 
             watchedStatusRepository.preload(preloadItems)
