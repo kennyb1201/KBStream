@@ -3150,8 +3150,15 @@ class MpvPlayerActivity : ComponentActivity() {
         // onDestroy, and a backgrounded player that kept playing would be a bug
         // report of its own.
         surface?.setPaused(true)
-        saveProgress(reason = "stop")
-        scrobble("stop")
+        // Not when this session is being continued in another engine (the
+        // ExoPlayer switch or an installed external player). That engine
+        // scrobbles its own "start" and its own "stop"; ours raced the start
+        // and ended the Simkl session immediately, so the real stop came back
+        // 409 "already ended" and the title was never marked watched.
+        if (!playerSwitchStarted) {
+            saveProgress(reason = "stop")
+            scrobble("stop")
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) abandonAudioFocus()
     }
 

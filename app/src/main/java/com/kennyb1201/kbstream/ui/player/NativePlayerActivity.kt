@@ -8224,17 +8224,26 @@ class NativePlayerActivity : ComponentActivity() {
         // panel having paused the clock), and leaving from the card happens
         // before the file's last second - both left the finished episode
         // without its watch marker and with its old progress bar.
-        val completedOnExit = shouldRecordCompletion(
-            playbackEnded = playbackEndedHandled,
-            endPanelsShown = endPanelsShown,
-            positionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs,
-            durationMs = exoPlayer?.duration
-                ?.takeIf { it > 0L && it != C.TIME_UNSET }
-                ?: 0L
-        )
-        saveProgress(reason = "stop", forceCompleted = completedOnExit)
+        // A session being continued in another engine - the MPV switch/fallback
+        // or an installed external player - is NOT ending here. That target
+        // opens the file and scrobbles its own "start", and a "stop" from this
+        // engine landed right after it: Simkl ends the session on the first
+        // stop, so the target's real stop (at 100%) then answered 409 "already
+        // ended" and the title was never marked watched. One session, one stop
+        // - sent by the engine that actually finished it.
+        if (!mpvHandoffStarted && !externalHandoffStarted) {
+            val completedOnExit = shouldRecordCompletion(
+                playbackEnded = playbackEndedHandled,
+                endPanelsShown = endPanelsShown,
+                positionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs,
+                durationMs = exoPlayer?.duration
+                    ?.takeIf { it > 0L && it != C.TIME_UNSET }
+                    ?: 0L
+            )
+            saveProgress(reason = "stop", forceCompleted = completedOnExit)
+            scrobbleSimkl("stop")
+        }
         scope?.cancel()
-        scrobbleSimkl("stop")
         subtitleCueHandler?.cancelPending()
         subtitleCueHandler = null
         exoPlayer?.release()

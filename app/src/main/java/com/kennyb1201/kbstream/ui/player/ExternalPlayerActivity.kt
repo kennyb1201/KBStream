@@ -628,6 +628,11 @@ class ExternalPlayerActivity : ComponentActivity() {
      * to the in-app engine for this session.
      */
     private fun showRefused(message: String, hint: String) {
+        // A hand-off that already told the trackers the title was playing - the
+        // app launched and closed straight away, or the stream arrived
+        // unplayable - must not leave an open "now watching" session behind.
+        // A refusal that never reached a hand-off has no session to close.
+        if (scrobbleStarted) scrobble("stop")
         refused = true
         handoffCard?.visibility = View.GONE
         errorCard?.visibility = View.VISIBLE
