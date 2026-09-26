@@ -1,0 +1,7 @@
+[
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+    "old": "        // A session that reached its own end must never be recorded as merely\n        // resumable. After ENDED the saved position can sit short of the\n        // completion threshold (a frozen tail, or the end panel having paused\n        // the clock), which is what left a finished episode without its watch\n        // marker and with its old progress bar still showing.\n        // A session that reached its own end - or that was already showing its\n        // end-of-episode card in the last minutes of the episode - must never\n        // be recorded as merely resumable: leaving there left the finished\n        // episode without its watch marker and with its old progress bar.\n",
+    "new": "        // A session that reached its own end - or that was already showing its\n        // end-of-episode card in the last minutes of the episode - must never\n        // be recorded as merely resumable. After ENDED the saved position can\n        // sit short of the completion threshold (a frozen tail, or the end\n        // panel having paused the clock), and leaving from the card happens\n        // before the file's last second - both left the finished episode\n        // without its watch marker and with its old progress bar.\n"
+  }
+]

@@ -7468,7 +7468,14 @@ class NativePlayerActivity : ComponentActivity() {
                 nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
                 return
             }
-            armNextUpAutoAdvance(playerRemainingMs())
+            // Once the player has declared the session over, the remaining
+            // time is not a question anymore: currentPosition may already have
+            // been reset, and arming a HELD countdown from it would leave the
+            // auto-advance waiting for an end that already passed - the popup
+            // sat there and the next episode never ran.
+            armNextUpAutoAdvance(
+                if (playbackEndedHandled) 0L else playerRemainingMs()
+            )
         } else {
             nextUpCountdownHeld = false
             nextUpCountdownRemaining = 0
@@ -7751,10 +7758,23 @@ class NativePlayerActivity : ComponentActivity() {
         val pos = player.currentPosition.coerceAtLeast(0L)
         val rawDur = player.duration
         val dur = if (rawDur == C.TIME_UNSET || rawDur <= 0L) null else rawDur
-        if (dur == null) return
+        // A missing duration used to abandon the write entirely - including
+        // the completion write onPlaybackEnded issues, which is the one fact
+        // the player can state without knowing how long the file was. A
+        // finished episode then kept no watch marker and its old resume bar,
+        // exactly as if it had never been played. A session the player itself
+        // declared over is written regardless; only a MID-session save still
+        // needs a real duration to mean anything.
+        if (dur == null && !forceCompleted) return
         if (pos < MIN_RESUME_POSITION_MS && !forceCompleted) return
-        val isCompleted = forceCompleted || pos >= (dur * COMPLETION_THRESHOLD_RATIO).toLong()
-        val safePos = if (isCompleted) 0L else pos.coerceAtMost(dur)
+        // With no length the played position is the best duration we have:
+        // the row is completed anyway (position reset to 0), and a non-zero
+        // duration keeps it from reading as a broken card.
+        val effectiveDur = dur ?: pos.coerceAtLeast(1L)
+        val isCompleted =
+            forceCompleted ||
+                (dur != null && pos >= (dur * COMPLETION_THRESHOLD_RATIO).toLong())
+        val safePos = if (isCompleted) 0L else pos.coerceAtMost(effectiveDur)
         val now = System.currentTimeMillis()
 
         // NonCancellable: this write must land even when the activity is
@@ -7774,7 +7794,7 @@ class NativePlayerActivity : ComponentActivity() {
                     clearLogo = clearLogoUrl, totalEpisodesInSeason = totalEpisodesInSeason,
                     poster = itemPoster, streamUrl = currentUrl,
                     season = season, episode = episode, episodeStreamId = episodeStreamId,
-                    positionMs = safePos, durationMs = dur, updatedAt = now,
+                    positionMs = safePos, durationMs = effectiveDur, updatedAt = now,
                     isCompleted = isCompleted,
                     completedAt = if (isCompleted) existing?.completedAt ?: now else null
                 )
@@ -8187,12 +8207,22 @@ class NativePlayerActivity : ComponentActivity() {
         // lifecycleScope, which is independent of `scope`, but ordering it
         // ahead of teardown keeps intent clear and avoids racing any
         // scope-bound work that reads history.
-        // A session that reached its own end must never be recorded as merely
-        // resumable. After ENDED the saved position can sit short of the
-        // completion threshold (a frozen tail, or the end panel having paused
-        // the clock), which is what left a finished episode without its watch
-        // marker and with its old progress bar still showing.
-        saveProgress(reason = "stop", forceCompleted = playbackEndedHandled)
+        // A session that reached its own end - or that was already showing its
+        // end-of-episode card in the last minutes of the episode - must never
+        // be recorded as merely resumable. After ENDED the saved position can
+        // sit short of the completion threshold (a frozen tail, or the end
+        // panel having paused the clock), and leaving from the card happens
+        // before the file's last second - both left the finished episode
+        // without its watch marker and with its old progress bar.
+        val completedOnExit = shouldRecordCompletion(
+            playbackEnded = playbackEndedHandled,
+            endPanelsShown = endPanelsShown,
+            positionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs,
+            durationMs = exoPlayer?.duration
+                ?.takeIf { it > 0L && it != C.TIME_UNSET }
+                ?: 0L
+        )
+        saveProgress(reason = "stop", forceCompleted = completedOnExit)
         scope?.cancel()
         scrobbleSimkl("stop")
         subtitleCueHandler?.cancelPending()

@@ -2648,17 +2648,25 @@ class MpvPlayerActivity : ComponentActivity() {
 
         val position = view.positionMs().coerceAtLeast(0L)
         val duration = view.durationMs()
-        if (duration <= 0L) return
+        // A missing duration used to abandon the write entirely - including
+        // the completion write at end of file, which is the one fact the
+        // player can state without knowing how long the file was. A finished
+        // episode then kept no watch marker and its old resume bar.
+        if (duration <= 0L && !forceCompleted) return
         if (position < MIN_RESUME_POSITION_MS && !forceCompleted) return
 
-        val completed = forceCompleted || position >= (duration * COMPLETION_THRESHOLD_RATIO).toLong()
-        val safePosition = if (completed) 0L else position.coerceAtMost(duration)
+        // With no length the played position is the best duration we have.
+        val effectiveDuration = if (duration > 0L) duration else position.coerceAtLeast(1L)
+        val completed =
+            forceCompleted ||
+                position >= (effectiveDuration * COMPLETION_THRESHOLD_RATIO).toLong()
+        val safePosition = if (completed) 0L else position.coerceAtMost(effectiveDuration)
         val now = System.currentTimeMillis()
         if (completed) completionSent = true
 
         Log.i(
             TAG,
-            "save progress ($reason): ${safePosition}ms / ${duration}ms completed=$completed"
+            "save progress ($reason): ${safePosition}ms / ${effectiveDuration}ms completed=$completed"
         )
 
         // NonCancellable: this write must land even while the activity is being
@@ -2684,7 +2692,7 @@ class MpvPlayerActivity : ComponentActivity() {
                     episode = episode,
                     episodeStreamId = episodeStreamId,
                     positionMs = safePosition,
-                    durationMs = duration,
+                    durationMs = effectiveDuration,
                     updatedAt = now,
                     isCompleted = completed,
                     completedAt = if (completed) existing?.completedAt ?: now else null
@@ -3160,7 +3168,18 @@ class MpvPlayerActivity : ComponentActivity() {
 
     private fun exitPlayer() {
         surface?.setPaused(true)
-        saveProgress(reason = "exit")
+        // Leaving from the end-of-episode card means the episode is over: save
+        // it as watched rather than as a resume point, so backing out of the
+        // card does not leave the finished episode unmarked with its old bar.
+        val pos = runCatching { surface?.positionMs() ?: 0L }.getOrDefault(0L)
+        val dur = runCatching { surface?.durationMs() ?: 0L }.getOrDefault(0L)
+        val completedOnExit = shouldRecordCompletion(
+            playbackEnded = endedHandled,
+            endPanelsShown = endPanelsShown,
+            positionMs = pos,
+            durationMs = dur
+        )
+        saveProgress(reason = "exit", forceCompleted = completedOnExit)
         scrobble("stop")
         finish()
     }

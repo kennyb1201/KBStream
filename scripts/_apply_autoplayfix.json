@@ -1,0 +1,37 @@
+[
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+    "old": "        val pos = player.currentPosition.coerceAtLeast(0L)\n        val rawDur = player.duration\n        val dur = if (rawDur == C.TIME_UNSET || rawDur <= 0L) null else rawDur\n        if (dur == null) return\n        if (pos < MIN_RESUME_POSITION_MS && !forceCompleted) return\n        val isCompleted = forceCompleted || pos >= (dur * COMPLETION_THRESHOLD_RATIO).toLong()\n        val safePos = if (isCompleted) 0L else pos.coerceAtMost(dur)\n        val now = System.currentTimeMillis()",
+    "new": "        val pos = player.currentPosition.coerceAtLeast(0L)\n        val rawDur = player.duration\n        val dur = if (rawDur == C.TIME_UNSET || rawDur <= 0L) null else rawDur\n        // A missing duration used to abandon the write entirely - including\n        // the completion write onPlaybackEnded issues, which is the one fact\n        // the player can state without knowing how long the file was. A\n        // finished episode then kept no watch marker and its old resume bar,\n        // exactly as if it had never been played. A session the player itself\n        // declared over is written regardless; only a MID-session save still\n        // needs a real duration to mean anything.\n        if (dur == null && !forceCompleted) return\n        if (pos < MIN_RESUME_POSITION_MS && !forceCompleted) return\n        // With no length the played position is the best duration we have:\n        // the row is completed anyway (position reset to 0), and a non-zero\n        // duration keeps it from reading as a broken card.\n        val effectiveDur = dur ?: pos.coerceAtLeast(1L)\n        val isCompleted =\n            forceCompleted ||\n                (dur != null && pos >= (dur * COMPLETION_THRESHOLD_RATIO).toLong())\n        val safePos = if (isCompleted) 0L else pos.coerceAtMost(effectiveDur)\n        val now = System.currentTimeMillis()"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+    "old": "                    positionMs = safePos, durationMs = dur, updatedAt = now,",
+    "new": "                    positionMs = safePos, durationMs = effectiveDur, updatedAt = now,"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+    "old": "            armNextUpAutoAdvance(playerRemainingMs())",
+    "new": "            // Once the player has declared the session over, the remaining\n            // time is not a question anymore: currentPosition may already have\n            // been reset, and arming a HELD countdown from it would leave the\n            // auto-advance waiting for an end that already passed - the popup\n            // sat there and the next episode never ran.\n            armNextUpAutoAdvance(\n                if (playbackEndedHandled) 0L else playerRemainingMs()\n            )"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+    "old": "        saveProgress(reason = \"stop\", forceCompleted = playbackEndedHandled)",
+    "new": "        // A session that reached its own end - or that was already showing its\n        // end-of-episode card in the last minutes of the episode - must never\n        // be recorded as merely resumable: leaving there left the finished\n        // episode without its watch marker and with its old progress bar.\n        val completedOnExit = shouldRecordCompletion(\n            playbackEnded = playbackEndedHandled,\n            endPanelsShown = endPanelsShown,\n            positionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs,\n            durationMs = exoPlayer?.duration\n                ?.takeIf { it > 0L && it != C.TIME_UNSET }\n                ?: 0L\n        )\n        saveProgress(reason = \"stop\", forceCompleted = completedOnExit)"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt",
+    "old": "        val position = view.positionMs().coerceAtLeast(0L)\n        val duration = view.durationMs()\n        if (duration <= 0L) return\n        if (position < MIN_RESUME_POSITION_MS && !forceCompleted) return\n\n        val completed = forceCompleted || position >= (duration * COMPLETION_THRESHOLD_RATIO).toLong()\n        val safePosition = if (completed) 0L else position.coerceAtMost(duration)\n        val now = System.currentTimeMillis()\n        if (completed) completionSent = true\n\n        Log.i(\n            TAG,\n            \"save progress ($reason): ${safePosition}ms / ${duration}ms completed=$completed\"\n        )",
+    "new": "        val position = view.positionMs().coerceAtLeast(0L)\n        val duration = view.durationMs()\n        // A missing duration used to abandon the write entirely - including\n        // the completion write at end of file, which is the one fact the\n        // player can state without knowing how long the file was. A finished\n        // episode then kept no watch marker and its old resume bar.\n        if (duration <= 0L && !forceCompleted) return\n        if (position < MIN_RESUME_POSITION_MS && !forceCompleted) return\n\n        // With no length the played position is the best duration we have.\n        val effectiveDuration = if (duration > 0L) duration else position.coerceAtLeast(1L)\n        val completed =\n            forceCompleted ||\n                position >= (effectiveDuration * COMPLETION_THRESHOLD_RATIO).toLong()\n        val safePosition = if (completed) 0L else position.coerceAtMost(effectiveDuration)\n        val now = System.currentTimeMillis()\n        if (completed) completionSent = true\n\n        Log.i(\n            TAG,\n            \"save progress ($reason): ${safePosition}ms / ${effectiveDuration}ms completed=$completed\"\n        )"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt",
+    "old": "                    positionMs = safePosition,\n                    durationMs = duration,",
+    "new": "                    positionMs = safePosition,\n                    durationMs = effectiveDuration,"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt",
+    "old": "    private fun exitPlayer() {\n        surface?.setPaused(true)\n        saveProgress(reason = \"exit\")\n        scrobble(\"stop\")\n        finish()\n    }",
+    "new": "    private fun exitPlayer() {\n        surface?.setPaused(true)\n        // Leaving from the end-of-episode card means the episode is over: save\n        // it as watched rather than as a resume point, so backing out of the\n        // card does not leave the finished episode unmarked with its old bar.\n        val pos = runCatching { surface?.positionMs() ?: 0L }.getOrDefault(0L)\n        val dur = runCatching { surface?.durationMs() ?: 0L }.getOrDefault(0L)\n        val completedOnExit = shouldRecordCompletion(\n            playbackEnded = endedHandled,\n            endPanelsShown = endPanelsShown,\n            positionMs = pos,\n            durationMs = dur\n        )\n        saveProgress(reason = \"exit\", forceCompleted = completedOnExit)\n        scrobble(\"stop\")\n        finish()\n    }"
+  }
+]
