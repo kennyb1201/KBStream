@@ -53,10 +53,20 @@
     private final android.view.View surfaceView;
 }
 
-# --- Jellyfin FFmpeg audio decoder ---
-# FFmpeg audio decoding (DTS / DTS-HD / TrueHD / E-AC3 / FLAC) is the reason
-# this package is bundled. Its video renderer ships with no video decoders
-# compiled in and is never referenced (video is always hardware MediaCodec).
+# --- FFmpeg decoder extension: the reflection-loaded renderers ---
+# DefaultRenderersFactory instantiates these two by NAME
+# (Class.forName("androidx.media3.decoder.ffmpeg....")), so R8 must not rename
+# or remove them: media3-exoplayer's consumer rules keep the constructors, and
+# these keep the classes themselves, which is what the name lookup actually
+# needs. If they are renamed, the lookup silently falls through and the
+# software video path (10-bit AVC/HEVC, VP9 profile 2, AV1, MPEG-2, VC-1) and
+# the software audio path (DTS/TrueHD/E-AC3/FLAC) simply do not exist in a
+# RELEASE build — while still working in debug, where minification is off.
+-keep class androidx.media3.decoder.ffmpeg.ExperimentalFfmpegVideoRenderer { *; }
+-keep class androidx.media3.decoder.ffmpeg.FfmpegAudioRenderer { *; }
+
+# The published Jellyfin artifact's package name; harmless with the locally
+# built video-enabled AAR (same androidx.media3.decoder.ffmpeg package).
 -dontwarn org.jellyfin.**
 
 -dontwarn javax.annotation.**
