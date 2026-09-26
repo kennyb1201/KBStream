@@ -47,7 +47,10 @@ internal object TmdbRailPages {
         // this file's screens — see TmdbRepository.browseLanguage.
         val lang = repo.browseLanguage()
 
-        return repo.finishDeepRailPage(page) { p ->
+        return repo.finishDeepRailPage(
+            page = page,
+            cacheKey = "genre|$genreId|$title|$lang"
+        ) { p ->
             genrePageItems(repo, genreId, title, p, lang)
         }
     }
@@ -154,7 +157,10 @@ internal object TmdbRailPages {
         // this file's screens — see TmdbRepository.browseLanguage.
         val lang = repo.browseLanguage()
 
-        return repo.finishDeepRailPage(page) { p ->
+        return repo.finishDeepRailPage(
+            page = page,
+            cacheKey = "keyword|$keywordId|$title|$lang"
+        ) { p ->
             keywordPageItems(repo, keywordId, title, p, lang)
         }
     }
@@ -276,7 +282,10 @@ internal object TmdbRailPages {
                 ?: TagRailPage(emptyList(), false)
         }
 
-        return repo.finishDeepRailPage(page) { p ->
+        return repo.finishDeepRailPage(
+            page = page,
+            cacheKey = "network|$networkId|$title|$lang"
+        ) { p ->
             networkPageItems(repo, networkId, title, p, lang)
         }
     }
@@ -346,7 +355,10 @@ internal object TmdbRailPages {
         // this file's screens — see TmdbRepository.browseLanguage.
         val lang = repo.browseLanguage()
 
-        return repo.finishDeepRailPage(page) { p ->
+        return repo.finishDeepRailPage(
+            page = page,
+            cacheKey = "company|$companyId|$title|$lang"
+        ) { p ->
             companyPageItems(repo, companyId, title, p, lang)
         }
     }

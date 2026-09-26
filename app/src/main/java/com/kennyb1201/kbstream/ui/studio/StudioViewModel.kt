@@ -244,15 +244,27 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
             // Clear logo + blurb for the header. Networks use their own TMDB
             // endpoints (a network id is not a company id), so route by type.
-            try {
-                _logoUrl.value = tmdbRepository.getEntityLogoUrl(id, isNetwork)
-            } catch (e: Exception) {
-                Log.w("STUDIO_VM", "Logo lookup failed for id=$id", e)
+            //
+            // Both are fetched CONCURRENTLY with the rails below. They used
+            // to be awaited one after the other before the six-rail discover
+            // fan-out even started, so a network page waited on the sum of
+            // three independent sets of round-trips (logo + detail + rails)
+            // instead of the slowest one.
+            val logoDeferred = async {
+                try {
+                    tmdbRepository.getEntityLogoUrl(id, isNetwork)
+                } catch (e: Exception) {
+                    Log.w("STUDIO_VM", "Logo lookup failed for id=$id", e)
+                    null
+                }
             }
-            try {
-                _companyInfo.value = tmdbRepository.getEntityDetail(id, isNetwork)
-            } catch (e: Exception) {
-                Log.w("STUDIO_VM", "Entity detail failed for id=$id", e)
+            val detailDeferred = async {
+                try {
+                    tmdbRepository.getEntityDetail(id, isNetwork)
+                } catch (e: Exception) {
+                    Log.w("STUDIO_VM", "Entity detail failed for id=$id", e)
+                    null
+                }
             }
 
             try {
@@ -293,9 +305,14 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             } catch (e: Exception) {
                 _error.value = e.message ?: "Failed to load studio"
                 Log.e("STUDIO_VM", "load failed for id=$id isNetwork=$isNetwork", e)
-            } finally {
-                _isLoading.value = false
             }
+
+            // Collected last: the rails are what the screen is for, so they
+            // own the loading state, while the header art/blurb have been in
+            // flight alongside them and land in the same frame.
+            _logoUrl.value = logoDeferred.await()
+            _companyInfo.value = detailDeferred.await()
+            _isLoading.value = false
 
             val loadedSections = _sections.value
             if (loadedSections.isNotEmpty()) {

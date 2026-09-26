@@ -183,6 +183,63 @@ class TmdbRepository private constructor(context: Context) :
     private val seasonEpisodesCacheTtlMs = 12L * 60L * 60L * 1000L
     private val seasonEpisodesDiskTtlMs = 7L * 24L * 60L * 60L * 1000L
 
+    /**
+     * Short-TTL memory cache for the browse rails' RAW per-page rows.
+     *
+     * Opening a browse screen (genre / network / studio / decade / tag)
+     * fires six rails at once, and every rail deepens through up to
+     * [RAIL_DEPTH_MAX_PAGE] TMDB pages - so each open was ~18 fresh requests,
+     * and coming back to the screen you were just on (Detail and back, or a
+     * genre chip toggled twice) cost exactly as much as the first visit. The
+     * raw rows are reusable for a few minutes: these are the same lists for
+     * every viewer, so a slightly stale popularity order is invisible.
+     *
+     * The RAW rows are cached rather than the finished page, on purpose:
+     * [finishRailPage] applies the digital-release filter and the active
+     * profile's kids ceiling, so caching a finished rail would keep serving
+     * one profile's filtered page to the next.
+     */
+    private val railPageCache =
+        ConcurrentHashMap<String, Pair<Long, List<StudioItem>>>()
+
+    private val railPageTtlMs = 5L * 60L * 1000L
+
+    /** Bound so a long browsing session cannot grow the map without end. */
+    private val railPageCacheMaxEntries = 512
+
+    /**
+     * One raw rail page, served from [railPageCache] while it is fresh.
+     *
+     * Only non-empty pages are stored: an empty one is either the genuine end
+     * of a short catalog (cheap to re-ask) or a failed request, and caching a
+     * failure would blank that rail until the TTL expired.
+     */
+    private suspend fun cachedRailPage(
+        cacheKey: String?,
+        page: Int,
+        load: suspend (Int) -> List<StudioItem>
+    ): List<StudioItem> {
+        if (cacheKey == null) return load(page)
+
+        val key = "$cacheKey|$page"
+        val now = System.currentTimeMillis()
+
+        railPageCache[key]?.let { (storedAt, items) ->
+            if (now - storedAt < railPageTtlMs) return items
+        }
+
+        val items = load(page)
+
+        if (items.isNotEmpty()) {
+            if (railPageCache.size > railPageCacheMaxEntries) {
+                railPageCache.clear()
+            }
+            railPageCache[key] = now to items
+        }
+
+        return items
+    }
+
     private val detailJsonAdapter: JsonAdapter<TmdbDetail> by lazy {
         moshi.adapter(TmdbDetail::class.java)
     }
@@ -1495,20 +1552,42 @@ class TmdbRepository private constructor(context: Context) :
      */
     internal suspend fun finishDeepRailPage(
         page: Int,
+        /**
+         * Identity of the request (dimension, id, rail title, language) so
+         * [cachedRailPage] can reuse it; null disables caching.
+         */
+        cacheKey: String? = null,
         load: suspend (Int) -> List<StudioItem>
-    ): TagRailPage {
-        val first = load(page)
-        if (page != 1) return finishRailPage(first, nextPage = page + 1)
+    ): TagRailPage = coroutineScope {
+        val first = cachedRailPage(cacheKey, page, load)
+        if (page != 1) {
+            return@coroutineScope finishRailPage(first, nextPage = page + 1)
+        }
+
+        if (first.size >= RAIL_DEPTH_TARGET_ITEMS) {
+            return@coroutineScope finishRailPage(first, nextPage = 2)
+        }
+
+        // The deepening pages are independent of one another, so they go out
+        // TOGETHER. As a serial loop this was one round-trip per page, and
+        // that - not the number of requests - is what a screen open actually
+        // waited on. They are still merged in order and still stop at the
+        // first empty page, so the merged rails and the page a later "load
+        // more" asks for are unchanged; the only difference is that a rail
+        // whose page 2 is empty has already paid for page 3.
+        val deeper = (2..RAIL_DEPTH_MAX_PAGE).map { p ->
+            async { cachedRailPage(cacheKey, p, load) }
+        }
 
         val merged = first.toMutableList()
         var next = 2
-        while (merged.size < RAIL_DEPTH_TARGET_ITEMS && next <= RAIL_DEPTH_MAX_PAGE) {
-            val more = load(next)
+        for (pending in deeper) {
+            val more = pending.await()
             if (more.isEmpty()) break
             merged += more
             next++
         }
-        return finishRailPage(merged, nextPage = next)
+        finishRailPage(merged, nextPage = next)
     }
 
     /**
@@ -1522,22 +1601,47 @@ class TmdbRepository private constructor(context: Context) :
         sortBy: String,
         filters: com.kennyb1201.kbstream.data.kb.KBFilters,
         page: Int
-    ): Pair<List<StudioItem>, Int> {
+    ): Pair<List<StudioItem>, Int> = coroutineScope {
         val itemType = if (mediaType.equals("tv", ignoreCase = true)) "series" else "movie"
 
-        suspend fun load(p: Int): List<StudioItem> = runCatching {
-            discoverKB(mediaType = mediaType, page = p, sortBy = sortBy, filters = filters)
-        }.getOrNull().orEmpty()
-            .map { StudioItem(it, itemType) }
-            .distinctBy { it.item.id }
+        // Keyed off the REQUEST rather than off the screen: two screens that
+        // ask the same discover question (a genre chip and a Tag screen over
+        // the same genre, say) are entitled to the same answer, and [filters]
+        // already carries every dimension that shapes it - the ids, the
+        // language and the vote floor.
+        val cacheKey = "discover|$mediaType|$sortBy|$filters"
+
+        suspend fun load(p: Int): List<StudioItem> =
+            cachedRailPage(cacheKey, p) { requestedPage ->
+                runCatching {
+                    discoverKB(
+                        mediaType = mediaType,
+                        page = requestedPage,
+                        sortBy = sortBy,
+                        filters = filters
+                    )
+                }.getOrNull().orEmpty()
+                    .map { StudioItem(it, itemType) }
+                    .distinctBy { it.item.id }
+            }
 
         val first = load(page)
-        if (page != 1) return first to (page + 1)
+        if (page != 1) return@coroutineScope first to (page + 1)
+
+        if (first.size >= RAIL_DEPTH_TARGET_ITEMS) {
+            return@coroutineScope first.distinctBy { it.item.id } to 2
+        }
+
+        // Independent pages go out together, exactly as in
+        // [finishDeepRailPage].
+        val deeper = (2..RAIL_DEPTH_MAX_PAGE).map { p ->
+            async { load(p) }
+        }
 
         val merged = first.toMutableList()
         var next = 2
-        while (merged.size < RAIL_DEPTH_TARGET_ITEMS && next <= RAIL_DEPTH_MAX_PAGE) {
-            val more = load(next)
+        for (pending in deeper) {
+            val more = pending.await()
             if (more.isEmpty()) break
             merged += more
             next++
@@ -1546,7 +1650,7 @@ class TmdbRepository private constructor(context: Context) :
         // page shifts as items gain votes, so page 2 can repeat a row page 1
         // already had. (The [finishDeepRailPage] path is deduped by
         // [finishRailPage] instead.)
-        return merged.distinctBy { it.item.id } to next
+        merged.distinctBy { it.item.id } to next
     }
 
     suspend fun getGenreRailPage(genreId: Int, title: String, page: Int): TagRailPage =
