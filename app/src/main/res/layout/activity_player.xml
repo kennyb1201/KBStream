@@ -310,10 +310,15 @@
                 android:orientation="vertical">
 
             <!-- Item name or clear logo -->
+            <!-- The title block is deliberately compact now. The overview
+                 below it is the only prose in the overlay, and an over-tall
+                 logo plus a 30sp name pushed it past the fold - where the
+                 scroll ran and the description read as clipped. Shrinking
+                 the title gives that text the room instead. -->
             <ImageView
                 android:id="@+id/clear_logo"
-                android:layout_width="460dp"
-                android:layout_height="140dp"
+                android:layout_width="400dp"
+                android:layout_height="104dp"
                 android:layout_marginTop="8dp"
                 android:layout_marginBottom="6dp"
                 android:scaleType="fitCenter"
@@ -327,7 +332,7 @@
                 android:layout_height="wrap_content"
                 android:fontFamily="@font/oswald_semibold"
                 android:textColor="@color/kb_text_hi"
-                android:textSize="30sp"
+                android:textSize="26sp"
                 android:visibility="gone" />
 
             <!-- Live channel programme block (IPTV only): what is on now —
@@ -410,7 +415,7 @@
                     android:fontFamily="@font/oswald_medium"
                     android:letterSpacing="0.08"
                     android:textColor="@color/kb_accent"
-                    android:textSize="20sp"
+                    android:textSize="17sp"
                     android:visibility="gone" />
 
                 <TextView
@@ -421,7 +426,7 @@
                     android:layout_marginStart="12dp"
                     android:fontFamily="@font/oswald_semibold"
                     android:textColor="@color/kb_text_hi"
-                    android:textSize="22sp"
+                    android:textSize="19sp"
                     android:maxLines="2"
                     android:ellipsize="end"
                     android:visibility="gone" />

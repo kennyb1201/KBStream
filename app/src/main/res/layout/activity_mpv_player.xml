@@ -203,10 +203,12 @@
                 android:gravity="center_vertical"
                 android:orientation="vertical">
 
+                <!-- Compact title block, same as the main player's: the
+                     overview below is the only prose, so it gets the room. -->
                 <ImageView
                     android:id="@+id/mpv_clear_logo"
-                    android:layout_width="460dp"
-                    android:layout_height="140dp"
+                    android:layout_width="400dp"
+                    android:layout_height="104dp"
                     android:layout_marginTop="8dp"
                     android:layout_marginBottom="6dp"
                     android:adjustViewBounds="true"
@@ -220,7 +222,7 @@
                     android:layout_height="wrap_content"
                     android:fontFamily="@font/oswald_semibold"
                     android:textColor="@color/kb_text_hi"
-                    android:textSize="30sp"
+                    android:textSize="26sp"
                     android:visibility="gone" />
 
                 <LinearLayout
@@ -236,7 +238,7 @@
                         android:fontFamily="@font/oswald_medium"
                         android:letterSpacing="0.08"
                         android:textColor="@color/kb_accent"
-                        android:textSize="20sp"
+                        android:textSize="17sp"
                         android:visibility="gone" />
 
                     <TextView
@@ -249,7 +251,7 @@
                         android:fontFamily="@font/oswald_semibold"
                         android:maxLines="2"
                         android:textColor="@color/kb_text_hi"
-                        android:textSize="22sp"
+                        android:textSize="19sp"
                         android:visibility="gone" />
                 </LinearLayout>
 
