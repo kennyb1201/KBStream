@@ -361,6 +361,12 @@ def fill(buf, w, h, polys, paint, ss=SS):
     Coverage is exact across x and sampled on `ss` sub-scanlines down y, which
     is what keeps the long, near-horizontal edges of the play triangle and the
     type clean without supersampling the whole canvas.
+
+    The `ss` samples are ACCUMULATED per pixel and composited once. Folding
+    them together with one "over" step each -- which is what this used to do --
+    lands a fully covered pixel on 1-(1-1/ss)**ss instead of 1: 0.665 at ss=6,
+    so every solid area came out a third transparent. That is what made the
+    transparent downloads (the lockup especially) read as faded behind a wash.
     """
     _check(polys)
     es = _edges(polys)
@@ -369,6 +375,13 @@ def fill(buf, w, h, polys, paint, ss=SS):
     y_lo = max(0, int(math.floor(min(min(e[1], e[3]) for e in es))))
     y_hi = min(h, int(math.ceil(max(max(e[1], e[3]) for e in es))))
     flat = constant_in_x(paint)
+    inv = 1.0 / ss
+    # Coverage for this layer, already weighted by the paint's own alpha
+    # (`acov`, so a radial's falling alpha is honoured), and that same weight
+    # applied to the colour so a partially covered pixel takes the paint's
+    # average colour rather than the last sample's.
+    acov = [0.0] * (w * h)
+    col = [0.0] * (w * h * 3)
     for sub in range(y_lo * ss, y_hi * ss):
         yc = (sub + 0.5) / ss
         cross = []
@@ -393,7 +406,6 @@ def fill(buf, w, h, polys, paint, ss=SS):
             continue
         row = (sub // ss) * w
         fixed = paint_at(paint, 0.0, yc) if flat else None
-        inv = 1.0 / ss
         for a, b in spans:
             gx0 = max(0, int(math.floor(a)))
             gx1 = min(w, int(math.ceil(b)))
@@ -402,21 +414,32 @@ def fill(buf, w, h, polys, paint, ss=SS):
                 if cov <= 0:
                     continue
                 c = fixed if fixed is not None else paint_at(paint, gx + 0.5, yc)
-                sa = cov * inv * c[3]
-                if sa <= 0.0:
+                wgt = cov * inv * c[3]
+                if wgt <= 0.0:
                     continue
-                if sa > 1.0:
-                    sa = 1.0
-                i = (row + gx) * 4
-                da = buf[i + 3]
-                oa = sa + da * (1.0 - sa)
-                if oa <= 0.0:
-                    continue
-                wd = da * (1.0 - sa)
-                buf[i] = (c[0] * sa + buf[i] * wd) / oa
-                buf[i + 1] = (c[1] * sa + buf[i + 1] * wd) / oa
-                buf[i + 2] = (c[2] * sa + buf[i + 2] * wd) / oa
-                buf[i + 3] = oa
+                i = row + gx
+                acov[i] += wgt
+                j = i * 3
+                col[j] += c[0] * wgt
+                col[j + 1] += c[1] * wgt
+                col[j + 2] += c[2] * wgt
+    for i in range(w * h):
+        total = acov[i]
+        if total <= 0.0:
+            continue
+        sa = 1.0 if total > 1.0 else total
+        j = i * 3
+        ia = 1.0 / total
+        o = i * 4
+        da = buf[o + 3]
+        oa = sa + da * (1.0 - sa)
+        if oa <= 0.0:
+            continue
+        wd = da * (1.0 - sa)
+        buf[o] = (col[j] * ia * sa + buf[o] * wd) / oa
+        buf[o + 1] = (col[j + 1] * ia * sa + buf[o + 1] * wd) / oa
+        buf[o + 2] = (col[j + 2] * ia * sa + buf[o + 2] * wd) / oa
+        buf[o + 3] = oa
 
 
 def render(layers, w, h, ss=SS):
