@@ -817,6 +817,41 @@ def banner_layers(solid=False):
     )
 
 
+# The bare lockup's size. The plate's own lockup is scaled down by PLATE_LOCK
+# to breathe inside the plate; a bare lockup is not inside anything, so it runs
+# at full size (the same numbers the store plates and the icon mark use).
+BANNER_LOCKUP_LOCK = 1.0
+
+
+def banner_lockup_layers(lock=BANNER_LOCKUP_LOCK):
+    """The banner's lockup alone, on a fully transparent field.
+
+    The same geometry as the plate's own lockup -- one lockup, so the mark and
+    the wordmark cannot drift apart between the two forms -- minus everything
+    that is not the brand: no plate, no halo, no beam and no tagline. What is
+    left in the PNG is the brass play button and the word KBSTREAM, so a
+    launcher that draws its own card (or its own colour behind the tile) gets
+    nothing but the brand painted over it.
+
+    The wordmark is centred by its CAP height rather than inside the plate's
+    three-line block: with the tagline gone there is no second line to balance
+    against, and centring that block would sit the word high.
+    """
+    scale = lock
+    mark_d = MARK_D * scale
+    word = wordmark(BOLD, "KBSTREAM", cap=PLATE_WORD_CAP * scale, tracking_em=0.05)
+    word_w = bbox(word)[2] - bbox(word)[0]
+    gap = PLATE_MARK_GAP * scale
+    total = mark_d + gap + word_w
+    x0 = (BANNER_W - total) / 2.0
+    mark_y = (BANNER_H - mark_d) / 2.0
+    text_x = x0 + mark_d + gap
+    text_y = (BANNER_H - PLATE_WORD_CAP * scale) / 2.0
+    layers = mark_layers(mark_d, x0, mark_y)
+    layers.append((move(word, text_x, text_y), solid(TEXT_HI)))
+    return layers
+
+
 # --------------------------------------------------------------------------- #
 # the logo lockup (transparent, for the README / website / anywhere vector)
 # --------------------------------------------------------------------------- #
@@ -870,24 +905,38 @@ def emit_banner():
     # lockup). The inset/translucent variants that were tried as the launcher
     # card are still emitted beside it, so switching between them stays a
     # drawable reference rather than a regeneration.
+    #
+    # The lockup-only form is the exception: it is a DOWNLOAD for surfaces
+    # outside the app, so it is written to BRAND and deliberately never to
+    # res/ (see the forms tuple).
     written = []
     forms = (
-        # (drawable, brand suffix, title suffix, layers, needs-alpha-channel)
+        # (drawable, brand suffix, title suffix, layers, needs-alpha-channel,
+        #  ships-in-the-apk)
         # The full-bleed form is opaque edge to edge, so it is written as RGB
         # exactly as it was before the inset/translucent experiment; the inset
         # forms need a real alpha channel (an RGB PNG has nowhere to put the
         # transparent margin and would come out black).
-        ("tv_banner", "", "", plate_layers(BANNER_W, BANNER_H), False),
+        ("tv_banner", "", "", plate_layers(BANNER_W, BANNER_H), False, True),
         ("tv_banner_plate", "-plate", " (solid plate)",
-         banner_layers(solid=True), True),
+         banner_layers(solid=True), True, True),
         ("tv_banner_translucent", "-translucent", " (translucent)",
-         banner_layers(solid=False), True),
+         banner_layers(solid=False), True, True),
+        # Lockup only: mark + wordmark on a transparent field, no plate at all.
+        # NOT a launcher card. android:banner is drawn AS the card artwork, so
+        # a 320x180 strip carrying nothing but the lockup is for a website, a
+        # listing, or anywhere the brand has to sit on someone else's
+        # background -- and shipping it in res/ would only add an unreferenced
+        # drawable to the APK.
+        ("tv_banner_lockup", "-lockup", " (lockup only)",
+         banner_lockup_layers(), True, False),
     )
-    for name, suffix, title_suffix, layers, alpha in forms:
+    for name, suffix, title_suffix, layers, alpha, in_apk in forms:
         w, h = int(BANNER_W * 2), int(BANNER_H * 2)
         buf = render(scale_layers(layers, w / BANNER_W), w, h)
-        written.append(write(os.path.join(RES, "drawable-xhdpi", "%s.png" % name),
-                             png_bytes(buf, w, h, alpha=alpha)))
+        if in_apk:
+            written.append(write(os.path.join(RES, "drawable-xhdpi", "%s.png" % name),
+                                 png_bytes(buf, w, h, alpha=alpha)))
         written.append(write(os.path.join(BRAND, "kbstream-banner%s.png" % suffix),
                              png_bytes(buf, w, h, alpha=alpha)))
         written.append(write(
@@ -1124,6 +1173,7 @@ def ascii_preview(layers, w, h, cols=104):
 PREVIEWS = {
     "banner": lambda: (banner_layers(), int(BANNER_W), int(BANNER_H)),
     "plate": lambda: (banner_layers(solid=True), int(BANNER_W), int(BANNER_H)),
+    "lockup": lambda: (banner_lockup_layers(), int(BANNER_W), int(BANNER_H)),
     "promo": lambda: (plate_layers(1024.0, 500.0, 3.2), 1024, 500),
     "icon": lambda: (icon_layers(), int(TILE), int(TILE)),
     "round": lambda: (icon_layers(True), int(TILE), int(TILE)),
