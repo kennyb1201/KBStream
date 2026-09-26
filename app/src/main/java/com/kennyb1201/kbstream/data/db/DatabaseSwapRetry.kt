@@ -71,6 +71,23 @@ internal fun isTransientDatabaseError(t: Throwable): Boolean {
 /** How many times a swap-interrupted operation is re-run before it fails. */
 internal const val DB_SWAP_RETRY_ATTEMPTS = 3
 
+/**
+ * The budget for work that can span a whole retirement: an EPG import or a
+ * playlist cache write runs for minutes, and the profile-scoped instance it
+ * writes through is closed one
+ * [com.kennyb1201.kbstream.data.iptv.db.IptvDatabase.RETIRE_GRACE_MS] window
+ * after the switch that retired it.
+ *
+ * The default budget is sized for a query that just needs the database layer
+ * to settle (250 + 500 ≈ 0.75s of backoff). That is BACKWARD for a long write:
+ * it can expire inside the grace window, before the old instance is even
+ * closed, so every attempt fails the same way and a momentary swap reaches the
+ * user as a permanent error. This budget outlasts the 5s grace
+ * (250 + 500 + 1000 + 2000 + 2000 ≈ 5.75s), which is what makes the retry land
+ * on the instance the layer has settled on.
+ */
+internal const val DB_SWAP_RETRY_LONG_ATTEMPTS = 6
+
 /** First pause between attempts; doubles per attempt, capped. */
 internal const val DB_SWAP_RETRY_DELAY_MS = 250L
 

@@ -176,4 +176,56 @@ class DatabaseSwapRetryTest {
         assertThrows(IllegalStateException::class.java) { runBlocking { failing.toList() } }
         assertEquals(3, collections)
     }
+
+    @Test
+    fun `the long budget is fully used on a swap that never settles`() = runBlocking {
+        var attempts = 0
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking {
+                withDatabaseSwapRetry(
+                    attempts = DB_SWAP_RETRY_LONG_ATTEMPTS,
+                    delayMs = 1L
+                ) {
+                    attempts++
+                    throw IllegalStateException(
+                        "attempt to re-open an already-closed object"
+                    )
+                }
+            }
+        }
+        assertEquals(DB_SWAP_RETRY_LONG_ATTEMPTS, attempts)
+    }
+
+    @Test
+    fun `the long budget outlasts the retirement grace`() {
+        // The scoped instance stays open for 5s after the switch that retired
+        // it, so a budget that backoff alone spends ~1.75s can run out while
+        // the old instance is STILL open and every attempt fails the same way.
+        // This pins the long budget as longer than that grace window, which is
+        // the whole reason it exists.
+        var wait = DB_SWAP_RETRY_DELAY_MS
+        var total = 0L
+        repeat(DB_SWAP_RETRY_LONG_ATTEMPTS - 1) {
+            total += wait
+            wait = minOf(wait * 2, DB_SWAP_RETRY_MAX_DELAY_MS)
+        }
+        assertTrue("total backoff was ${total}ms", total > 5_000L)
+    }
+
+    @Test
+    fun `a long operation still gives up at once on a real failure`() = runBlocking {
+        var attempts = 0
+        assertThrows(IOException::class.java) {
+            runBlocking {
+                withDatabaseSwapRetry(
+                    attempts = DB_SWAP_RETRY_LONG_ATTEMPTS,
+                    delayMs = 1L
+                ) {
+                    attempts++
+                    throw IOException("connection reset by peer")
+                }
+            }
+        }
+        assertEquals(1, attempts)
+    }
 }

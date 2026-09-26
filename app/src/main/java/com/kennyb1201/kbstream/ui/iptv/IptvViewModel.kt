@@ -7,6 +7,8 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.db.retryOnDatabaseSwap
+import com.kennyb1201.kbstream.data.db.DB_SWAP_RETRY_LONG_ATTEMPTS
+import com.kennyb1201.kbstream.data.db.isTransientDatabaseError
 import com.kennyb1201.kbstream.data.db.withDatabaseSwapRetry
 import com.kennyb1201.kbstream.data.iptv.EpgMatchType
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
@@ -678,7 +680,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
-                _error.value = buildMessage(t)
+                reportFailure(_error, t)
                 Log.e(TAG, "CACHE RESTORE FAILED source=$url", t)
             } finally {
                 _isLoading.value = false
@@ -703,13 +705,13 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             _isLoading.value = !hasPlaylist
             _error.value = null
             try {
-                val loadedPlaylist = repository.loadPlaylist(url, name)
+                val loadedPlaylist = loadPlaylistResilient(url, name)
                 applyPlaylist(loadedPlaylist)
                 markUpdated(KEY_PLAYLIST_UPDATED_AT)
                 Log.d(TAG, "PLAYLIST LOAD SUCCESS channels=${loadedPlaylist.channels.size} source=$url")
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
-                _error.value = buildMessage(t)
+                reportFailure(_error, t)
                 Log.e(TAG, "PLAYLIST LOAD FAILED source=$url", t)
                 if (!hasPlaylist) _playlist.value = null
             } finally {
@@ -804,12 +806,64 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
      */
     private suspend fun importGuideSource(url: String) {
         withDatabaseSwapRetry(
+            attempts = DB_SWAP_RETRY_LONG_ATTEMPTS,
             onRetry = { attempt, error ->
                 Log.w(TAG, "GUIDE IMPORT RETRY $attempt after database swap source=$url", error)
             }
         ) {
             repository.importGuide(url)
         }
+    }
+
+    /**
+     * A playlist load wrapped for the profile-scoped database swap.
+     *
+     * The load WRITES: it replaces every cached channel row in one transaction
+     * ([IptvRepository.loadPlaylist] -> `replaceCachedPlaylistChannels`), so it
+     * dies exactly the way the guide import used to when its instance is
+     * retired underneath it - "attempt to re-open an already-closed object".
+     * The guide import got a retry wrapper for that; the playlist paths did
+     * not, which is why an automatic refresh could leave the setup panel
+     * holding that exception while the cached playlist and the guide both kept
+     * working. Same treatment, same over-sized budget.
+     */
+    private suspend fun loadPlaylistResilient(
+        url: String,
+        name: String?
+    ): IptvPlaylist = withDatabaseSwapRetry(
+        attempts = DB_SWAP_RETRY_LONG_ATTEMPTS,
+        onRetry = { attempt, error ->
+            Log.w(TAG, "PLAYLIST LOAD RETRY $attempt after database swap source=$url", error)
+        }
+    ) {
+        repository.loadPlaylist(url, name)
+    }
+
+    /**
+     * Publishes a failed operation to its banner - unless the failure is a
+     * database-swap symptom.
+     *
+     * A swap is the guide/playlist database being retired under running work,
+     * not something the user can act on: the next attempt resolves a fresh
+     * instance (see [withDatabaseSwapRetry]) and the cached playlist and guide
+     * stay live. Reported anyway it read as
+     *
+     *   IllegalStateException: attempt to re-open an already-closed object:
+     *     SQLiteDatabase: /data/.../<profile>.iptv_epg.db
+     *
+     * - a banner the user had to clear by hand while everything on the screen
+     * worked. It is logged instead, so the race stays visible in logcat.
+     */
+    private fun reportFailure(
+        target: MutableStateFlow<String?>,
+        error: Throwable,
+        prefix: String = ""
+    ) {
+        if (isTransientDatabaseError(error)) {
+            Log.w(TAG, "IGNORED DATABASE SWAP FAILURE", error)
+            return
+        }
+        target.value = prefix + buildMessage(error)
     }
 
     private fun refreshIfNeeded() {
@@ -822,7 +876,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             if (playlistNeedsRefresh) {
                 runCatching { refreshPlaylistInBackground() }.onFailure { error ->
                     if (error is CancellationException) throw error
-                    _error.value = buildMessage(error)
+                    reportFailure(_error, error)
                     Log.e(TAG, "BACKGROUND PLAYLIST REFRESH FAILED", error)
                 }
             }
@@ -834,7 +888,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         val url = _playlistUrl.value.trim()
         val name = _playlistName.value.trim().ifBlank { null }
         if (url.isBlank() || _isImportingGuide.value) return
-        val refreshedPlaylist = repository.loadPlaylist(url, name)
+        val refreshedPlaylist = loadPlaylistResilient(url, name)
         applyPlaylist(refreshedPlaylist)
         markUpdated(KEY_PLAYLIST_UPDATED_AT)
         // applyPlaylist merged the extras in, so report what was applied.
@@ -870,7 +924,11 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             if (lastError != null) {
                 // At least one source made it in; surface the failures as a
                 // non-fatal warning but keep the successful guide data.
-                _guideError.value = "Some EPG sources failed: " + buildMessage(lastError)
+                reportFailure(
+                    _guideError,
+                    lastError,
+                    prefix = "Some EPG sources failed: "
+                )
             }
             val playlist = _playlist.value
             clearGuideMemory(
@@ -885,7 +943,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             markUpdated(KEY_EPG_UPDATED_AT)
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
-            _guideError.value = buildMessage(t)
+            reportFailure(_guideError, t)
             Log.e(TAG, "GUIDE IMPORT FAILED", t)
         } finally {
             _isImportingGuide.value = false
