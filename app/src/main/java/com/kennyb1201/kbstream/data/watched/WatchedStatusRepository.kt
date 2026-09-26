@@ -1474,13 +1474,52 @@ class WatchedStatusRepository(
         // and an IMDB-keyed badge for one title used to disagree - the mark
         // only "took" on the surface it was made from - and unmarking it on
         // the other surface removed a key that was never written.
-        val formKeys = runCatching {
+        val idForms = runCatching {
             watchedIdForms(normalizedId, normalizedType)
-                .map { form -> cacheKey(form, normalizedType) }
-                .filter { formKey -> formKey != key }
-        }.getOrDefault(emptyList()).toSet()
+        }.getOrDefault(setOf(normalizedId))
+        val formKeys = idForms
+            .map { form -> cacheKey(form, normalizedType) }
+            .filter { formKey -> formKey != key }
+            .toSet()
 
         applyOverrideKeys(formKeys, now, watched = true)
+
+        // 2b. A title marked watched has nothing left to resume: drop its
+        // local in-progress history rows - and their cloud copies - so the
+        // Continue Watching card and its progress bar cannot outlive the
+        // checkmark. Every surface's whole-title "Mark as Watched" funnels
+        // through here, so a mark made from Home, Search or a rail now
+        // behaves like the Detail season/series marks already did (which is
+        // why those two never showed the card, but the poster mark did).
+        runCatching {
+            val parents = (idForms + normalizedId).toList()
+            val resumeRows = historyDao.getInProgressForParents(parents)
+            if (resumeRows.isNotEmpty()) {
+                historyDao.deleteResumeRowsForParents(parents)
+
+                // Only ids that are GONE locally are sent: when the completed
+                // marker reused a resume row's id, the row still exists and
+                // its cloud copy must stay.
+                val removedIds = resumeRows
+                    .map { it.id }
+                    .distinct()
+                    .filter { id ->
+                        runCatching { historyDao.getById(id) }.getOrNull() == null
+                    }
+
+                if (removedIds.isNotEmpty()) {
+                    com.kennyb1201.kbstream.data.sync.SupabaseSync
+                        .deleteHistoryRows(removedIds)
+
+                    Log.i(
+                        "WATCHED_REPO",
+                        "mark watched: ended ${removedIds.size} cloud resume row(s)"
+                    )
+                }
+            }
+        }.onFailure { e ->
+            Log.e("WATCHED_REPO", "mark watched resume cleanup failed", e)
+        }
 
         // Cross-device sync: push the mark immediately (last-write-wins).
         com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
