@@ -810,6 +810,10 @@ object SupabaseSync {
         scheduleFlush()
     }
 
+    // @Volatile: scheduleFlush()/startPeriodicFlush() run on the multi-threaded
+    // IO scope, so the `?.isActive` check-then-act must see another thread's
+    // write rather than a stale cached read.
+    @Volatile
     private var flushJob: kotlinx.coroutines.Job? = null
 
     // Coalescing window for write bursts (bulk watched import, profile
@@ -841,6 +845,7 @@ object SupabaseSync {
     // failures). The header contract promises "retried on interval" — this
     // is that interval; without it a failed flush sits in the outbox until
     // the next local write happens to enqueue something.
+    @Volatile
     private var periodicFlushJob: kotlinx.coroutines.Job? = null
 
     private fun startPeriodicFlush() {

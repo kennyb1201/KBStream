@@ -5,6 +5,7 @@ import android.util.Log
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheDao
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.memory.evictOldest
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
@@ -65,6 +66,10 @@ class TvmazeAirDateRepository private constructor(context: Context) {
 
     // imdb id -> (fetchedAt, dates). ConcurrentHashMap: several Detail screens
     // and the Home enrichment path can ask for different shows at once.
+    // Capped: the Upcoming rail fans out over every show in Continue Watching,
+    // and the process is long-lived, so an unbounded map would hold a run of
+    // air dates for every title ever browsed. Same eviction rule as the TMDB
+    // caches (data.memory.evictOldest), oldest-fetched dropped first.
     private val memoryCache =
         ConcurrentHashMap<String, Pair<Long, Map<String, String>>>()
 
@@ -107,6 +112,7 @@ class TvmazeAirDateRepository private constructor(context: Context) {
                         .getOrNull()
                         ?.let { dates ->
                             memoryCache[id] = now to dates
+                            evictOldest(memoryCache, { it.first }, MAX_MEMORY_ENTRIES)
                             return@withContext dates
                         }
                 }
@@ -122,6 +128,7 @@ class TvmazeAirDateRepository private constructor(context: Context) {
                 .getOrDefault(emptyMap())
 
             memoryCache[id] = now to fetched
+            evictOldest(memoryCache, { it.first }, MAX_MEMORY_ENTRIES)
 
             // Only real data is written to disk. Persisting an empty answer for
             // a week would pin a missing show as "no dates" long after it
@@ -175,6 +182,9 @@ class TvmazeAirDateRepository private constructor(context: Context) {
         private const val DISK_TTL_MS = 7L * 24L * 60L * 60L * 1000L
 
         private const val MISS_TTL_MS = 30L * 60L * 1000L
+
+        /** Bound so a long browsing session cannot grow the map without end. */
+        private const val MAX_MEMORY_ENTRIES = 512
 
         @Volatile
         private var instance: TvmazeAirDateRepository? = null

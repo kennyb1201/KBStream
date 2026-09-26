@@ -1,0 +1,22 @@
+[
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+    "old": "        handler.removeCallbacksAndMessages(null)\n        nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)\n        // Remember where playback actually was: onSaveInstanceState() can run",
+    "new": "        handler.removeCallbacksAndMessages(null)\n        nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)\n        // These are NOT owned by `handler`, so clearing `handler` above left\n        // them running: a session backgrounded with the overlay still up kept\n        // its once-a-second clockRunnable re-posting itself forever - a Handler\n        // message holding this Activity, plus a view write a second on a dead\n        // surface. showControls() re-arms the clock on return, so stopping it\n        // here costs nothing. The scrub/zap timers go the same way.\n        clockHandler.removeCallbacks(clockRunnable)\n        scrubHandler.removeCallbacksAndMessages(null)\n        zapHandler.removeCallbacksAndMessages(null)\n        scrubDirection = 0\n        // Remember where playback actually was: onSaveInstanceState() can run"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+    "old": "        channelNumberHandler.removeCallbacksAndMessages(null)\n        nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)",
+    "new": "        channelNumberHandler.removeCallbacksAndMessages(null)\n        nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)\n        clockHandler.removeCallbacks(clockRunnable)\n        scrubHandler.removeCallbacksAndMessages(null)\n        zapHandler.removeCallbacksAndMessages(null)"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/data/sync/SupabaseSync.kt",
+    "old": "    private var flushJob: kotlinx.coroutines.Job? = null",
+    "new": "    // @Volatile: scheduleFlush()/startPeriodicFlush() run on the multi-threaded\n    // IO scope, so the `?.isActive` check-then-act must see another thread's\n    // write rather than a stale cached read.\n    @Volatile\n    private var flushJob: kotlinx.coroutines.Job? = null"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/data/sync/SupabaseSync.kt",
+    "old": "    private var periodicFlushJob: kotlinx.coroutines.Job? = null",
+    "new": "    @Volatile\n    private var periodicFlushJob: kotlinx.coroutines.Job? = null"
+  }
+]

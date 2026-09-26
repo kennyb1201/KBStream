@@ -8198,6 +8198,16 @@ class NativePlayerActivity : ComponentActivity() {
         // doesn't collide with a stale MediaSession ID.
         handler.removeCallbacksAndMessages(null)
         nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
+        // These are NOT owned by `handler`, so clearing `handler` above left
+        // them running: a session backgrounded with the overlay still up kept
+        // its once-a-second clockRunnable re-posting itself forever - a Handler
+        // message holding this Activity, plus a view write a second on a dead
+        // surface. showControls() re-arms the clock on return, so stopping it
+        // here costs nothing. The scrub/zap timers go the same way.
+        clockHandler.removeCallbacks(clockRunnable)
+        scrubHandler.removeCallbacksAndMessages(null)
+        zapHandler.removeCallbacksAndMessages(null)
+        scrubDirection = 0
         // Remember where playback actually was: onSaveInstanceState() can run
         // after this method (API 28+) and the player is released by then.
         if (!isLiveChannel) {
@@ -8243,6 +8253,9 @@ class NativePlayerActivity : ComponentActivity() {
         scrubHintHandler.removeCallbacksAndMessages(null)
         channelNumberHandler.removeCallbacksAndMessages(null)
         nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
+        clockHandler.removeCallbacks(clockRunnable)
+        scrubHandler.removeCallbacksAndMessages(null)
+        zapHandler.removeCallbacksAndMessages(null)
         scope?.cancel()
         subtitleCueHandler?.cancelPending()
         subtitleCueHandler = null
