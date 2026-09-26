@@ -54,6 +54,26 @@ internal fun normalizeEpgChannelKey(value: String): String =
     value.trim().lowercase(Locale.US)
 
 /**
+ * The key an imported programme is STORED under, and therefore the only key a
+ * program query may ask with.
+ *
+ * [XmltvImporter] writes `<programme channel=...>` through this function, so
+ * `epg_programs.channelId` is always the trimmed, lowercased spelling. The
+ * guide's own channel rows keep the raw `<channel id=...>` untouched, and the
+ * DAO matches `channelId IN (:channelIds)` exactly (SQLite is case-sensitive
+ * for TEXT unless a column says otherwise -- this one does not).
+ *
+ * So handing a program query the guide channel's raw id silently returns
+ * nothing whenever the guide spells that id with any uppercase letter
+ * (`ESPN.us`, `BBC.UK`, `Discovery.HD`), while its programmes are imported and
+ * sitting in the database: the channel shows "No program data" forever. That
+ * is the whole reason this function exists next to [epgLookupKey]: matching is
+ * deliberately fuzzy, but reading back what was written has to be exact.
+ */
+internal fun epgProgramChannelKey(value: String): String =
+    value.trim().lowercase(Locale.US)
+
+/**
  * Aggressive form used only for alias keys: strips bracket/parenthesis
  * decorations, quality qualifiers (HD, 4K, HEVC, ...), expands `+`, and drops
  * everything that is not alphanumeric — "BBC One HD (East)" becomes "bbcone".

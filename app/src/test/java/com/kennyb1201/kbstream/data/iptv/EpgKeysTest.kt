@@ -102,6 +102,38 @@ class EpgKeysTest {
         assertEquals("sky sports 1", normalizeEpgChannelKey("SKY SPORTS 1"))
     }
 
+    // ── Program keys (what a program row is STORED and READ under) ────────
+
+    @Test
+    fun `program keys fold case and whitespace and nothing else`() {
+        // This is the identity `epg_programs.channelId` holds: the importer's
+        // own normalization. Punctuation, dots and spaces all survive, because
+        // a read has to reproduce the write byte for byte.
+        assertEquals("espn.us", epgProgramChannelKey("  ESPN.us "))
+        assertEquals("bbc one hd", epgProgramChannelKey("BBC One HD"))
+        assertEquals("a&e", epgProgramChannelKey("A&E"))
+    }
+
+    @Test
+    fun `program keys are not the matcher's lookup keys`() {
+        // The two must not be confused: matching may fold spaces and
+        // punctuation away, reading back what the importer wrote may not.
+        assertEquals("bbconehd", epgLookupKey("BBC One HD"))
+        assertEquals("bbc one hd", epgProgramChannelKey("BBC One HD"))
+        assertNotEquals(epgProgramChannelKey("BBC One HD"), epgLookupKey("BBC One HD"))
+    }
+
+    @Test
+    fun `a mixed-case guide id only matches its programmes through the program key`() {
+        // The regression this exists for: programmes are stored lowercased and
+        // the DAO matches `channelId IN (...)` case-sensitively, so a query
+        // handed the guide's raw id found nothing -- a matched channel whose
+        // programmes were imported, showing "No program data" forever.
+        val rawGuideId = "ESPN.us"
+        assertNotEquals(rawGuideId, epgProgramChannelKey(rawGuideId))
+        assertEquals("espn.us", epgProgramChannelKey(rawGuideId))
+    }
+
     // ── The matcher: which guide channel a playlist channel resolves to ───
 
     @Test

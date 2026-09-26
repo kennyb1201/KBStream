@@ -73,6 +73,7 @@ import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.addon.StreamBehaviorHints
 import com.kennyb1201.kbstream.data.badges.StreamBadge
 import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
+import com.kennyb1201.kbstream.data.iptv.epgProgramChannelKey
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache
 import com.kennyb1201.kbstream.data.iptv.LiveChannelZapRegistry
@@ -1485,7 +1486,11 @@ class NativePlayerActivity : ComponentActivity() {
             // category/description columns, which the banner shows.
             val rows = dao.getProgramsForChannelsInWindow(
                 sourceUrl = epgUrl,
-                channelIds = listOf(epgChannelId),
+                // The importer stores programmes under a lowercased channel key
+                // (epgProgramChannelKey) and this query matches it exactly, so
+                // the guide channel's raw id returns nothing whenever it has an
+                // uppercase letter -- a matched channel with an empty banner.
+                channelIds = listOf(epgProgramChannelKey(epgChannelId)),
                 windowStart = now,
                 windowEnd = now + ZAP_EPG_LOOKAHEAD_MS,
                 perChannelLimit = ZAP_EPG_ROW_LIMIT

@@ -7,7 +7,6 @@ import com.kennyb1201.kbstream.data.iptv.db.IptvDao
 import java.io.BufferedInputStream
 import java.io.InputStream
 import java.io.InputStreamReader
-import java.util.Locale
 import java.util.zip.GZIPInputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
@@ -397,7 +396,7 @@ private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
 
         return EpgProgramEntity(
             sourceUrl = sourceUrl,
-            channelId = normalizeChannelKey(channelId),
+            channelId = epgProgramChannelKey(channelId),
             title = title.ifBlank { "Untitled Program" },
             description = description,
             category = category,
@@ -428,9 +427,6 @@ private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
         }
         return 0L
     }
-
-    private fun normalizeChannelKey(value: String): String =
-        value.trim().lowercase(Locale.US)
 
     /**
      * Whether the <programme> the parser is sitting on belongs to a channel

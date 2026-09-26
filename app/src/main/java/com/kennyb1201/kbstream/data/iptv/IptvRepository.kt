@@ -382,8 +382,15 @@ class IptvRepository(
             cachedMatches = cachedMatches
         )
 
+        // The programme rows were stored under the importer's key
+        // ([epgProgramChannelKey], lowercased), not under the guide channel's
+        // raw id. The DAO matches `channelId IN (...)` case-sensitively, so
+        // asking with the raw id returned nothing for every channel whose
+        // guide id carries an uppercase letter -- programmes imported and in
+        // the database, but a permanent "No program data" on screen.
         val matchedGuideIds = resolvedMatches.values
             .mapNotNull { it.epgChannel?.id }
+            .map(::epgProgramChannelKey)
             .distinct()
 
         Log.w(
@@ -1003,7 +1010,9 @@ class IptvRepository(
 
         val rows = dao.getRecentProgramsForChannels(
             sourceUrl = guideUrl,
-            channelIds = listOf(epgChannelId),
+            // Ask under the key the importer stored, not the channel's raw id:
+            // see epgProgramChannelKey.
+            channelIds = listOf(epgProgramChannelKey(epgChannelId)),
             nowMillis = now,
             windowStart = now - windowDays * 86_400_000L,
             perChannelLimit = count
