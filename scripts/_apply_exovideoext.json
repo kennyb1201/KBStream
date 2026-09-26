@@ -1,0 +1,12 @@
+[
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+    "old": " * which the Fire TV stick's MediaCodec can't decode, play with no sound\n * without it). Video is strictly hardware: the bundled FFmpeg build ships\n * AUDIO decoders only (flac alac pcm mp3 aac ac3 eac3 dca mlp truehd \u2014 see\n * jellyfin-androidx-media build.sh), so its video renderer claims no format\n * and an FFmpeg-video session can only ever produce black video with audio.\n */",
+    "new": " * which the Fire TV stick's MediaCodec can't decode, play with no sound\n * without it).\n *\n * Video gets the FFmpeg software video renderer as a FALLBACK behind\n * MediaCodec (mode ON): hardware is tried first and wins for every codec the\n * box can decode; software only catches the codecs it cannot (AVI's MPEG-4\n * ASP, VC-1/WMV, 10-bit AVC, ...). Today's bundled FFmpeg carries AUDIO\n * decoders only (flac alac pcm mp3 aac ac3 eac3 dca mlp truehd \u2014 see\n * jellyfin-androidx-media build.sh), so FfmpegLibrary.supportsFormat()\n * reports UNSUPPORTED for every video mime and this renderer claims no\n * track: it is inert until a video-enabled FFmpeg build replaces it. Keeping\n * the wiring in place means that swap is a dependency change and nothing\n * else \u2014 the software decoder then joins automatically.\n */"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+    "old": "        // No video extensions: the bundled FFmpeg has no video decoders, so\n        // its video renderer can never claim a track. Hardware only.\n        super.buildVideoRenderers(\n            context,\n            EXTENSION_RENDERER_MODE_OFF,",
+    "new": "        // Video: hardware first, FFmpeg software video BEHIND it. Mode ON\n        // (not OFF) so a video-enabled FFmpeg build is picked up as the\n        // fallback for a codec MediaCodec has no decoder for. Inert with the\n        // current audio-only FFmpeg: FfmpegLibrary.supportsFormat() answers\n        // UNSUPPORTED, so this renderer never claims a track and hardware\n        // behavior is unchanged.\n        super.buildVideoRenderers(\n            context,\n            EXTENSION_RENDERER_MODE_ON,"
+  }
+]

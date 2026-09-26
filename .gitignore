@@ -8,3 +8,7 @@ build/
 app/build/
 .idea/
 __pycache__/
+# Video-enabled FFmpeg decoder extension (scripts/build_ffmpeg_video.sh, or
+# the "Build FFmpeg video extension" workflow artifact): a multi-MB native
+# binary, consumed by app/build.gradle.kts when present, never committed.
+libs/

@@ -1202,6 +1202,9 @@ class MpvPlayerActivity : ComponentActivity() {
             if (isFallbackSession && fallbackReason == FALLBACK_REASON_DECODER) {
                 append("  \u00b7  ExoPlayer had run out of video decoders")
             }
+            if (isFallbackSession && fallbackReason == FALLBACK_REASON_CONTAINER) {
+                append("  \u00b7  ExoPlayer could not read this file's container")
+            }
             val parsed = surface?.diagnostics().orEmpty()
             if (parsed.isNotBlank()) append("  \u00b7  $parsed")
         }
@@ -3227,6 +3230,15 @@ class MpvPlayerActivity : ComponentActivity() {
 
         /** Set when the handoff reason was any other unrecoverable error. */
         const val FALLBACK_REASON_ERROR = "error"
+
+        /**
+         * Set when the extractor refused the container itself — AVI/WMV/ASF
+         * and anything else Media3 has no progressive extractor for. The
+         * decoder ladder cannot touch this: the failure arrives before a track
+         * exists, so libmpv's own FFmpeg demuxers are the only thing that can
+         * open the file.
+         */
+        const val FALLBACK_REASON_CONTAINER = "container"
 
         /**
          * Set when the viewer pressed the control bar's SWITCH button: the

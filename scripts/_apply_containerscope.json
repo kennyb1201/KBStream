@@ -1,0 +1,7 @@
+[
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+    "old": "     * created. The manifest codes are included because a playlist the parser\n     * cannot read is the same class of dead end for the retry ladder.\n     */\n    private fun isContainerParseFailure(error: PlaybackException): Boolean =\n        error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ||\n            error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED ||\n            error.errorCode == PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED ||\n            error.errorCode == PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED",
+    "new": "     * created. Manifest (HLS/DASH) parse failures are deliberately NOT part of\n     * this: a playlist the parser refuses already falls through to the backup\n     * engine below, and spending the MIME-hint-dropped probe on a playlist URL\n     * would only hand playlist text to the progressive extractors.\n     */\n    private fun isContainerParseFailure(error: PlaybackException): Boolean =\n        error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ||\n            error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED"
+  }
+]

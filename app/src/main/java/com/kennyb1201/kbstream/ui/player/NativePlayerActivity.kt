@@ -289,10 +289,18 @@ private const val ZAP_EPG_TTL_MS = 60_000L
  * priority (OFF / fallback / preferred) — that extension is the reason the
  * FFmpeg decoder package is bundled at all (DTS / DTS-HD / TrueHD tracks,
  * which the Fire TV stick's MediaCodec can't decode, play with no sound
- * without it). Video is strictly hardware: the bundled FFmpeg build ships
- * AUDIO decoders only (flac alac pcm mp3 aac ac3 eac3 dca mlp truehd — see
- * jellyfin-androidx-media build.sh), so its video renderer claims no format
- * and an FFmpeg-video session can only ever produce black video with audio.
+ * without it).
+ *
+ * Video gets the FFmpeg software video renderer as a FALLBACK behind
+ * MediaCodec (mode ON): hardware is tried first and wins for every codec the
+ * box can decode; software only catches the codecs it cannot (AVI's MPEG-4
+ * ASP, VC-1/WMV, 10-bit AVC, ...). Today's bundled FFmpeg carries AUDIO
+ * decoders only (flac alac pcm mp3 aac ac3 eac3 dca mlp truehd — see
+ * jellyfin-androidx-media build.sh), so FfmpegLibrary.supportsFormat()
+ * reports UNSUPPORTED for every video mime and this renderer claims no
+ * track: it is inert until a video-enabled FFmpeg build replaces it. Keeping
+ * the wiring in place means that swap is a dependency change and nothing
+ * else — the software decoder then joins automatically.
  */
 private class SplitModeRenderersFactory(
     context: Context,
@@ -328,11 +336,15 @@ private class SplitModeRenderersFactory(
             )
             Log.i("PLAYER_DV", "P5 plane renderer prepended (raw-plane ICtCp path)")
         }
-        // No video extensions: the bundled FFmpeg has no video decoders, so
-        // its video renderer can never claim a track. Hardware only.
+        // Video: hardware first, FFmpeg software video BEHIND it. Mode ON
+        // (not OFF) so a video-enabled FFmpeg build is picked up as the
+        // fallback for a codec MediaCodec has no decoder for. Inert with the
+        // current audio-only FFmpeg: FfmpegLibrary.supportsFormat() answers
+        // UNSUPPORTED, so this renderer never claims a track and hardware
+        // behavior is unchanged.
         super.buildVideoRenderers(
             context,
-            EXTENSION_RENDERER_MODE_OFF,
+            EXTENSION_RENDERER_MODE_ON,
             mediaCodecSelector,
             enableDecoderFallback,
             eventHandler,
@@ -1082,6 +1094,12 @@ class NativePlayerActivity : ComponentActivity() {
      * its URL, and no rebuild changes it. See onPlayerError.
      */
     private var decoderFailureRetried = false
+    /**
+     * True once a container-parsing failure has had its one raw-extractor
+     * probe (see [isContainerParseFailure]). The second one hands the session
+     * to the backup engine instead of rebuilding the identical extractor.
+     */
+    private var containerParseRetried = false
     private var retryExhausted = false
     private var errorMessageStr: String? = null
     private var manualRetryToken = 0
@@ -4839,6 +4857,39 @@ class NativePlayerActivity : ComponentActivity() {
                 declaredDvCodec = declaredDvCodec,
                 alreadyStripped = forceDvStripForSession
             )
+            // A container the extractor cannot open is a DEMUX failure, and a
+            // different animal from everything below: AVI, WMV/ASF, DIVX and
+            // every other container Media3 has no progressive extractor for
+            // fail before a single track exists, so no decoder is ever asked
+            // for and the decoder ladder cannot touch it — a rebuild picks
+            // the same extractor and fails identically. It gets the same ONE
+            // meaningful retry a decoder failure gets (the probe with the MIME
+            // hint dropped, so the extractor sniffs the real container instead
+            // of trusting a URL extension that may have lied), and a second
+            // failure hands the session to the backup engine, whose libmpv
+            // carries the full FFmpeg demuxer set.
+            if (isContainerParseFailure(error)) {
+                errorMessageStr = msg + "\n\n" +
+                    failureDiagnostic("the container could not be read")
+                if (!containerParseRetried) {
+                    containerParseRetried = true
+                    if (retryAttempt < RAW_EXTRACTOR_PROBE_ATTEMPT) {
+                        retryAttempt = RAW_EXTRACTOR_PROBE_ATTEMPT
+                    }
+                    scheduleRetry()
+                    return
+                }
+                Log.w(
+                    "PLAYER_RETRY",
+                    "Container parse failure survived the raw-extractor probe " +
+                        "(code=${error.errorCodeName}) \u2014 handing over to the MPV backup engine"
+                )
+                if (!handOffToMpv(MpvPlayerActivity.FALLBACK_REASON_CONTAINER)) {
+                    retryExhausted = true
+                    updateUIError()
+                }
+                return
+            }
             if (decoderFailure) {
                 val codec = streamCodec
                 if (!codec.isNullOrBlank()) {
@@ -5008,7 +5059,7 @@ class NativePlayerActivity : ComponentActivity() {
                     }
                 }
             }
-            errorMessageStr = msg
+            errorMessageStr = msg + "\n\n" + failureDiagnostic(failureStageLabel(error))
             if (isLikelyRetryable(error)) {
                 scheduleRetry()
             } else if (!handOffToMpv(MpvPlayerActivity.FALLBACK_REASON_ERROR)) {
@@ -5108,6 +5159,68 @@ class NativePlayerActivity : ComponentActivity() {
             hideSplash()
         }
         updateControlsInfo()
+    }
+
+    /**
+     * True when the failure is the extractor refusing the CONTAINER itself,
+     * rather than any decoder or network problem.
+     *
+     * Media3's progressive support is a fixed list (MP4/FMP4, Matroska/WebM,
+     * MP3, Ogg, WAV, MPEG-TS, MPEG-PS, FLV, ADTS, FLAC, AMR); AVI and WMV/ASF
+     * are not on it, so those files fail here before a single track is
+     * created. Manifest (HLS/DASH) parse failures are deliberately NOT part of
+     * this: a playlist the parser refuses already falls through to the backup
+     * engine below, and spending the MIME-hint-dropped probe on a playlist URL
+     * would only hand playlist text to the progressive extractors.
+     */
+    private fun isContainerParseFailure(error: PlaybackException): Boolean =
+        error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ||
+            error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED
+
+    /**
+     * The error card's "why did this fail" line.
+     *
+     * "Playback failed" on its own cannot be told apart from a network drop,
+     * and the recovery differs exactly by that distinction. The line names the
+     * stage that gave up and the media ExoPlayer was actually handed: the
+     * container it tried to open (the track's own sample MIME, falling back to
+     * the URL's resolved type) and the video codec with its size — so a
+     * demux failure reads as "the container could not be read" and a decode
+     * failure as "no usable decoder", which is what decides whether the backup
+     * engine can open the file.
+     */
+    private fun failureDiagnostic(stage: String): String {
+        val container = streamMimeType ?: resolveMimeType(currentUrl) ?: "unknown container"
+        val codec = currentCodecs ?: streamCodec
+        val dims = if (streamWidth > 0 && streamHeight > 0) " ${streamWidth}x$streamHeight" else ""
+        val media = buildString {
+            append(container)
+            if (!codec.isNullOrBlank()) append(" \u00b7 ").append(codec).append(dims)
+        }
+        return "Why: ExoPlayer stopped because $stage.\nMedia: $media"
+    }
+
+    /** Human-readable stage for [failureDiagnostic], keyed off the error code. */
+    private fun failureStageLabel(error: PlaybackException): String = when (error.errorCode) {
+        PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+        PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED ->
+            "the container could not be read"
+        PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED,
+        PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED ->
+            "the stream manifest could not be read"
+        PlaybackException.ERROR_CODE_DECODING_FAILED,
+        PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+        PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
+        PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ->
+            "this video has no usable decoder here"
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+        PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+        PlaybackException.ERROR_CODE_IO_UNSPECIFIED ->
+            "the source could not be reached"
+        PlaybackException.ERROR_CODE_TIMEOUT -> "the source stopped responding"
+        PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED -> "the audio output failed"
+        else -> error.errorCodeName
     }
 
     private fun updateUIError() {
@@ -5411,7 +5524,8 @@ class NativePlayerActivity : ComponentActivity() {
                 "The stream never became ready (buffered ${bufferedMs / 1000}s). This usually means " +
                     "the connection can't sustain the file's bitrate, the source went quiet, or the " +
                     "release has broken timestamps. Try a different source, a lower resolution, " +
-                    "or a non-Dolby-Vision release."
+                    "or a non-Dolby-Vision release." +
+                    "\n\n" + failureDiagnostic("the stream never became ready")
             errorContainer.visibility = View.VISIBLE
             btnChangeSource.visibility = View.VISIBLE
             offerErrorSwitch()

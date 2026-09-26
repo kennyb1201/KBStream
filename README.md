@@ -75,6 +75,37 @@ Requirements: JDK 17, Android SDK (API 35), and `gradle` via the wrapper.
    `KBSTREAM_KEY_PASSWORD` (or a CI-provided keystore) for signing, and run
    R8 with `proguard-rules.pro`.
 
+### Optional: software video decoding
+
+ExoPlayer's software video path needs a VIDEO-enabled build of media3's FFmpeg
+decoder extension. The published `org.jellyfin.media3:media3-ffmpeg-decoder`
+artifact carries audio decoders only, so by default the FFmpeg video renderer
+reports every video mime as unsupported and claims no track. Build the
+video-enabled AAR and drop it in:
+
+```sh
+# needs JDK 17, an Android SDK, and NDK r26b (26.1.10909125)
+scripts/build_ffmpeg_video.sh
+# -> libs/media3-ffmpeg-decoder.aar
+./gradlew assembleDebug
+```
+
+`app/build.gradle.kts` prefers `libs/media3-ffmpeg-decoder.aar` whenever it is
+present and falls back to the published artifact otherwise, so this is opt-in
+and reversible.
+
+You do **not** need an NDK on your own machine. The `Build KBStream APK`
+workflow runs the script in a cached, non-fatal step before the APK builds, so
+CI builds — including every published release — pick up software video
+decoding automatically once the cache is warm. If that step fails, the release
+still ships, just without software video decode.
+
+`libs/` is gitignored: the AAR is a build product, not a source artifact.
+
+The extension ships its FFmpeg as `libffmpegJNI.so`, which is why it can coexist
+with libmpv — see the FFmpeg block in `app/build.gradle.kts` for why the other
+prebuilt video extensions cannot.
+
 ## Running tests
 
 JVM unit tests cover the Kids Mode rating matrix, legacy value migration,
@@ -125,3 +156,6 @@ docs/              # Supabase RLS policy reference
   providers, and the kids rating scale are US-specific).
 - The `scripts/tmdb_*.py` probes expect `TMDB_API_KEY` exported in the
   environment; they are development tools, not part of the app.
+- `scripts/build_ffmpeg_video.sh` builds the optional video-enabled FFmpeg
+  decoder extension (see Building → Optional: software video decoding). It
+  needs an NDK, which the normal Gradle build does not.

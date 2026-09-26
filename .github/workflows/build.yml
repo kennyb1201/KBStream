@@ -52,6 +52,12 @@ jobs:
       # change HOW FAST the work runs - neither skips or reuses a task.
       GRADLE_DAEMON_JVMARGS: "-Xmx6g -XX:MaxMetaspaceSize=1g -XX:+UseParallelGC -XX:ActiveProcessorCount=4 -XX:ReservedCodeCacheSize=256m"
       GRADLE_MAX_WORKERS: "4"
+
+      # Optional video-enabled FFmpeg extension: the media3 tag to build it
+      # against (MUST match app/build.gradle.kts) and the NDK it is linked
+      # with. See scripts/build_ffmpeg_video.sh.
+      MEDIA3_TAG: "1.9.0"
+      NDK_VERSION: "26.1.10909125"
       
     steps:
       - name: Checkout
@@ -99,6 +105,51 @@ jobs:
           # only extra needed here; AGP fetches platforms/build-tools during
           # the build once licenses are accepted (default input).
           packages: platform-tools
+
+      # --- Optional software video decoding ---------------------------------
+      # Builds the video-enabled media3 FFmpeg decoder extension into
+      # libs/media3-ffmpeg-decoder.aar, which the app build picks up
+      # automatically (see the FFmpeg block in app/build.gradle.kts). The
+      # four-ABI cross-compile is tens of minutes cold, so both the FFmpeg
+      # static libs and the media3 checkout are cached: a warm run only
+      # relinks the JNI wrapper.
+      #
+      # continue-on-error is deliberate. A broken upstream, a source-only
+      # change to the script or an exhausted runner must not stop the release:
+      # with no AAR the app falls back to the published audio-only artifact,
+      # exactly as it did before this step existed. The APK is always built.
+      - name: Free disk space for the FFmpeg build
+        continue-on-error: true
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
+
+      - name: Cache FFmpeg extension build
+        uses: actions/cache@v4
+        with:
+          path: build/ffmpeg-ext
+          key: ffmpeg-ext-${{ runner.os }}-${{ env.MEDIA3_TAG }}-${{ hashFiles('scripts/build_ffmpeg_video.sh') }}
+          restore-keys: |
+            ffmpeg-ext-${{ runner.os }}-${{ env.MEDIA3_TAG }}-
+
+      - name: Build FFmpeg video extension (optional)
+        continue-on-error: true
+        run: |
+          SDKMANAGER="$(command -v sdkmanager || echo "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager")"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "ndk;${NDK_VERSION}" "cmake;3.22.1"
+          bash scripts/build_ffmpeg_video.sh
+
+      # Kept even when the build failed: the log above is the only record of
+      # why, and a successful run's AAR is worth downloading on its own for a
+      # local device test.
+      - name: Upload FFmpeg extension (optional)
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: media3-ffmpeg-decoder-video
+          path: libs/media3-ffmpeg-decoder.aar
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: Restore release keystore
         run: |

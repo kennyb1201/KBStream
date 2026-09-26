@@ -248,7 +248,32 @@ dependencies {
     implementation("androidx.media3:media3-ui:1.9.0")
     implementation("androidx.media3:media3-session:1.9.0")
     implementation("androidx.media3:media3-datasource-okhttp:1.9.0")
-    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.9.0+1")
+    // FFmpeg decoder extension.
+    //
+    // Default: the published Jellyfin build of media3's own decoder_ffmpeg
+    // extension, which carries AUDIO decoders only — so its video renderer can
+    // never claim a track. Drop a video-enabled build at
+    // libs/media3-ffmpeg-decoder.aar (scripts/build_ffmpeg_video.sh; the
+    // build workflow runs it in a cached, non-fatal step) and it is used
+    // instead. That is
+    // the whole swap: SplitModeRenderersFactory already runs the video
+    // extension renderer in EXTENSION_RENDERER_MODE_ON, so the software video
+    // decoder joins behind MediaCodec with no code change once the library
+    // actually has video decoders.
+    //
+    // Why this extension and not a prebuilt one: media3's decoder_ffmpeg
+    // ships its FFmpeg as libffmpegJNI.so, which can sit next to libmpv.
+    // NextLib and the other prebuilt video extensions bundle libavcodec.so /
+    // libavutil.so / libswscale.so — the same sonames libmpv already
+    // provides — and two dependencies shipping one native library name break
+    // the build (or silently keep only one engine's copy).
+    val localFfmpegAar = rootProject.file("libs/media3-ffmpeg-decoder.aar")
+    if (localFfmpegAar.exists()) {
+        logger.lifecycle("FFmpeg extension: using video-enabled ${localFfmpegAar.name}")
+        implementation(files(localFfmpegAar))
+    } else {
+        implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.9.0+1")
+    }
 
     // Backup playback engine (MPV): what plays a title when ExoPlayer cannot
     // — decoder-resource exhaustion on Realtek/TCL boxes, containers/codecs
