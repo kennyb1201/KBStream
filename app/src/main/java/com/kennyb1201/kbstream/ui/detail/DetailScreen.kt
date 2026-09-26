@@ -266,7 +266,11 @@ private val BUTTON_PROGRESS_WIDTH = 26.dp
 private fun IconButtonBody(
     @DrawableRes iconRes: Int,
     contentDescription: String,
-    progress: Float? = null
+    progress: Float? = null,
+    // The brand mark (the detail PLAY control) carries its own brass gradients
+    // and must render UNTINTED so it reads as the logo; the plain control-bar
+    // glyphs still tint with focus/idle like every other icon button.
+    brandMark: Boolean = false
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -277,9 +281,12 @@ private fun IconButtonBody(
     ) {
         Icon(
             // painterResource + Icon tints with LocalContentColor, exactly as
-            // the ImageVector form did.
+            // the ImageVector form did — except the brand mark, which draws its
+            // own brass and is left untinted.
             painter = painterResource(iconRes),
             contentDescription = contentDescription,
+            tint = if (brandMark) Color.Unspecified
+            else androidx.tv.material3.LocalContentColor.current,
             modifier = Modifier.size(BUTTON_ICON_SIZE)
         )
 
@@ -1529,12 +1536,16 @@ fun DetailScreen(
                                 )
                         ) {
                             IconButtonBody(
-                                iconRes = R.drawable.ic_player_play,
+                                // The logo/icon's ringed brass play button
+                                // rather than the bare control-bar triangle, so
+                                // the detail PLAY control matches the brand.
+                                iconRes = R.drawable.ic_brand_play,
                                 // Keeps the label the eye no longer sees
                                 // ("PLAY S1 E3" / "RESUME") available to
                                 // TalkBack and to anyone reading the screen.
                                 contentDescription = playLabel,
-                                progress = resumeProgress
+                                progress = resumeProgress,
+                                brandMark = true
                             )
                         }
 

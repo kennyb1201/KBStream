@@ -865,28 +865,34 @@ def emit_banner():
     # with it -- rendering the design into a 640x360 buffer would paint only the
     # top-left quarter.
     #
-    # Both forms are emitted as real drawables, so preferring the solid card is
-    # a one-line change to android:banner rather than a regeneration. The
-    # translucent one is the default: it is what a launcher's own card wants,
-    # and it is the one whose edges cannot be clipped.
+    # tv_banner -- what android:banner points at -- is the ORIGINAL full-bleed
+    # opaque plate (plate_layers' design defaults: no inset, opaque, full-size
+    # lockup). The inset/translucent variants that were tried as the launcher
+    # card are still emitted beside it, so switching between them stays a
+    # drawable reference rather than a regeneration.
     written = []
-    for name, solid in (("tv_banner", False), ("tv_banner_plate", True)):
-        layers = banner_layers(solid=solid)
+    forms = (
+        # (drawable, brand suffix, title suffix, layers, needs-alpha-channel)
+        # The full-bleed form is opaque edge to edge, so it is written as RGB
+        # exactly as it was before the inset/translucent experiment; the inset
+        # forms need a real alpha channel (an RGB PNG has nowhere to put the
+        # transparent margin and would come out black).
+        ("tv_banner", "", "", plate_layers(BANNER_W, BANNER_H), False),
+        ("tv_banner_plate", "-plate", " (solid plate)",
+         banner_layers(solid=True), True),
+        ("tv_banner_translucent", "-translucent", " (translucent)",
+         banner_layers(solid=False), True),
+    )
+    for name, suffix, title_suffix, layers, alpha in forms:
         w, h = int(BANNER_W * 2), int(BANNER_H * 2)
         buf = render(scale_layers(layers, w / BANNER_W), w, h)
-        # Written with alpha even for the opaque plate: the margin around the
-        # plate has to stay genuinely transparent, and an RGB PNG has nowhere
-        # to put "nothing" -- it would come out black, which is a worse edge
-        # than the flush artwork this inset exists to avoid.
         written.append(write(os.path.join(RES, "drawable-xhdpi", "%s.png" % name),
-                             png_bytes(buf, w, h, alpha=True)))
-        suffix = "-plate" if solid else ""
+                             png_bytes(buf, w, h, alpha=alpha)))
         written.append(write(os.path.join(BRAND, "kbstream-banner%s.png" % suffix),
-                             png_bytes(buf, w, h, alpha=True)))
+                             png_bytes(buf, w, h, alpha=alpha)))
         written.append(write(
             os.path.join(BRAND, "kbstream-banner%s.svg" % suffix),
-            svg_doc(layers, BANNER_W, BANNER_H,
-                    "KBStream TV banner" + (" (solid plate)" if solid else "")),
+            svg_doc(layers, BANNER_W, BANNER_H, "KBStream TV banner" + title_suffix),
         ))
     return written
 
@@ -982,6 +988,51 @@ def emit_vectors():
     )
     written.append(write(os.path.join(RES, "mipmap-anydpi-v26", "ic_launcher.xml"), anydpi))
     written.append(write(os.path.join(RES, "mipmap-anydpi-v26", "ic_launcher_round.xml"), anydpi))
+    return written
+
+
+def emit_brand_play():
+    """The brand mark alone as a vector drawable, for the detail screen's PLAY
+    control: the ringed brass play button (the logo/icon mark) rather than the
+    bare control-bar triangle.
+
+    Emitted with its own brass gradients so the caller can draw it untinted;
+    the glass face, the bezel and the glyph each keep their own fill, exactly
+    as on the icon.
+    """
+    d = 32.0
+    cx = cy = d / 2.0
+    bezel, tri = mark_split(d, 0.0, 0.0)
+    face = [circle(cx, cy, d / 2.0 * (1.0 - 2.0 * MARK_RING))]
+    shapes = [
+        (_poly_d(face), rad((cx, cy - 0.06 * d), 0.62 * d, BRASS, MARK_FACE)),
+        (_poly_d(bezel), lin((0.0, 0.0), (0.0, d), BRASS, BRASS_LO)),
+        (_poly_d(tri), lin((0.0, 0.0), (0.0, d), BRASS_HI, BRASS)),
+    ]
+    return [write(
+        os.path.join(RES, "drawable", "ic_brand_play.xml"),
+        vector_xml(24.0, d, d, shapes,
+                   "KBStream mark: the ringed brass play button, used for the\n"
+                   "     detail screen's PLAY control. Drawn with its own brass\n"
+                   "     gradients so it renders untinted, like the logo. Generated\n"
+                   "     by scripts/render_brand_assets.py."),
+    )]
+
+
+def emit_transparent_icon():
+    """The app mark on a FULLY TRANSPARENT background -- no navy plate -- for a
+    TV launcher that wants the bare lockup. Same mark, same 66dp safe-circle
+    sizing as the icon, just nothing painted behind it. Docs-only: it is not a
+    packaged drawable, it is a file to sideload.
+    """
+    written = []
+    d = ICON_MARK_D
+    layers = mark_layers(d, (TILE - d) / 2.0, (TILE - d) / 2.0)
+    for name, px in (("kbstream-icon-transparent.png", 512),
+                     ("kbstream-icon-transparent-256.png", 256)):
+        buf = render(scale_layers(layers, px / TILE), px, px, ss=SS)
+        written.append(write(os.path.join(BRAND, name),
+                             png_bytes(buf, px, px, alpha=True)))
     return written
 
 
@@ -1088,7 +1139,8 @@ def main():
         return
     written = (
         emit_banner() + emit_store_banners() + emit_icons() + emit_logo()
-        + emit_vectors() + emit_notification_icon() + emit_sheet()
+        + emit_vectors() + emit_brand_play() + emit_transparent_icon()
+        + emit_notification_icon() + emit_sheet()
         + emit_store_sheet()
     )
     for path in written:
