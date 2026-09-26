@@ -32,8 +32,14 @@ class AddonsConfigRulesTest {
     private fun addon(
         id: String = "com.linvo.cinemeta",
         enabled: Boolean = true,
-        catalogs: List<AddonsConfigRules.Catalog> = listOf(catalog())
-    ) = AddonsConfigRules.Addon(id = id, enabled = enabled, catalogs = catalogs)
+        catalogs: List<AddonsConfigRules.Catalog> = listOf(catalog()),
+        customName: String? = null
+    ) = AddonsConfigRules.Addon(
+        id = id,
+        enabled = enabled,
+        catalogs = catalogs,
+        customName = customName
+    )
 
     // ── remoteConfigWins: strict newest-wins ────────────────────────────
 
@@ -57,23 +63,114 @@ class AddonsConfigRulesTest {
         assertFalse(AddonsConfigRules.shouldPublish(localEditedAt = 0L, cloudEditedAt = 0L))
     }
 
-    // ── signature: order/name/visibility sensitive, list-order blind ─────
+    // ── signature: order/name/visibility sensitive, catalog-storage blind ─
 
     @Test
-    fun `signature ignores the storage order of addons and catalogs`() {
+    fun `signature ignores the order catalogs happen to sit in inside one addon`() {
+        // A catalog carries its global order explicitly, so the order they
+        // happen to be stored in is not a configuration.
+        assertEquals(
+            AddonsConfigRules.signature(
+                listOf(
+                    addon(
+                        id = "a",
+                        catalogs = listOf(catalog(id = "top", order = 0), catalog(id = "year", order = 1))
+                    )
+                )
+            ),
+            AddonsConfigRules.signature(
+                listOf(addon(id = "a", catalogs = listOf(catalog(id = "year", order = 1), catalog(id = "top", order = 0))))
+            )
+        )
+    }
+
+    @Test
+    fun `signature follows the addon list order`() {
+        // The addons screen renders the list in exactly this order and "move
+        // up/down" rewrites it, so a move has to register as a change - it did
+        // not, which is how a reordered addon list was silently replaced by the
+        // account copy on the next pull.
         val a = addon(
             id = "a",
             catalogs = listOf(catalog(id = "top", order = 0), catalog(id = "year", order = 1))
         )
         val b = addon(id = "b", catalogs = listOf(catalog(id = "top", order = 2)))
-        assertEquals(
+        assertNotEquals(
             AddonsConfigRules.signature(listOf(a, b)),
             AddonsConfigRules.signature(listOf(b, a))
         )
-        assertEquals(
-            AddonsConfigRules.signature(listOf(a)),
-            AddonsConfigRules.signature(
-                listOf(addon(id = "a", catalogs = listOf(catalog(id = "year", order = 1), catalog(id = "top", order = 0))))
+    }
+
+    @Test
+    fun `signature changes when an addon itself is renamed`() {
+        val plain = listOf(addon(id = "a", customName = null))
+        val renamed = listOf(addon(id = "a", customName = "Cinemeta (mine)"))
+        assertNotEquals(
+            AddonsConfigRules.signature(plain),
+            AddonsConfigRules.signature(renamed)
+        )
+    }
+
+    // ── shouldStampEdit: a real edit always counts ──────────────────────
+
+    @Test
+    fun `a user edit stamps even when the heuristics see no configuration`() {
+        // Moving whole addons around keeps each addon's catalogs contiguous,
+        // and renaming an addon sets no catalog field: both used to look like
+        // "no configuration", so the edit was never stamped and the next pull
+        // overwrote it.
+        assertTrue(
+            AddonsConfigRules.shouldStampEdit(
+                previousSignature = "before",
+                signature = "after",
+                userEdit = true,
+                configured = false
+            )
+        )
+    }
+
+    @Test
+    fun `a write that changed nothing is never an edit`() {
+        assertFalse(
+            AddonsConfigRules.shouldStampEdit(
+                previousSignature = "same",
+                signature = "same",
+                userEdit = true,
+                configured = true
+            )
+        )
+    }
+
+    @Test
+    fun `the rollout case stamps a device that already looks configured`() {
+        assertTrue(
+            AddonsConfigRules.shouldStampEdit(
+                previousSignature = null,
+                signature = "after",
+                userEdit = false,
+                configured = true
+            )
+        )
+    }
+
+    @Test
+    fun `a fresh box holding only defaults never stamps`() {
+        // This is the guarantee that keeps a brand-new second device from
+        // out-stamping - and overwriting - a configured sibling.
+        assertFalse(
+            AddonsConfigRules.shouldStampEdit(
+                previousSignature = null,
+                signature = "defaults",
+                userEdit = false,
+                configured = false
+            )
+        )
+        assertFalse(
+            AddonsConfigRules.shouldStampEdit(
+                previousSignature = "defaults",
+                signature = "defaults-2",
+                userEdit = false,
+                configured = false
             )
         )
     }
@@ -112,6 +209,15 @@ class AddonsConfigRulesTest {
             addon(id = "b", catalogs = listOf(catalog(id = "top", order = 2)))
         )
         assertFalse(AddonsConfigRules.looksConfigured(defaults))
+    }
+
+    @Test
+    fun `a renamed addon is a configuration`() {
+        assertTrue(
+            AddonsConfigRules.looksConfigured(
+                listOf(addon(id = "a", customName = "Cinemeta (mine)"))
+            )
+        )
     }
 
     @Test

@@ -1300,6 +1300,9 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
             com.kennyb1201.kbstream.data.sync.AddonsConfigRules.Addon(
                 id = addon.id,
                 enabled = addon.enabled,
+                // The addon's own rename counts too (see
+                // [AddonsConfigRules.Addon.customName]).
+                customName = addon.customName,
                 catalogs =
                     addon.catalogs.map { catalog ->
                         com.kennyb1201.kbstream.data.sync.AddonsConfigRules.Catalog(
@@ -1332,15 +1335,18 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         userEdit: Boolean
     ) {
         val view = configView(addons)
-        val signature =
-            com.kennyb1201.kbstream.data.sync.AddonsConfigRules.signature(view)
+        val rules = com.kennyb1201.kbstream.data.sync.AddonsConfigRules
+        val signature = rules.signature(view)
         val store = addonPrefs(profileId)
         val previous = store.getString(KEY_CONFIG_SIG, null)
-        val firstObservation = previous == null
-        val configured =
-            com.kennyb1201.kbstream.data.sync.AddonsConfigRules.looksConfigured(view)
         val editor = store.edit().putString(KEY_CONFIG_SIG, signature)
-        if (configured && previous != signature && (userEdit || firstObservation)) {
+        if (rules.shouldStampEdit(
+                previousSignature = previous,
+                signature = signature,
+                userEdit = userEdit,
+                configured = rules.looksConfigured(view)
+            )
+        ) {
             editor.putLong(KEY_CONFIG_EDITED_AT, System.currentTimeMillis())
         }
         editor.apply()

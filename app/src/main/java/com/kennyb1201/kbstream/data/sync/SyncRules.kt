@@ -783,11 +783,16 @@ internal object AddonsConfigRules {
         val userHidden: Boolean
     )
 
-    /** One addon's sync-relevant settings. */
+    /**
+     * One addon's sync-relevant settings. [customName] is the addon's own
+     * display-name override — the sibling of [Catalog.customName], and just as
+     * much a configuration.
+     */
     data class Addon(
         val id: String,
         val enabled: Boolean,
-        val catalogs: List<Catalog>
+        val catalogs: List<Catalog>,
+        val customName: String? = null
     )
 
     /**
@@ -795,17 +800,52 @@ internal object AddonsConfigRules {
      * fingerprint did not change is not an edit — which is how a manifest
      * refresh that only updates metadata (or a re-publish of an already
      * adopted blob) is prevented from claiming a newer timestamp.
+     *
+     * The ADDON list order is part of the fingerprint: the addons screen
+     * renders the list in exactly this order and "move up/down" rewrites it,
+     * and a rename is carried by [Addon.customName]. The order catalogs happen
+     * to sit in inside one addon is NOT part of it, because a catalog carries
+     * its global order explicitly ([Catalog.order]).
+     *
+     * That split is the point. Treating the addon list as unordered storage
+     * meant a renamed or moved addon produced an unchanged fingerprint - no
+     * fingerprint change, no edit stamp (see [shouldStampEdit]), so the next
+     * pull from the account copy replaced the user's names and order and the
+     * work had to be done again.
      */
     fun signature(addons: List<Addon>): String =
-        addons.sortedBy { it.id }.joinToString("\n") { addon ->
+        addons.joinToString("\n") { addon ->
             val catalogs =
                 addon.catalogs.sortedBy { it.order }.joinToString(",") { catalog ->
                     val type = catalog.type.lowercase()
                     "$type:${catalog.id}:${catalog.order}:" +
                         "${catalog.customName.orEmpty()}:${catalog.userHidden}"
                 }
-            "${addon.id}:${addon.enabled}:$catalogs"
+            "${addon.id}:${addon.enabled}:${addon.customName.orEmpty()}:$catalogs"
         }
+
+    /**
+     * True when a configuration write should claim a new edit timestamp.
+     *
+     * A change the USER made is an edit by definition, whatever it was
+     * (renaming or moving a catalog, renaming or moving an addon, hiding a
+     * catalog, enabling an addon), so it always stamps. [looksConfigured] is
+     * only consulted for the rollout case - the first time a device is seen at
+     * all - where the question is whether the configuration it is already
+     * holding is deliberate or just the built-in defaults. That is what keeps
+     * the guarantee "an untouched box can never out-stamp a configured one"
+     * without also discarding a real edit the heuristics cannot see.
+     */
+    fun shouldStampEdit(
+        previousSignature: String?,
+        signature: String,
+        userEdit: Boolean,
+        configured: Boolean
+    ): Boolean {
+        if (previousSignature == signature) return false
+        if (userEdit) return true
+        return previousSignature == null && configured
+    }
 
     /**
      * True when this device's configuration is deliberate: a catalog was
@@ -818,6 +858,8 @@ internal object AddonsConfigRules {
      * id appearing in two separate runs can only come from a user reorder.
      */
     fun looksConfigured(addons: List<Addon>): Boolean {
+        if (addons.any { addon -> addon.customName != null }) return true
+
         if (addons.any { addon ->
                 addon.catalogs.any { catalog ->
                     catalog.customName != null || catalog.userHidden
