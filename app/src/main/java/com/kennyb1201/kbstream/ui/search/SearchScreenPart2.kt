@@ -822,29 +822,3 @@ internal fun CollectionPosterTile(
             .height(posterSize.height)
     )
 }
-
-@Composable
-internal fun SearchMessagePanel(
-    title: String,
-    body: String
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(KBSurface, KBShapeCard)
-            .border(1.dp, KBTextLo.copy(alpha = 0.25f), KBShapeCard)
-            .padding(14.dp)
-    ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleMedium,
-            color = KBTextHi
-        )
-        Text(
-            text = body,
-            color = KBTextLo,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.padding(top = 6.dp)
-        )
-    }
-}

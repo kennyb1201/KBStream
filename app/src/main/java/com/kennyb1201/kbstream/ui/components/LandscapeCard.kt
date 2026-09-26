@@ -137,7 +137,9 @@ fun LandscapeCard(
                     model = ImageRequest.Builder(context)
                         .data(logoUrl)
                         .build(),
-                    contentDescription = null,
+                    // The corner clearlogo is artwork, not text; give it the
+                    // title it stands in for so it is not an unlabelled image.
+                    contentDescription = fallbackTitle?.takeIf { it.isNotBlank() },
                     contentScale = ContentScale.Fit,
                     onError = { logoFailed = true },
                     modifier = Modifier

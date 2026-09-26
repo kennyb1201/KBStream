@@ -1,0 +1,24 @@
+[
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/detail/DetailScreen.kt",
+    "old": "import com.kennyb1201.kbstream.ui.theme.KBShapeCard\nimport com.kennyb1201.kbstream.ui.theme.KBShapeChip",
+    "new": "import com.kennyb1201.kbstream.ui.theme.KBShapeCard\nimport com.kennyb1201.kbstream.ui.theme.KBShapeChip\nimport com.kennyb1201.kbstream.ui.theme.KBShapePill"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/detail/DetailScreen.kt",
+    "old": "RoundedCornerShape(50)",
+    "new": "KBShapePill",
+    "count": 5
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/detail/DetailScreen.kt",
+    "old": "RoundedCornerShape(percent = 50)",
+    "new": "KBShapePill",
+    "count": 1
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/detail/DetailScreen.kt",
+    "old": "@Composable\nprivate fun EpisodesStatusMessage(\n    icon: String,\n    message: String\n) {\n    Row(\n        verticalAlignment =\n            Alignment.CenterVertically,\n        modifier = Modifier\n            .padding(\n                start = 24.dp,\n                end = 24.dp,\n                bottom = 12.dp\n            )\n            .fillMaxWidth()\n            .background(\n                KBSurface,\n                KBShapeChip\n            )\n            .padding(\n                horizontal = 12.dp,\n                vertical = 10.dp\n            )\n    ) {\n        if (icon == \"⏳\") {\n            CircularProgressIndicator(\n                modifier = Modifier.size(18.dp),\n                color = KBAccent,\n                strokeWidth = 2.dp\n            )\n        } else {\n            Text(\n                icon,\n                style =\n                    MaterialTheme.typography.bodyMedium\n            )\n        }\n\n        Text(\n            message,\n            color = KBTextLo,\n            style =\n                MaterialTheme.typography.bodyMedium,\n            modifier = Modifier.padding(\n                start = 8.dp\n            )\n        )\n    }\n}",
+    "new": "@Composable\nprivate fun EpisodesStatusMessage(\n    icon: String,\n    message: String\n) {\n    // The app's one status card, inline in the episodes list. The old\n    // hand-rolled chip row was the last browse-style status outside\n    // KBStatusMessage; its \"⏳\" glyph is now the shared loading flag.\n    KBStatusMessage(\n        loading = icon == \"⏳\",\n        icon = icon,\n        message = message,\n        modifier = Modifier\n            .fillMaxWidth()\n            .padding(start = 24.dp, end = 24.dp, bottom = 12.dp)\n    )\n}"
+  }
+]

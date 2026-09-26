@@ -140,6 +140,7 @@ import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
 import com.kennyb1201.kbstream.ui.theme.KBFocusTile
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
+import com.kennyb1201.kbstream.ui.theme.KBShapePill
 import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -306,7 +307,7 @@ private fun IconButtonBody(
                 // idle and KBAccent while focused, so the bar highlights with
                 // the card it sits in.
                 val barColor = androidx.tv.material3.LocalContentColor.current
-                val barShape = RoundedCornerShape(percent = 50)
+                val barShape = KBShapePill
 
                 Box(
                     modifier = Modifier
@@ -4672,7 +4673,7 @@ private fun GenreChip(
         onClick = onClick,
         modifier = modifier,
         shape = ClickableSurfaceDefaults.shape(
-            shape = RoundedCornerShape(50)
+            shape = KBShapePill
         ),
         colors = ClickableSurfaceDefaults.colors(
             containerColor = KBSurface,
@@ -4694,7 +4695,7 @@ private fun GenreChip(
                     2.dp,
                     KBAccent
                 ),
-                shape = RoundedCornerShape(50)
+                shape = KBShapePill
             )
         ),
         glow = ClickableSurfaceDefaults.glow(
@@ -4729,7 +4730,7 @@ private fun KeywordChip(
         onClick = onClick,
         modifier = modifier,
         shape = ClickableSurfaceDefaults.shape(
-            shape = RoundedCornerShape(50)
+            shape = KBShapePill
         ),
         colors = ClickableSurfaceDefaults.colors(
             containerColor = Color.Transparent,
@@ -4751,14 +4752,14 @@ private fun KeywordChip(
                     1.dp,
                     KBTextLo.copy(alpha = 0.35f)
                 ),
-                shape = RoundedCornerShape(50)
+                shape = KBShapePill
             ),
             focusedBorder = Border(
                 border = BorderStroke(
                     2.dp,
                     KBAccent
                 ),
-                shape = RoundedCornerShape(50)
+                shape = KBShapePill
             )
         ),
         glow = ClickableSurfaceDefaults.glow(
@@ -4787,49 +4788,17 @@ private fun EpisodesStatusMessage(
     icon: String,
     message: String
 ) {
-    Row(
-        verticalAlignment =
-            Alignment.CenterVertically,
+    // The app's one status card, inline in the episodes list. The old
+    // hand-rolled chip row was the last browse-style status outside
+    // KBStatusMessage; its "⏳" glyph is now the shared loading flag.
+    KBStatusMessage(
+        loading = icon == "⏳",
+        icon = icon,
+        message = message,
         modifier = Modifier
-            .padding(
-                start = 24.dp,
-                end = 24.dp,
-                bottom = 12.dp
-            )
             .fillMaxWidth()
-            .background(
-                KBSurface,
-                KBShapeChip
-            )
-            .padding(
-                horizontal = 12.dp,
-                vertical = 10.dp
-            )
-    ) {
-        if (icon == "⏳") {
-            CircularProgressIndicator(
-                modifier = Modifier.size(18.dp),
-                color = KBAccent,
-                strokeWidth = 2.dp
-            )
-        } else {
-            Text(
-                icon,
-                style =
-                    MaterialTheme.typography.bodyMedium
-            )
-        }
-
-        Text(
-            message,
-            color = KBTextLo,
-            style =
-                MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.padding(
-                start = 8.dp
-            )
-        )
-    }
+            .padding(start = 24.dp, end = 24.dp, bottom = 12.dp)
+    )
 }
 
 /**

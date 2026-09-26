@@ -36,6 +36,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.tmdb.TmdbCollectionPart
+import com.kennyb1201.kbstream.ui.components.KBStatusMessage
+import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
+import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterSize
@@ -146,27 +149,32 @@ fun CollectionScreen(
 
             when {
                 isLoading -> {
-                    CollectionMessagePanel(
-                        title = "Loading collection...",
-                        body = "Fetching movies in this collection.",
-                        showSpinner = true,
-                        modifier = Modifier.padding(horizontal = 24.dp)
+                    KBStatusMessage(
+                        loading = true,
+                        message = KB_STATUS_LOADING,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 4.dp)
                     )
                 }
 
                 detail == null -> {
-                    CollectionMessagePanel(
-                        title = "Collection unavailable",
-                        body = "We couldn't load this collection right now.",
-                        modifier = Modifier.padding(horizontal = 24.dp)
+                    KBStatusMessage(
+                        message = "We couldn't load this collection right now.",
+                        onRetry = { viewModel.load(collectionId) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 4.dp)
                     )
                 }
 
                 detail.parts.isEmpty() -> {
-                    CollectionMessagePanel(
-                        title = "No movies found",
-                        body = "This collection does not currently list any titles.",
-                        modifier = Modifier.padding(horizontal = 24.dp)
+                    KBStatusMessage(
+                        icon = KB_STATUS_ICON_EMPTY,
+                        message = "This collection lists no movies yet.",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 4.dp)
                     )
                 }
 
@@ -431,40 +439,3 @@ private fun CollectionPosterTile(
     }
 }
 
-@Composable
-private fun CollectionMessagePanel(
-    title: String,
-    body: String,
-    showSpinner: Boolean = false,
-    modifier: Modifier = Modifier
-) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(KBSurface, KBShapePanel)
-            .border(1.dp, KBTextLo.copy(alpha = 0.25f), KBShapePanel)
-            .padding(18.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (showSpinner) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(16.dp),
-                    color = KBAccent,
-                    strokeWidth = 2.dp
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-            }
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                color = KBTextHi
-            )
-        }
-        Text(
-            text = body,
-            color = KBTextLo,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.padding(top = 6.dp)
-        )
-    }
-}

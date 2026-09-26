@@ -57,8 +57,8 @@ import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.tmdb.TmdbPersonCredit
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.metaLine
+import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
-import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.PosterSize
@@ -118,6 +118,8 @@ fun ActorScreen(
     val topWorkBackdropUrl by viewModel.topWorkBackdropUrl.collectAsStateWithLifecycle()
     val topWorkCredit by viewModel.topWorkCredit.collectAsStateWithLifecycle()
 
+    val posterSize = rememberPosterSize()
+
     LaunchedEffect(actorId) {
         viewModel.load(actorId)
     }
@@ -146,7 +148,17 @@ fun ActorScreen(
     }
 
     when {
-        isLoading -> KBStatusMessage(loading = true, message = KB_STATUS_LOADING)
+        // Poster-shaped placeholders, like every other browse page. The
+        // actor's rails then arrive at their real size instead of a lone
+        // centred spinner that shifts the whole layout when the credits land.
+        isLoading -> KBSkeletonRailStack(
+            posterWidth = posterSize.width,
+            posterHeight = posterSize.height,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(top = 36.dp),
+            railCount = 3
+        )
         error != null ->
             KBStatusMessage(
                 message = "Error: $error",

@@ -65,6 +65,9 @@ import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
+import com.kennyb1201.kbstream.ui.components.KBStatusMessage
+import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
+import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.KBSectionHeader
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.heroSharedElement
@@ -357,22 +360,24 @@ fun SearchScreen(
 
             if (isLoading) {
                 item(key = "loading") {
-                    SearchMessagePanel(
-                        title = "Searching...",
-                        body = if (query.isBlank()) {
-                            "Finding results"
-                        } else {
-                            """Looking for "$query" across titles, people, collections, and studios"""
-                        }
+                    KBStatusMessage(
+                        loading = true,
+                        message = KB_STATUS_LOADING,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp)
                     )
                 }
             }
 
             if (!isLoading && query.isNotBlank() && totalCount == 0) {
                 item(key = "no_results") {
-                    SearchMessagePanel(
-                        title = "No matches found",
-                        body = "Try a shorter title or a broader search term."
+                    KBStatusMessage(
+                        icon = KB_STATUS_ICON_EMPTY,
+                        message = "No matches found",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp)
                     )
                 }
             }

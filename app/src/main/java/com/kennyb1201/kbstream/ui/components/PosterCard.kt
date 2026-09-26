@@ -16,6 +16,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Icon
@@ -37,7 +39,11 @@ fun WatchedCheckBadge(
             .size(24.dp)
             .clip(CircleShape)
             .background(KBVoid.copy(alpha = 0.8f))
-            .border(1.dp, KBTextHi.copy(alpha = 0.95f), CircleShape),
+            .border(1.dp, KBTextHi.copy(alpha = 0.95f), CircleShape)
+            // The badge is the only place this state is stated, so it needs a
+            // spoken label: without it a screen reader announces the bare
+            // "✓" glyph (or nothing) beside the poster's title.
+            .clearAndSetSemantics { contentDescription = "Watched" },
         contentAlignment = Alignment.Center
     ) {
         Text(
@@ -69,7 +75,7 @@ fun WatchedEyeBadge(
     ) {
         Icon(
             imageVector = Icons.Filled.Visibility,
-            contentDescription = null,
+            contentDescription = "Started, not finished",
             tint = KBTextHi,
             modifier = Modifier.size(13.dp)
         )
