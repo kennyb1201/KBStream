@@ -222,4 +222,89 @@ class ContinueWatchingDedupeTest {
             )
         )
     }
+
+    // ── a card whose enrichment failed ──────────────────────────────
+
+    @Test
+    fun `a card labelled with its raw id collapses onto the real one`() {
+        // Reported bug: a show appeared twice in Continue Watching - one card
+        // with artwork, and one with no thumbnail whose title was the raw
+        // TMDB id. The twin's enrichment had failed, so it had no title to
+        // match on either, and the two id flavours ("tt..." vs "tmdb:...")
+        // never collided on their own. The resolved TMDB id both cards carry
+        // is what pairs them.
+        val localRow = resumeCard().copy(
+            tmdbId = 97546
+        )
+        val brokenTwin = suggestionCard(
+            parentId = "tmdb:97546",
+            badge = UpNextBadge.CONTINUE_WATCHING,
+            season = 4,
+            episode = 5
+        ).copy(
+            title = "tmdb:97546",
+            tmdbId = 97546,
+            startPositionMs = 0L,
+            progressPercent = 0.5f
+        )
+
+        val result = collapseDuplicateUpNextCards(listOf(localRow, brokenTwin))
+
+        assertEquals(1, result.size)
+        assertEquals(localRow.id, result.single().id)
+    }
+
+    @Test
+    fun `the resolved tmdb id does not merge two different shows`() {
+        // The widening must not swallow a genuinely different show that only
+        // shares the local card's tmdb id namespace.
+        val localRow = resumeCard().copy(
+            tmdbId = 97546
+        )
+        val otherShow = suggestionCard(
+            parentId = "tt00000001",
+            badge = UpNextBadge.CONTINUE_WATCHING,
+            title = "Breeders",
+            season = 4,
+            episode = 5
+        ).copy(
+            tmdbId = 11111,
+            startPositionMs = 0L,
+            progressPercent = 0.5f
+        )
+
+        assertEquals(
+            2,
+            collapseDuplicateUpNextCards(listOf(localRow, otherShow)).size
+        )
+    }
+
+    @Test
+    fun `identity keys name every id form the card carries`() {
+        val keys = upNextIdentityKeys(
+            resumeCard().copy(tmdbId = 97546)
+        )
+
+        assertEquals(
+            setOf(
+                "parent:series:tt10986410",
+                "parent:series:97546",
+                "title:series:ted lasso"
+            ),
+            keys
+        )
+    }
+
+    @Test
+    fun `episode keys keep one episode apart from the next`() {
+        val fifth = upNextEpisodeKeys(
+            resumeCard().copy(tmdbId = 97546)
+        )
+        val sixth = upNextEpisodeKeys(
+            resumeCard().copy(tmdbId = 97546, episode = 6)
+        )
+
+        assertTrue(fifth.contains("parent:series:97546:4:5"))
+        assertEquals(emptySet<String>(), fifth intersect sixth)
+    }
 }

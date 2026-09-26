@@ -274,16 +274,58 @@ internal fun upNextShowKey(item: UpNextItem): String {
     return upNextTitleKey(item)
 }
 
-/** Identity of one specific episode across id flavors (title based). */
-internal fun upNextEpisodeKey(item: UpNextItem): String? {
-    val season = item.season
-    val episode = item.episode
+/**
+ * Every identity this card carries, for the duplicate-collapse pass.
+ *
+ * A show reaches the rail under more than one id at once: local history and
+ * add-on catalogs write "tt..." while the tracker cards and TMDB enrichment
+ * use "tmdb:<n>". [upNextShowKey] can only name the one flavour a card
+ * happens to carry, so the same show produced two different keys and survived
+ * the collapse.
+ *
+ * What made that visible was a card whose enrichment had failed: no poster,
+ * and the raw navigation id where its title should have been - so the title
+ * fallback could not pair it with its twin either. Both twins resolve the
+ * numeric TMDB id (enrichment fills it in, and a "tmdb:<n>" id normalizes to
+ * the same number), so emitting a key per form the card knows lets them meet.
+ *
+ * [upNextShowKey] itself is deliberately NOT widened: it is the persisted
+ * dismissal key, and changing its shape would orphan every dismissal already
+ * stored on the device and in the cloud.
+ */
+internal fun upNextIdentityKeys(item: UpNextItem): Set<String> {
+    val mediaType =
+        upNextMediaType(item.parentType)
+
+    return buildSet {
+        upNextIdentifier(item.parentId)?.let { add("parent:$mediaType:$it") }
+
+        item.tmdbId
+            ?.takeIf { it > 0 }
+            ?.let { add("parent:$mediaType:$it") }
+
+        add(upNextTitleKey(item))
+    }
+}
+
+/**
+ * [upNextIdentityKeys] narrowed to one episode, so the same episode reached
+ * from two id flavours pairs up - and a *different* episode of that show does
+ * not, because it is a separate thing to continue.
+ */
+internal fun upNextEpisodeKeys(item: UpNextItem): Set<String> {
+    val season =
+        item.season
+
+    val episode =
+        item.episode
 
     if (season == null || episode == null) {
-        return null
+        return emptySet()
     }
 
-    return "${upNextTitleKey(item)}:$season:$episode"
+    return upNextIdentityKeys(item)
+        .mapTo(linkedSetOf()) { key -> "$key:$season:$episode" }
 }
 
 /**
@@ -302,7 +344,9 @@ internal fun upNextEpisodeKey(item: UpNextItem): String? {
  * because the local row and the tracker card carry different id flavors
  * (which is how a show mid-S4E5 showed up alongside "New Episode S4E6").
  * Matching therefore falls back to the show title when the parent keys
- * disagree.
+ * disagree, and to the card's resolved TMDB id when even the titles cannot be
+ * compared - a card whose enrichment failed carries the raw navigation id as
+ * its title, which matches nothing (see [upNextIdentityKeys]).
  */
 internal fun collapseDuplicateUpNextCards(
     items: List<UpNextItem>
@@ -319,15 +363,13 @@ internal fun collapseDuplicateUpNextCards(
     val resumeKeys =
         items
             .filter { item -> hasSomethingToResume(item) }
-            .flatMap { item ->
-                listOf(upNextShowKey(item), upNextTitleKey(item))
-            }
+            .flatMap { item -> upNextIdentityKeys(item) }
             .toSet()
 
     val localEpisodeKeys =
         items
             .filter { item -> isLocal(item) }
-            .mapNotNull { item -> upNextEpisodeKey(item) }
+            .flatMap { item -> upNextEpisodeKeys(item) }
             .toSet()
 
     if (resumeKeys.isEmpty() && localEpisodeKeys.isEmpty()) {
@@ -335,16 +377,18 @@ internal fun collapseDuplicateUpNextCards(
     }
 
     return items.filterNot { item ->
+        val matchesAnInProgressShow =
+            upNextIdentityKeys(item)
+                .any { key -> key in resumeKeys }
+
         val redundantSuggestion =
             !hasSomethingToResume(item) &&
-                (upNextShowKey(item) in resumeKeys ||
-                    upNextTitleKey(item) in resumeKeys)
+                matchesAnInProgressShow
 
         val remoteTwinOfALocalEpisode =
             !isLocal(item) &&
-                upNextEpisodeKey(item)?.let { key ->
-                    key in localEpisodeKeys
-                } == true
+                upNextEpisodeKeys(item)
+                    .any { key -> key in localEpisodeKeys }
 
         redundantSuggestion || remoteTwinOfALocalEpisode
     }
@@ -3624,13 +3668,26 @@ Log.d(
             "Resume - ${formatSeasonEpisode(resolvedSeason, resolvedEpisode)}"
         }
 
+        // Never fall back to the navigation id: "tmdb:12345" is not a title.
+        // The cards that used to show one are precisely the ones whose
+        // enrichment failed, so they carried no poster either - a blank tile
+        // with an internal id on it, sitting next to the same show's real
+        // card. A session with no name of any kind is dropped instead; it is
+        // still paused on the tracker, so it comes back with a real title as
+        // soon as enrichment succeeds.
+        val displayTitle =
+            detail?.name?.takeIf { it.isNotBlank() }
+                ?: detail?.title?.takeIf { it.isNotBlank() }
+                ?: session.title?.takeIf { it.isNotBlank() }
+                ?: return null
+
         return UpNextItem(
             id = "mdblist:${session.sessionId}",
-            title = session.title ?: navigationId,
+            title = displayTitle,
             poster = posterUrl,
             badge = UpNextBadge.CONTINUE_WATCHING,
             showTitle = if (session.isMovie) null
-            else showTitle ?: session.title,
+            else showTitle ?: displayTitle,
             episodeTitle = episodeTitle,
             tmdbRating = detail?.voteAverage?.takeIf { it > 0.0 },
             runtimeMinutes = runtimeMinutes,
