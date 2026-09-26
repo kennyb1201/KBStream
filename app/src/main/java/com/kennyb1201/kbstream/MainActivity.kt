@@ -2077,16 +2077,46 @@ fun AppRoot() {
     }
     } // closes CompositionLocalProvider( LocalKBHeroTransition provides … )
 
-    // Loading splash while autoselect resolves sources in the background —
-    // mirrors the player's first-load splash (backdrop + pulsing clearlogo) —
-    // so the streams picker is never shown before playback.
-    pendingAutoPlay?.let { pending ->
+    // Loading splash while a pre-playback hand-off is in flight.
+    //
+    // Two shapes, ONE screen:
+    //  - a Continue Watching / Up Next Detail deep link, which exists only to
+    //    hand the player its art. It is covered from the moment the screen
+    //    appears, not just while its metadata loads, so the resolved detail
+    //    page never paints for a frame between the splash and playback — that
+    //    frame is exactly the flash this removes.
+    //  - the autoselect resolution over whatever screen is already showing
+    //    (the detail page's own Play press, an autoplay next episode).
+    //
+    // Both render the same AutoPlayLoadSplash, so the tap reads as one
+    // unbroken tap -> splash -> playback.
+    val detailAutoPlay = (current as? Screen.Detail)?.takeIf { detail ->
+        val pending = detail.pendingTarget
+        pending != null &&
+            AppPreferences.getAutoSelectStream(context) &&
+            (
+                detail.type == "series" ||
+                    pending.startFromBeginning ||
+                    pending.resumePositionMs > 0L
+                )
+    }
+    if (detailAutoPlay != null) {
         AutoPlayLoadSplash(
-            backdropUrl = pending.backdropUrl,
-            clearLogoUrl = pending.clearLogoUrl,
-            title = pending.target.displayName,
+            backdropUrl = detailAutoPlay.itemBackdrop,
+            clearLogoUrl = detailAutoPlay.itemClearLogo,
+            title = detailAutoPlay.pendingTarget?.displayName.orEmpty()
+                .ifBlank { detailAutoPlay.id },
             subtitle = "Finding sources…"
         )
+    } else {
+        pendingAutoPlay?.let { pending ->
+            AutoPlayLoadSplash(
+                backdropUrl = pending.backdropUrl,
+                clearLogoUrl = pending.clearLogoUrl,
+                title = pending.target.displayName,
+                subtitle = "Finding sources…"
+            )
+        }
     }
     }
     } // closes AnimatedContent( targetState = screen ) { current -> ... }
