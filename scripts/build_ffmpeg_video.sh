@@ -146,23 +146,33 @@ fi
 # could not read the archive at all.
 NM="${ANDROID_NDK}/toolchains/llvm/prebuilt/${HOST_PLATFORM}/bin/llvm-nm"
 FFMPEG_LIBS_ARM64="${FFMPEG_LIBS}/arm64-v8a/libavcodec.a"
+# media3's build_ffmpeg.sh turns ENABLED_DECODERS into --enable-decoder flags,
+# so this only reports what configure ended up with. It greps a file rather
+# than a pipe on purpose: under `set -o pipefail`, `printf ... | grep -q`
+# reports failure every time grep -q exits early on a match (printf takes
+# SIGPIPE), which made FOUND decoders print as MISS and then aborted the whole
+# script -- before the AAR was ever built, which is why the FFmpeg artifact was
+# missing from releases. Never fatal: a wrong llvm-nm invocation must not
+# block an otherwise-good AAR.
 if [[ -x "$NM" && -f "$FFMPEG_LIBS_ARM64" ]]; then
   log "verifying decoder symbols in ${FFMPEG_LIBS_ARM64}"
-  NM_OUT="$("$NM" --defined-only "$FFMPEG_LIBS_ARM64" 2>&1 || true)"
+  NM_FILE="$(mktemp)"
+  "$NM" --defined-only "$FFMPEG_LIBS_ARM64" >"$NM_FILE" 2>&1 || true
   printf '  %s ff_*_decoder symbols visible to llvm-nm\n' \
-    "$(printf '%s\n' "$NM_OUT" | grep -c 'ff_.*_decoder' || true)"
+    "$(grep -c 'ff_.*_decoder' "$NM_FILE" || true)"
   for symbol in ff_h264_decoder ff_hevc_decoder ff_mpeg4_decoder ff_vc1_decoder \
                 ff_wmv3_decoder ff_vp9_decoder ff_aac_decoder; do
-    if printf '%s\n' "$NM_OUT" | grep -qw "$symbol"; then
+    if grep -qw "$symbol" "$NM_FILE"; then
       printf '  ok   %s\n' "$symbol"
     else
       printf '  MISS %s\n' "$symbol"
     fi
   done
-  if ! printf '%s\n' "$NM_OUT" | grep -q 'ff_.*_decoder'; then
+  if ! grep -q 'ff_.*_decoder' "$NM_FILE"; then
     printf '  note: llvm-nm reported no decoder symbols; first lines of its output:\n'
-    printf '%s\n' "$NM_OUT" | head -5 | sed 's/^/    /'
+    head -5 "$NM_FILE" | sed 's/^/    /'
   fi
+  rm -f "$NM_FILE"
 else
   log "llvm-nm not found at ${NM}, or ${FFMPEG_LIBS_ARM64} is missing; skipping the decoder symbol check"
 fi
