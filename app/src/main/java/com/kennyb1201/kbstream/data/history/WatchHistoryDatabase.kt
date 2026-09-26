@@ -12,6 +12,8 @@ import com.kennyb1201.kbstream.data.db.retryOnDatabaseSwap
 import com.kennyb1201.kbstream.data.db.withDatabaseSwapRetry
 import com.kennyb1201.kbstream.data.cache.ImdbResolutionDao
 import com.kennyb1201.kbstream.data.cache.ImdbResolutionEntity
+import com.kennyb1201.kbstream.data.cache.SyncOutboxDao
+import com.kennyb1201.kbstream.data.cache.SyncOutboxEntity
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheDao
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheEntity
 import com.kennyb1201.kbstream.data.cache.WatchedStatusDao
@@ -25,9 +27,10 @@ import kotlinx.coroutines.flow.flow
         WatchHistoryEntity::class,
         WatchedStatusEntity::class,
         ImdbResolutionEntity::class,
-        TmdbJsonCacheEntity::class
+        TmdbJsonCacheEntity::class,
+        SyncOutboxEntity::class
     ],
-    version = 11,
+    version = 12,
     exportSchema = false
 )
 abstract class WatchHistoryDatabase : RoomDatabase() {
@@ -35,6 +38,7 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
     abstract fun watchedStatusDao(): WatchedStatusDao
     abstract fun imdbResolutionDao(): ImdbResolutionDao
     abstract fun tmdbJsonCacheDao(): TmdbJsonCacheDao
+    abstract fun syncOutboxDao(): SyncOutboxDao
 
     companion object {
         private const val TAG = "WATCH_HISTORY_DB"
@@ -136,7 +140,7 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                 )
                     .addMigrations(
                         MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
-                        MIGRATION_9_10, MIGRATION_10_11
+                        MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12
                     )
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     // WAL lets readers and the sync writer proceed in
@@ -182,7 +186,7 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
             )
                 .addMigrations(
                     MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
-                    MIGRATION_9_10, MIGRATION_10_11
+                    MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12
                 )
                 .fallbackToDestructiveMigration(dropAllTables = true)
                 .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
@@ -337,6 +341,28 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
                     "ALTER TABLE `watched_status_cache` ADD COLUMN `isPartiallyWatched` INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
+        // v12: the sync outbox becomes durable (sync_outbox) so an offline
+        // write survives process death instead of relying on the in-memory
+        // queue. Created empty; rows are re-enqueued by the normal write
+        // paths on the next launch.
+        private val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `sync_outbox` (
+                        `id` TEXT NOT NULL,
+                        `tableName` TEXT NOT NULL,
+                        `keyColumn` TEXT NOT NULL,
+                        `itemKey` TEXT NOT NULL,
+                        `payloadJson` TEXT NOT NULL,
+                        `enqueuedAtMs` INTEGER NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent()
                 )
             }
         }

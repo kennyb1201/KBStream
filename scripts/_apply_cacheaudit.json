@@ -1,0 +1,47 @@
+[
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/data/tmdb/TmdbRepository.kt",
+    "old": "    private val imdbResolutionTtlMs = 30L * 24L * 60L * 60L * 1000L",
+    "new": "    /**\n     * Per-page TMDB reviews for a title, keyed \"<tmdbId>:<type>:<page>\".\n     *\n     * Detail's enrichment probes page 2 and then pages 3..N on every open,\n     * and reviews change on the order of days, so re-fetching them each visit\n     * was pure latency. Hits only -- never a null (a failed probe must be\n     * retried, not pinned). Bounded with the rest via [pruneMemoryCaches].\n     */\n    private val reviewsCache =\n        ConcurrentHashMap<String, Pair<Long, TmdbReviews>>()\n    private val reviewsCacheTtlMs = 12L * 60L * 60L * 1000L\n\n    private val imdbResolutionTtlMs = 30L * 24L * 60L * 60L * 1000L"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/data/tmdb/TmdbRepository.kt",
+    "old": "    private val MAX_DETAIL_ENTRIES = 150\n    private val MAX_SEASON_ENTRIES = 200\n    private val MAX_RESOLUTION_ENTRIES = 500",
+    "new": "    private val MAX_DETAIL_ENTRIES = 150\n    private val MAX_SEASON_ENTRIES = 200\n    private val MAX_RESOLUTION_ENTRIES = 500\n    private val MAX_REVIEW_ENTRIES = 300"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/data/tmdb/TmdbRepository.kt",
+    "old": "        evictOldest(detailCache, { it.first }, MAX_DETAIL_ENTRIES)\n        evictOldest(seasonEpisodesCache, { it.first }, MAX_SEASON_ENTRIES)\n        evictOldest(imdbResolutionMemoryCache, { it.first }, MAX_RESOLUTION_ENTRIES)\n        evictOldest(tmdbResolutionMemoryCache, { it.first }, MAX_RESOLUTION_ENTRIES)",
+    "new": "        evictOldest(detailCache, { it.first }, MAX_DETAIL_ENTRIES)\n        evictOldest(seasonEpisodesCache, { it.first }, MAX_SEASON_ENTRIES)\n        evictOldest(imdbResolutionMemoryCache, { it.first }, MAX_RESOLUTION_ENTRIES)\n        evictOldest(tmdbResolutionMemoryCache, { it.first }, MAX_RESOLUTION_ENTRIES)\n        evictOldest(reviewsCache, { it.first }, MAX_REVIEW_ENTRIES)"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/data/tmdb/TmdbRepository.kt",
+    "old": "    override fun releaseCaches() {\n        detailCache.clear()\n        seasonEpisodesCache.clear()\n        imdbResolutionMemoryCache.clear()\n        tmdbResolutionMemoryCache.clear()\n    }",
+    "new": "    override fun releaseCaches() {\n        detailCache.clear()\n        seasonEpisodesCache.clear()\n        imdbResolutionMemoryCache.clear()\n        tmdbResolutionMemoryCache.clear()\n        reviewsCache.clear()\n    }"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/data/tmdb/TmdbRepository.kt",
+    "old": "            \" tmdbRes=${tmdbResolutionMemoryCache.size}/$MAX_RESOLUTION_ENTRIES\"",
+    "new": "            \" tmdbRes=${tmdbResolutionMemoryCache.size}/$MAX_RESOLUTION_ENTRIES\" +\n            \" reviews=${reviewsCache.size}/$MAX_REVIEW_ENTRIES\""
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/data/tmdb/TmdbRepository.kt",
+    "old": "    suspend fun getReviews(tmdbId: Int, type: String, page: Int): TmdbReviews? {\n        if (apiKey.isBlank() || page < 1) return null\n        return runCatching {\n            if (normalizeType(type) == \"series\") {\n                api.getTvReviews(tmdbId, apiKey, page)\n            } else {\n                api.getMovieReviews(tmdbId, apiKey, page)\n            }\n        }.getOrNull()\n    }",
+    "new": "    suspend fun getReviews(tmdbId: Int, type: String, page: Int): TmdbReviews? {\n        if (apiKey.isBlank() || page < 1) return null\n        val normalized = normalizeType(type)\n        val key = \"$tmdbId:$normalized:$page\"\n        val now = System.currentTimeMillis()\n        reviewsCache[key]?.let { (cachedAt, cached) ->\n            if (now - cachedAt < reviewsCacheTtlMs) return cached\n        }\n        val result = runCatching {\n            if (normalized == \"series\") {\n                api.getTvReviews(tmdbId, apiKey, page)\n            } else {\n                api.getMovieReviews(tmdbId, apiKey, page)\n            }\n        }.getOrNull()\n        // A miss is not cached: Detail probes page 2 to discover the page\n        // count, and a null there must not pin \\\"no reviews\\\" for the session.\n        if (result != null) {\n            pruneMemoryCaches()\n            reviewsCache[key] = now to result\n        }\n        return result\n    }"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/data/mdblist/MdbListClient.kt",
+    "old": "    @Volatile private var cachedSnapshotKey = \"\"",
+    "new": "    @Volatile private var cachedSnapshotKey = \"\"\n\n    /**\n     * Per-title audience ratings, keyed \"<apiKey>|<mediaType>|<id>\".\n     *\n     * [fetchRatings] was completely uncached: every Detail open spent one of\n     * the free key's 1,000/day requests, and ratings move on the order of\n     * days. Cached in memory like the watched snapshot and playback list; the\n     * key is part of the cache key so a profile switch never serves the\n     * previous profile's key's data.\n     */\n    private const val RATINGS_TTL_MS = 12 * 60 * 60 * 1000L\n    private const val RATINGS_CACHE_MAX = 512\n    private val ratingsCache =\n        java.util.concurrent.ConcurrentHashMap<String, Pair<Long, MdbListRatings>>()"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/data/mdblist/MdbListClient.kt",
+    "old": "        val id = mediaId.trim()\n        if (apiKey.isBlank() || id.isBlank()) return@withContext null\n        if (!id.startsWith(\"tt\") && id.toIntOrNull() == null) return@withContext null\n\n        runCatching {\n            val url = mediaUrl(id, mediaType, apiKey)",
+    "new": "        val id = mediaId.trim()\n        if (apiKey.isBlank() || id.isBlank()) return@withContext null\n        if (!id.startsWith(\"tt\") && id.toIntOrNull() == null) return@withContext null\n\n        val cacheKey = \"$apiKey|${mediaType.lowercase()}|$id\"\n        val now = System.currentTimeMillis()\n        ratingsCache[cacheKey]?.let { (cachedAt, cached) ->\n            if (now - cachedAt < RATINGS_TTL_MS) return@withContext cached\n        }\n\n        runCatching {\n            val url = mediaUrl(id, mediaType, apiKey)"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/data/mdblist/MdbListClient.kt",
+    "old": "                ratings\n            }\n        }.getOrNull()\n    }",
+    "new": "                ratings\n            }\n        }.getOrNull().also { fetched ->\n            // Only real answers are remembered. null is a failed or empty\n            // lookup and must keep being retried, not pin \\\"no ratings\\\" for\n            // the session.\n            if (fetched != null && fetched.hasAny) {\n                if (ratingsCache.size > RATINGS_CACHE_MAX) ratingsCache.clear()\n                ratingsCache[cacheKey] = now to fetched\n            }\n        }\n    }"
+  }
+]

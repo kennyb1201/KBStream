@@ -21,6 +21,7 @@ import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.work.AddonManifestRefreshWorker
 import com.kennyb1201.kbstream.work.NewEpisodeWorker
+import com.kennyb1201.kbstream.work.OutboxFlushWorker
 import com.kennyb1201.kbstream.work.ReminderWorker
 import com.kennyb1201.kbstream.work.SimklSyncWorker
 import io.sentry.android.core.SentryAndroid
@@ -84,6 +85,12 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
         startupScope.launch {
             startupStep("startup.simklWorker", "app_create_simkl_worker") {
                 scheduleSimklPeriodicSync()
+            }
+            // Durable sync outbox: retry anything stranded by a previous
+            // process death (an offline write that never reached the cloud).
+            // The worker is network-gated and survives the app being closed.
+            startupStep("startup.outboxFlush", "app_create_outbox_flush_worker") {
+                OutboxFlushWorker.enqueue(applicationContext)
             }
             startupStep("startup.newEpisodeWorker", "app_create_new_episode_worker") {
                 scheduleNewEpisodeChecks()

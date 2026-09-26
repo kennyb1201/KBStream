@@ -1,0 +1,7 @@
+[
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/data/sync/SupabaseSync.kt",
+    "old": "    private fun OutboxItem.toEntity() = SyncOutboxEntity(\n        id = outbox.id(this),",
+    "new": "    // Uses the companion id (not outbox.id) on purpose: `outbox` initializes\n    // with `outboxStore`, and referencing `outbox` here would be a cycle the\n    // compiler cannot infer through.\n    private fun OutboxItem.toEntity() = SyncOutboxEntity(\n        id = OutboxQueue.id(table, keyColumn, key),"
+  }
+]

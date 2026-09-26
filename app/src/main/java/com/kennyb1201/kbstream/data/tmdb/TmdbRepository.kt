@@ -244,6 +244,10 @@ class TmdbRepository private constructor(context: Context) :
         moshi.adapter(TmdbDetail::class.java)
     }
 
+    private val reviewsJsonAdapter: JsonAdapter<TmdbReviews> by lazy {
+        moshi.adapter(TmdbReviews::class.java)
+    }
+
     private val seasonEpisodesJsonAdapter: JsonAdapter<List<ResolvedEpisode>> by lazy {
         moshi.adapter(
             Types.newParameterizedType(
@@ -269,6 +273,19 @@ class TmdbRepository private constructor(context: Context) :
      *  keyed "<type>::<imdb>". Same TTL and persistence table. */
     private val tmdbResolutionMemoryCache =
         ConcurrentHashMap<String, Pair<Long, Int?>>()
+
+    /**
+     * Per-page TMDB reviews for a title, keyed "<tmdbId>:<type>:<page>".
+     *
+     * Detail's enrichment probes page 2 and then pages 3..N on every open,
+     * and reviews change on the order of days, so re-fetching them each visit
+     * was pure latency. Hits only -- never a null (a failed probe must be
+     * retried, not pinned). Bounded with the rest via [pruneMemoryCaches].
+     */
+    private val reviewsCache =
+        ConcurrentHashMap<String, Pair<Long, TmdbReviews>>()
+    private val reviewsCacheTtlMs = 12L * 60L * 60L * 1000L
+    private val reviewsCacheDiskTtlMs = 7L * 24L * 60L * 60L * 1000L
 
     private val imdbResolutionTtlMs = 30L * 24L * 60L * 60L * 1000L
 
@@ -335,6 +352,7 @@ class TmdbRepository private constructor(context: Context) :
     private val MAX_DETAIL_ENTRIES = 150
     private val MAX_SEASON_ENTRIES = 200
     private val MAX_RESOLUTION_ENTRIES = 500
+    private val MAX_REVIEW_ENTRIES = 300
 
     /**
      * Keeps all four in-memory caches bounded.
@@ -352,6 +370,7 @@ class TmdbRepository private constructor(context: Context) :
         evictOldest(seasonEpisodesCache, { it.first }, MAX_SEASON_ENTRIES)
         evictOldest(imdbResolutionMemoryCache, { it.first }, MAX_RESOLUTION_ENTRIES)
         evictOldest(tmdbResolutionMemoryCache, { it.first }, MAX_RESOLUTION_ENTRIES)
+        evictOldest(reviewsCache, { it.first }, MAX_REVIEW_ENTRIES)
     }
 
     /**
@@ -365,6 +384,7 @@ class TmdbRepository private constructor(context: Context) :
         seasonEpisodesCache.clear()
         imdbResolutionMemoryCache.clear()
         tmdbResolutionMemoryCache.clear()
+        reviewsCache.clear()
     }
 
     /**
@@ -379,7 +399,8 @@ class TmdbRepository private constructor(context: Context) :
         "tmdb: detail=${detailCache.size}/$MAX_DETAIL_ENTRIES" +
             " season=${seasonEpisodesCache.size}/$MAX_SEASON_ENTRIES" +
             " imdbRes=${imdbResolutionMemoryCache.size}/$MAX_RESOLUTION_ENTRIES" +
-            " tmdbRes=${tmdbResolutionMemoryCache.size}/$MAX_RESOLUTION_ENTRIES"
+            " tmdbRes=${tmdbResolutionMemoryCache.size}/$MAX_RESOLUTION_ENTRIES" +
+            " reviews=${reviewsCache.size}/$MAX_REVIEW_ENTRIES"
 
     private fun pruneImdbCacheOnce() {
         if (cachePruned.compareAndSet(false, true)) {
@@ -939,13 +960,46 @@ class TmdbRepository private constructor(context: Context) :
      */
     suspend fun getReviews(tmdbId: Int, type: String, page: Int): TmdbReviews? {
         if (apiKey.isBlank() || page < 1) return null
-        return runCatching {
-            if (normalizeType(type) == "series") {
+        val normalized = normalizeType(type)
+        val key = "$tmdbId:$normalized:$page"
+        val now = System.currentTimeMillis()
+        reviewsCache[key]?.let { (cachedAt, cached) ->
+            if (now - cachedAt < reviewsCacheTtlMs) return cached
+        }
+        // Disk cache so a reopen after a restart does not refetch every page.
+        val diskKey = "reviews:$key"
+        val diskCached = runCatching { tmdbJsonCacheDao.getByKey(diskKey) }.getOrNull()
+        if (diskCached != null && now - diskCached.updatedAt < reviewsCacheDiskTtlMs) {
+            val parsed = runCatching { reviewsJsonAdapter.fromJson(diskCached.json) }.getOrNull()
+            if (parsed != null) {
+                reviewsCache[key] = now to parsed
+                pruneMemoryCaches()
+                return parsed
+            }
+        }
+        val result = runCatching {
+            if (normalized == "series") {
                 api.getTvReviews(tmdbId, apiKey, page)
             } else {
                 api.getMovieReviews(tmdbId, apiKey, page)
             }
         }.getOrNull()
+        // A miss is not cached: Detail probes page 2 to discover the page
+        // count, and a null there must not pin \"no reviews\" for the session.
+        if (result != null) {
+            pruneMemoryCaches()
+            reviewsCache[key] = now to result
+            runCatching {
+                tmdbJsonCacheDao.upsert(
+                    TmdbJsonCacheEntity(
+                        key = diskKey,
+                        json = reviewsJsonAdapter.toJson(result),
+                        updatedAt = now
+                    )
+                )
+            }
+        }
+        return result
     }
 
     suspend fun getSeasonEpisodes(

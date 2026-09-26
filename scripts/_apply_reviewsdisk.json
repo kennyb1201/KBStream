@@ -1,0 +1,17 @@
+[
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/data/tmdb/TmdbRepository.kt",
+    "old": "    private val reviewsCacheTtlMs = 12L * 60L * 60L * 1000L",
+    "new": "    private val reviewsCacheTtlMs = 12L * 60L * 60L * 1000L\n    private val reviewsCacheDiskTtlMs = 7L * 24L * 60L * 60L * 1000L"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/data/tmdb/TmdbRepository.kt",
+    "old": "    private val detailJsonAdapter: JsonAdapter<TmdbDetail> by lazy {\n        moshi.adapter(TmdbDetail::class.java)\n    }",
+    "new": "    private val detailJsonAdapter: JsonAdapter<TmdbDetail> by lazy {\n        moshi.adapter(TmdbDetail::class.java)\n    }\n\n    private val reviewsJsonAdapter: JsonAdapter<TmdbReviews> by lazy {\n        moshi.adapter(TmdbReviews::class.java)\n    }"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/data/tmdb/TmdbRepository.kt",
+    "old": "        val result = runCatching {\n            if (normalized == \"series\") {\n                api.getTvReviews(tmdbId, apiKey, page)\n            } else {\n                api.getMovieReviews(tmdbId, apiKey, page)\n            }\n        }.getOrNull()\n        // A miss is not cached: Detail probes page 2 to discover the page\n        // count, and a null there must not pin \\\"no reviews\\\" for the session.\n        if (result != null) {\n            pruneMemoryCaches()\n            reviewsCache[key] = now to result\n        }\n        return result",
+    "new": "        // Disk cache so a reopen after a restart does not refetch every page.\n        val diskKey = \"reviews:$key\"\n        val diskCached = runCatching { tmdbJsonCacheDao.getByKey(diskKey) }.getOrNull()\n        if (diskCached != null && now - diskCached.updatedAt < reviewsCacheDiskTtlMs) {\n            val parsed = runCatching { reviewsJsonAdapter.fromJson(diskCached.json) }.getOrNull()\n            if (parsed != null) {\n                reviewsCache[key] = now to parsed\n                pruneMemoryCaches()\n                return parsed\n            }\n        }\n        val result = runCatching {\n            if (normalized == \"series\") {\n                api.getTvReviews(tmdbId, apiKey, page)\n            } else {\n                api.getMovieReviews(tmdbId, apiKey, page)\n            }\n        }.getOrNull()\n        // A miss is not cached: Detail probes page 2 to discover the page\n        // count, and a null there must not pin \\\"no reviews\\\" for the session.\n        if (result != null) {\n            pruneMemoryCaches()\n            reviewsCache[key] = now to result\n            runCatching {\n                tmdbJsonCacheDao.upsert(\n                    TmdbJsonCacheEntity(\n                        key = diskKey,\n                        json = reviewsJsonAdapter.toJson(result),\n                        updatedAt = now\n                    )\n                )\n            }\n        }\n        return result"
+  }
+]

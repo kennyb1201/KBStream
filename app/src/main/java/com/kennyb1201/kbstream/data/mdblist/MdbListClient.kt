@@ -2,7 +2,15 @@ package com.kennyb1201.kbstream.data.mdblist
 
 import android.content.Context
 import android.util.Log
+import com.kennyb1201.kbstream.data.addon.AppContextHolder
+import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheDao
+import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheEntity
+import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
+import com.squareup.moshi.JsonAdapter
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.Types
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -427,6 +435,57 @@ object MdbListClient {
      * refetches instead of being served from someone else's snapshot.
      */
     @Volatile private var cachedSnapshotKey = ""
+
+    /**
+     * Per-title audience ratings, keyed "<apiKey>|<mediaType>|<id>".
+     *
+     * [fetchRatings] was completely uncached: every Detail open spent one of
+     * the free key's 1,000/day requests, and ratings move on the order of
+     * days. Cached in memory like the watched snapshot and playback list; the
+     * key is part of the cache key so a profile switch never serves the
+     * previous profile's key's data.
+     */
+    private const val RATINGS_TTL_MS = 12 * 60 * 60 * 1000L
+    private const val RATINGS_CACHE_MAX = 512
+    private val ratingsCache =
+        java.util.concurrent.ConcurrentHashMap<String, Pair<Long, MdbListRatings>>()
+
+    // ── Disk cache ────────────────────────────────────────────────────
+    // The three reads above were memory-only, so every cold start
+    // re-downloaded them and spent the free key's 1,000/day budget on data
+    // that has not changed. Persisted in the shared JSON cache table under
+    // ACCOUNT-scoped keys (the apiKey is part of every key), so a profile
+    // switch can never serve the other profile's blob. A unit test with no
+    // app context simply gets no disk cache.
+    private const val SNAPSHOT_DISK_TTL_MS = 6 * 60 * 60 * 1000L
+    private const val PLAYBACK_DISK_TTL_MS = 30 * 60 * 1000L
+    private const val RATINGS_DISK_TTL_MS = 7 * 24 * 60 * 60 * 1000L
+
+    private val diskMoshi by lazy {
+        Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
+    }
+    private val ratingsJsonAdapter: JsonAdapter<MdbListRatings> by lazy {
+        diskMoshi.adapter(MdbListRatings::class.java)
+    }
+    private val snapshotJsonAdapter: JsonAdapter<MdbListWatchedSnapshot> by lazy {
+        diskMoshi.adapter(MdbListWatchedSnapshot::class.java)
+    }
+    private val playbackJsonAdapter: JsonAdapter<List<MdbListPlaybackItem>> by lazy {
+        diskMoshi.adapter(
+            Types.newParameterizedType(List::class.java, MdbListPlaybackItem::class.java)
+        )
+    }
+    private val jsonCacheDao: TmdbJsonCacheDao?
+        get() = AppContextHolder.appContext?.let { ctx ->
+            runCatching { WatchHistoryDatabase.getInstance(ctx).tmdbJsonCacheDao() }
+                .getOrNull()
+        }
+
+    private fun snapshotDiskKey(apiKey: String) = "mdblist:snapshot:$apiKey"
+    private fun playbackDiskKey(apiKey: String) = "mdblist:playback:$apiKey"
+    private fun ratingsDiskKey(apiKey: String, mediaType: String, id: String) =
+        "mdblist:ratings:$apiKey:${mediaType.lowercase()}:$id"
+
     private val snapshotMutex = kotlinx.coroutines.sync.Mutex()
 
     /** Reads the user-pasted (or build-injected) key, or "" when unset. */    fun apiKey(context: Context): String =
@@ -519,6 +578,23 @@ object MdbListClient {
         if (apiKey.isBlank() || id.isBlank()) return@withContext null
         if (!id.startsWith("tt") && id.toIntOrNull() == null) return@withContext null
 
+        val cacheKey = "$apiKey|${mediaType.lowercase()}|$id"
+        val now = System.currentTimeMillis()
+        ratingsCache[cacheKey]?.let { (cachedAt, cached) ->
+            if (now - cachedAt < RATINGS_TTL_MS) return@withContext cached
+        }
+        val diskKey = ratingsDiskKey(apiKey, mediaType, id)
+        jsonCacheDao?.getByKey(diskKey)?.let { row ->
+            if (now - row.updatedAt < RATINGS_DISK_TTL_MS) {
+                runCatching { ratingsJsonAdapter.fromJson(row.json) }.getOrNull()
+                    ?.takeIf { it.hasAny }
+                    ?.let { cached ->
+                        ratingsCache[cacheKey] = now to cached
+                        return@withContext cached
+                    }
+            }
+        }
+
         runCatching {
             val url = mediaUrl(id, mediaType, apiKey)
             client.newCall(Request.Builder().url(url).get().build()).execute().use { response ->
@@ -556,7 +632,24 @@ object MdbListClient {
                 }
                 ratings
             }
-        }.getOrNull()
+        }.getOrNull().also { fetched ->
+            // Only real answers are remembered. null is a failed or empty
+            // lookup and must keep being retried, not pin "no ratings" for
+            // the session.
+            if (fetched != null && fetched.hasAny) {
+                if (ratingsCache.size > RATINGS_CACHE_MAX) ratingsCache.clear()
+                ratingsCache[cacheKey] = now to fetched
+                runCatching {
+                    jsonCacheDao?.upsert(
+                        TmdbJsonCacheEntity(
+                            key = diskKey,
+                            json = ratingsJsonAdapter.toJson(fetched),
+                            updatedAt = now
+                        )
+                    )
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1177,6 +1270,19 @@ object MdbListClient {
             }
         }
         return withContext(Dispatchers.IO) {
+            val diskKey = playbackDiskKey(apiKey)
+            jsonCacheDao?.getByKey(diskKey)?.let { row ->
+                if (System.currentTimeMillis() - row.updatedAt < PLAYBACK_DISK_TTL_MS) {
+                    runCatching { playbackJsonAdapter.fromJson(row.json) }.getOrNull()
+                        ?.takeIf { it.isNotEmpty() }
+                        ?.let { cached ->
+                            cachedPlayback = cached
+                            cachedPlaybackAt = System.currentTimeMillis()
+                            cachedPlaybackKey = apiKey
+                            return@withContext cached
+                        }
+                }
+            }
             runCatching {
                 val request = Request.Builder()
                     .url("$BASE/sync/playback?apikey=$apiKey")
@@ -1236,6 +1342,17 @@ object MdbListClient {
                     cachedPlayback = result
                     cachedPlaybackAt = System.currentTimeMillis()
                     cachedPlaybackKey = apiKey
+                    val key = playbackDiskKey(apiKey)
+                    val at = cachedPlaybackAt
+                    runCatching {
+                        jsonCacheDao?.upsert(
+                            TmdbJsonCacheEntity(
+                                key = key,
+                                json = playbackJsonAdapter.toJson(result),
+                                updatedAt = at
+                            )
+                        )
+                    }
                 }
             }
         }
@@ -1265,6 +1382,26 @@ object MdbListClient {
             System.currentTimeMillis() - cachedSnapshotAt < SNAPSHOT_TTL_MS
         ) {
             return cached
+        }
+
+        // Disk layer: this downloads the WHOLE history page by page, so a
+        // restart inside the disk window must not pay for it again.
+        if (!forceRefresh) {
+            val diskKey = snapshotDiskKey(apiKey)
+            val diskHit = withContext(Dispatchers.IO) {
+                jsonCacheDao?.getByKey(diskKey)?.let { row ->
+                    if (System.currentTimeMillis() - row.updatedAt < SNAPSHOT_DISK_TTL_MS) {
+                        runCatching { snapshotJsonAdapter.fromJson(row.json) }.getOrNull()
+                            ?.takeIf { !it.isEmpty }
+                    } else null
+                }
+            }
+            if (diskHit != null) {
+                cachedSnapshot = diskHit
+                cachedSnapshotAt = System.currentTimeMillis()
+                cachedSnapshotKey = apiKey
+                return diskHit
+            }
         }
 
         return snapshotMutex.withLock {
@@ -1364,6 +1501,19 @@ object MdbListClient {
                 cachedSnapshot = result
                 cachedSnapshotAt = System.currentTimeMillis()
                 cachedSnapshotKey = apiKey
+                val key = snapshotDiskKey(apiKey)
+                val at = cachedSnapshotAt
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        jsonCacheDao?.upsert(
+                            TmdbJsonCacheEntity(
+                                key = key,
+                                json = snapshotJsonAdapter.toJson(result),
+                                updatedAt = at
+                            )
+                        )
+                    }
+                }
             }
             result
         }
@@ -1376,6 +1526,8 @@ object MdbListClient {
      * without a TTL shorter than the network cost justifies.
      */
     fun invalidateWatchedSnapshot() {
+        val snapshotKey = cachedSnapshotKey
+        val playbackKey = cachedPlaybackKey
         cachedSnapshot = null
         cachedSnapshotAt = 0L
         cachedSnapshotKey = ""
@@ -1386,6 +1538,17 @@ object MdbListClient {
         cachedPlayback = null
         cachedPlaybackAt = 0L
         cachedPlaybackKey = ""
+        // Drop the persisted copies too, or the next read serves the just-
+        // invalidated blob from disk for up to its (longer) disk TTL.
+        if (snapshotKey.isNotBlank() || playbackKey.isNotBlank()) {
+            val keys = buildList {
+                if (snapshotKey.isNotBlank()) add(snapshotDiskKey(snapshotKey))
+                if (playbackKey.isNotBlank()) add(playbackDiskKey(playbackKey))
+            }
+            sessionScope.launch {
+                runCatching { jsonCacheDao?.deleteByKeys(keys) }
+            }
+        }
     }
 
     /**

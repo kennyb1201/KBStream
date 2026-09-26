@@ -39,6 +39,8 @@ import kotlinx.serialization.json.put
 import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.reporting.CrashReporter
+import com.kennyb1201.kbstream.data.cache.SyncOutboxDao
+import com.kennyb1201.kbstream.data.cache.SyncOutboxEntity
 import com.kennyb1201.kbstream.data.cache.WatchedStatusEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
@@ -203,7 +205,10 @@ object SupabaseSync {
         // ALL of sync's startup on IO. The scope carries a
         // CoroutineExceptionHandler, so a failure here is logged and reported
         // instead of crashing the process.
-        scope.launch { startClient(context) }
+        scope.launch {
+            hydrateOutbox()
+            startClient(context)
+        }
     }
 
     /**
@@ -464,6 +469,10 @@ object SupabaseSync {
 
     fun signOut(context: Context) {
         val c = client ?: return
+        // Drop queued writes: they belong to the account being left, and a
+        // later flush (or the OutboxFlushWorker) would push them under
+        // whichever account signs in next.
+        outbox.clear()
         periodicFlushJob?.cancel()
         periodicFlushJob = null
         // Reset the one-shot guards so a subsequent sign-in on the SAME
@@ -527,7 +536,84 @@ object SupabaseSync {
     // [OutboxItem] / [OutboxQueue] hold the coalescing contract (and are
     // unit tested). Every mutation reports the pending count to the Settings
     // sync-health panel.
-    private val outbox = OutboxQueue { pending -> _pendingOutbox.value = pending }
+    /**
+     * Durable mirror behind [outbox]: every mutation is written to the
+     * `sync_outbox` table so a write that never reached the cloud survives
+     * process death. Off the main thread (its own scope), and a persistence
+     * failure only costs durability, never the write itself.
+     */
+    private val outboxStore = object : OutboxStore {
+        override fun save(item: OutboxItem) {
+            scope.launch {
+                runCatching { outboxDao()?.upsert(item.toEntity()) }
+                    .onFailure { Log.w(TAG, "outbox persist failed: ${it.message}") }
+            }
+        }
+
+        override fun delete(ids: Collection<String>) {
+            if (ids.isEmpty()) return
+            val list = ids.toList()
+            scope.launch {
+                runCatching { outboxDao()?.deleteByIds(list) }
+                    .onFailure { Log.w(TAG, "outbox delete failed: ${it.message}") }
+            }
+        }
+
+        override fun clear() {
+            scope.launch {
+                runCatching { outboxDao()?.deleteAll() }
+                    .onFailure { Log.w(TAG, "outbox clear failed: ${it.message}") }
+            }
+        }
+    }
+
+    private val outbox = OutboxQueue(
+        onChange = { pending -> _pendingOutbox.value = pending },
+        store = outboxStore
+    )
+
+    private fun outboxDao(): SyncOutboxDao? =
+        appContextRef?.get()?.let { ctx ->
+            runCatching { WatchHistoryDatabase.getInstance(ctx).syncOutboxDao() }
+                .getOrNull()
+        }
+
+    // Uses the companion id (not outbox.id) on purpose: `outbox` initializes
+    // with `outboxStore`, and referencing `outbox` here would be a cycle the
+    // compiler cannot infer through.
+    private fun OutboxItem.toEntity() = SyncOutboxEntity(
+        id = OutboxQueue.id(table, keyColumn, key),
+        tableName = table,
+        keyColumn = keyColumn,
+        itemKey = key,
+        payloadJson = payload.toString(),
+        enqueuedAtMs = enqueuedAtMs
+    )
+
+    /**
+     * Rebuilds the in-memory outbox from the durable table on startup, so
+     * writes stranded by a previous process death are flushed by the normal
+     * periodic loop while the app is open, or by
+     * [com.kennyb1201.kbstream.work.OutboxFlushWorker] while it is closed.
+     * [OutboxQueue.seed] never re-persists, so this is not a write loop.
+     */
+    private suspend fun hydrateOutbox() {
+        val rows = runCatching { outboxDao()?.getAll() }.getOrNull().orEmpty()
+        if (rows.isEmpty()) return
+        val items = rows.mapNotNull { row ->
+            runCatching {
+                OutboxItem(
+                    table = row.tableName,
+                    keyColumn = row.keyColumn,
+                    key = row.itemKey,
+                    payload = Json.parseToJsonElement(row.payloadJson).jsonObject,
+                    enqueuedAtMs = row.enqueuedAtMs
+                )
+            }.getOrNull()
+        }
+        outbox.seed(items)
+        Log.i(TAG, "outbox hydrated: ${items.size} pending write(s)")
+    }
 
     /**
      * Profile scoping: item keys are prefixed with the profile id captured
@@ -925,6 +1011,54 @@ object SupabaseSync {
         val flushedAt = System.currentTimeMillis()
         _lastSyncAtMs.value = flushedAt
         _lastPushAtMs.value = flushedAt
+
+        // Rows still pending means we were offline (or a chunk failed): hand
+        // the retry to WorkManager, whose request survives process death, so
+        // the writes land even if the app is closed before connectivity is
+        // back. KEEP-coalesced, so this cannot queue a burst of workers.
+        if (!outbox.isEmpty) {
+            appContextRef?.get()?.let { ctx ->
+                runCatching {
+                    com.kennyb1201.kbstream.work.OutboxFlushWorker.enqueue(ctx)
+                }
+            }
+        }
+    }
+
+    /**
+     * Flush entry point for [com.kennyb1201.kbstream.work.OutboxFlushWorker],
+     * which can run with the app closed. Waits briefly for the async session
+     * restore (kicked off by [init] from MainApplication) to finish, then
+     * flushes. Returns true only when the outbox ends up empty, so a still
+     * stranded write asks WorkManager to retry it.
+     *
+     * Does NOT call [startClient] itself: MainApplication.onCreate already
+     * ran [init] in this process, and a second startClient racing the first
+     * would build two clients.
+     */
+    suspend fun flushOutboxWhenReady(
+        context: Context,
+        timeoutMs: Long = 20_000L
+    ): Boolean {
+        if (BuildConfig.SUPABASE_URL.isBlank() || BuildConfig.SUPABASE_ANON_KEY.isBlank()) {
+            return false
+        }
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (client == null && System.currentTimeMillis() < deadline) {
+            delay(250L)
+        }
+        if (client == null) return false
+        while (!isSignedIn() && System.currentTimeMillis() < deadline) {
+            delay(250L)
+        }
+        if (!isSignedIn()) return false
+        // A stranded write from a dead process is only in the table until the
+        // init-time hydrate ran; seed again here so the worker flushes it even
+        // if it started before hydration finished (putIfAbsent makes it safe).
+        runCatching { hydrateOutbox() }
+        runCatching { flushOutbox() }
+            .onFailure { Log.w(TAG, "outbox flush from worker failed: ${it.message}") }
+        return outbox.isEmpty
     }
 
     /** Serializes flushOutbox() bodies (see the mutex acquire above). */

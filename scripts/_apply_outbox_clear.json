@@ -1,0 +1,12 @@
+[
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/data/sync/SupabaseSync.kt",
+    "old": "        override fun delete(ids: Collection<String>) {\n            if (ids.isEmpty()) return\n            val list = ids.toList()\n            scope.launch {\n                runCatching { outboxDao()?.deleteByIds(list) }\n                    .onFailure { Log.w(TAG, \"outbox delete failed: ${it.message}\") }\n            }\n        }\n    }",
+    "new": "        override fun delete(ids: Collection<String>) {\n            if (ids.isEmpty()) return\n            val list = ids.toList()\n            scope.launch {\n                runCatching { outboxDao()?.deleteByIds(list) }\n                    .onFailure { Log.w(TAG, \"outbox delete failed: ${it.message}\") }\n            }\n        }\n\n        override fun clear() {\n            scope.launch {\n                runCatching { outboxDao()?.deleteAll() }\n                    .onFailure { Log.w(TAG, \"outbox clear failed: ${it.message}\") }\n            }\n        }\n    }"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/data/sync/SupabaseSync.kt",
+    "old": "        val c = client ?: return\n        periodicFlushJob?.cancel()\n        periodicFlushJob = null",
+    "new": "        val c = client ?: return\n        // Drop queued writes: they belong to the account being left, and a\n        // later flush (or the OutboxFlushWorker) would push them under\n        // whichever account signs in next.\n        outbox.clear()\n        periodicFlushJob?.cancel()\n        periodicFlushJob = null"
+  }
+]
