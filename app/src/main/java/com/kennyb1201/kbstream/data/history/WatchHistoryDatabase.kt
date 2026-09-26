@@ -142,7 +142,17 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                         MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
                         MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12
                     )
-                    .fallbackToDestructiveMigration(dropAllTables = true)
+                    // Destructive fallback is scoped to the LEGACY versions
+                    // that predate the migration list (1-5): an install still
+                    // on one of those is wiped once, which is how it has
+                    // always behaved. Upgrades from 6+ MUST have a real
+                    // Migration — a missing one now throws during open (loud,
+                    // caught in testing) instead of silently dropping every
+                    // table, which would take the local watch history and the
+                    // durable sync_outbox with it. Downgrades (an older APK
+                    // installed over a newer DB) still wipe, as they must.
+                    .fallbackToDestructiveMigrationFrom(1, 2, 3, 4, 5)
+                    .fallbackToDestructiveMigrationOnDowngrade()
                     // WAL lets readers and the sync writer proceed in
                     // parallel instead of failing with SQLITE_BUSY.
                     .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
@@ -188,7 +198,10 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                     MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
                     MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12
                 )
-                .fallbackToDestructiveMigration(dropAllTables = true)
+                // Same scoping as getInstance(): wipe only legacy (<=5),
+                // require a real migration from 6+.
+                .fallbackToDestructiveMigrationFrom(1, 2, 3, 4, 5)
+                .fallbackToDestructiveMigrationOnDowngrade()
                 .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
                 .addCallback(RoomBusyTimeout)
                 .build()

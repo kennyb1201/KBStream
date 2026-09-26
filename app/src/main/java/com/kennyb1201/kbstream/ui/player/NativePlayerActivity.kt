@@ -4858,11 +4858,14 @@ class NativePlayerActivity : ComponentActivity() {
                 alreadyStripped = forceDvStripForSession
             )
             // A container the extractor cannot open is a DEMUX failure, and a
-            // different animal from everything below: AVI, WMV/ASF, DIVX and
+            // different animal from everything below: WMV/ASF, RealMedia and
             // every other container Media3 has no progressive extractor for
             // fail before a single track exists, so no decoder is ever asked
             // for and the decoder ladder cannot touch it — a rebuild picks
-            // the same extractor and fails identically. It gets the same ONE
+            // the same extractor and fails identically. AVI is deliberately
+            // NOT in that list — media3 ships an AviExtractor — so an AVI
+            // that reaches here is failing on its CODEC, which is the branch
+            // after this one. It gets the same ONE
             // meaningful retry a decoder failure gets (the probe with the MIME
             // hint dropped, so the extractor sniffs the real container instead
             // of trusting a URL extension that may have lied), and a second
@@ -5166,9 +5169,12 @@ class NativePlayerActivity : ComponentActivity() {
      * rather than any decoder or network problem.
      *
      * Media3's progressive support is a fixed list (MP4/FMP4, Matroska/WebM,
-     * MP3, Ogg, WAV, MPEG-TS, MPEG-PS, FLV, ADTS, FLAC, AMR); AVI and WMV/ASF
-     * are not on it, so those files fail here before a single track is
-     * created. Manifest (HLS/DASH) parse failures are deliberately NOT part of
+     * MP3, Ogg, WAV, MPEG-TS, MPEG-PS, FLV, ADTS, FLAC, AMR, AVI). WMV/ASF
+     * is the one that is NOT on it, and is why this check exists: it fails
+     * here before a single track is created and no decoder can help. AVI IS
+     * on that list — media3 ships an AviExtractor — so an AVI that reaches
+     * this branch is failing on its codec, not its container.
+     * Manifest (HLS/DASH) parse failures are deliberately NOT part of
      * this: a playlist the parser refuses already falls through to the backup
      * engine below, and spending the MIME-hint-dropped probe on a playlist URL
      * would only hand playlist text to the progressive extractors.

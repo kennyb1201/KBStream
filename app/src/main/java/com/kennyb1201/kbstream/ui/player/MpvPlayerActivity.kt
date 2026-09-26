@@ -3232,8 +3232,9 @@ class MpvPlayerActivity : ComponentActivity() {
         const val FALLBACK_REASON_ERROR = "error"
 
         /**
-         * Set when the extractor refused the container itself — AVI/WMV/ASF
-         * and anything else Media3 has no progressive extractor for. The
+         * Set when the extractor refused the container itself — WMV/ASF and
+         * anything else Media3 has no progressive extractor for (AVI is not
+         * one of them: media3 ships an AviExtractor). The
          * decoder ladder cannot touch this: the failure arrives before a track
          * exists, so libmpv's own FFmpeg demuxers are the only thing that can
          * open the file.

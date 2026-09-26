@@ -228,7 +228,10 @@ jobs:
       - name: Prepare metadata
         if: github.ref == 'refs/heads/main'
         run: |
-          echo "{\"versionCode\": ${GITHUB_RUN_NUMBER}, \"versionName\": \"0.2.${GITHUB_RUN_NUMBER}\"}" > metadata.json
+          # The APK the app will download, excluding any unsigned output.
+          APK="$(ls app/build/outputs/apk/release/*.apk | grep -v unsigned | head -1)"
+          SHA="$(sha256sum "$APK" | awk '{print $1}')"
+          echo "{\"versionCode\": ${GITHUB_RUN_NUMBER}, \"versionName\": \"0.2.${GITHUB_RUN_NUMBER}\", \"sha256\": \"$SHA\"}" > metadata.json
           cat metadata.json
 
       - name: Delete in-progress release tag

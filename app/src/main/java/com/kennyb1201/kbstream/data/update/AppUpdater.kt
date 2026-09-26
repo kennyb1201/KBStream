@@ -56,7 +56,14 @@ object AppUpdater {
             val versionCode: Long,
             val notes: String,
             val downloadUrl: String,
-            val sizeBytes: Long
+            val sizeBytes: Long,
+            /**
+             * SHA-256 of the APK asset, from the release's metadata.json.
+             * Null for a release published before the field existed, in which
+             * case the download cannot be verified (and is also unverifiable
+             * older-format data, never the current build).
+             */
+            val sha256: String? = null
         ) : UpdateState
 
         data class Downloading(val percent: Int) : UpdateState
@@ -218,16 +225,17 @@ object AppUpdater {
                     return@launch
                 }
                 val meta = fetchMetadata(release)
-                if (meta == null || meta.first <= installedCode) {
+                if (meta == null || meta.versionCode <= installedCode) {
                     state.value = UpdateState.UpToDate
                     return@launch
                 }
                 state.value = UpdateState.Available(
-                    versionName = meta.second,
-                    versionCode = meta.first,
+                    versionName = meta.versionName,
+                    versionCode = meta.versionCode,
                     notes = release.optString("body").orEmpty(),
                     downloadUrl = apkAsset.getString("browser_download_url"),
-                    sizeBytes = apkAsset.optLong("size", -1L)
+                    sizeBytes = apkAsset.optLong("size", -1L),
+                    sha256 = meta.sha256
                 )
             } catch (t: Throwable) {
                 state.value = UpdateState.Failed(t.message ?: "Network error")
@@ -245,7 +253,7 @@ object AppUpdater {
                     dir,
                     "kbstream-${available.versionName}-build${available.versionCode}.apk"
                 )
-                download(available.downloadUrl, apk)
+                download(available.downloadUrl, apk, available.sha256)
                 state.value = UpdateState.ReadyToInstall(apk)
                 installApk(context, apk)
             } catch (t: Throwable) {
@@ -301,11 +309,19 @@ object AppUpdater {
         }
     }
 
+    /** versionCode / versionName / APK hash from the release's metadata.json. */
+    private data class ReleaseMeta(
+        val versionCode: Long,
+        val versionName: String,
+        val sha256: String?
+    )
+
     /**
      * versionCode + versionName from the release's metadata.json asset, with a
      * filename fallback (...-buildN.apk) if that asset is missing or broken.
+     * The optional sha256 is the APK's own hash, verified after download.
      */
-    private fun fetchMetadata(release: JSONObject): Pair<Long, String>? {
+    private fun fetchMetadata(release: JSONObject): ReleaseMeta? {
         val metaAsset = assets(release)
             .firstOrNull { it.getString("name") == "metadata.json" }
         if (metaAsset != null) {
@@ -318,7 +334,8 @@ object AppUpdater {
                         val obj = JSONObject(response.body!!.string())
                         val code = obj.getLong("versionCode")
                         val name = obj.optString("versionName", "unknown")
-                        return code to name
+                        val sha = obj.optString("sha256", "").trim()
+                        return ReleaseMeta(code, name, sha.takeIf { it.isNotBlank() })
                     }
                 }
             } catch (_: Throwable) {
@@ -330,11 +347,19 @@ object AppUpdater {
             ?.getString("name") ?: return null
         val match = Regex("build(\\d+)").find(apkName) ?: return null
         val code = match.groupValues[1].toLongOrNull() ?: return null
-        return code to apkName.substringBefore("-build")
+        // No metadata.json means no published hash: filename fallback only.
+        return ReleaseMeta(code, apkName.substringBefore("-build"), null)
     }
 
-    private fun download(url: String, target: File) {
+    /**
+     * Streams [url] to [target], hashing as it goes, then checks the result
+     * against [expectedSha256] (when the release published one). A mismatch
+     * deletes the file and throws, so a tampered or truncated download can
+     * never reach the installer.
+     */
+    private fun download(url: String, target: File, expectedSha256: String?) {
         val request = Request.Builder().url(url).build()
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("Download HTTP ${response.code}")
             val body = response.body ?: throw IOException("Empty download body")
@@ -348,6 +373,7 @@ object AppUpdater {
                         val read = input.read(buffer)
                         if (read == -1) break
                         output.write(buffer, 0, read)
+                        digest.update(buffer, 0, read)
                         done += read
                         if (total > 0) {
                             val percent = (done * 100 / total).toInt()
@@ -359,6 +385,19 @@ object AppUpdater {
                     }
                 }
             }
+        }
+
+        if (!expectedSha256.isNullOrBlank()) {
+            val actual = digest.digest().joinToString("") { "%02x".format(it) }
+            if (!actual.equals(expectedSha256.trim(), ignoreCase = true)) {
+                target.delete()
+                throw IOException(
+                    "Update failed its integrity check (SHA-256 mismatch)"
+                )
+            }
+            Log.i(TAG, "update APK verified (sha256=$actual)")
+        } else {
+            Log.w(TAG, "update APK has no published sha256; installing unverified")
         }
     }
 

@@ -1,0 +1,17 @@
+[
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+    "old": "            // different animal from everything below: AVI, WMV/ASF, DIVX and\n            // every other container Media3 has no progressive extractor for\n            // fail before a single track exists, so no decoder is ever asked\n            // for and the decoder ladder cannot touch it — a rebuild picks\n            // the same extractor and fails identically. It gets the same ONE",
+    "new": "            // different animal from everything below: WMV/ASF, RealMedia and\n            // every other container Media3 has no progressive extractor for\n            // fail before a single track exists, so no decoder is ever asked\n            // for and the decoder ladder cannot touch it — a rebuild picks\n            // the same extractor and fails identically. AVI is deliberately\n            // NOT in that list — media3 ships an AviExtractor — so an AVI\n            // that reaches here is failing on its CODEC, which is the branch\n            // after this one. It gets the same ONE"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+    "old": "     * MP3, Ogg, WAV, MPEG-TS, MPEG-PS, FLV, ADTS, FLAC, AMR); AVI and WMV/ASF\n     * are not on it, so those files fail here before a single track is\n     * created. Manifest (HLS/DASH) parse failures are deliberately NOT part of",
+    "new": "     * MP3, Ogg, WAV, MPEG-TS, MPEG-PS, FLV, ADTS, FLAC, AMR, AVI). WMV/ASF\n     * is the one that is NOT on it, and is why this check exists: it fails\n     * here before a single track is created and no decoder can help. AVI IS\n     * on that list — media3 ships an AviExtractor — so an AVI that reaches\n     * this branch is failing on its codec, not its container.\n     * Manifest (HLS/DASH) parse failures are deliberately NOT part of"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt",
+    "old": "         * Set when the extractor refused the container itself — AVI/WMV/ASF\n         * and anything else Media3 has no progressive extractor for. The",
+    "new": "         * Set when the extractor refused the container itself — WMV/ASF and\n         * anything else Media3 has no progressive extractor for (AVI is not\n         * one of them: media3 ships an AviExtractor). The"
+  }
+]

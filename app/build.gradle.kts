@@ -272,6 +272,14 @@ dependencies {
         logger.lifecycle("FFmpeg extension: using video-enabled ${localFfmpegAar.name}")
         implementation(files(localFfmpegAar))
     } else {
+        logger.warn(
+            "FFmpeg extension: libs/media3-ffmpeg-decoder.aar not found — " +
+                "falling back to the published AUDIO-ONLY artifact. Software " +
+                "VIDEO decoding (10-bit AVC/HEVC, VP9 profile 2, AV1, MPEG-2, " +
+                "VC-1) will NOT be available in this build. Run " +
+                "scripts/build_ffmpeg_video.sh, or the build workflow's " +
+                "\"Build FFmpeg video extension\" step, to produce the AAR."
+        )
         implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.9.0+1")
     }
 
