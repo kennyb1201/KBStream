@@ -12,6 +12,7 @@ import androidx.recyclerview.widget.RecyclerView
 import coil3.load
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.badges.StreamBadge
+import com.kennyb1201.kbstream.ui.settings.AppPreferences
 
 data class PickerItem(
     val label: String,
@@ -43,6 +44,10 @@ class PickerAdapter(
             else ContextCompat.getColor(holder.itemView.context, R.color.kb_text_hi)
         )
         holder.itemView.setOnClickListener { item.onClick() }
+        applyBadgePosition(
+            holder,
+            AppPreferences.getBadgesAboveFile(holder.itemView.context)
+        )
         bindBadgeRow(holder.badges, item.badges)
     }
 
@@ -63,6 +68,33 @@ class PickerAdapter(
 
         /** 1sp of tracking at an 11sp label — TextView tracks in em, Compose in sp. */
         private const val BADGE_LABEL_TRACKING_EM = 1f / BADGE_LABEL_SIZE_SP
+
+        /**
+         * Puts the badge row above or below the file name.
+         *
+         * The item layout ships with the chips above the name (the default);
+         * the "Badges above the file name" setting can move them under it. A
+         * RecyclerView reuses holders, so this re-runs on every bind rather
+         * than only when the layout is inflated -- the padding moves with the
+         * row, since a header wants a gap under it and a footer wants one
+         * above it.
+         */
+        fun applyBadgePosition(holder: ViewHolder, above: Boolean) {
+            val parent = holder.badges.parent as? ViewGroup ?: return
+            val target = if (above) 0 else parent.childCount - 1
+            if (parent.indexOfChild(holder.badges) != target) {
+                parent.removeView(holder.badges)
+                parent.addView(holder.badges, target)
+            }
+            val density = holder.itemView.resources.displayMetrics.density
+            val hPad = (14 * density).toInt()
+            holder.badges.setPadding(
+                hPad,
+                (if (above) 10 * density else 0f).toInt(),
+                hPad,
+                (if (above) 0f else 8 * density).toInt()
+            )
+        }
 
         /**
          * Fills a horizontal LinearLayout with badge chips (hosted image art,

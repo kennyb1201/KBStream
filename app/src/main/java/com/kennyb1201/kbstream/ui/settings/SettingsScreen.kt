@@ -554,6 +554,9 @@ fun SettingsScreen(
 
                 // ── STREAM BADGES (KB-compatible packs) ────────────────
                 val badgeFocusRequester = remember { FocusRequester() }
+                var badgesAboveFile by remember {
+                    mutableStateOf(AppPreferences.getBadgesAboveFile(context))
+                }
                 KBCard(
                     onClick = { badgeFocusRequester.requestFocus() },
                     modifier = Modifier.fillMaxWidth()
@@ -674,6 +677,20 @@ fun SettingsScreen(
                         }
                     }
                 }
+
+                // One pref for both surfaces: this controls the chips in the
+                // player's source picker and in the streams screen, since both
+                // list the same sources. ON = above the file name (the default).
+                ToggleRow(
+                    label = "Badges above the file name",
+                    description = "Show a source's badge chips over its name instead of under " +
+                        "it, in the player's source picker and on the streams screen.",
+                    checked = badgesAboveFile,
+                    onToggle = {
+                        badgesAboveFile = it
+                        AppPreferences.setBadgesAboveFile(context, it)
+                    }
+                )
                 }
 
                 if (selectedPane == SettingsPane.DATA) {

@@ -253,6 +253,10 @@ fun StreamsScreen(
                         ) { stream ->
                             StreamCard(
                                 stream = stream,
+                                // Chips above the file name by default; the
+                                // "Badges above the file name" setting (and the
+                                // player's source picker) shares this pref.
+                                badgesAbove = AppPreferences.getBadgesAboveFile(context),
                                 onClick = {
                                     selectSource(stream, streams)
                                 }
@@ -366,6 +370,7 @@ private fun formatStreamRuntime(minutes: Int): String {
 @Composable
 private fun StreamCard(
     stream: Stream,
+    badgesAbove: Boolean,
     onClick: () -> Unit
 ) {
     var isFocused by remember { mutableStateOf(false) }
@@ -416,10 +421,12 @@ private fun StreamCard(
                 )
                 .padding(horizontal = 18.dp, vertical = 15.dp)
         ) {
-            StreamBadgeRow(
-                badges = stream.badges,
-                modifier = Modifier.padding(bottom = if (stream.badges.isEmpty()) 0.dp else 6.dp)
-            )
+            if (badgesAbove) {
+                StreamBadgeRow(
+                    badges = stream.badges,
+                    modifier = Modifier.padding(bottom = if (stream.badges.isEmpty()) 0.dp else 6.dp)
+                )
+            }
 
             stream.name
                 ?.takeIf { it.isNotBlank() }
@@ -445,6 +452,13 @@ private fun StreamCard(
                     top = if (stream.name.isNullOrBlank()) 0.dp else 5.dp
                 )
             )
+
+            if (!badgesAbove) {
+                StreamBadgeRow(
+                    badges = stream.badges,
+                    modifier = Modifier.padding(top = if (stream.badges.isEmpty()) 0.dp else 6.dp)
+                )
+            }
         }
     }
 }

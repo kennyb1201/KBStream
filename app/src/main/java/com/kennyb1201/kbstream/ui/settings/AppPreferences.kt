@@ -84,6 +84,7 @@ object AppPreferences {
     private const val KEY_BROWSE_ENGLISH_ONLY = "browse_english_only"
     private const val KEY_LANDSCAPE_CARDS = "home_landscape_cards"
     private const val KEY_POSTER_PARTIAL_WATCH_BADGE = "poster_partial_watch_badge"
+    private const val KEY_BADGES_ABOVE_FILE = "badges_above_file"            // badge chips above (true) or below the file name
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(
             com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, PREFS_NAME),
@@ -1117,6 +1118,20 @@ object AppPreferences {
 
     fun setPosterPartialWatchBadge(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_POSTER_PARTIAL_WATCH_BADGE, enabled).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
+    // ── Stream badges: chips above or below the file name ────────────
+    /**
+     * Where a source's badge chips sit relative to the file name, in both the
+     * player's source picker and the streams screen. True = above the name
+     * (the default; the chips read as a header over the file they describe).
+     */
+    fun getBadgesAboveFile(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_BADGES_ABOVE_FILE, true)
+
+    fun setBadgesAboveFile(context: Context, above: Boolean) {
+        prefs(context).edit().putBoolean(KEY_BADGES_ABOVE_FILE, above).apply()
         syncDisplayPrefsBlob(context)
     }
 

@@ -817,6 +817,21 @@
         </LinearLayout>
     </LinearLayout>
 
+    <!-- Scrim behind panels (clickable to dismiss). It has to be declared
+         BEFORE the panels: a FrameLayout paints its children in order, so while
+         this sat after the picker and settings panels it was drawn over them
+         and washed both out by 40% of black, which is the "dull / hazy"
+         settings panel. From here it dims the video and the controls behind the
+         panels, which is what it is for. -->
+    <View
+        android:id="@+id/scrim"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#66000000"
+        android:clickable="true"
+        android:focusable="true"
+        android:visibility="gone" />
+
     <!-- Picker dialog (side panel, hidden by default) -->
     <LinearLayout
         android:id="@+id/picker_container"
@@ -1624,16 +1639,6 @@
         android:paddingBottom="12dp"
         android:textColor="@color/kb_text_hi"
         android:textSize="30sp"
-        android:visibility="gone" />
-
-    <!-- Scrim behind panels (clickable to dismiss) -->
-    <View
-        android:id="@+id/scrim"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:background="#66000000"
-        android:clickable="true"
-        android:focusable="true"
         android:visibility="gone" />
 
     <!-- Up next panel (shown when an episode finishes) -->

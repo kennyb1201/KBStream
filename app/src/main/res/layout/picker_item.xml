@@ -6,6 +6,21 @@
     android:background="@drawable/picker_item_bg"
     android:layout_marginVertical="4dp">
 
+    <!-- KB-compatible stream badge chips row. Ships ABOVE the file name so the
+         chips read as a header over the source they describe. PickerAdapter
+         re-applies the order (and the spacing that goes with it) on every bind,
+         so the "Badges above the file name" setting can move it under the name
+         without a second layout. -->
+    <LinearLayout
+        android:id="@+id/picker_item_badges"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingHorizontal="14dp"
+        android:paddingTop="10dp"
+        android:visibility="gone" />
+
     <TextView
         android:id="@+id/picker_item_label"
         android:layout_width="match_parent"
@@ -19,16 +34,5 @@
         android:textSize="14sp"
         android:maxLines="5"
         android:ellipsize="end" />
-
-    <!-- KB-compatible stream badge chips row -->
-    <LinearLayout
-        android:id="@+id/picker_item_badges"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:paddingHorizontal="14dp"
-        android:paddingBottom="8dp"
-        android:visibility="gone" />
 
 </LinearLayout>
