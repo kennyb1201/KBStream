@@ -344,7 +344,12 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
     }
 
     fun saveInstalledAddons(
-        addons: List<InstalledAddon>
+        addons: List<InstalledAddon>,
+        // True for a user-visible change (rename/reorder/hide/install). The
+        // background manifest refresh passes false: it preserves the user's
+        // catalog settings, so it must never claim a newer sync timestamp and
+        // overwrite a sibling device's configuration.
+        userEdit: Boolean = true
     ) {
         synchronized(stateLock) {
         // Pin the profile this list belongs to. The ambient active profile is
@@ -360,20 +365,30 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         val json =
             adapter.toJson(normalized)
 
-        addonPrefs(profileId).edit()
+        val store = addonPrefs(profileId)
+
+        store.edit()
             .putString(KEY, json)
             .apply()
+
+        // Record the user's configuration edit time (not the push time) so a
+        // sibling device can tell a real edit from a plain re-publish.
+        recordConfigWrite(normalized, profileId, userEdit)
 
         _installedAddons.value =
             normalized
 
         // Cross-device sync: push the full addon set (small JSON blob) under
-        // the SAME profile it was just written for.
+        // the SAME profile it was just written for, stamped with the
+        // configuration's edit time.
         com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
             com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
                 appContext,
                 com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_ADDONS,
-                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildAddons(json),
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildAddons(
+                    json,
+                    store.getLong(KEY_CONFIG_EDITED_AT, 0L)
+                ),
                 profileId
             )
         }
@@ -835,6 +850,15 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                         previous?.showOnHome
                             ?: manifestCatalog.defaultShowOnHome,
 
+                    // The display-name override is KBStream-local state, not
+                    // part of the manifest — a refresh must carry it forward.
+                    // Dropping it here is what made a renamed catalog lose its
+                    // name locally on the next launch, and then push the
+                    // nameless copy to every other device.
+                    customName =
+                        previous?.customName
+                            ?: manifestCatalog.customName,
+
                     order =
                         existingOrder
                             ?: (
@@ -908,7 +932,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
             return
         }
 
-        saveInstalledAddons(current)
+        saveInstalledAddons(current, userEdit = false)
         }
     }
 
@@ -1047,14 +1071,48 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
      * [applyMutex] as auto-update applies: both replace/merge the full addon
      * list, and unserialized writers would clobber each other's updates.
      */
-    suspend fun applySyncedAddons(addonsJson: String) {
+    suspend fun applySyncedAddons(addonsJson: String, remoteEditedAt: Long = 0L) {
         applyMutex.withLock {
             // The pull filters cloud rows by profile scope, so this blob
             // belongs to whichever profile is active now. Resolve it here and
             // name it explicitly instead of resolving the ambient profile at
             // prefs-write time — the row was fetched earlier.
             val profileId = activeStoreProfileId()
-            addonPrefs(profileId).edit().putString(KEY, addonsJson).apply()
+            val store = addonPrefs(profileId)
+            val localEditedAt = store.getLong(KEY_CONFIG_EDITED_AT, 0L)
+
+            // Never let an older remote configuration replace a newer local
+            // one: the configured device keeps its order/names/visibility and
+            // re-publishes them. A device with no local configuration
+            // (localEditedAt == 0) always accepts the cloud copy, which is how
+            // a fresh sibling gets set up. See [AddonsConfigRules].
+            if (localEditedAt > 0L &&
+                !com.kennyb1201.kbstream.data.sync.AddonsConfigRules
+                    .remoteConfigWins(remoteEditedAt, localEditedAt)
+            ) {
+                return@withLock
+            }
+
+            store.edit().putString(KEY, addonsJson).apply()
+
+            // Adopt: mirror the fingerprint and demote this device's edit
+            // stamp to the remote one, so the just-adopted configuration is
+            // not treated as a local edit and echoed straight back. The cloud
+            // stamp itself was already folded in by
+            // [observeAddonsCloudEditedAt] before this ran.
+            val adopted = runCatching { adapter.fromJson(addonsJson) }.getOrNull()
+            val adoption =
+                store.edit()
+                    .putLong(KEY_CONFIG_EDITED_AT, remoteEditedAt)
+            if (adopted != null) {
+                adoption.putString(
+                    KEY_CONFIG_SIG,
+                    com.kennyb1201.kbstream.data.sync.AddonsConfigRules
+                        .signature(configView(adopted))
+                )
+            }
+            adoption.apply()
+
             synchronized(stateLock) {
                 loadForLocked(profileId)
             }
@@ -1234,6 +1292,85 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         return "${addonId}::${type.lowercase()}::$id"
     }
 
+    /** Sync-relevant projection of the addon list (see [AddonsConfigRules]). */
+    private fun configView(
+        addons: List<InstalledAddon>
+    ): List<com.kennyb1201.kbstream.data.sync.AddonsConfigRules.Addon> =
+        addons.map { addon ->
+            com.kennyb1201.kbstream.data.sync.AddonsConfigRules.Addon(
+                id = addon.id,
+                enabled = addon.enabled,
+                catalogs =
+                    addon.catalogs.map { catalog ->
+                        com.kennyb1201.kbstream.data.sync.AddonsConfigRules.Catalog(
+                            type = catalog.type,
+                            id = catalog.id,
+                            order = catalog.order,
+                            customName = catalog.customName,
+                            // Only a catalog the user hid AWAY from its
+                            // manifest default is a configuration; addons
+                            // that ship catalogs hidden by design must not
+                            // make a fresh box look configured.
+                            userHidden =
+                                !catalog.showOnHome && catalog.defaultShowOnHome
+                        )
+                    }
+            )
+        }
+
+    /**
+     * Records the configuration this device now holds. Only a write the user
+     * caused — or the very first observation of an already-configured device,
+     * the rollout case — may claim an edit timestamp. A manifest refresh, a
+     * reload and an adopted cloud blob all update the fingerprint without
+     * claiming an edit, so an untouched device can never out-stamp a
+     * configured one.
+     */
+    private fun recordConfigWrite(
+        addons: List<InstalledAddon>,
+        profileId: String?,
+        userEdit: Boolean
+    ) {
+        val view = configView(addons)
+        val signature =
+            com.kennyb1201.kbstream.data.sync.AddonsConfigRules.signature(view)
+        val store = addonPrefs(profileId)
+        val previous = store.getString(KEY_CONFIG_SIG, null)
+        val firstObservation = previous == null
+        val configured =
+            com.kennyb1201.kbstream.data.sync.AddonsConfigRules.looksConfigured(view)
+        val editor = store.edit().putString(KEY_CONFIG_SIG, signature)
+        if (configured && previous != signature && (userEdit || firstObservation)) {
+            editor.putLong(KEY_CONFIG_EDITED_AT, System.currentTimeMillis())
+        }
+        editor.apply()
+    }
+
+    /**
+     * The active profile's catalog-configuration edit stamp, or 0 when this
+     * device has no deliberate configuration to share.
+     */
+    fun addonsConfigEditedAt(): Long =
+        addonPrefs(activeStoreProfileId()).getLong(KEY_CONFIG_EDITED_AT, 0L)
+
+    /** Edit stamp of the account copy this device last adopted (0 if never). */
+    fun addonsConfigCloudAt(): Long =
+        addonPrefs(activeStoreProfileId()).getLong(KEY_CONFIG_CLOUD_AT, 0L)
+
+    /**
+     * Learns the account's configuration edit stamp from a pulled row, so the
+     * publish gate stops re-sending a configuration the cloud already holds.
+     * This is deliberately fed by PULLS (the authoritative cloud copy) rather
+     * than advanced at push time: a push that never reached the cloud (an app
+     * kill mid-flush) must not silence the next attempt.
+     */
+    fun observeAddonsCloudEditedAt(remoteEditedAt: Long) {
+        val store = addonPrefs(activeStoreProfileId())
+        if (remoteEditedAt > store.getLong(KEY_CONFIG_CLOUD_AT, 0L)) {
+            store.edit().putLong(KEY_CONFIG_CLOUD_AT, remoteEditedAt).apply()
+        }
+    }
+
     private fun defaultAddons():
             List<InstalledAddon> {
 
@@ -1282,6 +1419,15 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
 
         private const val KEY =
             "installed_addons_json"
+
+        // Shadow keys holding the sync bookkeeping for the catalog
+        // configuration in [KEY]. Never user data, never published:
+        //  - KEY_CONFIG_SIG: fingerprint of the last observed configuration,
+        //  - KEY_CONFIG_EDITED_AT: when the user last changed it deliberately,
+        //  - KEY_CONFIG_CLOUD_AT: edit stamp of the account copy last adopted.
+        private const val KEY_CONFIG_SIG = "addons_config_sig"
+        private const val KEY_CONFIG_EDITED_AT = "addons_config_edited_at"
+        private const val KEY_CONFIG_CLOUD_AT = "addons_config_cloud_at"
 
         private const val TAG_AUTO_UPDATE =
             "ADDON_AUTO_UPDATE"

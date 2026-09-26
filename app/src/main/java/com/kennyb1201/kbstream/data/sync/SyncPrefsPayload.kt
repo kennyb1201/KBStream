@@ -339,21 +339,37 @@ object PrefsPayloadBuilder {
         }
     }
 
-    fun buildAddons(context: Context): JsonObject =
-        buildAddons(
+    fun buildAddons(context: Context): JsonObject {
+        val json =
             scopedPrefs(context, "kbstream_addons")
                 .getString("installed_addons_json", null).orEmpty()
-        )
+        // The edit stamp (not the push time) decides which device's catalog
+        // order/names/visibility win; see [AddonsConfigRules].
+        val editedAt =
+            runCatching {
+                com.kennyb1201.kbstream.data.addon.AddonManager.getInstance(context)
+                    .addonsConfigEditedAt()
+            }.getOrDefault(0L)
+        return buildAddons(json, editedAt)
+    }
 
     /**
-     * Payload for an addon set the caller has ALREADY written, so the blob
-     * carries exactly the JSON that went to disk for that profile. Re-reading
-     * the active profile's store here instead would publish whichever profile
-     * happened to be active at enqueue time.
+     * Payload for an addon set that has ALREADY been written, so the blob
+     * carries exactly the JSON that went to disk for that profile plus the
+     * configuration's edit time. Re-reading the active profile's store here
+     * instead would publish whichever profile happened to be active at
+     * enqueue time.
      */
-    fun buildAddons(addonsJson: String): JsonObject =
+    fun buildAddons(addonsJson: String, configEditedAt: Long = 0L): JsonObject =
         buildJsonObject {
-            put("updatedAt", System.currentTimeMillis())
+            // Keep updatedAt meaningful for older builds: when this
+            // configuration last changed, falling back to the push time only
+            // for a device that holds nothing deliberate.
+            put(
+                "updatedAt",
+                configEditedAt.takeIf { it > 0L } ?: System.currentTimeMillis()
+            )
+            put(AddonsConfigRules.CONFIG_EDITED_AT_FIELD, configEditedAt)
             put("installed_addons_json", addonsJson)
         }
 
@@ -674,8 +690,26 @@ object PrefsPayloadApplier {
         val addonsJson = (payload["installed_addons_json"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return
         if (addonsJson.isBlank()) return
 
+        // The published configuration edit time is what decides whether this
+        // blob may replace a newer local configuration (see
+        // [AddonsConfigRules]). A blob from a build that predates the field
+        // reads as edit time 0 — deliberately NOT its push time: an old
+        // build stamped updatedAt at push time, so trusting it would let an
+        // untouched old device's default order overwrite a configured one.
+        // Edit time 0 can still be adopted by a device that has no local
+        // configuration of its own.
+        val remoteEditedAt =
+            (payload[AddonsConfigRules.CONFIG_EDITED_AT_FIELD] as? kotlinx.serialization.json.JsonPrimitive)
+                ?.content?.toLongOrNull()
+                ?: 0L
+
+        // Remember the cloud copy's edit stamp even when there is nothing to
+        // adopt (identical content, or a local config that wins). This is what
+        // lets the publish gate tell "already synced" from "never sent".
+        com.kennyb1201.kbstream.data.addon.AddonManager.getInstance(context)
+            .observeAddonsCloudEditedAt(remoteEditedAt)
+
         val prefs = scopedPrefs(context, "kbstream_addons")
-        val remoteUpdated = payloadUpdatedAt(payload)
         val localAddons = prefs.getString("installed_addons_json", null).orEmpty()
         if (addonsJson == localAddons) return
 
@@ -684,7 +718,7 @@ object PrefsPayloadApplier {
         // writers would clobber each other's updates.
         try {
             com.kennyb1201.kbstream.data.addon.AddonManager.getInstance(context)
-                .applySyncedAddons(addonsJson)
+                .applySyncedAddons(addonsJson, remoteEditedAt)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {

@@ -1138,6 +1138,23 @@ object SupabaseSync {
             ) {
                 return@forEach
             }
+            // Catalog naming/ordering/hiding lives in this blob. Publish it
+            // only when this device's configuration is newer than the account
+            // copy it last adopted, so an untouched device never re-seeds the
+            // cloud with its default order and cannot clobber a configured
+            // sibling — whether or not it managed to pull first (see
+            // [AddonsConfigRules]).
+            if (key == PrefsPayloadBuilder.KEY_ADDONS) {
+                val addons =
+                    com.kennyb1201.kbstream.data.addon.AddonManager.getInstance(context)
+                if (!AddonsConfigRules.shouldPublish(
+                        addons.addonsConfigEditedAt(),
+                        addons.addonsConfigCloudAt()
+                    )
+                ) {
+                    return@forEach
+                }
+            }
             enqueuePrefs(context, key, payload, pid)
         }
         flushOutbox()

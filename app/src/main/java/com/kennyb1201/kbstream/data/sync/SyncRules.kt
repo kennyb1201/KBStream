@@ -727,3 +727,120 @@ internal object PoisonDetector {
         return duplicates
     }
 }
+
+/**
+ * Merge rules for the addons sync blob (`sync_prefs` key "addons").
+ *
+ * That blob carries the whole `installed_addons_json`, which is where the
+ * user's per-catalog settings live: the GLOBAL catalog order, each catalog's
+ * display-name override, and each catalog's Home visibility. It used to be
+ * WHOLE-BLOB last-write-wins with the timestamp stamped at PUSH time, and the
+ * applier replaced the local list unconditionally. So a device that was not
+ * set up like its sibling — a second TV signed in fresh, whose catalogs still
+ * sat in the manifest's default order — re-published that default order with a
+ * brand-new timestamp, and the next device to pull it silently adopted the
+ * messed-up order. That is the "catalog naming/ordering/hiding doesn't sync,
+ * and the second device pushed its order onto my good one" report.
+ *
+ * The fix follows the display-prefs pattern, lifted to the whole blob:
+ *  - the published timestamp is when the CONFIGURATION last changed locally,
+ *    not when it was pushed,
+ *  - a device only publishes when its configuration is newer than the account
+ *    copy it last adopted, so an untouched device never re-seeds the cloud,
+ *  - the applier adopts the remote blob only when it is strictly newer than
+ *    the local configuration, and demotes its own stamp to the adopted one so
+ *    the same blob is not echoed straight back,
+ *  - a device whose configuration has never been deliberately changed (only
+ *    the built-in default catalogs, in their default order) has no opinion and
+ *    is never allowed to claim an edit — this is what makes the guarantee
+ *    "a fresh second device cannot overwrite a configured first device" hold
+ *    even if it pushes before it has pulled.
+ */
+internal object AddonsConfigRules {
+
+    /** Payload field holding when this device's configuration last changed. */
+    const val CONFIG_EDITED_AT_FIELD = "configEditedAt"
+
+    /** A remote configuration wins only when its edit is strictly newer. */
+    fun remoteConfigWins(remoteEditedAt: Long, localEditedAt: Long): Boolean =
+        remoteEditedAt > localEditedAt
+
+    /** A device publishes only when its configuration out-runs the cloud copy. */
+    fun shouldPublish(localEditedAt: Long, cloudEditedAt: Long): Boolean =
+        localEditedAt > cloudEditedAt
+
+    /**
+     * One catalog's sync-relevant settings. [userHidden] is deliberately NOT
+     * the raw Home visibility: many addons ship catalogs hidden by design
+     * (director rails, search placeholders), so only a catalog the USER hid
+     * away from its manifest default counts as a configuration.
+     */
+    data class Catalog(
+        val type: String,
+        val id: String,
+        val order: Int,
+        val customName: String?,
+        val userHidden: Boolean
+    )
+
+    /** One addon's sync-relevant settings. */
+    data class Addon(
+        val id: String,
+        val enabled: Boolean,
+        val catalogs: List<Catalog>
+    )
+
+    /**
+     * Stable fingerprint of the user-visible configuration. A write whose
+     * fingerprint did not change is not an edit — which is how a manifest
+     * refresh that only updates metadata (or a re-publish of an already
+     * adopted blob) is prevented from claiming a newer timestamp.
+     */
+    fun signature(addons: List<Addon>): String =
+        addons.sortedBy { it.id }.joinToString("\n") { addon ->
+            val catalogs =
+                addon.catalogs.sortedBy { it.order }.joinToString(",") { catalog ->
+                    val type = catalog.type.lowercase()
+                    "$type:${catalog.id}:${catalog.order}:" +
+                        "${catalog.customName.orEmpty()}:${catalog.userHidden}"
+                }
+            "${addon.id}:${addon.enabled}:$catalogs"
+        }
+
+    /**
+     * True when this device's configuration is deliberate: a catalog was
+     * renamed, hidden from Home, or catalogs from different addons were
+     * interleaved into a custom global order. A box that still holds only the
+     * built-in defaults answers false and therefore publishes no edit stamp.
+     *
+     * Interleaving is the order signal: a default configuration keeps each
+     * addon's catalogs in one contiguous run of the global order, so an addon
+     * id appearing in two separate runs can only come from a user reorder.
+     */
+    fun looksConfigured(addons: List<Addon>): Boolean {
+        if (addons.any { addon ->
+                addon.catalogs.any { catalog ->
+                    catalog.customName != null || catalog.userHidden
+                }
+            }
+        ) {
+            return true
+        }
+
+        val orderedAddonIds =
+            addons.flatMap { addon -> addon.catalogs.map { addon.id to it.order } }
+                .sortedBy { it.second }
+                .map { it.first }
+        if (orderedAddonIds.isEmpty()) return false
+
+        var runs = 0
+        var previous: String? = null
+        orderedAddonIds.forEach { id ->
+            if (id != previous) runs++
+            previous = id
+        }
+        val addonsWithCatalogs =
+            addons.filter { it.catalogs.isNotEmpty() }.map { it.id }.distinct().size
+        return runs > addonsWithCatalogs
+    }
+}
