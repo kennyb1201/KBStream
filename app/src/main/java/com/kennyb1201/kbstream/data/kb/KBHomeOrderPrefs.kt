@@ -136,10 +136,42 @@ internal fun normalizeHomeOrder(value: KBHomeOrder): KBHomeOrder {
     return value.copy(pinned = pinned, order = healedOrder)
 }
 
+/**
+ * Rewrites addon arrangement keys after a manifest refresh replaced a catalog
+ * (see `pairReplacedCatalogs` in data/addon).
+ *
+ * Dynamic addons (BingeCat) swap catalog ids as their content changes, and the
+ * arrangement key embeds the id — so without this the position the user gave a
+ * rail was orphaned the moment its id changed and the rail dropped to the
+ * default tail. Pure so the rename rules are unit tested.
+ */
+internal fun remapAddonOrderKeys(
+    value: KBHomeOrder,
+    remap: Map<String, String>
+): KBHomeOrder {
+    if (remap.isEmpty()) return value
+    fun swap(key: String): String = remap[key] ?: key
+    // distinct(): if both the old and new key were somehow present, the
+    // rewrite would otherwise leave the same rail twice in one list.
+    val rewritten = value.copy(
+        order = value.order.map(::swap).distinct(),
+        pinned = value.pinned.map(::swap).distinct(),
+        hidden = value.hidden.map(::swap).distinct()
+    )
+    return normalizeHomeOrder(rewritten)
+}
+
 object KBHomeOrderPrefs {
 
     private const val PREFS_NAME = "kbstream_kb_home_order"
     private const val KEY_BLOB = "home_order_json"
+
+    /**
+     * Last arrangement this device considers already synced (mirrors the key
+     * [PrefsPayloadApplier.applyHomeOrder] reads). Written on every local save
+     * so our own edit cannot be judged "older than remote" and reverted.
+     */
+    private const val KEY_SYNCED_AT = "home_order_synced_at"
 
     private val adapter = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
@@ -227,6 +259,20 @@ object KBHomeOrderPrefs {
     }
 
     fun save(context: Context, value: KBHomeOrder) {
+        // Write the local blob FIRST. buildHomeOrder() below reads this same
+        // pref, so enqueuing before the write pushed the PREVIOUS arrangement
+        // to the cloud — and because it stamped it "now", the next pull
+        // judged that stale copy newer than what the user had just set and
+        // reverted the edit (every reorder looked like it did not stick).
+        //
+        // KEY_SYNCED_AT is stamped too, so the pull's "is the remote older
+        // than my last sync?" guard treats this edit as already synced and an
+        // older sibling-device copy can never clobber it.
+        prefs(context).edit()
+            .putString(KEY_BLOB, adapter.toJson(value) ?: "{}")
+            .putLong(KEY_SYNCED_AT, System.currentTimeMillis())
+            .apply()
+
         com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
             com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
                 appContext,
@@ -234,10 +280,18 @@ object KBHomeOrderPrefs {
                 com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildHomeOrder(appContext)
             )
         }
+    }
 
-        prefs(context).edit()
-            .putString(KEY_BLOB, adapter.toJson(value) ?: "{}")
-            .apply()
+    /**
+     * Rewrites arrangement keys after a manifest refresh replaced catalogs (see
+     * [remapAddonOrderKeys]). Called from the addon merge, the one place that
+     * sees both the old and the new catalog ids.
+     */
+    fun remapAddonKeys(context: Context, remap: Map<String, String>) {
+        if (remap.isEmpty()) return
+        val current = get(context)
+        val updated = remapAddonOrderKeys(current, remap)
+        if (updated != current) save(context, updated)
     }
 
     /** Drop every manual arrangement (used by "Reset order" in Settings). */

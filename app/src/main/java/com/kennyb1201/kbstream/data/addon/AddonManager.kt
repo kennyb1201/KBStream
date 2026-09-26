@@ -780,6 +780,27 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                 )
             }
 
+        // Identity-free replacement pairing for THIS addon (see
+        // pairReplacedCatalogs): dynamic addons swap catalog ids as their
+        // content changes, and the id-key is exactly what breaks. Used below
+        // so a replacement inherits the removed catalog's local settings
+        // (showOnHome / customName) and its Home arrangement slot instead of
+        // appearing as a brand-new, default-positioned rail. Sorted by the
+        // saved order so the pairing matches the freed-slot order above.
+        val replacementPairs =
+            pairReplacedCatalogs(
+                existingCatalogs.sortedBy { it.order },
+                manifest.catalogs
+            )
+        val replacementByKey =
+            replacementPairs.associate { (added, removed) ->
+                catalogKey(
+                    manifest.id,
+                    added.type,
+                    added.id
+                ) to removed
+            }
+
         /*
          * Existing catalogs retain their current
          * global order.
@@ -836,6 +857,11 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                 val previous =
                     existingByKey[key]
 
+                // A swapped catalog id: fall back to the catalog this one
+                // replaced so its local settings carry over.
+                val inherited =
+                    previous ?: replacementByKey[key]
+
                 val existingOrder =
                     existingGlobalOrder[key]
 
@@ -847,7 +873,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                     // don't flood Home on install. This is only the DEFAULT:
                     // the user can still pin any of them via the manager.
                     showOnHome =
-                        previous?.showOnHome
+                        inherited?.showOnHome
                             ?: manifestCatalog.defaultShowOnHome,
 
                     // The display-name override is KBStream-local state, not
@@ -856,7 +882,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                     // name locally on the next launch, and then push the
                     // nameless copy to every other device.
                     customName =
-                        previous?.customName
+                        inherited?.customName
                             ?: manifestCatalog.customName,
 
                     order =
@@ -930,6 +956,29 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
             // would resurrect it) or the profile changed mid-refresh (adding
             // would leak one profile's addons into another's).
             return
+        }
+
+        // Carry the user's HOME ARRANGEMENT onto any catalog this refresh
+        // REPLACED: the arrangement key embeds the catalog id, so without
+        // this a reordered dynamic rail (BingeCat) silently dropped back to
+        // the default tail the moment its id changed. Done here because this
+        // is the one place that sees both the old and the new ids.
+        if (replacementPairs.isNotEmpty()) {
+            val remap = replacementPairs.associate { (added, removed) ->
+                com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs.addonKeyFromManifest(
+                    manifestUrl,
+                    removed.type,
+                    removed.id
+                ) to com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs.addonKeyFromManifest(
+                    manifestUrl,
+                    added.type,
+                    added.id
+                )
+            }
+            runCatching {
+                com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+                    .remapAddonKeys(context, remap)
+            }
         }
 
         saveInstalledAddons(current, userEdit = false)
