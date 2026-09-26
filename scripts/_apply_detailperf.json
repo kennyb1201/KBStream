@@ -1,0 +1,12 @@
+[
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/detail/DetailViewModel.kt",
+    "old": "                val tmdbDeferred = async { runCatching { tmdbRepository.fetchEnrichedMeta(id, normalizedType) } }",
+    "new": "                // Cached (12h memory / 30d disk), like every other screen's\n                // TMDB fetch. This call was UNCACHED, so a revisit after the\n                // 60s freshness window redid the whole TMDB round-trip - and\n                // for an \"tt...\" id that is the extra find-then-detail hop -\n                // before the spinner could come down. The freshness gate only\n                // ever spared a reopen inside its own minute; the cache is what\n                // makes later revisits instant too.\n                val tmdbDeferred = async {\n                    runCatching {\n                        tmdbRepository.fetchEnrichedMetaCached(id, normalizedType)\n                    }\n                }"
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/data/tmdb/TmdbRepository.kt",
+    "old": "        val result = runCatching { fetchEnrichedMeta(imdbId, type) }.getOrNull()\n        detailCache[key] = now to result\n        if (result != null) {\n            runCatching {\n                tmdbJsonCacheDao.upsert(\n                    TmdbJsonCacheEntity(\n                        key = diskKey,\n                        json = detailJsonAdapter.toJson(result),\n                        updatedAt = now\n                    )\n                )\n            }\n        }\n        return result",
+    "new": "        val result = runCatching { fetchEnrichedMeta(imdbId, type) }.getOrNull()\n        // A MISS is deliberately not cached. A transient TMDB failure (or an\n        // add-on-only title with no TMDB record) used to pin a null in the 12h\n        // memory cache, after which every caller - the Detail screen included -\n        // got \"no TMDB metadata\" for the rest of the session and could never\n        // retry. Only a real answer is remembered, in memory and on disk.\n        if (result != null) {\n            detailCache[key] = now to result\n            runCatching {\n                tmdbJsonCacheDao.upsert(\n                    TmdbJsonCacheEntity(\n                        key = diskKey,\n                        json = detailJsonAdapter.toJson(result),\n                        updatedAt = now\n                    )\n                )\n            }\n        }\n        return result"
+  }
+]

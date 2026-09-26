@@ -38,6 +38,7 @@ import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import com.kennyb1201.kbstream.data.tmdb.displayRuntimeMinutes
 import com.kennyb1201.kbstream.data.tmdb.keepRecommendedGenre
 import com.kennyb1201.kbstream.data.tmdb.list
@@ -66,7 +67,6 @@ import kotlinx.coroutines.withTimeoutOrNull
  * still paints.
  */
 private const val META_PROBE_CALL_TIMEOUT_MS = 10_000L
-private const val META_PROBE_BUDGET_MS = 20_000L
 
 /**
  * How long a COMPLETED load keeps ownership of this screen's state.
@@ -572,7 +572,11 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         type: String,
         id: String,
         initialSeason: Int? = null,
-        initialMeta: Meta? = null
+        initialMeta: Meta? = null,
+        // True for a Continue Watching / Up Next deep link, which auto-plays
+        // the moment metadata lands: its loading splash has to stay up
+        // instead of the page painting early underneath it.
+        isDeepLinkAutoPlay: Boolean = false
     ) {
         val normalizedType = normalizeMediaType(type)
         // The active profile is part of the key: the state being reused is
@@ -645,11 +649,109 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
             _error.value = null
 
             try {
+                fun buildMergedMeta(
+                    tmdbDetail: TmdbDetail?,
+                    addonMeta: Meta?,
+                    initialMeta: Meta?
+                ): Meta {
+                    val tmdbMeta = tmdbDetail?.let { detail ->
+                        Meta(
+                            id = id,
+                            type = normalizedType,
+                            name = detail.name ?: detail.title ?: id,
+                            poster = detail.posterPath?.let { TmdbRepository.POSTER_BASE + it },
+                            background = detail.backdropPath?.let { TmdbRepository.BACKDROP_BASE + it },
+                            logo = null,
+                            description = detail.overview,
+                            releaseInfo = if (normalizedType == "series") {
+                                detail.firstAirDate?.takeIf { it.isNotBlank() }?.take(4)
+                            } else {
+                                detail.releaseDate?.takeIf { it.isNotBlank() }?.take(4)
+                            },
+                            // Deliberately no imdbRating here. TMDB's vote_average is
+                            // not an IMDb score, and the meta line renders this field as
+                            // "IMDb x.x" — which then disagreed with the MDBList IMDb
+                            // chip on the same screen. A real IMDb rating only ever comes
+                            // from the add-on meta (see the merge below); TMDB's own
+                            // score is already shown as its own chip in the RATINGS
+                            // strip.
+                            runtime = if (normalizedType == "series") {
+                                detail.episodeRunTime.firstOrNull()?.toString()
+                            } else {
+                                detail.runtime?.toString()
+                            },
+                            language = detail.originalLanguage,
+                            country = detail.originCountries.firstOrNull(),
+                            awards = detail.awards,
+                            website = null,
+                            genres = detail.genres.map { it.name },
+                            cast = detail.credits?.cast?.map { it.name },
+                            director = detail.credits?.crew
+                                ?.filter { it.job.equals("Director", ignoreCase = true) }
+                                ?.map { it.name },
+                            videos = detail.videos?.results?.map { video ->
+                                VideoEntry(
+                                    id = video.key,
+                                    title = video.name,
+                                    description = video.site,
+                                    thumbnail = video.thumbnail
+                                )
+                            }
+                        )
+                    }
+
+                    val releaseFromAddon = addonMeta?.releaseInfo?.takeIf { it.isNotBlank() }
+                    val releaseFromTmdb = tmdbMeta?.releaseInfo?.takeIf { it.isNotBlank() }
+
+                    return Meta(
+                        id = id,
+                        type = normalizedType,
+                        name = tmdbMeta?.name ?: addonMeta?.name ?: initialMeta?.name ?: id,
+                        poster = tmdbMeta?.poster ?: addonMeta?.poster ?: initialMeta?.poster,
+                        background = tmdbMeta?.background ?: addonMeta?.background ?: initialMeta?.background,
+                        logo = addonMeta?.logo ?: initialMeta?.logo,
+                        description = tmdbMeta?.description ?: addonMeta?.description ?: initialMeta?.description,
+                        releaseInfo = releaseFromAddon ?: releaseFromTmdb,
+                        // The meta add-on's rating is the only genuine IMDb figure in
+                        // this merge; initialMeta is the poster/blurb the caller passed
+                        // in and carries no rating.
+                        imdbRating = addonMeta?.imdbRating ?: initialMeta?.imdbRating,
+                        runtime = tmdbMeta?.runtime ?: addonMeta?.runtime,
+                        language = tmdbMeta?.language ?: addonMeta?.language,
+                        country = tmdbMeta?.country ?: addonMeta?.country,
+                        awards = tmdbMeta?.awards ?: addonMeta?.awards,
+                        website = addonMeta?.website ?: initialMeta?.website,
+                        genres = tmdbMeta?.genres?.takeIf { it.isNotEmpty() }
+                            ?: addonMeta?.genres?.takeIf { it.isNotEmpty() }
+                            ?: initialMeta?.genres,
+                        cast = tmdbMeta?.cast?.takeIf { it.isNotEmpty() }
+                            ?: addonMeta?.cast?.takeIf { it.isNotEmpty() }
+                            ?: initialMeta?.cast,
+                        director = tmdbMeta?.director?.takeIf { it.isNotEmpty() }
+                            ?: addonMeta?.director?.takeIf { it.isNotEmpty() }
+                            ?: initialMeta?.director,
+                        videos = tmdbMeta?.videos?.takeIf { it.isNotEmpty() }
+                            ?: addonMeta?.videos?.takeIf { it.isNotEmpty() }
+                            ?: initialMeta?.videos
+                    )
+                }
+
                 mediaType = normalizedType
                 Log.e("KBStream", "detail load start type=$normalizedType id=$id initialSeason=$initialSeason")
 
                 val addonsDeferred = async { addonManager.getEnabledAddons() }
-                val tmdbDeferred = async { runCatching { tmdbRepository.fetchEnrichedMeta(id, normalizedType) } }
+                // Cached (12h memory / 30d disk), like every other screen's
+                // TMDB fetch. This call was UNCACHED, so a revisit after the
+                // 60s freshness window redid the whole TMDB round-trip - and
+                // for an "tt..." id that is the extra find-then-detail hop -
+                // before the spinner could come down. The freshness gate only
+                // ever spared a reopen inside its own minute; the cache is what
+                // makes later revisits instant too.
+                val tmdbDeferred = async {
+                    runCatching {
+                        tmdbRepository.fetchEnrichedMetaCached(id, normalizedType)
+                    }
+                }
 
                 // 1. Await structural and history components first so watched data is guaranteed ready
                 val tmdbDetailResult = tmdbDeferred.await()
@@ -703,8 +805,30 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                     }
                 }
 
+                // Paint first, refine second: TMDB has already answered, so
+                // publish a meta built from it and bring the spinner down NOW,
+                // without waiting for the Simkl/MDBList round-trips or the
+                // add-on meta probes below. The add-on meta still refines the
+                // page when it lands (logo, IMDb rating, extra art). Skipped
+                // for a synthetic addon-videos detail (TMDB had no record) and
+                // for a deep-link auto-play open, whose loading splash the
+                // player replaces the moment metadata lands.
+                val earlyTmdbDetail = tmdbDetailResult.getOrNull()
+                if (earlyTmdbDetail != null && !_isSyntheticDetail.value) {
+                    if (_meta.value == null) {
+                        _meta.value = buildMergedMeta(
+                            tmdbDetail = earlyTmdbDetail,
+                            addonMeta = null,
+                            initialMeta = initialMeta
+                        )
+                    }
+                    if (!isDeepLinkAutoPlay) {
+                        _isLoading.value = false
+                    }
+                }
+
                 // MDBList ratings: fire EARLY, not buried behind the Simkl
-                // round-trip and the serial addon meta probes below. The row
+                // round-trip and the add-on meta probes below. The row
                 // renders as soon as its own fetch answers; a blank IMDb id
                 // (TMDB-only titles) retries via the enrich pass once the
                 // external-ids lookup resolves.
@@ -816,141 +940,48 @@ Log.e(
 var resolvedMeta: Meta? = null
 var lastMetaError: Throwable? = null
 
-val probeDeadline = SystemClock.elapsedRealtime() + META_PROBE_BUDGET_MS
-for (metaAddon in metaAddons) {
-    val budgetLeft = probeDeadline - SystemClock.elapsedRealtime()
-    if (budgetLeft <= 0L) {
+// Every candidate is probed CONCURRENTLY and the results are then considered
+// in preference order, so the winner is still the best-ranked add-on that
+// answered - but the wait is the slowest single probe instead of the sum of
+// every probe (one add-on that never answers no longer delays everything
+// behind it). Each call keeps its own timeout, and withTimeoutOrNull sits
+// INSIDE runCatching so a timeout's own cancellation turns into a null
+// response here instead of escaping this scope as a cancellation of the whole
+// load.
+val probeResults = metaAddons.map { metaAddon ->
+    async {
+        val baseUrl = metaAddon.manifestUrl.substringBeforeLast("/manifest.json")
+        val result = runCatching {
+            withTimeoutOrNull(META_PROBE_CALL_TIMEOUT_MS) {
+                repository.getMeta(baseUrl, normalizedType, id)
+            }
+        }
+        Triple(metaAddon, result.getOrNull(), result.exceptionOrNull())
+    }
+}.awaitAll()
+
+for ((metaAddon, response, error) in probeResults) {
+    if (response != null) {
+        resolvedMeta = response
         Log.e(
             "KBStream",
-            "detail meta: probe budget ${META_PROBE_BUDGET_MS}ms spent, " +
-                "skipping ${metaAddon.name} id=$id"
+            "detail meta resolved addon=${metaAddon.name} id=$id"
         )
         break
-    }
-
-    // withTimeoutOrNull deliberately sits INSIDE runCatching: the timeout's
-    // own cancellation is caught where it is raised and turns into a null
-    // response, so it reaches the handler below as "no meta" rather than as a
-    // failure - and, more importantly, never escapes this scope as a
-    // cancellation of the whole load.
-    val result = runCatching {
-        val baseUrl = metaAddon.manifestUrl.substringBeforeLast("/manifest.json")
-        withTimeoutOrNull(minOf(META_PROBE_CALL_TIMEOUT_MS, budgetLeft)) {
-            repository.getMeta(baseUrl, normalizedType, id)
-        }
-    }
-
-    result.onSuccess { response ->
-        if (response != null) {
-            resolvedMeta = response
-            Log.e(
-                "KBStream",
-                "detail meta resolved addon=${metaAddon.name} id=$id"
-            )
-        } else {
-            Log.e(
-                "KBStream",
-                "detail meta empty or timed out addon=${metaAddon.name} id=$id"
-            )
-        }
-    }.onFailure { error ->
+    } else if (error != null) {
         lastMetaError = error
         Log.e(
             "KBStream",
             "detail meta failed addon=${metaAddon.name} id=$id",
             error
         )
-    }
-
-    if (resolvedMeta != null) break
-}
-
-    fun buildMergedMeta(
-        tmdbDetail: TmdbDetail?,
-        addonMeta: Meta?,
-        initialMeta: Meta?
-    ): Meta {
-        val tmdbMeta = tmdbDetail?.let { detail ->
-            Meta(
-                id = id,
-                type = normalizedType,
-                name = detail.name ?: detail.title ?: id,
-                poster = detail.posterPath?.let { TmdbRepository.POSTER_BASE + it },
-                background = detail.backdropPath?.let { TmdbRepository.BACKDROP_BASE + it },
-                logo = null,
-                description = detail.overview,
-                releaseInfo = if (normalizedType == "series") {
-                    detail.firstAirDate?.takeIf { it.isNotBlank() }?.take(4)
-                } else {
-                    detail.releaseDate?.takeIf { it.isNotBlank() }?.take(4)
-                },
-                // Deliberately no imdbRating here. TMDB's vote_average is
-                // not an IMDb score, and the meta line renders this field as
-                // "IMDb x.x" — which then disagreed with the MDBList IMDb
-                // chip on the same screen. A real IMDb rating only ever comes
-                // from the add-on meta (see the merge below); TMDB's own
-                // score is already shown as its own chip in the RATINGS
-                // strip.
-                runtime = if (normalizedType == "series") {
-                    detail.episodeRunTime.firstOrNull()?.toString()
-                } else {
-                    detail.runtime?.toString()
-                },
-                language = detail.originalLanguage,
-                country = detail.originCountries.firstOrNull(),
-                awards = detail.awards,
-                website = null,
-                genres = detail.genres.map { it.name },
-                cast = detail.credits?.cast?.map { it.name },
-                director = detail.credits?.crew
-                    ?.filter { it.job.equals("Director", ignoreCase = true) }
-                    ?.map { it.name },
-                videos = detail.videos?.results?.map { video ->
-                    VideoEntry(
-                        id = video.key,
-                        title = video.name,
-                        description = video.site,
-                        thumbnail = video.thumbnail
-                    )
-                }
-            )
-        }
-
-        val releaseFromAddon = addonMeta?.releaseInfo?.takeIf { it.isNotBlank() }
-        val releaseFromTmdb = tmdbMeta?.releaseInfo?.takeIf { it.isNotBlank() }
-
-        return Meta(
-            id = id,
-            type = normalizedType,
-            name = tmdbMeta?.name ?: addonMeta?.name ?: initialMeta?.name ?: id,
-            poster = tmdbMeta?.poster ?: addonMeta?.poster ?: initialMeta?.poster,
-            background = tmdbMeta?.background ?: addonMeta?.background ?: initialMeta?.background,
-            logo = addonMeta?.logo ?: initialMeta?.logo,
-            description = tmdbMeta?.description ?: addonMeta?.description ?: initialMeta?.description,
-            releaseInfo = releaseFromAddon ?: releaseFromTmdb,
-            // The meta add-on's rating is the only genuine IMDb figure in
-            // this merge; initialMeta is the poster/blurb the caller passed
-            // in and carries no rating.
-            imdbRating = addonMeta?.imdbRating ?: initialMeta?.imdbRating,
-            runtime = tmdbMeta?.runtime ?: addonMeta?.runtime,
-            language = tmdbMeta?.language ?: addonMeta?.language,
-            country = tmdbMeta?.country ?: addonMeta?.country,
-            awards = tmdbMeta?.awards ?: addonMeta?.awards,
-            website = addonMeta?.website ?: initialMeta?.website,
-            genres = tmdbMeta?.genres?.takeIf { it.isNotEmpty() }
-                ?: addonMeta?.genres?.takeIf { it.isNotEmpty() }
-                ?: initialMeta?.genres,
-            cast = tmdbMeta?.cast?.takeIf { it.isNotEmpty() }
-                ?: addonMeta?.cast?.takeIf { it.isNotEmpty() }
-                ?: initialMeta?.cast,
-            director = tmdbMeta?.director?.takeIf { it.isNotEmpty() }
-                ?: addonMeta?.director?.takeIf { it.isNotEmpty() }
-                ?: initialMeta?.director,
-            videos = tmdbMeta?.videos?.takeIf { it.isNotEmpty() }
-                ?: addonMeta?.videos?.takeIf { it.isNotEmpty() }
-                ?: initialMeta?.videos
+    } else {
+        Log.e(
+            "KBStream",
+            "detail meta empty or timed out addon=${metaAddon.name} id=$id"
         )
     }
+}
 
     if (resolvedMeta != null) {
         val savedMeta = initialMeta

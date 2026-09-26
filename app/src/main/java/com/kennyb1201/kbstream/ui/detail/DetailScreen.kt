@@ -668,7 +668,8 @@ fun DetailScreen(
                     !initialBackdrop.isNullOrBlank() ||
                     !initialClearLogo.isNullOrBlank() ||
                     !initialOverview.isNullOrBlank()
-            }
+            },
+            isDeepLinkAutoPlay = initialTarget != null
         )
     }
 

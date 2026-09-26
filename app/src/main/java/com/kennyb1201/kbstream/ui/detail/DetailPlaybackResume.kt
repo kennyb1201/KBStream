@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.detail
 import android.app.Application
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
+import com.kennyb1201.kbstream.data.simkl.SimklPlaybackItem
 import com.kennyb1201.kbstream.data.tmdb.displayRuntimeMinutes
 
 /**
@@ -24,6 +25,53 @@ import com.kennyb1201.kbstream.data.tmdb.displayRuntimeMinutes
  */
 internal object DetailPlaybackResume {
 
+    /**
+     * Short-TTL memo of the Simkl playback feed for the resume fallback ONLY.
+     *
+     * [SimklRepository.getPlaybackItems] is deliberately uncached — the delete
+     * paths have to see the very session they are about to remove — but this
+     * lookup sits on the Detail screen's critical path (the spinner waits on
+     * it) for every title with no LOCAL resume row, which is almost every
+     * first open. A minute of staleness on a display-only resume estimate is
+     * invisible; a Simkl round-trip in front of the spinner is not. Keyed by
+     * the account's access token so a profile switch can never show the other
+     * account's progress. Only a successful answer is memoized, so a failure
+     * stays a failure and the next open retries.
+     */
+    private const val SIMKL_PLAYBACK_TTL_MS = 60_000L
+
+    @Volatile
+    private var cachedSimklPlayback: List<SimklPlaybackItem>? = null
+
+    @Volatile
+    private var cachedSimklPlaybackAt = 0L
+
+    @Volatile
+    private var cachedSimklPlaybackToken = ""
+
+    private suspend fun simklPlaybackItems(vm: DetailViewModel): List<SimklPlaybackItem> {
+        val token = runCatching { vm.simklRepository.getSavedAccessToken() }
+            .getOrNull()
+            .orEmpty()
+
+        val cached = cachedSimklPlayback
+        if (
+            cached != null &&
+            cachedSimklPlaybackToken == token &&
+            System.currentTimeMillis() - cachedSimklPlaybackAt < SIMKL_PLAYBACK_TTL_MS
+        ) {
+            return cached
+        }
+
+        val fresh = runCatching { vm.simklRepository.getPlaybackItems() }.getOrNull()
+            ?: return emptyList()
+
+        cachedSimklPlayback = fresh
+        cachedSimklPlaybackAt = System.currentTimeMillis()
+        cachedSimklPlaybackToken = token
+        return fresh
+    }
+
     /** Simkl's paused session for this title, if any. */
     suspend fun simkl(
         vm: DetailViewModel,
@@ -35,8 +83,7 @@ internal object DetailPlaybackResume {
             return null
         }
 
-        val sessions = runCatching { vm.simklRepository.getPlaybackItems() }
-            .getOrDefault(emptyList())
+        val sessions = simklPlaybackItems(vm)
 
         val normalizedType = type.lowercase()
         val match = sessions.firstOrNull { session ->

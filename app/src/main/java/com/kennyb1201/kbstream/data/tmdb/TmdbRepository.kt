@@ -510,8 +510,13 @@ class TmdbRepository private constructor(context: Context) :
         }
 
         val result = runCatching { fetchEnrichedMeta(imdbId, type) }.getOrNull()
-        detailCache[key] = now to result
+        // A MISS is deliberately not cached. A transient TMDB failure (or an
+        // add-on-only title with no TMDB record) used to pin a null in the 12h
+        // memory cache, after which every caller - the Detail screen included -
+        // got "no TMDB metadata" for the rest of the session and could never
+        // retry. Only a real answer is remembered, in memory and on disk.
         if (result != null) {
+            detailCache[key] = now to result
             runCatching {
                 tmdbJsonCacheDao.upsert(
                     TmdbJsonCacheEntity(
