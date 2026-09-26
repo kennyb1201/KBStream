@@ -140,6 +140,27 @@ class TitleMetaLineTest {
         assertNull(movie(genres = listOf(" ", "")).displayGenres())
     }
 
+    @Test
+    fun `the credits strip asks for a single genre`() {
+        // The because-you-watched strip is one line wide, so the usual three
+        // read as a tag cloud there; the first genre is the descriptive one.
+        val line = movie(
+            genres = listOf("Action", "Crime", "Drama", "Thriller")
+        ).displayMetaLine(isMovie = true, genreLimit = 1).orEmpty()
+        assertEquals(true, line.contains("Action"))
+        assertEquals(false, line.contains("Crime"))
+        assertEquals(false, line.contains("Drama"))
+    }
+
+    @Test
+    fun `the default line still names up to three genres`() {
+        val line = movie(
+            genres = listOf("Action", "Crime", "Drama", "Thriller")
+        ).displayMetaLine(isMovie = true).orEmpty()
+        assertEquals(true, line.contains("Action, Crime, Drama"))
+        assertEquals(false, line.contains("Thriller"))
+    }
+
     // ── card line ───────────────────────────────────────────────────
 
     @Test

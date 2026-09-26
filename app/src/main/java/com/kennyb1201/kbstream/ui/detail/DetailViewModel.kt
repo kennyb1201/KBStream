@@ -1666,6 +1666,39 @@ for (metaAddon in metaAddons) {
                 }
             }
 
+            // 1b. A watched episode has nothing left to resume, so drop the
+            // progress row too - the completed marker written above is what
+            // keeps the badge. Marking a season (or one episode) watched used
+            // to leave the resume bar sitting there, because the progress row
+            // is a different row from the marker.
+            runCatching {
+                val parents = localHistoryParentIds(parentId)
+                validEpisodes.forEach { episode ->
+                    historyDao.deleteResumeRowsForParentsSeasonEpisode(
+                        parentIds = parents,
+                        season = season,
+                        episode = episode
+                    )
+                }
+            }.onFailure { e ->
+                Log.e(
+                    "KBStream",
+                    "markSeasonWatched resume cleanup failed s=$season",
+                    e
+                )
+            }
+
+            // The hero's RESUME bar and the per-card progress bars read these
+            // in-memory copies, so they have to lose the marked episodes too.
+            _inProgressByStreamId.value =
+                _inProgressByStreamId.value.filterValues { row ->
+                    !(row.season == season && (row.episode ?: -1) in validEpisodes)
+                }
+            _resumeInfo.value =
+                _resumeInfo.value?.takeUnless { row ->
+                    row.season == season && (row.episode ?: -1) in validEpisodes
+                }
+
             // 2. Optimistic in-memory state so badges light up instantly.
             val newKeys =
                 _watchedEpisodeKeys.value +

@@ -895,7 +895,8 @@ internal class BecauseYouWatchedUi(
                     ?.firstOrNull()?.filePath
                 val isMovie = pick.type != "series"
                 val meta = PickMeta(
-                    metaLine = detail.displayMetaLine(isMovie),
+                    // One genre: the featured strip is a single line wide.
+                    metaLine = detail.displayMetaLine(isMovie, genreLimit = 1),
                     cardLine = detail.displayCardMeta(isMovie),
                     overview = pick.overview ?: detail.displayDescription(),
                     // Franchise and credits candidates ship a poster only; the

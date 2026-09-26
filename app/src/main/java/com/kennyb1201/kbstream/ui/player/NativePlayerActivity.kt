@@ -459,6 +459,7 @@ class NativePlayerActivity : ComponentActivity() {
             // MPV's result with its own, which reads like the switch failed.
             nextUpCountdownHeld = false
             nextUpCountdownRemaining = 0
+            nextUpHandoffArmed = false
             nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
         }
         super.startActivityForResult(intent, requestCode, options)
@@ -1925,9 +1926,28 @@ class NativePlayerActivity : ComponentActivity() {
     // left: the auto-advance countdown waits for the end of the episode rather
     // than running from the moment the early panel appeared.
     private var nextUpCountdownHeld = false
+
+    /**
+     * True while the Up Next card is THIS session's end-of-episode decision,
+     * i.e. a next episode was actually resolved and offered.
+     *
+     * The auto-advance countdown and that card's PLAY button both require it.
+     * [pendingNextSeason] / [pendingNextEpisode] are only ever written by
+     * [showNextUpPanel], but they used to SURVIVE into a later decision: the
+     * credits card (because-you-watched) is exactly what is shown when there is
+     * no next episode, and a held countdown still fired with those stale
+     * fields, resolving - and trying to play - an episode that does not exist,
+     * right underneath that panel.
+     */
+    private var nextUpHandoffArmed = false
     private val nextUpCountdownHandler = Handler(Looper.getMainLooper())
     private val nextUpCountdownRunnable = object : Runnable {
         override fun run() {
+            if (!nextUpHandoffArmed) {
+                nextUpCountdownHeld = false
+                nextUpCountdownRemaining = 0
+                return
+            }
             nextUpCountdownRemaining--
             if (nextUpCountdownRemaining <= 0) {
                 // The countdown fired unattended: count this as an
@@ -3221,6 +3241,9 @@ class NativePlayerActivity : ComponentActivity() {
 
         // "Up next" popup buttons
         btnNextPlay.setOnClickListener {
+            // Same guard as the countdown: this card's PLAY must never hand the
+            // session on from a DIFFERENT end-of-episode decision.
+            if (!nextUpHandoffArmed) return@setOnClickListener
             // Manual confirmation: user is awake - restart the watchdog.
             AppPreferences.resetConsecutiveAutoplays(this)
             launchNextEpisode(
@@ -4653,6 +4676,13 @@ class NativePlayerActivity : ComponentActivity() {
                     }
                 }
                 Player.STATE_ENDED -> {
+                    // Marked BEFORE the handoff: onStop() consults this flag so a
+                    // session that reached its own end is recorded as watched
+                    // even when the last save has to happen as the activity
+                    // exits. Both fallback paths in
+                    // detectStallEndedFallback() already set it; this is the
+                    // primary one and it did not.
+                    playbackEndedHandled = true
                     onPlaybackEnded()
                 }
             }
@@ -6828,9 +6858,14 @@ class NativePlayerActivity : ComponentActivity() {
     // --- Playback Ended ---
     private fun onPlaybackEnded() {
         scrobbleSimkl("stop", progressOverride = 100.0)
-        scope?.launch {
-            saveProgress(reason = "ended", forceCompleted = true)
-        }
+        // Saved SYNCHRONOUSLY rather than from `scope`. saveProgress reads the
+        // position while the player is still alive and then does its own
+        // NonCancellable database write, whereas a scope-bound call was a
+        // coroutine that onStop's `scope?.cancel()` could kill before it ever
+        // ran: leaving the player (BACK, or a handoff that finishes the
+        // activity) right after the credits left the episode with no watch
+        // marker and the resume bar exactly where the viewer had been.
+        saveProgress(reason = "ended", forceCompleted = true)
         // The panel is normally already up from maybeTriggerEndPanels (it opens
         // during the credits) with its auto-advance countdown held because the
         // episode was not over yet. Playback is over now, so let it run.
@@ -7281,6 +7316,20 @@ class NativePlayerActivity : ComponentActivity() {
      */
     private fun showBecauseYouWatchedPanel() {
         if (bywDismissed || isLiveChannel) return
+        // This is the panel for "there is nothing left to chain to", so
+        // nothing an earlier Up Next decision left behind may fire: a held
+        // countdown carrying those stale pendingNext* fields used to resolve
+        // and try to play a next episode that does not exist, right under this
+        // panel - and the resolution it started is what the viewer then backed
+        // out of, losing the finished episode's bookkeeping.
+        nextUpHandoffArmed = false
+        nextUpCountdownHeld = false
+        nextUpCountdownRemaining = 0
+        nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
+        pendingNextSeason = null
+        pendingNextEpisode = null
+        pendingNextEpisodeName = null
+        pendingNextEpisodeRuntime = null
         bywUi.show(itemName)
         // Credits are rolling: shrink the video into the corner so the picks
         // own the screen while the credits keep playing.
@@ -7373,6 +7422,9 @@ class NativePlayerActivity : ComponentActivity() {
         pendingNextSeason = targetSeason
         pendingNextEpisode = targetEpisode
         pendingNextEpisodeName = null
+        // This IS the decision now: only the countdown and PLAY that follow
+        // from it may auto-advance.
+        nextUpHandoffArmed = true
 
         nextUpShowTitle.text = itemName
         nextUpEpisodeLabel.text = "Season $targetSeason • Episode $targetEpisode"
@@ -8130,7 +8182,12 @@ class NativePlayerActivity : ComponentActivity() {
         // lifecycleScope, which is independent of `scope`, but ordering it
         // ahead of teardown keeps intent clear and avoids racing any
         // scope-bound work that reads history.
-        saveProgress(reason = "stop")
+        // A session that reached its own end must never be recorded as merely
+        // resumable. After ENDED the saved position can sit short of the
+        // completion threshold (a frozen tail, or the end panel having paused
+        // the clock), which is what left a finished episode without its watch
+        // marker and with its old progress bar still showing.
+        saveProgress(reason = "stop", forceCompleted = playbackEndedHandled)
         scope?.cancel()
         scrobbleSimkl("stop")
         subtitleCueHandler?.cancelPending()

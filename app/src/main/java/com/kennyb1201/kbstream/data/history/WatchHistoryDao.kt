@@ -229,6 +229,28 @@ suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity>
     )
     suspend fun deleteResumeRowsForParents(parentIds: List<String>)
 
+    /**
+     * Single-episode form of [deleteResumeRowsForParents]: marking one episode
+     * - or a season's worth - watched has to take that episode's progress bar
+     * with it, and the row holding that progress is not the completed marker
+     * the mark writes.
+     */
+    @Query(
+        """
+        DELETE FROM watch_history
+        WHERE parentId IN (:parentIds)
+          AND season = :season
+          AND episode = :episode
+          AND positionMs > 0
+          AND isCompleted = 0
+        """
+    )
+    suspend fun deleteResumeRowsForParentsSeasonEpisode(
+        parentIds: List<String>,
+        season: Int,
+        episode: Int
+    )
+
     @Query("UPDATE watch_history SET backdropUrl = :backdropUrl WHERE id = :id AND (backdropUrl IS NULL OR backdropUrl = '')")
     suspend fun updateBackdropIfMissing(id: String, backdropUrl: String)
 

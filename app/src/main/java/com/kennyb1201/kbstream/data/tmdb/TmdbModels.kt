@@ -963,12 +963,21 @@ fun TmdbDetail.displayLengthLabel(isMovie: Boolean): String? =
  * and audience rating. For surfaces with room for a single line, such as the
  * player's because-you-watched featured strip.
  */
-fun TmdbDetail.displayMetaLine(isMovie: Boolean): String? =
+fun TmdbDetail.displayMetaLine(
+    isMovie: Boolean,
+    /**
+     * How many genres to name. The player's credits strip has a single line and
+     * these are the only genres in the app shown on one, so it asks for one -
+     * the first genre is the one that describes the title, while three read as
+     * a tag cloud on a strip this small.
+     */
+    genreLimit: Int = 3
+): String? =
     listOfNotNull(
         certification(isMovie),
         releaseYear(),
         displayLengthLabel(isMovie),
-        displayGenres(),
+        displayGenres(limit = genreLimit),
         displayRating()?.let { "\u2605 $it" }
     ).joinToString(" • ").takeIf { it.isNotEmpty() }
 
