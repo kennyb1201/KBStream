@@ -1,4 +1,47 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- WHY CLEARTEXT IS PERMITTED APP-WIDE. A deliberate decision, recorded so it
+     is not re-raised as a finding and not "fixed" by someone who does not know
+     what depends on it.
+
+     Every host the app talks to on its own behalf is HTTPS: TMDB, Simkl,
+     MDBList, OMDb, OpenSubtitles, Supabase (auth + sync), Sentry and the
+     GitHub update feed all use https:// endpoints and keep normal certificate
+     validation. Nothing below weakens any of those; this file only declines to
+     BLOCK plaintext for destinations the user chooses.
+
+     Plaintext has to stay permitted because the interesting hosts are unknown
+     until runtime and are frequently http:
+       * IPTV playlist / XMLTV guide URLs, whose entry fields advertise
+         "http://host/..." as the expected shape (see GuideScreen.kt).
+       * Stremio-style addon manifests, also supplied by the user.
+       * LAN pairing, where the phone-to-TV handoff is built as
+         "http://<tv-ip>:<port>" (see AddonsScreen.kt) and a device on the
+         local network generally has no certificate at all.
+     Stream, poster and subtitle URLs from those sources are handled
+     scheme-agnostically (StreamRanker.kt, KBRepository.kt,
+     PlayerSourceExtras.kt), so blocking http would break playback for sources
+     that work today, silently and only on the user's device.
+
+     A domain allowlist cannot express this: this file is compiled into the
+     APK, so it can only name hosts known at build time, while these are typed
+     in by the user afterwards. Narrowing the exception to a few known domains
+     would therefore change nothing for the sources that need it. The only
+     real choice is permit cleartext or fail those connections.
+
+     ACCEPTED RISK, stated plainly: for a user-added http source, the
+     playlist/guide contents and any credentials embedded in them (an Xtream
+     username/password carried in the URL, for instance) travel unencrypted, so
+     someone on the same network could read or tamper with them. That exposure
+     is confined to the sources the user themselves added; it does not extend
+     to the app's own API traffic, which stays on HTTPS.
+
+     TO TIGHTEN LATER: if plaintext sources are ever dropped, set
+     cleartextTrafficPermitted="false" here, or delete this file and the
+     android:networkSecurityConfig reference in AndroidManifest.xml. No other
+     change is needed, because nothing in the app requires cleartext.
+     (There is deliberately no android:usesCleartextTraffic attribute in the
+     manifest: it is ignored on API 24+ whenever a network security config is
+     present, and having both invites them to disagree.) -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="true" />
 </network-security-config>

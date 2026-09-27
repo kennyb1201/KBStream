@@ -97,6 +97,11 @@
          Backup would sweep those files into cloud backup / `adb backup`.
          Nothing here needs to survive a device transfer — a new install signs
          in again and the watched state re-pulls from sync. -->
+    <!-- Cleartext HTTP is permitted app-wide so user-supplied IPTV/addon
+         sources and the http:// LAN pairing handoff keep working. That is a
+         deliberate tradeoff, not an oversight: the reasoning, the accepted
+         risk and how to tighten it are documented in
+         res/xml/network_security_config.xml. -->
     <application
         android:name=".MainApplication"
         android:allowBackup="false"
