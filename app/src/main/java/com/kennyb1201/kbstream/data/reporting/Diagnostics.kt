@@ -52,7 +52,8 @@ object Diagnostics {
     private val CACHE_DIRS = listOf(
         "image_cache",
         "media_cache",
-        "addon_http_cache"
+        "addon_http_cache",
+        com.kennyb1201.kbstream.data.cache.DiskSweep.SUBTITLE_DIR
     )
 
     private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.US)

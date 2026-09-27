@@ -111,7 +111,10 @@ object AnimeDetect {
         val detail = try {
             repository.fetchEnrichedMetaCached(
                 imdbId = parentId,
-                type = parentType
+                type = parentType,
+                // full = true: the verdict keys off the keyword list, which the
+                // rail projection leaves out.
+                full = true
             )
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e

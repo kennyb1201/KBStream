@@ -10,20 +10,25 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.kennyb1201.kbstream.data.cache.DiskSweep
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheMaintenance
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.update.AppUpdater
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 
 /**
- * Bounds the TMDB JSON cache and hands the database file its space back.
+ * Every periodic disk cleanup in one place: bounds the TMDB JSON cache, hands
+ * the database file its space back, and sweeps the caches that grow by file
+ * COUNT rather than by bytes.
  *
- * The trim is also enforced by [com.kennyb1201.kbstream.data.tmdb.TmdbRepository]
- * on the write path, so this worker is not what stops the growth. It exists for
- * the other half: `VACUUM`, which needs an exclusive lock on the database and
- * temporarily as much free storage as the file itself, and therefore cannot run
- * from a screen — a launch-time pass would either collide with the Home reads
- * already in flight or be wrongly skipped as busy.
+ * The JSON trim is also enforced by
+ * [com.kennyb1201.kbstream.data.tmdb.TmdbRepository] on the write path, so this
+ * worker is not what stops that growth. It exists for the parts that cannot run
+ * from a screen: `VACUUM` needs an exclusive lock on the database and
+ * temporarily as much free storage as the file itself, so a launch-time pass
+ * would either collide with the Home reads already in flight or be wrongly
+ * skipped as busy.
  *
  * Deliberately NOT network-gated. Everything here is local, and an install that
  * has been offline for weeks is exactly one that has been accumulating rows.
@@ -38,10 +43,19 @@ class CacheMaintenanceWorker(
             val dao = WatchHistoryDatabase.getInstance(applicationContext).tmdbJsonCacheDao()
             val trim = TmdbJsonCacheMaintenance.trim(dao)
             val reclaimed = TmdbJsonCacheMaintenance.reclaimDatabaseSpace(applicationContext, dao)
+            // The small caches are bounded by file count, so the byte budget
+            // above never sees them: clock-named subtitle copies and avatar
+            // imports that were picked and then abandoned.
+            val subtitles = DiskSweep.sweepSubtitleCache(applicationContext)
+            val avatars = DiskSweep.sweepPendingAvatars(applicationContext)
+            // A staged update APK for a build that is already installed.
+            val stagedApk = AppUpdater.clearStaleStagedApk(applicationContext)
             Log.i(
                 TAG,
                 "maintenance done: agedOut=${trim.agedOut} evicted=${trim.evicted} " +
-                    "left=${trim.rows} row(s) / ${trim.bytes / 1_048_576} MB, reclaimed=$reclaimed"
+                    "left=${trim.rows} row(s) / ${trim.bytes / 1_048_576} MB, " +
+                    "reclaimed=$reclaimed subtitles=$subtitles avatars=$avatars " +
+                    "stagedApk=$stagedApk"
             )
             Result.success()
         } catch (e: CancellationException) {

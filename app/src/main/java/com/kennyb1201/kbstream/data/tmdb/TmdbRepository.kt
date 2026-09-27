@@ -59,6 +59,38 @@ data class StudioSection(val title: String, val items: List<StudioItem>)
  * surviving entry without artwork renders as a titled card, which is
  * `PosterCard`'s documented fallback, so nothing draws blank.
  */
+/**
+ * The rail/resume projection of a TMDB detail response: everything a card, a
+ * badge, a next-episode walk or a playback target reads, and none of the bulk.
+ *
+ * The six fields it blanks are exactly the ones every consumer outside the
+ * Detail screen, the Home/KB heroes and anime detection ignores. Measured
+ * against the live API, they are ~93% of a TV row and ~94% of a movie row
+ * (images and credits dominate; one full row is 65-280 KB against 5-20 KB for
+ * this projection), which is why the rail path persists this instead.
+ *
+ * Blanking fields on the existing model rather than introducing a slim type
+ * keeps `slim + bulk == full` structurally true and lets both rows share one
+ * JSON adapter.
+ *
+ * `releaseDates`/`contentRatings` deliberately survive: the Kids Mode ceiling
+ * is enforced from `certification()`, which reads them, and that check runs
+ * over every rail page.
+ *
+ * Top-level and pure on purpose: this is the rule the whole disk-budget story
+ * rests on (a slim row must never be served to a surface that needs the bulk),
+ * and as a testable function it can be asserted directly instead of through a
+ * repository that needs a Context to build.
+ */
+internal fun TmdbDetail.railProjection(): TmdbDetail = copy(
+    credits = null,
+    videos = null,
+    recommendations = null,
+    reviews = null,
+    keywords = null,
+    images = null
+)
+
 internal fun hasSomethingToDraw(item: StudioItem): Boolean =
     !item.item.posterPath.isNullOrBlank() ||
         !item.item.overview.isNullOrBlank() ||
@@ -194,6 +226,19 @@ class TmdbRepository private constructor(context: Context) :
     private val detailCacheDiskTtlMs = 30L * 24L * 60L * 60L * 1000L
 
     /**
+     * Rail/resume projections, keyed exactly like [detailCache] but never
+     * holding anything the Detail screen or a hero strip reads.
+     *
+     * A separate map rather than one map of mixed shapes, because the two
+     * answer different questions: a slim entry that landed in [detailCache]
+     * would be handed to DetailViewModel as the title's detail, and the cast
+     * list, trailer and "More like this" rail would all quietly come back
+     * empty. Keeping the slim path with nowhere to write that is what makes the
+     * split safe without every call site having to know which one it wants.
+     */
+    private val railDetailCache = ConcurrentHashMap<String, Pair<Long, TmdbDetail?>>()
+
+    /**
      * Disk key for a cached detail response.
      *
      * Versioned (`_en`) because the detail request now restricts its appended
@@ -205,6 +250,16 @@ class TmdbRepository private constructor(context: Context) :
      * cache through the same cleanup that trims every other stale entry.
      */
     private fun detailDiskKey(key: String): String = "detail_en:$key"
+
+    /**
+     * Disk key for the rail/resume projection of the same response.
+     *
+     * Versioned for the same reason as [detailDiskKey]: the projection is a
+     * different payload behind the same title, and reusing the `detail_en`
+     * prefix would make a slim row indistinguishable from a full one that
+     * simply never had a cast list.
+     */
+    private fun railDetailKey(key: String): String = "railenrich_en:$key"
 
     private val seasonEpisodesCache =
         ConcurrentHashMap<String, Pair<Long, List<ResolvedEpisode>>>()
@@ -395,9 +450,10 @@ class TmdbRepository private constructor(context: Context) :
      * written once.
      */
     private fun pruneMemoryCaches() {
-        // All four maps keep their timestamp in Pair.first, which is the stamp
+        // Every map here keeps its timestamp in Pair.first, which is the stamp
         // evictOldest orders by.
         evictOldest(detailCache, { it.first }, MAX_DETAIL_ENTRIES)
+        evictOldest(railDetailCache, { it.first }, MAX_DETAIL_ENTRIES)
         evictOldest(seasonEpisodesCache, { it.first }, MAX_SEASON_ENTRIES)
         evictOldest(imdbResolutionMemoryCache, { it.first }, MAX_RESOLUTION_ENTRIES)
         evictOldest(tmdbResolutionMemoryCache, { it.first }, MAX_RESOLUTION_ENTRIES)
@@ -405,13 +461,14 @@ class TmdbRepository private constructor(context: Context) :
     }
 
     /**
-     * Drops every in-memory cache. All four are rebuilt from the JSON cache
+     * Drops every in-memory cache. All of them are rebuilt from the JSON cache
      * table on disk (30-day TTL) or from one request, so the worst case cost is
      * a database read -- which is what makes them worth giving back when the
      * heap is tight, like the guide's snapshots.
      */
     override fun releaseCaches() {
         detailCache.clear()
+        railDetailCache.clear()
         seasonEpisodesCache.clear()
         imdbResolutionMemoryCache.clear()
         tmdbResolutionMemoryCache.clear()
@@ -428,6 +485,7 @@ class TmdbRepository private constructor(context: Context) :
      */
     override fun cacheStats(): String =
         "tmdb: detail=${detailCache.size}/$MAX_DETAIL_ENTRIES" +
+            " rail=${railDetailCache.size}/$MAX_DETAIL_ENTRIES" +
             " season=${seasonEpisodesCache.size}/$MAX_SEASON_ENTRIES" +
             " imdbRes=${imdbResolutionMemoryCache.size}/$MAX_RESOLUTION_ENTRIES" +
             " tmdbRes=${tmdbResolutionMemoryCache.size}/$MAX_RESOLUTION_ENTRIES" +
@@ -574,18 +632,56 @@ class TmdbRepository private constructor(context: Context) :
             }.getOrNull()
     }
 
-    suspend fun fetchEnrichedMetaCached(imdbId: String, type: String): TmdbDetail? {
+    /**
+     * The enriched TMDB detail for one raw id: in-memory cache, then the disk
+     * cache, then the network.
+     *
+     * [full] picks WHICH projection is served and persisted. It is a parameter
+     * rather than a second function because the callers differ in that one
+     * thing only:
+     *
+     *  - the default (`full = false`) is the rail/resume/badge projection. It
+     *    reads and writes the SLIM row — see [railProjection] for what that
+     *    leaves out and why it is ~90% of the payload. Rails, browse grids, KB
+     *    folders, resume rows, next-episode walks and the Kids Mode ceiling all
+     *    land here, and none of them read the bulk.
+     *  - `full = true` is for the surfaces that DO read it: the Detail screen
+     *    (cast, trailer, "More like this", keywords, reviews), the Home and
+     *    KB-folder heroes (cast line + trailer) and anime detection (keywords).
+     *    It reads and writes the full row exactly as before, so a slim row can
+     *    never reach them.
+     *
+     * A fetch is always the FULL response — one API call serves both — so the
+     * full in-memory cache is warmed either way. A slim request therefore keeps
+     * the hero instant for the rest of the session, and only a process restart
+     * pays the extra request when the user finally opens the title.
+     */
+    suspend fun fetchEnrichedMetaCached(
+        imdbId: String,
+        type: String,
+        full: Boolean = false
+    ): TmdbDetail? {
         val key = "${normalizeType(type)}:$imdbId"
         val now = System.currentTimeMillis()
         pruneMemoryCaches()
 
-        // In-memory TTL cache (fast path for the current session).
+        // In-memory TTL cache (fast path for the current session). The full
+        // cache is consulted first by BOTH paths, because a full object answers
+        // a slim question: a title the Detail screen already loaded serves its
+        // own rail card with no extra work.
         val cached = detailCache[key]
         if (cached != null && now - cached.first < detailCacheTtlMs) {
             return cached.second
         }
+        if (!full) {
+            val railCached = railDetailCache[key]
+            if (railCached != null && now - railCached.first < detailCacheTtlMs) {
+                return railCached.second
+            }
+        }
 
-        // Disk cache so resolved metadata survives restarts.
+        // Disk cache so resolved metadata survives restarts. Full first, for the
+        // same reason; the slim row is only consulted when there is no full one.
         val diskKey = detailDiskKey(key)
         val diskCached = runCatching {
             tmdbJsonCacheDao.getByKey(diskKey)
@@ -596,7 +692,25 @@ class TmdbRepository private constructor(context: Context) :
             }.getOrNull()
             if (parsed != null) {
                 detailCache[key] = now to parsed
+                railDetailCache[key] = now to parsed
                 return parsed
+            }
+        }
+        if (!full) {
+            val railKey = railDetailKey(key)
+            val railDiskCached = runCatching {
+                tmdbJsonCacheDao.getByKey(railKey)
+            }.getOrNull()
+            if (railDiskCached != null && now - railDiskCached.updatedAt < detailCacheDiskTtlMs) {
+                val parsed = runCatching {
+                    detailJsonAdapter.fromJson(railDiskCached.json)
+                }.getOrNull()
+                if (parsed != null) {
+                    // Only the rail map: this object has no cast, trailer or
+                    // recommendations, and must never answer a `full` caller.
+                    railDetailCache[key] = now to parsed
+                    return parsed
+                }
             }
         }
 
@@ -608,7 +722,20 @@ class TmdbRepository private constructor(context: Context) :
         // retry. Only a real answer is remembered, in memory and on disk.
         if (result != null) {
             detailCache[key] = now to result
-            cacheJson(diskKey, detailJsonAdapter.toJson(result), now)
+            // The slim memory entry holds the PROJECTION, not the response:
+            // rails never read the bulk, and keeping a full copy in both maps
+            // would double this class's retained heap for no gain. (The disk
+            // row is already the projection in the slim case.)
+            railDetailCache[key] = now to result.railProjection()
+            if (full) {
+                cacheJson(diskKey, detailJsonAdapter.toJson(result), now)
+            } else {
+                cacheJson(
+                    railDetailKey(key),
+                    detailJsonAdapter.toJson(result.railProjection()),
+                    now
+                )
+            }
         }
         return result
     }

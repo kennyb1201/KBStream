@@ -97,13 +97,15 @@ internal object SubtitleSearchHelper {
 
     /** Writes subtitle text into the app cache and returns a file:// Uri. */
     internal fun toCacheUri(context: Context, result: SubtitleSearchResult, body: String): Uri {
-        val dir = File(context.cacheDir, "kbstream_subs").apply { mkdirs() }
+        val dir = com.kennyb1201.kbstream.data.cache.DiskSweep.subtitleDir(context)
         val ext = when {
             result.fileName.endsWith(".vtt", true) -> "vtt"
             result.fileName.endsWith(".ass", true) ||
                 result.fileName.endsWith(".ssa", true) -> "ass"
             else -> "srt"
         }
+        // Deterministic by file id: re-picking the same track overwrites its
+        // own file instead of adding another one (see DiskSweep).
         val f = File(dir, "${result.fileId}.$ext")
         f.writeText(body)
         return Uri.fromFile(f)

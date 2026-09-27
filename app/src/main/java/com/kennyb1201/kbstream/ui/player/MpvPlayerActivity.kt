@@ -31,6 +31,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.badges.StreamBadge
+import com.kennyb1201.kbstream.data.cache.DiskSweep
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.player.ExternalPlayer
 import com.kennyb1201.kbstream.data.player.LanguageMatch
@@ -317,7 +318,7 @@ class MpvPlayerActivity : ComponentActivity() {
     )
 
     /** Where sidecar subtitles are copied; shared with the online downloads. */
-    private val subtitleCacheDirName = "kbstream_subs"
+    private val subtitleCacheDirName = DiskSweep.SUBTITLE_DIR
 
     // --- External subtitles: the other half of the main player's SUBTITLES
     // picker ---------------------------------------------------------------
@@ -1510,14 +1511,32 @@ class MpvPlayerActivity : ComponentActivity() {
         lifecycleScope.launch {
             val copied = runCatching {
                 withContext(Dispatchers.IO) {
-                    val directory = File(cacheDir, subtitleCacheDirName).apply { mkdirs() }
-                    val target = File(directory, "sidecar-${System.nanoTime()}-${displayNameFor(uri)}")
-                    val stream = contentResolver.openInputStream(uri)
-                        ?: return@withContext null
-                    stream.use { input ->
-                        target.outputStream().use { output -> input.copyTo(output) }
+                    // Keyed by the document URI, not the clock: picking the same
+                    // sidecar twice must reuse one file rather than leave the
+                    // first behind (see DiskSweep). The extension comes from the
+                    // display name so mpv still sniffs the right format.
+                    val extension = displayNameFor(uri)
+                        .substringAfterLast('.', missingDelimiterValue = "")
+                        .lowercase()
+                        .let { if (it in DiskSweep.SUBTITLE_EXTENSIONS) it else "srt" }
+                    val cached = DiskSweep.existingSubtitleFile(
+                        this@MpvPlayerActivity,
+                        uri.toString(),
+                        extension
+                    )
+                    cached ?: run {
+                        val stream = contentResolver.openInputStream(uri)
+                            ?: return@withContext null
+                        val file = DiskSweep.targetSubtitleFile(
+                            this@MpvPlayerActivity,
+                            uri.toString(),
+                            extension
+                        )
+                        stream.use { input ->
+                            file.outputStream().use { output -> input.copyTo(output) }
+                        }
+                        file
                     }
-                    target
                 }
             }.getOrNull()
             if (copied == null) {
@@ -1525,9 +1544,11 @@ class MpvPlayerActivity : ComponentActivity() {
                 return@launch
             }
             externalSubtitleUri = uri
-            externalSubtitleName = copied.name
+            // The user's own file name, not the cache file's: the panel note
+            // is the only place this is shown, and the cache name is a hash now.
+            externalSubtitleName = displayNameFor(uri)
             surface?.addExternalSubtitle(Uri.fromFile(copied).toString())
-            showToast("Subtitle loaded: ${copied.name}", 4_000L)
+            showToast("Subtitle loaded: ${displayNameFor(uri)}", 4_000L)
             refreshSettings()
         }
     }

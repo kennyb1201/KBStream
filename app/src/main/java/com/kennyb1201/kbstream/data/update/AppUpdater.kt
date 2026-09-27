@@ -135,6 +135,16 @@ object AppUpdater {
 
     private const val TAG = "AppUpdater"
 
+    /** Where a downloaded APK waits for the installer. */
+    private const val UPDATES_DIR = "updates"
+
+    /**
+     * `...-build<versionCode>.apk`, the name CI publishes and the name the
+     * updater writes — parsed on both sides so a staged file can be matched
+     * against the installed build (see [clearStaleStagedApk]).
+     */
+    private val BUILD_NUMBER = Regex("build(\\d+)")
+
     // Derived from the process-wide base client: the long read window this
     // needs for an APK download stays its own, the sockets and threads do not.
     private val client = BaseHttpClient.derived {
@@ -247,7 +257,7 @@ object AppUpdater {
         state.value = UpdateState.Downloading(0)
         scope.launch {
             try {
-                val dir = File(context.cacheDir, "updates").apply { mkdirs() }
+                val dir = File(context.cacheDir, UPDATES_DIR).apply { mkdirs() }
                 dir.listFiles()?.forEach { it.delete() }
                 val apk = File(
                     dir,
@@ -283,6 +293,46 @@ object AppUpdater {
     }
 
     // ── Internals ──────────────────────────────────────────────────
+
+    /**
+     * Deletes a staged update APK that is not newer than the installed build,
+     * returning whether anything went.
+     *
+     * `cacheDir/updates` is cleared before each download, so it only ever holds
+     * one file — but that one file is a whole signed APK (tens of megabytes,
+     * and an unsigned debug build is over a hundred), and it survives the case
+     * that matters: the download succeeded, the user dismissed the install
+     * prompt, and the build was installed by some other route afterwards. That
+     * leftover is never downloaded again and never needed, because an update is
+     * only ever offered when it is strictly newer than the installed code.
+     *
+     * Refuses to touch anything while a download or an install is pending:
+     * the staged file is handed to PackageInstaller by path, so deleting it
+     * under an in-flight install would break the install rather than save the
+     * space. The comparison is `<=` on purpose — an APK for exactly the
+     * installed build is already spent.
+     */
+    fun clearStaleStagedApk(context: Context): Boolean {
+        val current = state.value
+        if (current is UpdateState.Downloading || current is UpdateState.ReadyToInstall) {
+            return false
+        }
+        val dir = File(context.cacheDir, UPDATES_DIR)
+        if (!dir.isDirectory) return false
+        val installed = runCatching { installedVersionCode(context) }.getOrNull() ?: return false
+
+        var removed = false
+        dir.listFiles()?.forEach { file ->
+            if (!file.isFile) return@forEach
+            // An unreadable build number goes too: nothing can install from a
+            // name the updater itself could not parse, and that is exactly what
+            // a half-written or renamed leftover looks like.
+            val built = BUILD_NUMBER.find(file.name)?.groupValues?.get(1)?.toLongOrNull()
+            if ((built == null || built <= installed) && file.delete()) removed = true
+        }
+        if (removed) Log.i(TAG, "cleared a staged update APK (installed=$installed)")
+        return removed
+    }
 
     private fun installedVersionCode(context: Context): Long {
         val info = context.packageManager.getPackageInfo(context.packageName, 0)
@@ -345,7 +395,7 @@ object AppUpdater {
         val apkName = assets(release)
             .firstOrNull { it.getString("name").endsWith(".apk") }
             ?.getString("name") ?: return null
-        val match = Regex("build(\\d+)").find(apkName) ?: return null
+        val match = BUILD_NUMBER.find(apkName) ?: return null
         val code = match.groupValues[1].toLongOrNull() ?: return null
         // No metadata.json means no published hash: filename fallback only.
         return ReleaseMeta(code, apkName.substringBefore("-build"), null)

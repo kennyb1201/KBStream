@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.player
 
 import android.content.Context
 import android.net.Uri
+import com.kennyb1201.kbstream.data.cache.DiskSweep
 import android.util.AttributeSet
 import android.util.Log
 import androidx.media3.common.MediaItem
@@ -289,22 +290,33 @@ class AddonSubtitleController(
         }
     }
 
-    /** Downloads [url] to app cache and returns its file URI, or null on failure. */
+    /**
+     * Downloads [url] into the shared subtitle cache, or returns the copy
+     * already there.
+     *
+     * The file name is derived from the URL (see DiskSweep) rather than from
+     * the clock, which is what makes that second part possible: the previous
+     * `addon_sub_${System.nanoTime()}` name could never collide with an earlier
+     * download of the same track, so every use re-downloaded it AND left
+     * another file behind, forever.
+     */
     private fun download(url: String): Uri? {
+        val extension = url
+            .substringBefore('?')
+            .substringAfterLast('.', missingDelimiterValue = "")
+            .lowercase()
+            .let { if (it in DiskSweep.SUBTITLE_EXTENSIONS) it else "srt" }
+
         return try {
+            DiskSweep.existingSubtitleFile(appContext, url, extension)?.let { cached ->
+                return Uri.fromFile(cached).also { downloadCache[url] = it }
+            }
+
             val request = okhttp3.Request.Builder().url(url).build()
             downloadClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return null
                 val body = response.body ?: return null
-                val ext = url
-                    .substringBefore('?')
-                    .substringAfterLast('.', missingDelimiterValue = "")
-                    .lowercase()
-                val safeExt = if (ext in setOf("srt", "vtt", "ssa", "ass")) ext else "srt"
-                val file = java.io.File(
-                    appContext.cacheDir,
-                    "addon_sub_${System.nanoTime()}.$safeExt"
-                )
+                val file = DiskSweep.targetSubtitleFile(appContext, url, extension)
                 file.outputStream().use { out ->
                     body.byteStream().copyTo(out)
                 }

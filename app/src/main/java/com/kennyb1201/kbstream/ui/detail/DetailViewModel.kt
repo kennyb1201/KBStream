@@ -749,7 +749,15 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 // makes later revisits instant too.
                 val tmdbDeferred = async {
                     runCatching {
-                        tmdbRepository.fetchEnrichedMetaCached(id, normalizedType)
+                        // full = true: THIS is the screen that reads the bulk
+                        // (cast, trailer, keywords, reviews), and the object
+                        // published to _tmdbDetail is what every one of those
+                        // surfaces draws from.
+                        tmdbRepository.fetchEnrichedMetaCached(
+                            id,
+                            normalizedType,
+                            full = true
+                        )
                     }
                 }
 

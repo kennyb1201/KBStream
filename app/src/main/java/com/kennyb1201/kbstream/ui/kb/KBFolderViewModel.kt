@@ -209,7 +209,13 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
                                     tmdbRepository.getDetailByTmdbId(item.tmdbId, type)
 
                                 item.id.startsWith("tt", ignoreCase = true) ->
-                                    tmdbRepository.fetchEnrichedMetaCached(item.id, type)
+                                    // full = true: the folder hero reads
+                                    // tmdb.credits and detail.videos below.
+                                    tmdbRepository.fetchEnrichedMetaCached(
+                                        item.id,
+                                        type,
+                                        full = true
+                                    )
 
                                 else -> null
                             }

@@ -1078,9 +1078,13 @@ class HomeViewModel(
                                 }
 
                                 requestedId.trim().startsWith("tt", ignoreCase = true) -> {
+                                    // full = true: the hero strip below draws
+                                    // the cast line (tmdb.credits) and the
+                                    // trailer (videos) off this exact object.
                                     tmdbRepository.fetchEnrichedMetaCached(
                                         requestedId.trim(),
-                                        requestedType
+                                        requestedType,
+                                        full = true
                                     )
                                 }
 
