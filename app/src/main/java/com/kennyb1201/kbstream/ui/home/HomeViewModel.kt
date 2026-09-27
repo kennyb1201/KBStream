@@ -3150,9 +3150,13 @@ Log.d(
             Log.w("HOME_UPNEXT", "Instant up-next snapshot failed", e)
             return
         }
-        if (history.isEmpty()) return
+        // A resume row a later watched episode has overtaken is stale and
+        // must not seed the rail (see supersededResumeRowIds).
+        val visibleHistory = dropSupersededResumeRows(history)
 
-        val items = history.mapNotNull { entry ->
+        if (visibleHistory.isEmpty()) return
+
+        val items = visibleHistory.mapNotNull { entry ->
             UpNextItem(
                 id = buildString {
                     append("history:")
@@ -3246,7 +3250,15 @@ Log.d(
                     watchHistoryRepository.continueWatchingParentsFlow()
                 }
                 .debounce(UP_NEXT_DEBOUNCE_MS)
-                .collectLatest { history ->
+                .collectLatest { rawHistory ->
+
+                    // Continue Watching follows the furthest point watched:
+                    // drop in-progress rows a later completed episode has
+                    // overtaken (see supersededResumeRowIds). They would
+                    // otherwise win the rail and strand the show on an
+                    // abandoned episode.
+                    val history =
+                        dropSupersededResumeRows(rawHistory)
 
                     val requestVersion =
                         nextUpNextRequestVersion()
@@ -3732,6 +3744,34 @@ Log.d(
                     }
                 }
         }
+    }
+
+    /**
+     * Drops in-progress rows a LATER completed episode has already overtaken
+     * (see [supersededResumeRowIds]). Continue Watching must follow the
+     * furthest point watched - a stale partial row from an early episode must
+     * not win the rail while the user is many episodes ahead. On any read
+     * failure the rows are returned untouched (show the old behavior rather
+     * than hide a show).
+     */
+    private suspend fun dropSupersededResumeRows(
+        resumeRows: List<WatchHistoryEntity>
+    ): List<WatchHistoryEntity> {
+        if (resumeRows.isEmpty()) return resumeRows
+        val completedRows =
+            try {
+                historyDao.getCompletedSeriesRows()
+            } catch (_: Exception) {
+                return resumeRows
+            }
+        if (completedRows.isEmpty()) return resumeRows
+        val superseded = supersededResumeRowIds(resumeRows, completedRows)
+        if (superseded.isEmpty()) return resumeRows
+        Log.d(
+            "HOME_UPNEXT",
+            "Dropping ${superseded.size} superseded resume row(s)"
+        )
+        return resumeRows.filterNot { it.id in superseded }
     }
 
     private suspend fun nextUpNextRequestVersion(): Long {
@@ -4653,6 +4693,13 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     var totalAiredEpisodes = 0
     var watchedAiredEpisodes = 0
 
+    // Furthest episode actually watched (season, then episode). Continue
+    // Watching follows the furthest point, the way Simkl and MDBList do, so a
+    // stale resume row for an episode long since passed (a partial S1E5 while
+    // the user is on S3E15) cannot win over where the user actually is.
+    var furthestWatchedSeason: Int? = null
+    var furthestWatchedEpisode: Int = 0
+
     /*
      * Calculate the full watched/total episode count for the show.
      *
@@ -4759,6 +4806,19 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
                     watchedEpisodesForSeason
             ) {
                 watchedAiredEpisodes++
+
+                val reachedSeason = furthestWatchedSeason
+                if (
+                    reachedSeason == null ||
+                    season > reachedSeason ||
+                    (
+                        season == reachedSeason &&
+                            episode.episodeNumber > furthestWatchedEpisode
+                        )
+                ) {
+                    furthestWatchedSeason = season
+                    furthestWatchedEpisode = episode.episodeNumber
+                }
             }
         }
 
@@ -4964,11 +5024,30 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
             null
         }
 
+    // Ignore a resume row a LATER watched episode has already overtaken: the
+    // show resumes from the furthest point below, not from the abandoned
+    // episode. This is the "Continue S1E5 while on S3E15" report.
+    val resumeSeason = resume?.season
+    val resumeEpisode = resume?.episode
+    val furthestWatched = furthestWatchedSeason
+    val resumeIsSuperseded =
+        furthestWatched != null &&
+            resumeSeason != null &&
+            resumeEpisode != null &&
+            (
+                furthestWatched > resumeSeason ||
+                    (
+                        furthestWatched == resumeSeason &&
+                            furthestWatchedEpisode > resumeEpisode
+                        )
+                )
+
     if (
         resume != null &&
         resume.season != null &&
         resume.episode != null &&
-        resume.positionMs > 0L
+        resume.positionMs > 0L &&
+        !resumeIsSuperseded
     ) {
 
         val resumeEpisodes =
@@ -5069,11 +5148,23 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     /*
      * Find the next unwatched episode in the current season.
      */
+    // With no Simkl-provided starting point, resume from the furthest watched
+    // episode rather than S1E1: Continue Watching is "continue", not
+    // "backfill every gap", and it must not snap back to an abandoned
+    // episode.
     val startingSeason =
-        simklSeason ?: 1
+        simklSeason ?: furthestWatchedSeason ?: 1
 
     val startingEpisode =
-        simklEpisode ?: 1
+        simklEpisode
+            ?: if (
+                startingSeason == furthestWatchedSeason &&
+                furthestWatchedEpisode > 0
+            ) {
+                furthestWatchedEpisode
+            } else {
+                1
+            }
 
     val currentSeasonEpisodes =
         try {

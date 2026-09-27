@@ -118,4 +118,136 @@ class LocalNextUpRulesTest {
 
         assertEquals(listOf("tt2", "tt1"), result.map { it.first })
     }
+
+    private fun resumeRow(
+        id: String,
+        parentId: String,
+        season: Int?,
+        episode: Int?,
+        touchedAt: Long
+    ) = WatchHistoryEntity(
+        id = id,
+        parentId = parentId,
+        type = "series",
+        name = parentId,
+        poster = null,
+        streamUrl = null,
+        season = season,
+        episode = episode,
+        positionMs = 60_000L,
+        durationMs = 1_000_000L,
+        updatedAt = touchedAt,
+        isCompleted = false,
+        completedAt = null
+    )
+
+    private fun completedRow(
+        id: String,
+        parentId: String,
+        season: Int?,
+        episode: Int?,
+        completedAt: Long
+    ) = WatchHistoryEntity(
+        id = id,
+        parentId = parentId,
+        type = "series",
+        name = parentId,
+        poster = null,
+        streamUrl = null,
+        season = season,
+        episode = episode,
+        positionMs = 0L,
+        durationMs = 1_000_000L,
+        updatedAt = completedAt,
+        isCompleted = true,
+        completedAt = completedAt
+    )
+
+    @Test
+    fun `a resume row overtaken by a later episode is superseded`() {
+        // The reported bug: paused S1E5 long ago, watched through S3E15 since.
+        val superseded = supersededResumeRowIds(
+            resumeRows = listOf(
+                resumeRow("r", "tt1", 1, 5, touchedAt = 10)
+            ),
+            completedRows = listOf(
+                completedRow("c", "tt1", 3, 15, completedAt = 100)
+            )
+        )
+
+        assertEquals(setOf("r"), superseded)
+    }
+
+    @Test
+    fun `the furthest in-progress row is kept`() {
+        // Paused in the middle of the newest episode -> still the resume point.
+        val superseded = supersededResumeRowIds(
+            resumeRows = listOf(
+                resumeRow("r", "tt1", 3, 15, touchedAt = 200)
+            ),
+            completedRows = listOf(
+                completedRow("c", "tt1", 3, 14, completedAt = 100)
+            )
+        )
+
+        assertEquals(emptySet<String>(), superseded)
+    }
+
+    @Test
+    fun `rewatching a finished show keeps the fresh resume row`() {
+        // Resume touched NOW, completions long past: not superseded.
+        val superseded = supersededResumeRowIds(
+            resumeRows = listOf(
+                resumeRow("r", "tt1", 1, 1, touchedAt = 500)
+            ),
+            completedRows = listOf(
+                completedRow("c", "tt1", 3, 15, completedAt = 100)
+            )
+        )
+
+        assertEquals(emptySet<String>(), superseded)
+    }
+
+    @Test
+    fun `a movie resume row is never superseded`() {
+        val superseded = supersededResumeRowIds(
+            resumeRows = listOf(
+                resumeRow("r", "tt1", null, null, touchedAt = 10)
+            ),
+            completedRows = listOf(
+                completedRow("c", "tt1", 3, 15, completedAt = 100)
+            )
+        )
+
+        assertEquals(emptySet<String>(), superseded)
+    }
+
+    @Test
+    fun `a different show does not supersede`() {
+        val superseded = supersededResumeRowIds(
+            resumeRows = listOf(
+                resumeRow("r", "tt1", 1, 5, touchedAt = 10)
+            ),
+            completedRows = listOf(
+                completedRow("c", "tt2", 3, 15, completedAt = 100)
+            )
+        )
+
+        assertEquals(emptySet<String>(), superseded)
+    }
+
+    @Test
+    fun `id flavors are matched on the show identifier`() {
+        // Resume written under "tmdb:123", completions under plain "123".
+        val superseded = supersededResumeRowIds(
+            resumeRows = listOf(
+                resumeRow("r", "tmdb:123", 1, 5, touchedAt = 10)
+            ),
+            completedRows = listOf(
+                completedRow("c", "123", 3, 15, completedAt = 100)
+            )
+        )
+
+        assertEquals(setOf("r"), superseded)
+    }
 }
