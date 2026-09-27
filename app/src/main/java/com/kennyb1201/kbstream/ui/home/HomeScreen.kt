@@ -42,6 +42,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -158,6 +159,13 @@ private val RailBottomContentPadding = 12.dp
 
 internal val RailHorizontalStartPadding = 12.dp
 private val RailSectionGap = 20.dp
+
+// Room reserved below the focused rail for the NEXT rail: the section gap, the
+// next title, and a slice of its posters. railRowsBringIntoViewSpec pulls a
+// rail up off the landing inset when it is too tall to leave this band
+// visible, so every rail peeks the one below it instead of only the short
+// Continue Watching / Upcoming rows.
+private val RailNextSectionReveal = RailSectionGap + 60.dp
 
 // KB parity: MODERN_ROW_HEADER_FOCUS_INSET. When a row takes focus, its
 // header lands this far below the rails viewport top — deterministic landing
@@ -1738,6 +1746,138 @@ private fun UpcomingEpisodeCard(
     }
 }
 
+/**
+ * The Home hero, and the focus/hero-art state it reads.
+ *
+ * This exists as its own composable because a state read is charged to the
+ * scope that performs it: with these reads in `HomeScreen`'s body, every D-pad
+ * step recomposed the whole screen — the hero, the rails LazyColumn and its
+ * content lambdas, the top bar and the context menus — to change one image.
+ * Taking the [State] objects and reading them HERE keeps the work in this
+ * scope, so scrolling a rail only recomposes the hero. The two effects live
+ * here for the same reason: their `LaunchedEffect` keys are composition-time
+ * reads of that same state.
+ */
+@Composable
+private fun HomeHeroHost(
+    focusedItem: State<MetaPreview?>,
+    focusedFolder: State<KBFolder?>,
+    continueWatchingItem: State<UpNextItem?>,
+    heroMeta: State<Meta?>,
+    heroTmdbDetail: State<TmdbDetail?>,
+    heroBackdropUrl: State<String?>,
+    heroLogoUrl: State<String?>,
+    heroTrailerKey: State<String?>,
+    onResolveHeroMeta: (MetaPreview) -> Unit
+) {
+    val context = LocalContext.current
+
+    // Pre-warm the hero trailer resolve: on a cold start the source cache is
+    // empty, so the first post-dwell resolve otherwise starts the full
+    // InnerTube -> NewPipe chain only AFTER the 4s dwell elapses. Kicking the
+    // resolve off in the background the moment the key arrives means the
+    // post-dwell resolve is usually a cache hit (the resolve mutex coalesces
+    // both callers into one network flight) and playback starts immediately.
+    LaunchedEffect(heroTrailerKey.value) {
+        val key = heroTrailerKey.value
+        if (
+            !key.isNullOrBlank() &&
+            AppPreferences.getHeroTrailerAutoplay(context)
+        ) {
+            runCatching {
+                TrailerPlayerLauncher.resolvePlayableUrl(
+                    key,
+                    recordFailure = false
+                )
+            }
+        }
+    }
+
+    var heroTrailerReady by remember {
+        mutableStateOf(false)
+    }
+
+    // Dwell before any network work: focus that survives the dwell is a
+    // deliberate stop, and it is also what arms the trailer.
+    LaunchedEffect(
+        focusedItem.value?.id,
+        focusedItem.value?.type,
+        continueWatchingItem.value?.id
+    ) {
+        heroTrailerReady = false
+
+        focusedItem.value?.let {
+            onResolveHeroMeta(it)
+            delay(HeroTrailerDwellMs)
+            heroTrailerReady = true
+        }
+    }
+
+    // Hero owner: a focused KB folder tile (manifest artwork) or a focused
+    // catalog/Continue-Watching item. Folders render even when no catalog item
+    // has been focused yet.
+    val heroFolder = focusedFolder.value
+    val folderBackdrop = heroFolder?.let { f ->
+        f.heroBackdropUrl?.takeIf { it.isNotBlank() }
+            ?: f.coverImageUrl?.takeIf { it.isNotBlank() }
+    }
+    val folderLogo = heroFolder?.titleLogoUrl?.takeIf { it.isNotBlank() }
+    // KB's ModernHomeModels blanks the hero title for hideTitle folders (the
+    // clearlogo stands alone; with no logo the hero shows artwork only).
+    val folderPreview = heroFolder?.let { f ->
+        MetaPreview(
+            id = "kb-folder:${f.id ?: f.title}",
+            type = "movie",
+            name = if (f.hideTitle) "" else f.title
+        )
+    }
+
+    (folderPreview ?: focusedItem.value)?.let {
+        // KB-style proportional hero: give the rails a fixed fraction of the
+        // real screen height, and the hero whatever remains. Scales to any TV
+        // density, unlike the old fixed 300.dp which pushed the first rail's
+        // posters off the bottom on shorter panels.
+        val configuration = LocalConfiguration.current
+        val screenHeight = configuration.screenHeightDp.dp
+        val railsFraction = 0.52f
+        val heroComputedHeight =
+            (screenHeight * (1f - railsFraction))
+                .coerceAtMost(HomeHeroHeight)
+
+        HomeHero(
+            preview = it,
+            heroHeight = heroComputedHeight,
+            meta = if (heroFolder != null) null else heroMeta.value,
+            tmdbDetail = if (heroFolder != null) null else heroTmdbDetail.value,
+            heroBackdropUrl = if (heroFolder != null) folderBackdrop else heroBackdropUrl.value,
+            heroLogoUrl = if (heroFolder != null) folderLogo else heroLogoUrl.value,
+            trailerKey = if (heroFolder != null) null else heroTrailerKey.value,
+            autoPlayTrailer =
+                heroTrailerReady &&
+                    continueWatchingItem.value == null &&
+                    // Settings > Playback: hero trailer autoplay toggle
+                    AppPreferences.getHeroTrailerAutoplay(context),
+            // Settings > Interface: mute hero trailers toggle
+            muted = AppPreferences.getHeroTrailerMuted(context),
+            continueWatchingItem = continueWatchingItem.value,
+            // Collection manifests supply their own wordmark logo — render it
+            // larger than the shared TMDB hero logo.
+            heroLogoWidth =
+                if (heroFolder != null) {
+                    CollectionHeroLogoWidth
+                } else {
+                    HeroLogoWidth
+                },
+            heroLogoHeight =
+                if (heroFolder != null) {
+                    CollectionHeroLogoHeight
+                } else {
+                    HeroLogoHeight
+                }
+        )
+    }
+}
+
 @Composable
 private fun SectionTitle(text: String) {
     Text(
@@ -2153,34 +2293,14 @@ fun HomeScreen(
         viewModel.upcomingSchedule.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
-    val heroMeta by viewModel.heroMeta.collectAsStateWithLifecycle()
-    val heroTmdbDetail by viewModel.heroTmdbDetail.collectAsStateWithLifecycle()
-    val heroBackdropUrl by viewModel.heroBackdropUrl.collectAsStateWithLifecycle()
-    val heroLogoUrl by viewModel.heroLogoUrl.collectAsStateWithLifecycle()
-    val heroTrailerKey by viewModel.heroTrailerKey.collectAsStateWithLifecycle()
-
-    // Pre-warm the hero trailer resolve: on a cold start the source cache is
-    // empty, so the first post-dwell resolve otherwise starts the full
-    // InnerTube -> NewPipe chain only AFTER the 4s dwell elapses. Kicking the
-    // resolve off in the background the moment the key arrives means the
-    // post-dwell resolve is usually a cache hit (the resolve mutex coalesces
-    // both callers into one network flight) and playback starts immediately.
-    LaunchedEffect(heroTrailerKey) {
-        // Local val: delegated state properties can't be smart-cast to
-        // non-null after the isNullOrBlank() check.
-        val key = heroTrailerKey
-        if (
-            !key.isNullOrBlank() &&
-            AppPreferences.getHeroTrailerAutoplay(context)
-        ) {
-            runCatching {
-                TrailerPlayerLauncher.resolvePlayableUrl(
-                    key,
-                    recordFailure = false
-                )
-            }
-        }
-    }
+    // Held as State objects rather than values: HomeHeroHost below performs the
+    // reads, so a hero art/trailer update recomposes the hero instead of this
+    // whole screen (rails LazyColumn and overlays included).
+    val heroMetaState = viewModel.heroMeta.collectAsStateWithLifecycle()
+    val heroTmdbDetailState = viewModel.heroTmdbDetail.collectAsStateWithLifecycle()
+    val heroBackdropUrlState = viewModel.heroBackdropUrl.collectAsStateWithLifecycle()
+    val heroLogoUrlState = viewModel.heroLogoUrl.collectAsStateWithLifecycle()
+    val heroTrailerKeyState = viewModel.heroTrailerKey.collectAsStateWithLifecycle()
 
     // KB collections interleaved with addon rails (merged order from the
     // Collections manager: pin / reorder / hide). Computed in composable
@@ -2252,31 +2372,34 @@ fun HomeScreen(
         mutableStateOf(false)
     }
 
-    var focusedItem by remember {
+    // The state object is kept alongside the delegate so HomeHeroHost can read
+    // focus directly: the read is then charged to the hero's recompose scope
+    // rather than this function's, so a D-pad step no longer recomposes the
+    // whole screen (rails LazyColumn included).
+    val focusedItemState = remember {
         mutableStateOf<MetaPreview?>(firstHomeItem)
     }
+    var focusedItem by focusedItemState
 
     // KB folder tile currently under focus (null = a normal catalog item
     // owns the hero). The manifest supplies the folder's heroBackdropUrl /
     // titleLogoUrl directly, so the hero swaps to the collection's own
     // artwork without probing addons — no meta/trailer resolution happens
     // for folders.
-    var focusedFolder by remember {
+    val focusedFolderState = remember {
         mutableStateOf<KBFolder?>(null)
     }
+    var focusedFolder by focusedFolderState
 
-    var focusedContinueWatchingItem by remember {
+    val focusedContinueWatchingItemState = remember {
         mutableStateOf<UpNextItem?>(null)
     }
+    var focusedContinueWatchingItem by focusedContinueWatchingItemState
 
     // Scroll position of the rails LazyColumn; read/written by selectHero so
     // the Continue Watching row can be cleared out of the viewport on rail
     // focus (see below).
     val railListState = rememberLazyListState()
-
-    var heroTrailerReady by remember {
-        mutableStateOf(false)
-    }
 
     fun openTopBar(
         requester: FocusRequester
@@ -2334,6 +2457,7 @@ fun HomeScreen(
     val density = LocalDensity.current
     val railRowsBringIntoViewSpec = remember(density) {
         val topInsetPx = with(density) { RailHeaderFocusInset.toPx() }
+        val revealBandPx = with(density) { RailNextSectionReveal.toPx() }
         object : BringIntoViewSpec {
             override fun calculateScrollDistance(
                 offset: Float,
@@ -2341,10 +2465,20 @@ fun HomeScreen(
                 containerSize: Float
             ): Float {
                 val currentLeadingEdge = offset
-                // Already resting at the landing line: done. This also keeps
+                // Landing line, pulled up when the focused rail is too tall to
+                // leave the reveal band below it: landing a poster rail on the
+                // inset puts the next rail's title just past the viewport edge
+                // on shorter panels, which is why only the Continue Watching /
+                // Upcoming rows ever peeked the rail below them. Depends only
+                // on the row's size, so every child of a row still returns the
+                // same distance (no bounce mid-flight).
+                val revealTarget =
+                    (containerSize - abs(size) - revealBandPx).coerceAtLeast(0f)
+                val targetLeadingEdge = minOf(topInsetPx, revealTarget)
+                // Already resting on the landing line: done. This also keeps
                 // the spring quiet during horizontal focus moves (no bounce).
-                if (abs(currentLeadingEdge - topInsetPx) < 1f) return 0f
-                val distance = currentLeadingEdge - topInsetPx
+                if (abs(currentLeadingEdge - targetLeadingEdge) < 1f) return 0f
+                val distance = currentLeadingEdge - targetLeadingEdge
                 // Never force the list above its start (mirrors KB's
                 // canScrollBackward guard).
                 if (distance < 0f && !railListState.canScrollBackward) return 0f
@@ -2441,20 +2575,6 @@ fun HomeScreen(
             }
         }
     }
-
-    LaunchedEffect(
-    focusedItem?.id,
-    focusedItem?.type,
-    focusedContinueWatchingItem?.id
-) {
-    heroTrailerReady = false
-
-    focusedItem?.let {
-        viewModel.resolveHeroMeta(it)
-        delay(HeroTrailerDwellMs)
-        heroTrailerReady = true
-    }
-}
 
     LifecycleEventEffect(
         Lifecycle.Event.ON_RESUME
@@ -2582,75 +2702,17 @@ fun HomeScreen(
         Column(
             modifier = Modifier.fillMaxSize()
         ) {
-            // Hero owner: a focused KB folder tile (manifest artwork)
-            // or a focused catalog/Continue-Watching item. Folders render
-            // even when no catalog item has been focused yet.
-            val heroFolder = focusedFolder
-            val folderBackdrop = heroFolder?.let { f ->
-                f.heroBackdropUrl?.takeIf { it.isNotBlank() }
-                    ?: f.coverImageUrl?.takeIf { it.isNotBlank() }
-            }
-            val folderLogo = heroFolder?.titleLogoUrl?.takeIf { it.isNotBlank() }
-            // KB's ModernHomeModels blanks the hero title for
-            // hideTitle folders (the clearlogo stands alone; with no logo
-            // the hero shows artwork only).
-            val folderPreview = heroFolder?.let { f ->
-                MetaPreview(
-                    id = "kb-folder:${f.id ?: f.title}",
-                    type = "movie",
-                    name = if (f.hideTitle) "" else f.title
-                )
-            }
-            (folderPreview ?: focusedItem)?.let {
-                // KB-style proportional hero: give the rails a fixed
-                // fraction of the real screen height, and the hero whatever
-                // remains (minus one row title + breathing room). Scales to
-                // any TV density, unlike the old fixed 300.dp which pushed
-                // the first rail's posters off the bottom on shorter
-                // panels.
-                val configuration = LocalConfiguration.current
-                val screenHeight = configuration.screenHeightDp.dp
-                val railsFraction = 0.52f
-                val heroComputedHeight =
-                    (screenHeight * (1f - railsFraction))
-                        .coerceAtMost(HomeHeroHeight)
-
-                HomeHero(
-                    preview = it,
-                    heroHeight = heroComputedHeight,
-                    meta = if (heroFolder != null) null else heroMeta,
-                    tmdbDetail = if (heroFolder != null) null else heroTmdbDetail,
-                    heroBackdropUrl = if (heroFolder != null) folderBackdrop else heroBackdropUrl,
-                    heroLogoUrl = if (heroFolder != null) folderLogo else heroLogoUrl,
-                    trailerKey = if (heroFolder != null) null else heroTrailerKey,
-                    autoPlayTrailer =
-                        heroTrailerReady &&
-                            focusedContinueWatchingItem == null &&
-                            // Settings > Playback: hero trailer autoplay toggle
-                            com.kennyb1201.kbstream.ui.settings.AppPreferences
-                                .getHeroTrailerAutoplay(context),
-                    // Settings > Interface: mute hero trailers toggle
-                    muted =
-                        com.kennyb1201.kbstream.ui.settings.AppPreferences
-                            .getHeroTrailerMuted(context),
-                    continueWatchingItem =
-                        focusedContinueWatchingItem,
-                    // Collection manifests supply their own wordmark logo —
-                    // render it larger than the shared TMDB hero logo.
-                    heroLogoWidth =
-                        if (heroFolder != null) {
-                            CollectionHeroLogoWidth
-                        } else {
-                            HeroLogoWidth
-                        },
-                    heroLogoHeight =
-                        if (heroFolder != null) {
-                            CollectionHeroLogoHeight
-                        } else {
-                            HeroLogoHeight
-                        }
-                )
-            }
+            HomeHeroHost(
+                focusedItem = focusedItemState,
+                focusedFolder = focusedFolderState,
+                continueWatchingItem = focusedContinueWatchingItemState,
+                heroMeta = heroMetaState,
+                heroTmdbDetail = heroTmdbDetailState,
+                heroBackdropUrl = heroBackdropUrlState,
+                heroLogoUrl = heroLogoUrlState,
+                heroTrailerKey = heroTrailerKeyState,
+                onResolveHeroMeta = { viewModel.resolveHeroMeta(it) }
+            )
 
             // KB parity: the rows list gets the custom vertical
             // BringIntoViewSpec (fixed header landing inset). The opaque
