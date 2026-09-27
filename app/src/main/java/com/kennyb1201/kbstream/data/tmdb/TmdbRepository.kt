@@ -1139,6 +1139,41 @@ class TmdbRepository private constructor(context: Context) :
         return result
     }
 
+    /**
+     * Cache-only variant of [getDetailByTmdbId]: memory + disk TTL caches, no
+     * network. Used by the watched-state preload path, which runs for every
+     * visible poster and must never issue a request per item. A miss returns
+     * null, and the caller treats "unknown" the way it treats "not finished".
+     */
+    suspend fun cachedDetailByTmdbId(
+        tmdbId: Int,
+        type: String
+    ): TmdbDetail? {
+        val key = "${normalizeType(type)}:tmdb:$tmdbId"
+        val now = System.currentTimeMillis()
+        pruneMemoryCaches()
+
+        val cached = detailCache[key]
+        if (cached != null && now - cached.first < detailCacheTtlMs) {
+            return cached.second
+        }
+
+        val diskCached = runCatching {
+            tmdbJsonCacheDao.getByKey(detailDiskKey(key))
+        }.getOrNull()
+        if (diskCached != null && now - diskCached.updatedAt < detailCacheDiskTtlMs) {
+            val parsed = runCatching {
+                detailJsonAdapter.fromJson(diskCached.json)
+            }.getOrNull()
+            if (parsed != null) {
+                detailCache[key] = now to parsed
+                return parsed
+            }
+        }
+
+        return null
+    }
+
     suspend fun getByCompany(companyId: Int): List<StudioSection> =
         getInitialCompanySections(companyId)
 

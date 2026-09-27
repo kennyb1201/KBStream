@@ -14,6 +14,7 @@ import com.kennyb1201.kbstream.data.airdates.AirDateCorrection
 import com.kennyb1201.kbstream.data.airdates.TvmazeAirDateRepository
 import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
 import com.kennyb1201.kbstream.data.library.LibraryMirror
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
@@ -108,6 +109,17 @@ private const val CAUGHT_UP_UPCOMING_TTL_MS =
 
 /** Sync bookkeeping key inside the dismissals prefs store. */
 private const val DISMISSALS_SYNCED_AT = "dismissals_synced_at"
+
+/**
+ * Ceiling on how many locally-watched shows one Continue Watching refresh
+ * resolves into "next up" cards. Each candidate is one cached TMDB detail +
+ * season walk (see HomeViewModel's local next-up builder); the list is ordered
+ * newest completion first, so the cap only trims the tail of a long history.
+ */
+private const val MAX_LOCAL_NEXT_UP_ITEMS = 25
+
+/** Parallel TMDB resolutions while building the local next-up cards. */
+private const val LOCAL_NEXT_UP_CONCURRENCY = 4
 
 data class Rail(
     val addonName: String,
@@ -1818,6 +1830,215 @@ Log.d(
     }
 
     /**
+     * Local "next up" cards for shows that have watched episodes but nothing
+     * in progress.
+     *
+     * Continue Watching is built from the unfinished resume rows alone, so
+     * marking a show's episodes watched - or finishing its last in-progress
+     * episode - removes the rows the rail is made of and the show disappeared,
+     * even with most of it still unwatched. These cards restore it, exactly as
+     * the Simkl NEXT_UP cards do for tracked shows: one card per show, pointing
+     * at its next unwatched aired episode.
+     *
+     * A show with no unwatched AIRED episode left (finished, or merely waiting
+     * on the next season) resolves to no target and is left off, so caught-up
+     * shows stay off Continue Watching as before.
+     */
+    private suspend fun loadLocalNextUpItems(
+        existing: List<UpNextItem>
+    ): List<UpNextItem> {
+
+        val completedRows =
+            try {
+                historyDao.getCompletedSeriesRows()
+            } catch (e: Exception) {
+                Log.w(
+                    "HOME_UPNEXT",
+                    "local next-up rows failed: ${e.message}",
+                    e
+                )
+                return emptyList()
+            }
+
+        if (completedRows.isEmpty()) return emptyList()
+
+        // One candidate per show, newest completion first: an active show must
+        // win a slot when the cap below trims the tail.
+        val candidates =
+            completedRows
+                .groupBy { row ->
+                    row.parentId.trim().ifBlank { row.id.trim() }
+                }
+                .mapNotNull { (parentId, rows) ->
+                    rows
+                        .maxByOrNull { row ->
+                            row.completedAt ?: row.updatedAt
+                        }
+                        ?.let { row -> parentId to row }
+                }
+                .sortedByDescending { (_, row) ->
+                    row.completedAt ?: row.updatedAt
+                }
+
+        // Shows already on the rail (an episode paused part-way) keep their
+        // resume card; a next-up twin for them is wasted work.
+        val representedIds =
+            existing
+                .mapNotNull { item -> upNextIdentifier(item.parentId) }
+                .toSet()
+
+        val semaphore =
+            Semaphore(LOCAL_NEXT_UP_CONCURRENCY)
+
+        return coroutineScope {
+            candidates
+                .asSequence()
+                .filterNot { (parentId, _) ->
+                    val id = upNextIdentifier(parentId)
+                    id != null && id in representedIds
+                }
+                .take(MAX_LOCAL_NEXT_UP_ITEMS)
+                .map { (parentId, row) ->
+                    async {
+                        semaphore.withPermit {
+                            runCatching {
+                                buildLocalNextUpItem(parentId, row)
+                            }.getOrNull()
+                        }
+                    }
+                }
+                .toList()
+                .awaitAll()
+                .filterNotNull()
+        }
+    }
+
+    /**
+     * The next unwatched aired episode of one locally-watched show as an
+     * [UpNextItem] with no progress (the resume path owns cards that have one).
+     * Null when the show cannot be resolved or has nothing left to watch.
+     */
+    private suspend fun buildLocalNextUpItem(
+        parentId: String,
+        row: WatchHistoryEntity
+    ): UpNextItem? {
+
+        val detail =
+            try {
+                tmdbLookupSemaphore.withPermit {
+                    when {
+                        parentId.startsWith("tmdb:", ignoreCase = true) ->
+                            parentId
+                                .substringAfter(":")
+                                .toIntOrNull()
+                                ?.let { id ->
+                                    tmdbRepository.getDetailByTmdbId(
+                                        id,
+                                        "series"
+                                    )
+                                }
+
+                        parentId.startsWith("tt", ignoreCase = true) ->
+                            tmdbRepository.fetchEnrichedMetaCached(
+                                parentId,
+                                "series"
+                            )
+
+                        parentId.toIntOrNull() != null ->
+                            tmdbRepository.getDetailByTmdbId(
+                                parentId.toInt(),
+                                "series"
+                            )
+
+                        else -> null
+                    }
+                }
+            } catch (_: Exception) {
+                null
+            }
+
+        val tmdbId = detail?.id ?: return null
+        if (tmdbId <= 0) return null
+
+        // The resolver reads this show's watched state from the shared maps,
+        // which only carry what has been preloaded for it.
+        preloadWatchedEpisodeStateForShow(
+            parentId = parentId,
+            tmdbShowId = tmdbId
+        )
+
+        val target =
+            resolveSeriesTargetFromSharedWatchedState(
+                parentId = parentId,
+                tmdbId = tmdbId,
+                simklSeason = null,
+                simklEpisode = null
+            ) ?: return null
+
+        // A resume target here means the show already has an in-progress row
+        // (and therefore its own card); don't duplicate it.
+        if (target.isResume) return null
+
+        val poster =
+            row.poster?.takeIf { it.isNotBlank() }
+                ?: detail.posterPath
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { TmdbRepository.POSTER_BASE + it }
+                ?: return null
+
+        val title =
+            upNextDisplayTitleOrNull(
+                row.name,
+                !row.poster.isNullOrBlank()
+            )
+                ?: upNextDisplayTitleOrNull(detail.name, true)
+                ?: upNextDisplayTitleOrNull(detail.title, true)
+                ?: return null
+
+        val backdrop =
+            row.backdropUrl?.takeIf { it.isNotBlank() }
+                ?: detail.backdropPath
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { "https://image.tmdb.org/t/p/w780$it" }
+
+        return UpNextItem(
+            id = "nextup:$parentId",
+            title = title,
+            poster = poster,
+            badge = UpNextBadge.NEXT_UP,
+            showTitle = title,
+            episodeTitle = target.episodeTitle,
+            episodeDescription = target.episodeDescription,
+            episodesWatched = target.episodesWatched,
+            episodesTotal = target.episodesTotal,
+            episodesRemaining = target.episodesRemaining,
+            episodeThumbnail = target.episodeThumbnail,
+            backdrop = backdrop,
+            clearLogo = row.clearLogo,
+            imdbRating = target.episodeRating,
+            runtimeMinutes = target.runtimeMinutes,
+            subtitle =
+                "Up Next - ${
+                    formatSeasonEpisode(
+                        target.season,
+                        target.episode
+                    )
+                }",
+            parentId = parentId,
+            parentType = "series",
+            season = target.season,
+            episode = target.episode,
+            episodeStreamId = target.streamId,
+            startPositionMs = 0L,
+            recencyTimestamp = row.completedAt ?: row.updatedAt,
+            isSeasonFinale = target.isSeasonFinale,
+            isSeriesFinale = target.isSeriesFinale,
+            nextEpisodeAir = detail.nextEpisodeToAir,
+            tmdbId = tmdbId
+        )
+    }
+
+    /**
      * Kids Mode gate for the Continue Watching / Upcoming rails. Both rails
      * derive from [_upNext], which merges the account-wide Simkl feed, so
      * each item's parent title is checked against the active profile's
@@ -3378,6 +3599,16 @@ Log.d(
     }.awaitAll().filterNotNull()
 }
 
+                    // A series with watched episodes but no in-progress row
+                    // still has unwatched aired episodes, so it belongs on the
+                    // rail pointing at the next one. Marking episodes watched
+                    // (or finishing them) removes the resume rows the rail is
+                    // built from, which dropped a show with plenty left to
+                    // watch. Caught-up shows resolve to no next episode and are
+                    // still kept off the rail.
+                    val localCards =
+                        localItems + loadLocalNextUpItems(localItems)
+
                         // Publish local cards first: the enriched local rows
                         // are ready here, so the rail shows real content while
                         // the (potentially slow) Simkl network fetch runs.
@@ -3395,13 +3626,13 @@ Log.d(
                         // the retire grace period). Gate this publish
                         // exactly like the merged one below.
                         if (
-                            localItems.isNotEmpty() &&
+                            localCards.isNotEmpty() &&
                             isLatestUpNextRequest(requestVersion)
                         ) {
                             _upNext.value =
                                 applyContinueWatchingDismissals(
                                     dedupeAndSortUpNext(
-                                        localItems + previousSimklUpNextItems()
+                                        localCards + previousSimklUpNextItems()
                                     )
                                 )
                             // Warm hero art for the resume rows too: their
@@ -3451,7 +3682,7 @@ Log.d(
                                 _upNext.value =
                                     applyContinueWatchingDismissals(
                                         dedupeAndSortUpNext(
-                                            localItems +
+                                            localCards +
                                                 previousSimklUpNextItems() +
                                                 mdbListItems
                                         )
@@ -3474,7 +3705,7 @@ Log.d(
                             loadMdbListUpNextItems()
 
                         val merged =
-                            dedupeAndSortUpNext(localItems + simklItems + mdbListItems)
+                            dedupeAndSortUpNext(localCards + simklItems + mdbListItems)
 
                         if (!isLatestUpNextRequest(requestVersion)) {
                             return@collectLatest
@@ -3485,10 +3716,10 @@ Log.d(
 
                                 merged
 
-                            } else if (localItems.isNotEmpty()) {
+                            } else if (localCards.isNotEmpty()) {
 
                                 dedupeAndSortUpNext(
-                                    localItems
+                                    localCards
                                 )
 
                             } else {

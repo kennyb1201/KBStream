@@ -1,0 +1,8 @@
+[
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/data/watched/WatchedStatusRepository.kt",
+    "old": "     * yet, after the local next-up fallback, still earned a NEXT_UP card on\n     * the rail. A show the user fully finished stays out of both: a whole-show\n     * mark lands in the watched override and the `!watched` guard drops it.\n     */\n    private suspend fun hasLocalSeriesActivity(\n",
+    "new": "     * yet, after the local next-up fallback, still earned a NEXT_UP card on\n     * the rail.\n     *\n     * A show with nothing left to watch stays out of both: a whole-show mark\n     * lands in the watched override and the `!watched` guard drops it here,\n     * and a show merely finished episode by episode is caught out by\n     * [isLocallyCaughtUp] before the eye is set.\n     */\n    private suspend fun hasLocalSeriesActivity(\n",
+    "count": 1
+  }
+]

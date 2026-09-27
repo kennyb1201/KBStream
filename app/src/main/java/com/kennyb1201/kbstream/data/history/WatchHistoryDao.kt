@@ -156,6 +156,26 @@ interface WatchHistoryDao {
     )
     suspend fun getAll(): List<WatchHistoryEntity>
 
+    /**
+     * Series rows that carry at least one COMPLETED episode, newest completion
+     * first. Backs Home's local "next up" cards: a show whose episodes were
+     * marked watched has no in-progress row left, and Continue Watching - built
+     * only from those rows - dropped it even though unwatched episodes
+     * remained. Callers group by parentId (one card per show) and cap the list.
+     *
+     * Live channels and movies are excluded: neither is something to continue
+     * episode by episode.
+     */
+    @Query(
+        """
+        SELECT * FROM watch_history
+        WHERE isCompleted = 1
+          AND lower(type) NOT IN ('movie', 'channel')
+        ORDER BY completedAt DESC, updatedAt DESC
+        """
+    )
+    suspend fun getCompletedSeriesRows(): List<WatchHistoryEntity>
+
     @Query(
         """
         SELECT * FROM watch_history

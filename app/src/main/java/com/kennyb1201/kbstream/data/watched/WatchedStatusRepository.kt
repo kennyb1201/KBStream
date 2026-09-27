@@ -6,6 +6,7 @@ import com.kennyb1201.kbstream.data.cache.WatchedStatusEntity
 import com.kennyb1201.kbstream.data.cache.WatchedStatusDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
@@ -1128,20 +1129,175 @@ class WatchedStatusRepository(
     }
 
     /**
-     * Local "started but not finished" signal for a series: an in-progress
-     * watch-history row (resume position saved, episode not completed).
-     * Used when Simkl has no entry for the show so the eye badge still
-     * reflects purely-local viewing.
+     * Local-history id forms for a series, resolved OFFLINE from the imdb
+     * resolution table (the same table [expandOverrideTwins] reads). The
+     * preload path runs for every visible poster, so this must never issue a
+     * request; when the twin is not known the raw id is used alone, exactly
+     * as before.
      */
-    private suspend fun hasLocalInProgressEpisode(
+    private suspend fun localHistoryIdForms(
+        id: String
+    ): List<String> {
+
+        val raw = id.trim()
+        if (raw.isBlank()) return emptyList()
+
+        val forms = linkedSetOf(raw)
+
+        val dao = try {
+            WatchHistoryDatabase.getInstanceScoped(context).imdbResolutionDao()
+        } catch (e: Exception) {
+            null
+        } ?: return forms.toList()
+
+        try {
+            when {
+                raw.startsWith("tt") ->
+                    dao.getByImdbId(raw, "series")
+                        ?.tmdbId
+                        ?.takeIf { it > 0 }
+                        ?.let { forms += "tmdb:$it" }
+
+                raw.startsWith("tmdb:") || raw.all(Char::isDigit) -> {
+                    val tmdbId = raw.removePrefix("tmdb:").toIntOrNull()
+                    if (tmdbId != null) {
+                        dao.getByKey("series::$tmdbId")
+                            ?.imdbId
+                            ?.takeIf { it.startsWith("tt") }
+                            ?.let { forms += it }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            // Twin resolution is best-effort: fall back to the raw id.
+        }
+
+        return forms.toList()
+    }
+
+    /**
+     * Local "started but not finished" signal for a series, used when Simkl
+     * (and MDBList) have no entry for the show so the eye badge still
+     * reflects purely-local viewing.
+     *
+     * Two shapes count as started:
+     *  - an in-progress row (resume position saved, episode not completed),
+     *    and
+     *  - a COMPLETED episode row with no resume row left.
+     *
+     * The second shape is what keeps the eye badge consistent with Continue
+     * Watching. Marking episodes watched writes completed rows and deletes
+     * their resume rows, so before this the show had no resume row (no eye)
+     * yet, after the local next-up fallback, still earned a NEXT_UP card on
+     * the rail.
+     *
+     * A show with nothing left to watch stays out of both: a whole-show mark
+     * lands in the watched override and the `!watched` guard drops it here,
+     * and a show merely finished episode by episode is caught out by
+     * [isLocallyCaughtUp] before the eye is set.
+     */
+    private suspend fun hasLocalSeriesActivity(
         id: String
     ): Boolean {
 
-        return try {
-            historyDao.getResumeForParent(id) != null
+        val forms = try {
+            localHistoryIdForms(id)
         } catch (e: Exception) {
-            false
+            emptyList()
         }
+
+        if (forms.isEmpty()) return false
+
+        val resume = try {
+            historyDao.getResumeForParents(forms)
+        } catch (e: Exception) {
+            null
+        }
+
+        if (resume != null) return true
+
+        val completed = try {
+            historyDao.getCompletedForParents(forms)
+        } catch (e: Exception) {
+            emptyList()
+        }
+
+        if (completed.isEmpty()) return false
+
+        /*
+         * Started. Now: is there anything left? A show the user has fully
+         * watched must NOT keep the eye just because it has completed rows.
+         * Caught-up is decided from cached TMDB detail only - this runs for
+         * every visible poster - and an unknown reads as unfinished, which is
+         * the safe default.
+         */
+        return !isLocallyCaughtUp(forms, completed)
+    }
+
+    /**
+     * Whether a locally-watched series has nothing left to watch, using ONLY
+     * cached TMDB detail (never a request) plus the completed rows already
+     * read. Anything unknown returns false, so the eye stays.
+     */
+    private suspend fun isLocallyCaughtUp(
+        forms: List<String>,
+        completed: List<WatchHistoryEntity>
+    ): Boolean {
+
+        val tmdbId =
+            forms.asSequence()
+                .mapNotNull { form ->
+                    when {
+                        form.startsWith("tmdb:") ->
+                            form.removePrefix("tmdb:").toIntOrNull()
+
+                        form.all(Char::isDigit) ->
+                            form.toIntOrNull()
+
+                        else -> null
+                    }
+                }
+                .firstOrNull()
+                ?: return false
+
+        val detail = try {
+            tmdbRepository.cachedDetailByTmdbId(tmdbId, "series")
+        } catch (e: Exception) {
+            null
+        } ?: return false
+
+        val seasonEpisodeCounts =
+            detail.seasons
+                .mapNotNull { season ->
+                    val number = season.seasonNumber
+                    val count = season.episodeCount
+                    if (number > 0 && count != null && count > 0) {
+                        number to count
+                    } else {
+                        null
+                    }
+                }
+                .toMap()
+
+        val completedEpisodes =
+            completed
+                .mapNotNull { row ->
+                    val season = row.season
+                    val episode = row.episode
+                    if (season != null && episode != null) {
+                        season to episode
+                    } else {
+                        null
+                    }
+                }
+                .toSet()
+
+        return LocalSeriesProgress.isCaughtUp(
+            completedEpisodes = completedEpisodes,
+            seasonEpisodeCounts = seasonEpisodeCounts,
+            lastAiredSeason = detail.lastEpisodeToAir?.seasonNumber,
+            lastAiredEpisode = detail.lastEpisodeToAir?.episodeNumber
+        )
     }
 
     suspend fun isWatchedCached(
@@ -2268,9 +2424,15 @@ class WatchedStatusRepository(
              * Eye badge: a series the user has started but not finished.
              * Simkl side first (free membership lookup in the all-shows
              * snapshot); when Simkl has no entry, fall back to local
-             * history — any in-progress episode row (resume position
-             * saved, not completed) means "in the middle of it". Movies
-             * resolve watched-or-not, nothing in between.
+             * history — an in-progress episode row, or a completed episode
+             * with no resume row left, both mean "in the middle of it".
+             *
+             * The completed-episode half matches Continue Watching: marking
+             * episodes watched writes completed rows and deletes their resume
+             * rows, so the show kept its NEXT_UP card but lost the eye. A
+             * whole-show mark lands in the watched override and the !watched
+             * guard below keeps it a plain checkmark. Movies resolve
+             * watched-or-not, nothing in between.
              */
             val partialShow =
                 normalizedType == "series" &&
@@ -2279,7 +2441,7 @@ class WatchedStatusRepository(
                         id in remoteSnapshot.simklPartialShowKeys ||
                             id in remoteSnapshot.simklPartialShowTmdbKeys ||
                             id in remoteSnapshot.mdbListStartedShowKeys ||
-                            hasLocalInProgressEpisode(id)
+                            hasLocalSeriesActivity(id)
                         )
 
             WatchedStatusEntity(

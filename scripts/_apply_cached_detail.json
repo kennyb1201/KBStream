@@ -1,0 +1,8 @@
+[
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/data/tmdb/TmdbRepository.kt",
+    "old": "    suspend fun getByCompany(companyId: Int): List<StudioSection> =\n        getInitialCompanySections(companyId)\n",
+    "new": "    /**\n     * Cache-only variant of [getDetailByTmdbId]: memory + disk TTL caches, no\n     * network. Used by the watched-state preload path, which runs for every\n     * visible poster and must never issue a request per item. A miss returns\n     * null, and the caller treats \"unknown\" the way it treats \"not finished\".\n     */\n    suspend fun cachedDetailByTmdbId(\n        tmdbId: Int,\n        type: String\n    ): TmdbDetail? {\n        val key = \"${normalizeType(type)}:tmdb:$tmdbId\"\n        val now = System.currentTimeMillis()\n        pruneMemoryCaches()\n\n        val cached = detailCache[key]\n        if (cached != null && now - cached.first < detailCacheTtlMs) {\n            return cached.second\n        }\n\n        val diskCached = runCatching {\n            tmdbJsonCacheDao.getByKey(detailDiskKey(key))\n        }.getOrNull()\n        if (diskCached != null && now - diskCached.updatedAt < detailCacheDiskTtlMs) {\n            val parsed = runCatching {\n                detailJsonAdapter.fromJson(diskCached.json)\n            }.getOrNull()\n            if (parsed != null) {\n                detailCache[key] = now to parsed\n                return parsed\n            }\n        }\n\n        return null\n    }\n\n    suspend fun getByCompany(companyId: Int): List<StudioSection> =\n        getInitialCompanySections(companyId)\n",
+    "count": 1
+  }
+]
