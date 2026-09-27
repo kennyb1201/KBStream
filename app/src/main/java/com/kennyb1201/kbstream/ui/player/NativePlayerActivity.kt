@@ -3371,6 +3371,11 @@ class NativePlayerActivity : ComponentActivity() {
                     val durationMs = exoPlayer?.duration ?: 0L
                     val posMs = (progress.toLong() * durationMs) / 10_000L
                     currentTime.text = formatMillis(posMs)
+                    // The bar is inside the overlay, so the card tracks its
+                    // thumb: the viewer is looking at the bar, not the middle of
+                    // the screen. A remote fires a lot of these on the way, and
+                    // TrickplayFrames coalesces them onto one decode per bucket.
+                    requestTrickplayFrame(posMs, anchorView = seekbar)
                 }
             }
             override fun onStartTrackingTouch(sb: SeekBar) {
@@ -3381,6 +3386,7 @@ class NativePlayerActivity : ComponentActivity() {
                 val posMs = (sb.progress.toLong() * durationMs) / 10_000L
                 exoPlayer?.seekTo(posMs)
                 scheduleAutoHide()
+                endTrickplayScrub()
             }
         })
 
@@ -3922,6 +3928,20 @@ class NativePlayerActivity : ComponentActivity() {
     private val scrubHintHandler = Handler(Looper.getMainLooper())
     private val scrubHintHider = Runnable { surfaceScrubHint?.visibility = View.GONE }
 
+    // --- Scrub previews (a decoded frame while the viewer scrubs) ---
+    //
+    // Null until a scrub asks for its first frame: a session that never scrubs
+    // never builds the second player this costs. See TrickplayFrames for what
+    // that player is, and why it gives up so readily.
+    private var trickplay: TrickplayFrames? = null
+    private var trickplayOverlay: TrickplayOverlay? = null
+
+    /** The view the card tracks, when the frame being asked for has one. */
+    private var trickplayAnchorView: View? = null
+
+    /** True while a scrub is in progress, so a late frame is not shown after it. */
+    private var trickplayWanted = false
+
     private fun ensureScrubHint(): TextView {
         surfaceScrubHint?.let { return it }
         val density = resources.displayMetrics.density
@@ -3963,11 +3983,79 @@ class NativePlayerActivity : ComponentActivity() {
         }
         tv.visibility = View.VISIBLE
         scrubHintHandler.removeCallbacks(scrubHintHider)
+        // The overlay is down, so the card is the only thing that can show where
+        // the press landed. No anchor: the bubble is centred, and so is the card
+        // above it.
+        requestTrickplayFrame(pos, anchorView = null)
     }
 
     private fun scheduleScrubHintHide() {
         scrubHintHandler.removeCallbacks(scrubHintHider)
         scrubHintHandler.postDelayed(scrubHintHider, 700L)
+        endTrickplayScrub()
+    }
+
+    // --- Scrub previews -------------------------------------------------------
+
+    /**
+     * Asks for the decoded frame covering [posMs] — the position a scrub has just
+     * landed on — and notes [anchorView] for the card to centre itself over when
+     * the frame arrives: the seek bar while that is what is being dragged, and
+     * nothing when the overlay is down.
+     *
+     * Every scrub path ends up here — a drag on the seek bar, a 10-second press,
+     * a held LEFT/RIGHT with the overlay down — so the guards live here rather
+     * than at each of them:
+     *
+     *  - **Nothing to scrub.** Live TV has no duration, and neither has a stream
+     *    that never reported one. There is no position to preview and no seek
+     *    that could fetch it.
+     *  - **Hardware only.** The preview player runs on the default renderers, so
+     *    a stream whose video only the software decoder can handle gets no
+     *    preview rather than spending on a thumbnail the CPU the video itself
+     *    needs. That is the right way round: the frame is a nicety.
+     */
+    private fun requestTrickplayFrame(posMs: Long, anchorView: View?) {
+        if (isLiveChannel || currentUrl.isBlank()) return
+        val duration = exoPlayer?.duration?.takeIf { it > 0 } ?: return
+        trickplayWanted = true
+        trickplayAnchorView = anchorView
+        val frames = trickplay ?: TrickplayFrames(
+            activity = this,
+            url = currentUrl,
+            headers = streamHeaders,
+            // The same container the player itself settled on, so a playlist
+            // whose marker lives only in the query is fetched through the HLS
+            // source instead of the progressive extractors.
+            resolvedMimeType = resolveMimeType(currentUrl)
+        ) { _, frame ->
+            if (trickplayWanted) previewCard().show(frame, trickplayAnchorView)
+        }.also { trickplay = it }
+        if (!frames.isUsable) return
+        frames.request(posMs, duration)
+    }
+
+    /** The card previews appear in, built the first time a frame arrives. */
+    private fun previewCard(): TrickplayOverlay =
+        trickplayOverlay ?: TrickplayOverlay(this).also { trickplayOverlay = it }
+
+    /**
+     * The scrub is over. The card goes at once; the decoder behind it is given
+     * back a few seconds later, so the next press of the same scrub does not pay
+     * for a new player and a new connection (see [TrickplayFrames.idle]).
+     */
+    private fun endTrickplayScrub() {
+        trickplayWanted = false
+        trickplayOverlay?.hide()
+        trickplay?.idle()
+    }
+
+    /** Hides the card and gives the preview decoder back now (leaving the screen). */
+    private fun stopTrickplay() {
+        trickplayWanted = false
+        trickplayOverlay?.hide()
+        trickplay?.release()
+        trickplay = null
     }
 
     /**
@@ -8605,6 +8693,9 @@ class NativePlayerActivity : ComponentActivity() {
         scrubHandler.removeCallbacksAndMessages(null)
         zapHandler.removeCallbacksAndMessages(null)
         scrubDirection = 0
+        // The preview decoder goes with them: the session is leaving the screen,
+        // and a second decoder held behind a backgrounded player helps nobody.
+        stopTrickplay()
         // Remember where playback actually was: onSaveInstanceState() can run
         // after this method (API 28+) and the player is released by then.
         if (!isLiveChannel) {
@@ -8655,6 +8746,8 @@ class NativePlayerActivity : ComponentActivity() {
         // leaving this set would hold guide writes back forever.
         EpgWriteGate.setPlayerActive(false)
         p5VideoGlesView.release()
+        trickplay?.release()
+        trickplay = null
         sleepTimerSection?.release()
         handler.removeCallbacksAndMessages(null)
         scrubHintHandler.removeCallbacksAndMessages(null)
