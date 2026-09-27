@@ -55,9 +55,18 @@ internal object NotificationCenter {
     )
 
     /**
-     * Registers the channels once per process start. Safe to call repeatedly:
-     * creating an existing channel is a no-op, and a channel the user already
-     * tuned (importance, sound) is never clobbered.
+     * Registers the channels once per process start, and re-registers them on
+     * every later start so the name and description here stay in step with the
+     * app.
+     *
+     * Those two are the only fields an app can still change on a channel that
+     * already exists - the platform ignores everything else about a channel it
+     * has already made, so the importance, sound, vibration and badge the user
+     * tuned stay theirs. Skipping an existing channel instead (a
+     * `getNotificationChannel(...) != null` guard) is what left every installed
+     * build showing whatever copy it was installed with: the strings moved, the
+     * system's notification settings did not, and this screen's wording drifted
+     * away from the app's own.
      */
     fun ensureChannels(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -66,7 +75,6 @@ internal object NotificationCenter {
                 context.getSystemService(NotificationManager::class.java)
             }.getOrNull() ?: return
         CHANNELS.forEach { spec ->
-            if (manager.getNotificationChannel(spec.id) != null) return@forEach
             val channel = NotificationChannel(
                 spec.id,
                 spec.name,
