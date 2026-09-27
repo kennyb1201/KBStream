@@ -13,6 +13,11 @@
 --   3. A composite PRIMARY KEY (user_id, <key column>) — required for
 --      PostgREST upsert (Prefer: resolution=merge-duplicates) to work now that
 --      the same item_id can legitimately exist for more than one account.
+--   4. Exactly ONE policy per table. Permissions are OR'd together, so a
+--      permissive leftover from the dashboard's policy editor (this file has
+--      seen one named "own rows all") re-opens every other account's rows no
+--      matter how tight the policies below are. Anything that is not one of
+--      this file's policies is therefore dropped.
 --
 -- IMPORTANT — deploying this to an install that is already syncing:
 --   The owner of pre-existing rows cannot be inferred from the data (the old
@@ -168,3 +173,33 @@ create policy "kbstream_own_prefs"
   to authenticated
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
+
+-- ── Converge: leave exactly one policy per table ────────────────────
+-- Drops any policy this file did not create, whoever added it and by whatever
+-- route (the dashboard policy editor is not visible to this repo). Without
+-- this the tables end up with several permissive policies OR'd together and
+-- the tightest one is meaningless.
+--
+-- Deliberately AFTER the creates: if this loop ever fails, the owner-scoped
+-- policies are already in place, so the worst case is leftover redundant
+-- policies rather than a table with RLS on and no policy at all (which would
+-- lock every signed-in account out of its own data except via the service
+-- role).
+do $$
+declare
+  p record;
+begin
+  for p in
+    select policyname, tablename
+    from pg_policies
+    where schemaname = 'public'
+      and tablename in ('sync_watch_history','sync_watched_status','sync_prefs')
+      and policyname not in (
+        'kbstream_own_watch_history',
+        'kbstream_own_watched_status',
+        'kbstream_own_prefs'
+      )
+  loop
+    execute format('drop policy %I on public.%I', p.policyname, p.tablename);
+  end loop;
+end $$;

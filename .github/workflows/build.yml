@@ -131,6 +131,31 @@ jobs:
         continue-on-error: true
         run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
 
+      # The compiled FFmpeg static libs bake the decoder list, the FFmpeg ref
+      # and the native API level into the binary, so a cached build is only
+      # reusable while all three are unchanged. This signature covers them and
+      # sits BEFORE the script hash in both the key and the restore-keys
+      # prefix, because restore-keys is a PREFIX match: with the old broad
+      # prefix, editing the decoder list still restored the previous build, the
+      # script printed "FFmpeg static libs already built" and configure never
+      # re-ran -- so a newly added decoder would silently never reach the AAR
+      # while CI stayed green.
+      #
+      # The effective NDK is deliberately absent: the runner image exports
+      # ANDROID_NDK, which the build script prefers over NDK_VERSION, so the
+      # toolchain in use cannot be derived from this file at all. Keying the
+      # cache on it would require pinning it first.
+      - name: Compute FFmpeg build signature
+        id: decoder_sig
+        run: |
+          sig="$(sed -n -e '/^ENABLED_DECODERS=(/,/^)/p' \
+                       -e '/^FFMPEG_TAG=/p' \
+                       -e '/^ANDROID_API=/p' \
+                       scripts/build_ffmpeg_video.sh \
+                 | tr -d '[:space:]' | sha256sum | cut -c1-16)"
+          echo "sig=${sig}" >> "$GITHUB_OUTPUT"
+          echo "build signature: ${sig}"
+
       - name: Cache FFmpeg extension build
         uses: actions/cache@v4
         with:
@@ -139,9 +164,15 @@ jobs:
           # looked for the AAR in the wrong place (build/, not media3's
           # buildout/); restoring one would keep the stale build alive, so the
           # prefix is bumped to force one clean rebuild under the fixed script.
-          key: ffmpeg-ext-v2-${{ runner.os }}-${{ env.MEDIA3_TAG }}-${{ hashFiles('scripts/build_ffmpeg_video.sh') }}
+          #
+          # The signature segment is new, so no existing v2 entry matches it:
+          # the first run after this change does one full cold cross-compile and
+          # then caches under the corrected key. That one rebuild is the price
+          # of making the cache honest -- the old entries were built from the
+          # previous decoder list and cannot be trusted.
+          key: ffmpeg-ext-v2-${{ runner.os }}-${{ env.MEDIA3_TAG }}-${{ steps.decoder_sig.outputs.sig }}-${{ hashFiles('scripts/build_ffmpeg_video.sh') }}
           restore-keys: |
-            ffmpeg-ext-v2-${{ runner.os }}-${{ env.MEDIA3_TAG }}-
+            ffmpeg-ext-v2-${{ runner.os }}-${{ env.MEDIA3_TAG }}-${{ steps.decoder_sig.outputs.sig }}-
 
       - name: Build FFmpeg video extension (optional)
         continue-on-error: true
