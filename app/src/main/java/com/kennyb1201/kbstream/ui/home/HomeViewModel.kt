@@ -468,6 +468,176 @@ internal fun collapseDuplicateUpNextCards(
 }
 
 /**
+ * One card per show for the instant Continue Watching seed.
+ *
+ * The seed is built from `getContinueWatchingParentsSnapshot`, whose SQL
+ * groups by the RAW parent id, so a show whose resume rows were written under
+ * two id flavours ("tt..." from the player's canonicalization, "tmdb:<n>"
+ * from the TMDB rows and the kids rails) arrives as TWO rows. The enriched
+ * pass pairs those through the resolved TMDB id - which is exactly what the
+ * snapshot does not have, since resolving it is the enrichment - so until that
+ * pass finished the rail drew the same show twice.
+ *
+ * The display name is the only identity the two rows share at this point, so
+ * that is what collapses them. [upNextTitleKey] is deliberately the key here
+ * even though [upNextGroupingKeys] refuses it: a card with a resolved id can
+ * meet its twin on that id, and grouping on the name would hide a different
+ * title that shares one. A snapshot row has no such id to offer. Two genuinely
+ * different titles that share a name would therefore collapse here too, but
+ * only for the moment before the enriched list replaces this one, and the
+ * newest row wins - so the card that survives is the one the viewer touched
+ * last, not an arbitrary one.
+ */
+internal fun collapseInstantSnapshotItems(
+    items: List<UpNextItem>
+): List<UpNextItem> =
+    items
+        .groupBy(::upNextTitleKey)
+        .mapNotNull { (_, group) ->
+            group.maxWithOrNull(
+                compareBy<UpNextItem> { it.recencyTimestamp }
+                    .thenByDescending { it.startPositionMs }
+                    .thenBy { it.id }
+            )
+        }
+
+/**
+ * The identity keys that may GROUP two rail cards into one, as opposed to the
+ * looser [upNextIdentityKeys] used to pair a suggestion with the episode it
+ * duplicates.
+ *
+ * The difference is the title key, and it matters here: two DIFFERENT titles
+ * legitimately share a name (the two "Ghostbusters", a remake and its
+ * original, a US and a UK series), and grouping on the name would hide one of
+ * them. A card with a usable id is therefore grouped by its ids alone - the
+ * resolved TMDB id is what pairs an "tt..." card with its "tmdb:..." twin,
+ * since both sources resolve it (see buildLocalNextUpItem /
+ * buildSimklUpNextItem). Only a card with no id at all falls back to the name,
+ * which is the case where two flavours have nothing else to meet on.
+ */
+internal fun upNextGroupingKeys(
+    item: UpNextItem
+): Set<String> {
+    val mediaType =
+        upNextMediaType(item.parentType)
+
+    val idKeys =
+        buildSet {
+            upNextIdentifier(item.parentId)
+                ?.let { add("parent:$mediaType:$it") }
+
+            item.tmdbId
+                ?.takeIf { it > 0 }
+                ?.let { add("parent:$mediaType:$it") }
+        }
+
+    return idKeys.ifEmpty { setOf(upNextTitleKey(item)) }
+}
+
+/**
+ * Groups [items] into clusters that share at least one key, transitively:
+ * A-B and B-C land in one cluster even when A and C have no key in common.
+ *
+ * Used wherever the rail must show one card per show. A show reaches it under
+ * "tt...", "tmdb:<n>" and a bare numeric id at once, and each key alone only
+ * names the flavour that card happens to carry - which is how the same show
+ * survived as two cards after the show-level dedupe compared one hand-picked
+ * key per card.
+ *
+ * Clusters come back in first-appearance order and keep input order inside a
+ * cluster, so a caller that picks a winner and then sorts stays
+ * deterministic.
+ */
+internal fun <T> clusterByIdentityKeys(
+    items: List<T>,
+    keysOf: (T) -> Set<String>
+): List<List<T>> {
+    if (items.isEmpty()) return emptyList()
+
+    val parent = IntArray(items.size) { it }
+
+    fun root(index: Int): Int {
+        var node = index
+        while (parent[node] != node) node = parent[node]
+
+        // Path compression, so a card carrying many keys stays cheap to merge.
+        var cursor = index
+        while (parent[cursor] != cursor) {
+            val next = parent[cursor]
+            parent[cursor] = node
+            cursor = next
+        }
+        return node
+    }
+
+    fun union(a: Int, b: Int) {
+        val rootA = root(a)
+        val rootB = root(b)
+        if (rootA == rootB) return
+
+        // Lower index wins, so the cluster's representative is its first
+        // member and the output order above holds.
+        if (rootA < rootB) parent[rootB] = rootA else parent[rootA] = rootB
+    }
+
+    val firstOwnerByKey = HashMap<String, Int>()
+
+    items.forEachIndexed { index, item ->
+        for (key in keysOf(item)) {
+            val first = firstOwnerByKey.putIfAbsent(key, index)
+            if (first != null) union(first, index)
+        }
+    }
+
+    val clusters = LinkedHashMap<Int, MutableList<T>>()
+
+    items.forEachIndexed { index, item ->
+        clusters.getOrPut(root(index)) { mutableListOf() }.add(item)
+    }
+
+    return clusters.values.toList()
+}
+
+/**
+ * Collapses the Upcoming rail's just-built rows to ONE per show.
+ *
+ * A show has exactly one next unaired episode, so a second row for the same
+ * show is a duplicate. The rail merges two sources that name a show
+ * differently - the local cards carry its canonical imdb id, the
+ * Simkl-derived caught-up cards carry the tracker's flavour - and
+ * [UpcomingEpisode] alone cannot tell those apart because it keeps no resolved
+ * TMDB id. Pairing therefore happens on the SOURCE cards
+ * ([upNextGroupingKeys]) before the winner is kept.
+ *
+ * The earliest air date wins: within one show the rows describe the same real
+ * episode, so the earlier date is the one the second-source correction left in
+ * place. Ties prefer the row that knows an episode title and then artwork, so
+ * the surviving card is the informative one.
+ */
+internal fun selectUpcomingPerShow(
+    rows: List<Pair<UpNextItem, UpcomingEpisode>>
+): List<UpcomingEpisode> =
+    clusterByIdentityKeys(
+        rows
+    ) { (item, _) -> upNextGroupingKeys(item) }
+        .map { group ->
+            group
+                .minWith(
+                    compareBy<Pair<UpNextItem, UpcomingEpisode>> { (_, episode) ->
+                        episode.airDateEpochMs
+                    }
+                        .thenByDescending { (_, episode) ->
+                            episode.episodeTitle != null
+                        }
+                        .thenByDescending { (_, episode) ->
+                            !episode.poster.isNullOrBlank()
+                        }
+                        .thenBy { (item, _) -> item.title.lowercase() }
+                )
+                .second
+        }
+
+/**
  * One row in the Home "Upcoming" rail: a show's next unaired episode,
  * derived for free from the Continue Watching enrichment (the TMDB detail
  * it already fetches carries next_episode_to_air). No extra network calls.
@@ -2935,8 +3105,10 @@ Log.d(
             .atStartOfDay(ZoneId.systemDefault())
             .toInstant()
             .toEpochMilli()
-        val seenParents = HashSet<String>()
-        val upcoming = ArrayList<UpcomingEpisode>()
+        // (source card, derived row) pairs. The winner per show is chosen
+        // only after every row is built, because one show can reach the rail
+        // twice under different id flavours (see selectUpcomingPerShow).
+        val rows = ArrayList<Pair<UpNextItem, UpcomingEpisode>>()
 
         // Second-source air dates for the shows on the rail, fetched up front
         // (concurrently, and failing open per show) so the loop below never
@@ -2978,15 +3150,14 @@ Log.d(
             // start of today: an episode airing later today still shows
             // (labelled "Today"); anything before today has aired.
             if (epochMs < startOfToday) continue
-            if (!seenParents.add(parentId)) continue
 
             val airLabel = formatAirDateLabel(airDateText)
             val airFull = AirDateCorrection.parse(airDateText)
                 ?.format(DateTimeFormatter.ofPattern("EEE, MMM d"))
                 ?: ""
 
-            upcoming.add(
-                UpcomingEpisode(
+            rows.add(
+                item to UpcomingEpisode(
                     id = "upcoming:$parentId:s$season:e$episode",
                     parentId = parentId,
                     parentType = parentType,
@@ -3027,7 +3198,9 @@ Log.d(
             )
         }
 
-        return upcoming.sortedBy { it.airDateEpochMs }
+        // ONE row per show: a show has exactly one next unaired episode, so a
+        // second row for it is the duplicate the rail was showing.
+        return selectUpcomingPerShow(rows).sortedBy { it.airDateEpochMs }
     }
 
     /**
@@ -3213,7 +3386,9 @@ Log.d(
         // never clobber a live enriched list with the raw snapshot.
         if (_upNext.value.isEmpty()) {
             _upNext.value = applyContinueWatchingDismissals(
-                dedupeAndSortUpNext(items)
+                dedupeAndSortUpNext(
+                    collapseInstantSnapshotItems(items)
+                )
             )
         }
     }
@@ -5769,13 +5944,13 @@ private suspend fun calculateEpisodesRemaining(
         items: List<UpNextItem>
     ): List<UpNextItem> {
 
-        return collapseDuplicateUpNextCards(
-            items
-        )
-            .groupBy(
-                ::showDedupeKey
+        return clusterByIdentityKeys(
+            collapseDuplicateUpNextCards(
+                items
             )
-            .values
+        ) { item ->
+            upNextGroupingKeys(item)
+        }
             .mapNotNull { candidates ->
 
                 candidates.maxWithOrNull(
