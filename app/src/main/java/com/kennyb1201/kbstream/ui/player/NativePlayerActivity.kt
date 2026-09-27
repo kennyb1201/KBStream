@@ -294,13 +294,18 @@ private const val ZAP_EPG_TTL_MS = 60_000L
  * Video gets the FFmpeg software video renderer as a FALLBACK behind
  * MediaCodec (mode ON): hardware is tried first and wins for every codec the
  * box can decode; software only catches the codecs it cannot (AVI's MPEG-4
- * ASP, VC-1/WMV, 10-bit AVC, ...). Today's bundled FFmpeg carries AUDIO
- * decoders only (flac alac pcm mp3 aac ac3 eac3 dca mlp truehd — see
- * jellyfin-androidx-media build.sh), so FfmpegLibrary.supportsFormat()
- * reports UNSUPPORTED for every video mime and this renderer claims no
- * track: it is inert until a video-enabled FFmpeg build replaces it. Keeping
- * the wiring in place means that swap is a dependency change and nothing
- * else — the software decoder then joins automatically.
+ * ASP, VC-1/WMV, 10-bit AVC, ...). The bundled FFmpeg is the video-enabled
+ * build now: scripts/build_ffmpeg_video.sh enables h264 hevc mpeg2video
+ * mpeg1video mpeg4 msmpeg4v3 wmv3 vc1 vp8 vp9 av1 theora h263 alongside the
+ * audio set, so FfmpegLibrary.supportsFormat() answers SUPPORTED for those and
+ * this renderer does claim a track for them.
+ *
+ * It is a fallback in the media3 sense only: the extension renderer is
+ * consulted when NO MediaCodec decoder claims the format. A vendor decoder
+ * that claims the format and then fails at RUNTIME (the TCL/Realtek DV case,
+ * OMX_ErrorInsufficientResources on the first frame) goes to media3's own
+ * MediaCodec-to-MediaCodec fallback, not here - see [DvEscalation] for how
+ * that case is handled.
  */
 private class SplitModeRenderersFactory(
     context: Context,
@@ -5054,6 +5059,26 @@ class NativePlayerActivity : ComponentActivity() {
             // a device without libmpv and an "ExoPlayer only" engine setting,
             // and those keep the old ladder.
             if (decoderFailure) {
+                // A DV session that has already spent its one strip retry has
+                // no ladder step left that can help it. The raw-extractor probe
+                // below addresses a URL whose extension lied about the
+                // CONTAINER; a Dolby Vision decoder refusing the stream is a
+                // verdict on the FORMAT, and that probe asks for the same
+                // component -- which is how this box turned one DV failure into
+                // a chain of identical rebuilds (Attempt 4: probing with raw
+                // extractor) without ever reaching the backup engine. Hand the
+                // session over instead: libmpv decodes the HDR10 base layer in
+                // software, which is what an external player does with the same
+                // file. handOffToMpv still refuses live TV, a DRM session and an
+                // ExoPlayer-only setting, and those keep the ladder below.
+                if (DvEscalation.handOffAfterStripRetry(
+                        stripRetrySpent = forceDvStripForSession,
+                        dvDecoderRefused = dvDecoderRefused
+                    ) &&
+                    handOffToMpv(MpvPlayerActivity.FALLBACK_REASON_DECODER)
+                ) {
+                    return
+                }
                 if (decoderFailureRetried) {
                     if (handOffToMpv(MpvPlayerActivity.FALLBACK_REASON_DECODER)) return
                 } else {
