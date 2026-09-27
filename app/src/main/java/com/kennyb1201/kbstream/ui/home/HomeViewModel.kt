@@ -638,6 +638,37 @@ internal fun selectUpcomingPerShow(
         }
 
 /**
+ * True when a series resolution pass ended with nothing to continue to: it
+ * counted the show's aired episodes and every one of them is watched, and the
+ * caller supplied no next-episode hint.
+ *
+ * A pass that counted NOTHING ([totalAiredEpisodes] null / zero - every season
+ * lookup failed) is not this case: an offline device cannot prove the viewer
+ * is caught up, and hiding shows on a failed lookup is worse than showing one
+ * card too many.
+ *
+ * The hint is excluded because it is the caller's own answer: a tracker can
+ * queue an episode that TMDB has not aired or listed yet, and such a show is
+ * deliberately kept on the rail (see
+ * ShowCompletionRules.isContinueWatchingCandidate).
+ *
+ * Top level on purpose: the resolver that uses it is a private member of
+ * HomeViewModel, and a rule declared next to it would be a member too - i.e.
+ * unreachable from the unit tests that pin this behaviour down.
+ */
+internal fun hasNothingLeftToWatch(
+    simklSeason: Int?,
+    simklEpisode: Int?,
+    watchedAiredEpisodes: Int,
+    totalAiredEpisodes: Int?
+): Boolean =
+    simklSeason == null &&
+        simklEpisode == null &&
+        totalAiredEpisodes != null &&
+        totalAiredEpisodes > 0 &&
+        watchedAiredEpisodes >= totalAiredEpisodes
+
+/**
  * One row in the Home "Upcoming" rail: a show's next unaired episode,
  * derived for free from the Continue Watching enrichment (the TMDB detail
  * it already fetches carries next_episode_to_air). No extra network calls.
@@ -5607,6 +5638,40 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
         }
     }
 
+    /*
+     * Nothing to continue.
+     *
+     * Every aired episode this profile has is watched - the current-season
+     * scan and the future-season scan both came up empty - and the caller
+     * passed no next-episode hint of its own. The fall-through below used to
+     * hand back the position it STARTED from instead: the last episode the
+     * viewer watched (or E1 of the season they are on), with
+     * episodesRemaining = 0. Callers read a non-null target as "there is
+     * something here", so a show that was completely finished kept a
+     * "next up" card labelled with the very episode just watched - while the
+     * detail page said "caught up". There is no episode to continue to, so
+     * say so: null leaves a caught-up show off Continue Watching, and what is
+     * left for it (a next UNAIRED episode) is the Upcoming rail's job (see
+     * loadCaughtUpUpcomingItems).
+     *
+     * Guarded on the walk having actually counted the show, and on there being
+     * no hint: a tracker's queued next episode can run ahead of TMDB's aired
+     * set, and the Simkl feed deliberately keeps exactly that show on the rail
+     * (ShowCompletionRules.isContinueWatchingCandidate), while a season walk
+     * that failed to load must keep today's behaviour rather than hide the
+     * show.
+     */
+    if (
+        hasNothingLeftToWatch(
+            simklSeason = simklSeason,
+            simklEpisode = simklEpisode,
+            watchedAiredEpisodes = watchedAiredEpisodes,
+            totalAiredEpisodes = totalAiredEpisodes
+        )
+    ) {
+        return null
+    }
+
     return ResolvedHomeSeriesTarget(
 
         season =
@@ -5625,6 +5690,7 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
             0
     )
 }
+
 
 private suspend fun calculateEpisodesRemaining(
     parentId: String,
