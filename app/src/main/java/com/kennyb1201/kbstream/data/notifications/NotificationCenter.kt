@@ -50,7 +50,7 @@ internal object NotificationCenter {
         ChannelSpec(
             CHANNEL_LIVE_REMINDERS,
             "Live TV reminders",
-            "Alerts when a live programme you asked to be reminded about starts."
+            "Alerts when a live program you asked to be reminded about starts."
         )
     )
 
@@ -104,7 +104,7 @@ internal object NotificationCenter {
         }
 
         val body = buildString {
-            append(programmeTitle.ifBlank { "Your programme" })
+            append(programmeTitle.ifBlank { "Your program" })
             append(" is starting now")
         }
 
