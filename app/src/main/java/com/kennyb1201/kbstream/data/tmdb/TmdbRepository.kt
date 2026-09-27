@@ -37,6 +37,32 @@ data class StudioItem(val item: TmdbDiscoverItem, val mediaType: String)
 data class StudioSection(val title: String, val items: List<StudioItem>)
 
 /**
+ * Whether a discover row is a real catalog entry - something a poster grid can
+ * draw - rather than a TMDB placeholder (an announced announcement, a festival
+ * stub, a merge target) that carries a title and nothing else.
+ *
+ * A missing poster is NOT on its own that test, which is the mistake the rail
+ * gate used to make. TMDB routinely holds a real, already-airing entry with no
+ * artwork for months: its Game Show Network pages for the 2025 `Bingo Blitz`
+ * and `Tic Tac Dough` revivals have no poster, The CW's 2026 `The Great
+ * American Road Rally: Celebrity Edition` has none, nor do The Weather
+ * Channel's 2023 `Search Party with Brandon Jordan` or Rakuten Viki's 2025
+ * `Business As Usual` - every one of them a substantive entry with a synopsis.
+ * Dropping those on the artwork test alone pushed the RECENT rail's head back
+ * a year or more (Game Show Network: 2025 -> 2024; The CW: 2026 -> 2025),
+ * which is precisely the recency that rail exists to show.
+ *
+ * So an entry with no poster survives when TMDB has something behind it - a
+ * synopsis, or any audience at all - and only the empty stubs are dropped. A
+ * surviving entry without artwork renders as a titled card, which is
+ * `PosterCard`'s documented fallback, so nothing draws blank.
+ */
+internal fun hasSomethingToDraw(item: StudioItem): Boolean =
+    !item.item.posterPath.isNullOrBlank() ||
+        !item.item.overview.isNullOrBlank() ||
+        (item.item.voteCount ?: 0) > 0
+
+/**
  * The non-genre dimension a discover screen is already filtered by. Genre
  * chip rails compose this WITH a genre (KBFilters fields AND together), so
  * every screen can offer "browse this dimension by genre" without new
@@ -1595,9 +1621,13 @@ class TmdbRepository private constructor(context: Context) :
      * announcements, festival stubs, merges) that have a title and nothing
      * else; a poster grid can only render them as an empty card, and the
      * RECENT rails no longer have a vote floor to keep them out.
+     *
+     * Artwork alone is not that test: a posterless but otherwise real entry is
+     * kept, so a brand's newest show cannot sit hidden behind its missing art.
+     * See [hasSomethingToDraw] for the exact rule and why.
      */
     private fun dropPosterless(items: List<StudioItem>): List<StudioItem> =
-        items.filter { !it.item.posterPath.isNullOrBlank() }
+        items.filter { hasSomethingToDraw(it) }
 
     /**
      * Shared tail of every rail-page loader (see [TmdbRailPages]): drop

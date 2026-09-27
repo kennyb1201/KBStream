@@ -411,7 +411,13 @@ data class TmdbDiscoverItem(
     // (TMDB sends both on every discover response).
     @Json(name = "release_date") val releaseDate: String? = null,
     @Json(name = "first_air_date") val firstAirDate: String? = null,
-    @Json(name = "vote_average") val voteAverage: Double? = null
+    @Json(name = "vote_average") val voteAverage: Double? = null,
+    // Evidence that an entry is a real catalog row rather than a placeholder,
+    // which is what the rail artwork gate needs when TMDB has no poster for
+    // it - see hasSomethingToDraw in TmdbRepository. Both ride on every
+    // discover response, so parsing them costs nothing extra.
+    val overview: String? = null,
+    @Json(name = "vote_count") val voteCount: Int? = null
 )
 
 @JsonClass(generateAdapter = true)
