@@ -7,14 +7,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The rail projection is what lets the disk cache hold ~10x more titles: one
- * full appended TMDB detail measured 65-280 KB against the live API, and ~93%
- * of it is bulk that no rail, badge, resume row or playback target reads.
+ * The rail projection is what lets the disk cache hold roughly twice as many
+ * titles: one full appended TMDB detail measured 65-280 KB against the live
+ * API, and the projection is 27-81 KB.
  *
  * The risk in that trade is a surface that DOES read the bulk silently getting
  * a projection and rendering an empty cast list or no trailer. So these cases
  * name both halves: every field the rail path relies on survives, and every
  * field that is dropped is dropped.
+ *
+ * `images` is the case that makes the point. It was dropped first, and it
+ * broke the Home and KB rail landscape art - not through a field read, but
+ * through the [bestLogoPath]/[cardBackdropPath] helpers defined on top of it.
  */
 class TmdbRailProjectionTest {
 
@@ -44,7 +48,11 @@ class TmdbRailProjectionTest {
         reviews = TmdbReviews(),
         genres = listOf(TmdbGenre(id = 18, name = "Drama")),
         keywords = TmdbKeywords(),
-        images = TmdbImagesResponse(),
+        images = TmdbImagesResponse(
+            logos = listOf(TmdbImageAsset(filePath = "/logo.png", iso6391 = "en")),
+            backdrops = listOf(TmdbImageAsset(filePath = "/alt-backdrop.jpg", iso6391 = null)),
+            posters = listOf(TmdbImageAsset(filePath = "/alt-poster.jpg"))
+        ),
         awards = "16 Primetime Emmys",
         tagline = "Remember my name.",
         belongsToCollection = TmdbCollectionRef(id = 9, name = "Collection"),
@@ -62,7 +70,32 @@ class TmdbRailProjectionTest {
         assertNull(slim.recommendations)
         assertNull(slim.reviews)
         assertNull(slim.keywords)
-        assertNull(slim.images)
+    }
+
+    @Test
+    fun `images survives, because the rail landscape-art helpers read it`() {
+        // This case is the reason the projection keeps `images`. Dropping it
+        // looked free - no rail reads the `images` FIELD - but the per-card
+        // backdrop + clearlogo prefetch on Home and in KB folders calls
+        // bestLogoPath()/cardBackdropPath(), which are defined entirely in
+        // terms of it. Both were the slim callers, so dropping it would have
+        // blanked every rail card's alternate backdrop and clearlogo with no
+        // compile error and no other failing test.
+        val slim = full.railProjection()
+
+        assertNotNull(slim.images)
+        assertEquals("/alt-backdrop.jpg", slim.cardBackdropPath())
+        assertEquals("/logo.png", slim.bestLogoPath())
+        assertEquals("/alt-poster.jpg", slim.alternatePosterPath())
+    }
+
+    @Test
+    fun `the projected card art is identical to the full payload's`() {
+        val slim = full.railProjection()
+
+        assertEquals(full.cardBackdropPath(), slim.cardBackdropPath())
+        assertEquals(full.bestLogoPath(), slim.bestLogoPath())
+        assertEquals(full.alternatePosterPath(), slim.alternatePosterPath())
     }
 
     @Test
@@ -125,7 +158,8 @@ class TmdbRailProjectionTest {
 
         assertEquals(full.railProjection(), twice)
         assertNull(twice.credits)
-        assertNull(twice.images)
+        assertNull(twice.keywords)
+        assertNotNull(twice.images)
     }
 
     @Test
@@ -136,6 +170,5 @@ class TmdbRailProjectionTest {
 
         assertTrue(slim !== full)
         assertNotNull(full.credits)
-        assertNotNull(full.images)
     }
 }

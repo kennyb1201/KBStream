@@ -25,12 +25,13 @@ internal data class TmdbJsonCacheTrim(
  * on real devices for three compounding reasons:
  *
  *  - **Every enriched title writes one row.** [com.kennyb1201.kbstream.data.tmdb.TmdbRepository]
- *    caches the FULL appended TMDB detail response, and that response is
- *    dominated by the parts a rail never reads back: measured against the
- *    live API, one row is 65-280 KB, of which images/credits/videos/
- *    recommendations/reviews/keywords are ~90% (a slim core of the same
- *    titles is 5-20 KB). Home, Search browse, KB folders and the Library all
- *    enrich per card, so a browse-heavy month is thousands of rows.
+ *    caches the appended TMDB detail response, and that response is dominated
+ *    by parts a rail never reads back (credits, videos, recommendations,
+ *    keywords): measured against the live API, one full row is 65-280 KB. Home,
+ *    Search browse, KB folders and the Library all enrich per card, so a
+ *    browse-heavy month is thousands of rows. The rail path now persists a
+ *    projection instead — see [com.kennyb1201.kbstream.data.tmdb.railProjection]
+ *    — which is 27-81 KB.
  *  - **The only eviction was by age** (30 days), and `updatedAt` is refreshed
  *    on every re-fetch — so anything the user keeps looking at never expired,
  *    and there was no ceiling on the sum. A table with no byte budget has no

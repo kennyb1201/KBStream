@@ -63,19 +63,28 @@ data class StudioSection(val title: String, val items: List<StudioItem>)
  * The rail/resume projection of a TMDB detail response: everything a card, a
  * badge, a next-episode walk or a playback target reads, and none of the bulk.
  *
- * The six fields it blanks are exactly the ones every consumer outside the
- * Detail screen, the Home/KB heroes and anime detection ignores. Measured
- * against the live API, they are ~93% of a TV row and ~94% of a movie row
- * (images and credits dominate; one full row is 65-280 KB against 5-20 KB for
- * this projection), which is why the rail path persists this instead.
+ * The five fields it blanks are the ones every consumer outside the Detail
+ * screen, the Home/KB heroes and anime detection ignores. Measured against the
+ * live API, this is 27-81 KB against 65-280 KB for the full row — a saving of
+ * 35-58% on TV rows and 59-84% on movies, where the credits blob dominates.
  *
  * Blanking fields on the existing model rather than introducing a slim type
  * keeps `slim + bulk == full` structurally true and lets both rows share one
  * JSON adapter.
  *
- * `releaseDates`/`contentRatings` deliberately survive: the Kids Mode ceiling
- * is enforced from `certification()`, which reads them, and that check runs
- * over every rail page.
+ * Three field groups deliberately survive, and each has a caller that is easy
+ * to miss because it reads a HELPER rather than a field:
+ *
+ *  - `images` — [bestLogoPath], [cardBackdropPath] and [alternatePosterPath]
+ *    are all defined off it, and the rail landscape-art path (the per-card
+ *    backdrop + clearlogo prefetch on Home and in KB folders) calls the first
+ *    two. This is the one that nearly shipped as a bug: it reads as artwork
+ *    enrichment rather than as the detail payload, so dropping it would have
+ *    silently blanked every rail card's alternate backdrop and clearlogo.
+ *  - `releaseDates`/`contentRatings` — the Kids Mode ceiling is enforced from
+ *    [certification], which reads them, and that check runs over every rail
+ *    page. A projection without them would fail OPEN, which is the wrong way
+ *    for a parental control to fail.
  *
  * Top-level and pure on purpose: this is the rule the whole disk-budget story
  * rests on (a slim row must never be served to a surface that needs the bulk),
@@ -87,8 +96,7 @@ internal fun TmdbDetail.railProjection(): TmdbDetail = copy(
     videos = null,
     recommendations = null,
     reviews = null,
-    keywords = null,
-    images = null
+    keywords = null
 )
 
 internal fun hasSomethingToDraw(item: StudioItem): Boolean =
@@ -640,11 +648,11 @@ class TmdbRepository private constructor(context: Context) :
      * rather than a second function because the callers differ in that one
      * thing only:
      *
-     *  - the default (`full = false`) is the rail/resume/badge projection. It
-     *    reads and writes the SLIM row — see [railProjection] for what that
-     *    leaves out and why it is ~90% of the payload. Rails, browse grids, KB
-     *    folders, resume rows, next-episode walks and the Kids Mode ceiling all
-     *    land here, and none of them read the bulk.
+     *  - the default (`full = false`) is the rail/resume/badge projection: see
+     *    [railProjection] for what it keeps and drops, and for the helpers that
+     *    nearly made this a bug. Rails, browse grids, KB folders, resume rows,
+     *    next-episode walks and the Kids Mode ceiling all land here, and none
+     *    of them read the bulk.
      *  - `full = true` is for the surfaces that DO read it: the Detail screen
      *    (cast, trailer, "More like this", keywords, reviews), the Home and
      *    KB-folder heroes (cast line + trailer) and anime detection (keywords).
