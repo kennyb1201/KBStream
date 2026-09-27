@@ -1,6 +1,5 @@
 package com.kennyb1201.kbstream.ui.player
 
-import android.app.PictureInPictureParams
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.net.Uri
@@ -10,7 +9,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import android.util.Rational
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
@@ -995,6 +993,14 @@ class NativePlayerActivity : ComponentActivity() {
 
     private var isInPiPMode = false
     private var showSettingsPanel = false
+
+    // The sleep timer's rows, appended to the settings panel's own column the
+    // same way the track / A-V rows are; null until the panel is built.
+    private var sleepTimerSection: SleepTimerSection? = null
+
+    // The sleep timer's current output gain: 1 while no fade is running, so the
+    // ordinary case writes nothing to the player at all.
+    private var sleepFadeGain = 1f
     // The track / A-V rows appended to that panel; see PlayerPanelSection.
     private var settingsPanelSection: PlayerPanelSection? = null
     private var isPickerShowing = false
@@ -1999,6 +2005,17 @@ class NativePlayerActivity : ComponentActivity() {
                 nextUpCountdownRemaining = 0
                 return
             }
+            // A sleep timer armed while this countdown was already running (the
+            // card opens during the credits, so that is the ordinary way the two
+            // meet) wins: the countdown stops here instead of handing off seconds
+            // before the end the timer is waiting for. Re-checked every tick, so
+            // the timer is honoured whenever it is armed - up to the last second.
+            if (sleepTimerBlocksAutoAdvance(SleepTimer.state.value)) {
+                nextUpCountdownHeld = false
+                nextUpCountdownRemaining = 0
+                nextUpCountdown.text = "Stopping here - sleep timer"
+                return
+            }
             nextUpCountdownRemaining--
             if (nextUpCountdownRemaining <= 0) {
                 // The countdown fired unattended: count this as an
@@ -2675,6 +2692,16 @@ class NativePlayerActivity : ComponentActivity() {
                 if (settingsContainer.visibility == View.VISIBLE) section.refresh()
             }
         }
+
+        // The sleep-timer rows go into the same panel column, as their own
+        // section. The choices are read through the activity rather than
+        // captured here because they can change under the section: a live
+        // channel only gains "End of program" once the guide has a block end.
+        sleepTimerSection = SleepTimerSection(
+            activity = this,
+            optionsProvider = { sleepTimerChoices() },
+            onSelect = { option -> chooseSleepTimer(option) }
+        ).also { section -> section.attach(settingsContainer) }
 
         // Bring back the subtitle attached to THIS video last time. Only the
         // URI is seeded here: createPlayer() turns it into the sidecar
@@ -6507,6 +6534,10 @@ class NativePlayerActivity : ComponentActivity() {
 }
 
     private fun updateSettingsPanelState() {
+        // The sleep-timer rows take part in the panel's own refresh, so opening
+        // the panel always shows the state the timer is really in.
+        sleepTimerSection?.refresh()
+
         applyPillState(settingsBufferAuto, bufferMode == 2)
         applyPillState(settingsBufferBalanced, bufferMode == 0)
         applyPillState(settingsBufferLow, bufferMode == 1)
@@ -7102,6 +7133,13 @@ class NativePlayerActivity : ComponentActivity() {
         // activity) right after the credits left the episode with no watch
         // marker and the resume bar exactly where the viewer had been.
         saveProgress(reason = "ended", forceCompleted = true)
+        // A sleep timer armed to stop at the end of this episode is honoured
+        // here, where the episode really is over: no card, no auto-advance,
+        // just out. The completion write above is what the history keeps.
+        if (sleepTimerBlocksAutoAdvance(SleepTimer.state.value)) {
+            exitForSleepTimer(savePartialProgress = false)
+            return
+        }
         // The panel is normally already up from maybeTriggerEndPanels (it opens
         // during the credits) with its auto-advance countdown held because the
         // episode was not over yet. Playback is over now, so let it run.
@@ -7124,6 +7162,10 @@ class NativePlayerActivity : ComponentActivity() {
      */
     private fun maybeTriggerEndPanels(pos: Long, dur: Long) {
         if (endPanelsShown || playbackEndedHandled || isLiveChannel) return
+        // A sleep timer armed for the end of this episode suppresses the card
+        // entirely: offering PLAY NEXT while the timer is about to stop the
+        // session is a promise this player cannot keep.
+        if (sleepTimerBlocksAutoAdvance(SleepTimer.state.value)) return
         if (dur <= 0L || dur == C.TIME_UNSET) return
         // Both panels switched off: nothing to raise, so playback runs to its
         // own end instead of this trigger cutting the last minutes off with
@@ -7787,6 +7829,12 @@ class NativePlayerActivity : ComponentActivity() {
         // the rest are no-ops (see [nextEpisodeHandoffStarted]).
         if (nextEpisodeHandoffStarted) return
         nextEpisodeHandoffStarted = true
+        // Reaching here while a timer is armed to stop at the end of this
+        // episode means the viewer pressed PLAY NEXT: an explicit press beats
+        // the timer, so the timer goes with the episode it was waiting for. A
+        // minutes timer is left alone - that intent is about the clock, not
+        // about this episode.
+        if (SleepTimer.state.value.stopsAtEndOfItem) SleepTimer.cancel()
         // The end-of-episode decision is spent: a later countdown tick must not
         // re-fetch a target for a session that is already leaving.
         nextUpHandoffArmed = false
@@ -7875,6 +7923,10 @@ class NativePlayerActivity : ComponentActivity() {
                     pos,
                     dur
                 )
+
+                // Last, so a timer that fires on this tick stops a session the
+                // completion checks have already finished with.
+                enforceSleepTimer(player)
             }
             handler.postDelayed(this, 1_000L)
     }
@@ -8379,23 +8431,130 @@ class NativePlayerActivity : ComponentActivity() {
         }
     }
 
-    // --- PiP ---
-    private fun enterPipIfEnabled() {
-        // Never enter PiP while the activity is finishing/destroyed (e.g. during a
-        // Back press) - on TVs that dumps the user to the launcher instead of the
-        // previous app screen. Only enter PiP for a genuine user-leave (Home/recent).
-        if (isFinishing || isDestroyed) return
-        // Fire TV OS does not display PiP windows for third-party apps, and
-        // attempting PiP during navigation is what dumps users to the launcher.
-        // Skip PiP entirely on Amazon devices.
-        if (android.os.Build.MANUFACTURER.equals("Amazon", ignoreCase = true)) return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && AppPreferences.getEnablePip(this)) {
-            try {
-                enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build())
-            } catch (e: Exception) { Log.w("PLAYER_PIP", "PiP failed", e) }
+    // --- Sleep timer ---------------------------------------------------------
+
+    /**
+     * The rows this session can offer. Read fresh on every second the panel is
+     * up, because a live channel's "End of program" depends on guide data
+     * that arrives - and rolls over to the next block - after the panel was
+     * built.
+     */
+    internal fun sleepTimerChoices(): List<SleepTimerOption> = sleepTimerOptions(
+        isLive = isLiveChannel,
+        isEpisode = season != null && episode != null,
+        hasProgrammeEnd = currentProgrammeEndMs() != null
+    )
+
+    /**
+     * The guide's end for the programme this channel is on now, or null when
+     * there is none to trust.
+     *
+     * Only the already-resolved zap row is consulted. Asking the EPG again from
+     * here would put a query behind a panel press, and the row this reads is
+     * the same one the zap banner has already painted on screen - so "end of
+     * program" means the end the viewer can see.
+     */
+    private fun currentProgrammeEndMs(): Long? {
+        if (!isLiveChannel) return null
+        val channel = currentZapChannel() ?: return null
+        val now = zapEpgCache[zapEpgCacheKey(channel)]?.now ?: return null
+        return now.endUtcMillis.takeIf { it > System.currentTimeMillis() }
     }
 
-}
+    /**
+     * Arms (or clears) the timer. A fade already in progress is undone here:
+     * "Off" pressed during the last twenty seconds of a timer has to bring the
+     * sound back rather than silence the rest of the film.
+     */
+    internal fun chooseSleepTimer(option: SleepTimerOption) {
+        SleepTimer.select(
+            option = option,
+            nowMs = System.currentTimeMillis(),
+            programmeEndMs = currentProgrammeEndMs()
+        )
+        sleepFadeGain = 1f
+        exoPlayer?.volume = 1f
+        sleepTimerSection?.refresh()
+    }
+
+    /**
+     * The sleep timer, driven from the 1s position tick: the last
+     * [SLEEP_FADE_MS] fade to silence, then the session stops.
+     *
+     * Enforced from that tick rather than from a handler of its own because it
+     * is already the player's once-a-second heartbeat - one clock, so the fade
+     * cannot drift away from the position the timer is stopping.
+     */
+    private fun enforceSleepTimer(player: Player) {
+        val state = SleepTimer.state.value
+        if (!state.isArmed) {
+            restoreSleepFade(player)
+            return
+        }
+        // "End of episode" has no deadline to count: it is honoured where the
+        // episode actually ends (see onPlaybackEnded).
+        if (state.stopsAtEndOfItem) return
+        val remaining = (state.deadlineMs ?: return) - System.currentTimeMillis()
+        val gain = sleepFadeGain(remaining)
+        if (gain != sleepFadeGain) {
+            sleepFadeGain = gain
+            player.volume = gain
+        }
+        if (remaining > 0L) return
+        exitForSleepTimer(savePartialProgress = true)
+    }
+
+    private fun restoreSleepFade(player: Player?) {
+        if (sleepFadeGain == 1f) return
+        sleepFadeGain = 1f
+        player?.volume = 1f
+    }
+
+    /**
+     * Leaves the player for a sleep timer that fired, or for one armed to stop
+     * at the end of what was playing.
+     *
+     * It finishes rather than pausing: a stopped player left on screen keeps
+     * the box decoding a static frame until the TV's own idle timer gives up,
+     * and "we are done for tonight" is what the viewer asked for. The binge
+     * chain is disarmed first, so an Up Next countdown cannot start the next
+     * episode from behind a session that is already on its way out.
+     *
+     * [savePartialProgress] is false on the end-of-episode path, where the
+     * caller has already recorded the title as finished: saving again from here
+     * would overwrite that completion with the resume point it was just
+     * reported as.
+     */
+    private fun exitForSleepTimer(savePartialProgress: Boolean) {
+        SleepTimer.cancel()
+        nextUpHandoffArmed = false
+        nextUpCountdownHeld = false
+        nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
+        sleepFadeGain = 1f
+        exoPlayer?.let { player ->
+            player.volume = 1f
+            player.pause()
+        }
+        if (savePartialProgress) saveProgress(reason = "sleep_timer")
+        mediaSession?.release()
+        mediaSession = null
+        android.widget.Toast
+            .makeText(this, "Sleep timer - playback stopped", android.widget.Toast.LENGTH_SHORT)
+            .show()
+        finish()
+    }
+
+    // --- PiP ---
+    /**
+     * Called from onUserLeaveHint and onPause, so a Home press pops the picture
+     * into the corner instead of leaving playback. The guards - finishing or
+     * destroyed, Fire TV, no system feature, and the viewer's own setting - live
+     * in the shared helper, so both engines enter PiP under the same rules (see
+     * PipSupport).
+     */
+    private fun enterPipIfEnabled() {
+        enterPipMode(this)
+    }
 
 
     override fun onUserLeaveHint() { super.onUserLeaveHint(); enterPipIfEnabled() }
@@ -8496,6 +8655,7 @@ class NativePlayerActivity : ComponentActivity() {
         // leaving this set would hold guide writes back forever.
         EpgWriteGate.setPlayerActive(false)
         p5VideoGlesView.release()
+        sleepTimerSection?.release()
         handler.removeCallbacksAndMessages(null)
         scrubHintHandler.removeCallbacksAndMessages(null)
         channelNumberHandler.removeCallbacksAndMessages(null)

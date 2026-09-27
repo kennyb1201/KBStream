@@ -134,7 +134,12 @@
         <!-- System / voice search target: the TV remote's mic (and assistant
              queries) arrive here as ACTION_SEARCH and are forwarded to
              MainActivity with the query, which opens the Search screen with it
-             already submitted. Transparent, never in Recents. -->
+             already submitted.
+
+             The second filter is the media action a TV launcher or an assistant
+             dispatches for "play <title>": the query is resolved to one result
+             and that title's own screen opens, ready to play (see
+             VoiceSearchActivity). Transparent, never in Recents. -->
         <activity
             android:name=".ui.search.VoiceSearchActivity"
             android:exported="true"
@@ -143,6 +148,10 @@
             android:theme="@android:style/Theme.Translucent.NoTitleBar">
             <intent-filter>
                 <action android:name="android.intent.action.SEARCH" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
             <meta-data
@@ -161,13 +170,16 @@
         <!-- Backup engine (MPV). Takes the same launch extras as
              NativePlayerActivity, so a failed ExoPlayer session hands its own
              intent over mid-title (see NativePlayerActivity.handOffToMpv) and
-             the Settings "Player engine" choice can open it directly. Not
-             resizable/PiP: this engine's job is to get a picture on screen for
-             a file the main player could not open at all. -->
+             the Settings "Player engine" choice can open it directly.
+             Resizable/PiP like the main player: this is the engine anime and
+             Dolby Vision titles land on, so a Home press had to pop exactly
+             those sessions into the corner instead of dropping out of what was
+             playing. The guards both engines share are in PipSupport. -->
         <activity
             android:name=".ui.player.MpvPlayerActivity"
             android:exported="false"
-            android:resizeableActivity="false"
+            android:resizeableActivity="true"
+            android:supportsPictureInPicture="true"
             android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden|density|uiMode"
             android:screenOrientation="landscape" />
 

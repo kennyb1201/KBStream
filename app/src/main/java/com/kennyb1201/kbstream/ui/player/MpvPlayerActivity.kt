@@ -215,6 +215,18 @@ class MpvPlayerActivity : ComponentActivity() {
     private var settingsContainer: View? = null
     private var settingsSection: MpvSettingsSection? = null
 
+    // The sleep timer's rows, appended to the same panel column after the
+    // engine's own sections; null until the panel is built.
+    private var sleepTimerSection: SleepTimerSection? = null
+
+    // The sleep timer's current fade, a multiplier over the volume boost: 1
+    // while no fade is running, so the ordinary case writes nothing to mpv.
+    private var sleepFadeGain = 1f
+
+    // True between PiP entry and exit: the window is in the corner and playback
+    // is deliberately still running (see the PiP block near onDestroy).
+    private var isInPiPMode = false
+
     // --- Picker: the same side panel the main player opens -------------------
     private var sourceButton: ImageView? = null
     private var pickerContainer: View? = null
@@ -385,6 +397,17 @@ class MpvPlayerActivity : ComponentActivity() {
     private val nextUpCountdownHandler = Handler(Looper.getMainLooper())
     private val nextUpCountdownRunnable = object : Runnable {
         override fun run() {
+            // A sleep timer armed while this countdown was already running (the
+            // card opens during the credits, so that is the ordinary way the two
+            // meet) wins: the countdown stops here instead of handing off seconds
+            // before the end the timer is waiting for. Re-checked every tick, so
+            // the timer is honoured whenever it is armed - up to the last second.
+            if (sleepTimerBlocksAutoAdvance(SleepTimer.state.value)) {
+                nextUpCountdownHeld = false
+                nextUpCountdownRemaining = 0
+                nextUpCountdown?.text = "Stopping here - sleep timer"
+                return
+            }
             nextUpCountdownRemaining--
             if (nextUpCountdownRemaining <= 0) {
                 // The countdown fired unattended: count this as an auto-advanced
@@ -545,6 +568,19 @@ class MpvPlayerActivity : ComponentActivity() {
         settingsContainer = findViewById(R.id.mpv_settings_container)
         settingsSection = settingsContainer?.let { container ->
             MpvSettingsSection(this, container).also { section -> section.attach() }
+        }
+
+        // The sleep-timer rows go into the same column, as their own section.
+        // This engine has no live-TV path, so its choices are the minute steps
+        // and the end of whatever is playing - the row list is still read
+        // through the activity, exactly as the main player's is, so the two
+        // engines cannot offer different timers.
+        settingsContainer?.let { container ->
+            sleepTimerSection = SleepTimerSection(
+                activity = this,
+                optionsProvider = { sleepTimerChoices() },
+                onSelect = { option -> chooseSleepTimer(option) }
+            ).also { section -> section.attach(container) }
         }
         // The MPV chrome is plain XML with fixed surface fills, so the AMOLED /
         // pure-black toggles never reached it. Run the same re-tint pass the
@@ -1659,6 +1695,9 @@ class MpvPlayerActivity : ComponentActivity() {
         settingsOpen = true
         removeAutoHide()
         settingsSection?.refresh()
+        // ...and the sleep timer's own rows, so the armed pill and its countdown
+        // are right the moment the panel appears instead of on the next tick.
+        sleepTimerSection?.refresh()
         container.visibility = View.VISIBLE
         focusFirstPill(container)
     }
@@ -1990,6 +2029,11 @@ class MpvPlayerActivity : ComponentActivity() {
      */
     private fun maybeTriggerEndPanels(position: Long, duration: Long) {
         if (endPanelsShown || endedHandled || duration <= 0L) return
+        // A sleep timer armed to stop at the end of this episode suppresses the
+        // card entirely, exactly as it does in the main player: offering PLAY
+        // NEXT while the timer is about to end the session is a promise this
+        // player cannot keep.
+        if (sleepTimerBlocksAutoAdvance(SleepTimer.state.value)) return
         // Both panels switched off: nothing to raise, so the file runs to its
         // own end instead. Acting on the point anyway would cut the last minutes
         // off with nothing to show for them.
@@ -2573,6 +2617,11 @@ class MpvPlayerActivity : ComponentActivity() {
             // IntroDB segment it is inside.
             updateSkipPrompt(positionMs, durationMs)
 
+            // The sleep timer rides this tick: it is already mpv's own
+            // once-a-second progress report, so the fade cannot drift away from
+            // the playhead it is stopping.
+            enforceSleepTimer()
+
             // Completion is a watch-history fact, not an end-of-file event: a
             // title watched to 96% and then backed out of counts as watched,
             // exactly as it does in the main player.
@@ -2613,6 +2662,14 @@ class MpvPlayerActivity : ComponentActivity() {
             saveProgress(reason = "ended", forceCompleted = true)
             scrobble("stop", progressOverride = 100.0)
 
+            // A sleep timer armed to stop at the end of this episode is honoured
+            // here, where the episode really is over: no card, no auto-advance,
+            // just out. The completion write above is what the history keeps.
+            if (sleepTimerBlocksAutoAdvance(SleepTimer.state.value)) {
+                exitForSleepTimer(savePartialProgress = false)
+                return@runOnUiThread
+            }
+
             // The card is normally already up from the credits trigger, with its
             // countdown held because the episode had not ended yet. Playback is
             // over now, so let the countdown run.
@@ -2633,6 +2690,12 @@ class MpvPlayerActivity : ComponentActivity() {
         // One handoff per session: whichever trigger gets here first wins.
         if (nextEpisodeHandoffStarted) return
         nextEpisodeHandoffStarted = true
+        // Reaching here while a timer is armed to stop at the end of this
+        // episode means the viewer pressed PLAY NEXT: an explicit press beats
+        // the timer, so the timer goes with the episode it was waiting for. A
+        // minutes timer is left alone - that intent is about the clock, not
+        // about this episode.
+        if (SleepTimer.state.value.stopsAtEndOfItem) SleepTimer.cancel()
         nextUpCountdownHeld = false
         nextUpCountdownRemaining = 0
         nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
@@ -3210,10 +3273,141 @@ class MpvPlayerActivity : ComponentActivity() {
         // Safety net for a player that never reached onStop: leaving this
         // set would hold guide writes back for the life of the process.
         EpgWriteGate.setPlayerActive(false)
+        sleepTimerSection?.release()
         handler.removeCallbacksAndMessages(null)
         nextUpCountdownHandler.removeCallbacksAndMessages(null)
         surface?.release()
         surface = null
+    }
+
+    // --- Sleep timer ---------------------------------------------------------
+
+    /**
+     * The rows this session can offer. Read through the activity rather than
+     * captured once, so the panel section and the main player's are built from
+     * the same rule even though this engine resolves none of the live ones.
+     */
+    internal fun sleepTimerChoices(): List<SleepTimerOption> = sleepTimerOptions(
+        isLive = false,
+        isEpisode = season != null && episode != null,
+        hasProgrammeEnd = false
+    )
+
+    /**
+     * Arms (or clears) the timer. A fade already in progress is undone here:
+     * "Off" pressed during the last twenty seconds of a timer has to bring the
+     * sound back rather than silence the rest of the film.
+     */
+    internal fun chooseSleepTimer(option: SleepTimerOption) {
+        SleepTimer.select(option, nowMs = System.currentTimeMillis())
+        sleepFadeGain = 1f
+        surface?.setOutputGain(1f)
+        sleepTimerSection?.refresh()
+    }
+
+    /**
+     * The sleep timer, driven from the progress tick: the last [SLEEP_FADE_MS]
+     * fade to silence, then the session stops.
+     */
+    private fun enforceSleepTimer() {
+        val state = SleepTimer.state.value
+        if (!state.isArmed) {
+            restoreSleepFade()
+            return
+        }
+        // "End of episode" has no deadline to count: it is honoured where the
+        // file actually ends (see onPlaybackEnded).
+        if (state.stopsAtEndOfItem) return
+        val remaining = (state.deadlineMs ?: return) - System.currentTimeMillis()
+        val gain = sleepFadeGain(remaining)
+        if (gain != sleepFadeGain) {
+            sleepFadeGain = gain
+            surface?.setOutputGain(gain)
+        }
+        if (remaining > 0L) return
+        exitForSleepTimer(savePartialProgress = true)
+    }
+
+    private fun restoreSleepFade() {
+        if (sleepFadeGain == 1f) return
+        sleepFadeGain = 1f
+        surface?.setOutputGain(1f)
+    }
+
+    /**
+     * Leaves the player for a sleep timer that fired, or for one armed to stop
+     * at the end of what was playing.
+     *
+     * The same two decisions the main player makes: it finishes rather than
+     * holding a stopped frame on screen until the TV's own idle timer gives up,
+     * and it disarms the binge chain first so the Up Next countdown cannot start
+     * the next episode from behind a session that is already leaving.
+     *
+     * [savePartialProgress] is false on the end-of-episode path, where the
+     * caller has already recorded the title as finished: saving again from here
+     * would overwrite that completion with the resume point it was just
+     * reported as.
+     */
+    private fun exitForSleepTimer(savePartialProgress: Boolean) {
+        SleepTimer.cancel()
+        cancelNextUpAutoAdvance()
+        // Latch the handoff: whatever else runs as this activity goes down must
+        // not start another episode.
+        nextEpisodeHandoffStarted = true
+        sleepFadeGain = 1f
+        surface?.setOutputGain(1f)
+        surface?.setPaused(true)
+        if (savePartialProgress) saveProgress(reason = "sleep_timer")
+        mediaSession?.release()
+        mediaSession = null
+        showToast("Sleep timer - playback stopped", 3_000L)
+        finish()
+    }
+
+    // --- PiP ----------------------------------------------------------------
+
+    /**
+     * A Home press pops the picture into the corner instead of ending playback,
+     * exactly as it does in the main player. This engine used to be the one
+     * exception: it is the engine for anime and Dolby Vision titles, so those
+     * were precisely the sessions where HOME dropped the viewer out of what they
+     * were watching. The guards are shared with the main player (see PipSupport),
+     * so both engines enter PiP - and refuse to - under the same rules.
+     */
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        enterPipIfEnabled()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Belt and braces, as in the main player: onUserLeaveHint does not fire
+        // for every way a window can lose focus, and this is skipped once the
+        // corner window is already up.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !isInPiPMode) {
+            enterPipIfEnabled()
+        }
+    }
+
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.O)
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: android.content.res.Configuration
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        isInPiPMode = isInPictureInPictureMode
+        // The control bar is built for a full screen: in the corner it would
+        // cover the picture, and the next press belongs to the system's PiP
+        // chrome anyway. Playback itself is untouched - playing on in the corner
+        // is the whole point.
+        if (isInPictureInPictureMode) {
+            removeAutoHide()
+            controlsContainer?.visibility = View.GONE
+        }
+    }
+
+    private fun enterPipIfEnabled() {
+        enterPipMode(this)
     }
 
     private fun exitPlayer() {
