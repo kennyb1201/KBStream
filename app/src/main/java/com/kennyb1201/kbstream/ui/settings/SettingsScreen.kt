@@ -1405,11 +1405,11 @@ fun SettingsScreen(
                 ToggleRow(
                     label = "Live TV Reminder Alerts",
                     description = if (!notificationsAllowed) {
-                        "Alerts when a programme you set a reminder for starts. " +
+                        "Alerts when a program you set a reminder for starts. " +
                             "Blocked by the system — allow notifications for KBStream in your " +
                             "device settings."
                     } else {
-                        "Alerts when a programme you set a reminder for starts (REMIND ME in " +
+                        "Alerts when a program you set a reminder for starts (REMIND ME in " +
                             "the guide). Without this you'd only see the reminder if the " +
                             "guide happened to be open at that moment."
                     },

@@ -1706,7 +1706,7 @@ class NativePlayerActivity : ComponentActivity() {
             } else if (channelName.isNotBlank()) {
                 channelName
             } else {
-                "No programme data"
+                "No program data"
             }
             liveProgramStatus?.text = buildList {
                 add(liveProgramScope)
