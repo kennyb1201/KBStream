@@ -51,7 +51,12 @@ internal fun encodeScreen(
         is Screen.Detail -> {
             put("type", screen.type)
             put("id", screen.id)
-            screen.pendingTarget?.let { put("pendingTarget", encodeTarget(it)) }
+            // pendingTarget is deliberately NOT persisted: it is a one-shot
+            // "play this now" instruction, and restoring it made a recreated
+            // app silently auto-play that episode again - which reads as the
+            // binge restarting from the episode it began on. The Detail page
+            // still opens; the user presses play. (decodeScreen still accepts
+            // the key, so an older saved bundle stays loadable.)
             screen.itemPoster?.let { put("itemPoster", it) }
             screen.itemBackdrop?.let { put("itemBackdrop", it) }
             screen.itemClearLogo?.let { put("itemClearLogo", it) }

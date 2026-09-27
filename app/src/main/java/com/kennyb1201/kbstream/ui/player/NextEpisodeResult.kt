@@ -103,6 +103,14 @@ object NextEpisodeResult {
     fun restoreIfDropped(context: Context): PendingNext? = synchronized(this) {
         val pending = decode(prefs(context).getString(KEY_PENDING, null))
         if (pending != null) {
+            // Clear BOTH stores, not just prefs. The in-memory copy used to
+            // survive this recovery, so the player-result callback (or a later
+            // consumePersisted) picked the SAME handoff up again on top of the
+            // recovery and started the episode a second time - which reads as
+            // "autoplay played the same episode twice". Fire TV recreating the
+            // backgrounded MainActivity mid-handoff is exactly the case this
+            // recovery exists for, so the two paths overlap in practice.
+            pendingNextEpisode = null
             clearPrefs(context)
         }
         pending
@@ -114,7 +122,12 @@ object NextEpisodeResult {
     }
 
     private fun clearPrefs(context: Context) {
-        prefs(context).edit().clear().apply()
+        // commit(), not apply(): a handoff that was consumed from the in-memory
+        // cache must not survive a process kill on disk, or the next launch's
+        // restoreIfDropped() replays an episode the viewer has since watched -
+        // which reads as the binge restarting from the episode it began on.
+        // A tiny prefs file, so the synchronous write is cheap.
+        prefs(context).edit().clear().commit()
     }
 
     private fun prefs(context: Context): SharedPreferences =

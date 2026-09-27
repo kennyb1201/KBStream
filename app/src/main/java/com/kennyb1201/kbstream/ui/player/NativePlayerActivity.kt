@@ -1979,6 +1979,18 @@ class NativePlayerActivity : ComponentActivity() {
      * right underneath that panel.
      */
     private var nextUpHandoffArmed = false
+
+    /**
+     * Latched the first time this session hands playback to the next episode.
+     *
+     * The still-there confirmation (the card's PLAY NEXT) and the auto-advance
+     * countdown are two triggers for the same card, and a remote's media-NEXT
+     * fires alongside either. They all end in [launchNextEpisode], whose only
+     * job is to hand off ONCE: without this latch a second trigger re-persisted
+     * the handoff and finished again, which started the same next episode a
+     * second time - the "autoplay played the same episode twice" report.
+     */
+    private var nextEpisodeHandoffStarted = false
     private val nextUpCountdownHandler = Handler(Looper.getMainLooper())
     private val nextUpCountdownRunnable = object : Runnable {
         override fun run() {
@@ -7771,6 +7783,13 @@ class NativePlayerActivity : ComponentActivity() {
         episodeName: String? = null,
         runtimeMinutes: Int? = null
     ) {
+        // One handoff per session: whichever trigger gets here first wins, and
+        // the rest are no-ops (see [nextEpisodeHandoffStarted]).
+        if (nextEpisodeHandoffStarted) return
+        nextEpisodeHandoffStarted = true
+        // The end-of-episode decision is spent: a later countdown tick must not
+        // re-fetch a target for a session that is already leaving.
+        nextUpHandoffArmed = false
         nextUpCountdownHeld = false
         nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
         val label = buildString {

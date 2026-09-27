@@ -373,6 +373,14 @@ class MpvPlayerActivity : ComponentActivity() {
     private var nextUpCountdownRemaining = 0
     private var nextUpCountdownHeld = false
 
+    /**
+     * Latched the first time this session hands playback to the next episode,
+     * so the card's PLAY NEXT and the auto-advance countdown - both of which
+     * run through [launchNextEpisode] - cannot chain out twice and start the
+     * same next episode a second time.
+     */
+    private var nextEpisodeHandoffStarted = false
+
     private val nextUpCountdownHandler = Handler(Looper.getMainLooper())
     private val nextUpCountdownRunnable = object : Runnable {
         override fun run() {
@@ -2601,6 +2609,12 @@ class MpvPlayerActivity : ComponentActivity() {
      * was up) and the classic result extras for the live callback.
      */
     private fun launchNextEpisode(targetSeason: Int, targetEpisode: Int) {
+        // One handoff per session: whichever trigger gets here first wins.
+        if (nextEpisodeHandoffStarted) return
+        nextEpisodeHandoffStarted = true
+        nextUpCountdownHeld = false
+        nextUpCountdownRemaining = 0
+        nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
         val pending = NextEpisodeResult.PendingNext(
             season = targetSeason,
             episode = targetEpisode,

@@ -79,6 +79,7 @@ import com.kennyb1201.kbstream.ui.player.NativePlayerActivity
 import com.kennyb1201.kbstream.ui.player.NextEpisodeResult
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.player.PlayerCastMember
+import android.content.Context
 import android.content.Intent
 import org.json.JSONArray
 import org.json.JSONObject
@@ -366,6 +367,38 @@ private data class PendingPlay(
             overview = overview,
             cast = cast
         )
+    }
+}
+
+/**
+ * True when a recovered next-episode handoff names an episode this profile has
+ * ALREADY finished.
+ *
+ * A recovered handoff exists to resume the binge on the episode that had not
+ * been watched yet. One that names a finished episode is stale - the pending
+ * handoff is cleared with a write that can be lost to a process kill, so an
+ * old one can survive - and auto-playing it is exactly the "it started the
+ * first episode I began on" report. Everything here is best-effort: any doubt
+ * answers false, which keeps the recovery doing what it did before.
+ */
+private suspend fun recoveredEpisodeAlreadyWatched(
+    context: Context,
+    showId: String,
+    pending: NextEpisodeResult.PendingNext
+): Boolean {
+    val id = showId.trim()
+    if (id.isBlank()) return false
+    // The handoff's stream id carries the add-on's own show id; watch-history
+    // rows are canonicalised to "tt..."/"tmdb:<n>", so both flavors are tried.
+    val forms = linkedSetOf(id)
+    id.removePrefix("tmdb:").toIntOrNull()?.let { forms += "tmdb:$it" }
+    return try {
+        WatchHistoryDatabase.getInstanceScoped(context)
+            .watchHistoryDao()
+            .getCompletedForParents(forms.toList())
+            .any { row -> row.season == pending.season && row.episode == pending.episode }
+    } catch (_: Exception) {
+        false
     }
 }
 
@@ -744,6 +777,18 @@ fun AppRoot() {
                 val showId = pending.streamId
                     .substringBeforeLast(':')
                     .substringBeforeLast(':')
+                if (recoveredEpisodeAlreadyWatched(context, showId, pending)) {
+                    // A stale handoff naming an already-watched episode: open the
+                    // show instead of replaying it. Auto-playing an episode the
+                    // viewer has finished is the "the binge restarted from the
+                    // episode I started on" report.
+                    screen = Screen.Detail(
+                        type = "series",
+                        id = showId,
+                        returnTo = Screen.Home
+                    )
+                    return@LaunchedEffect
+                }
                 screen = Screen.Detail(
                     type = "series",
                     id = showId,
