@@ -60,7 +60,12 @@ ANDROID_NDK="${ANDROID_NDK:-${ANDROID_SDK:+${ANDROID_SDK}/ndk/${NDK_VERSION}}}"
 # Audio decoders exactly as the published Jellyfin build carries them, so the
 # software AUDIO path is unchanged by this swap, plus the video decoders the
 # hardware MediaCodec path cannot cover: AVI/DivX (MPEG-4 ASP, MS-MPEG4 v3),
-# WMV/VC-1, MPEG-1/2, 10-bit AVC and HEVC, VP8/VP9, AV1, Theora, FLV1, H.263.
+# WMV/VC-1, MPEG-1/2, 10-bit AVC and HEVC, VP8/VP9, AV1, Theora, H.263.
+#
+# "flv1" is deliberately absent: it names the FLV1 container/format tag, not an
+# FFmpeg decoder, so --enable-decoder=flv1 matched nothing and only made
+# configure print "Option --enable-decoder=flv1 did not match anything". FLV1
+# video is H.263, which the h263 entry below already covers.
 #
 # Keep this list in sync with the comment on the FFmpeg block in
 # app/build.gradle.kts. media3's build_ffmpeg.sh builds with --disable-everything
@@ -68,7 +73,7 @@ ANDROID_NDK="${ANDROID_NDK:-${ANDROID_SDK:+${ANDROID_SDK}/ndk/${NDK_VERSION}}}"
 ENABLED_DECODERS=(
   flac alac pcm_mulaw pcm_alaw mp3 aac ac3 eac3 dca mlp truehd
   h264 hevc mpeg2video mpeg1video mpeg4 msmpeg4v3 wmv3 vc1
-  vp8 vp9 av1 theora flv1 h263
+  vp8 vp9 av1 theora h263
 )
 
 log() { printf '\n=== %s\n' "$*"; }
@@ -220,13 +225,34 @@ log "wrote $OUTPUT ($(wc -c < "$OUTPUT") bytes)"
 
 # --- Verify the AAR is a drop-in for the audio-only artifact --------------
 
+# An AAR stores native libraries under jni/<abi>/ -- that is the AAR on-disk
+# layout; Gradle relocates them to lib/<abi>/ only when it packages the APK.
+# Checking lib/ here therefore never matched anything and printed "MISS" for
+# all four ABIs even on a perfectly good AAR. Either path is accepted so the
+# check keeps working whichever layout Gradle emits.
+ABIS_WITH_LIB=0
 for abi in armeabi-v7a arm64-v8a x86 x86_64; do
-  if unzip -l "$OUTPUT" | grep -q "lib/${abi}/libffmpegJNI.so"; then
-    printf '  ok   lib/%s/libffmpegJNI.so\n' "$abi"
+  entry=""
+  for candidate in "jni/${abi}/libffmpegJNI.so" "lib/${abi}/libffmpegJNI.so"; do
+    if unzip -l "$OUTPUT" | grep -q "$candidate"; then
+      entry="$candidate"
+      break
+    fi
+  done
+  if [[ -n "$entry" ]]; then
+    printf '  ok   %s\n' "$entry"
+    ABIS_WITH_LIB=$((ABIS_WITH_LIB + 1))
   else
-    printf '  MISS lib/%s/libffmpegJNI.so\n' "$abi"
+    printf '  MISS jni/%s/libffmpegJNI.so\n' "$abi"
   fi
 done
+
+# An AAR that carries no JNI library for any ABI is not a decoder extension at
+# all, so refuse to hand it to the app build (which would happily accept the
+# file and then fail at runtime).
+if [[ "$ABIS_WITH_LIB" -eq 0 ]]; then
+  die "$OUTPUT contains no libffmpegJNI.so for any ABI; not usable as a decoder extension"
+fi
 
 log "done. Rebuild the app (./gradlew assembleDebug) and it uses this AAR;"
 log "the FFmpeg video renderer then joins behind MediaCodec with no code change."

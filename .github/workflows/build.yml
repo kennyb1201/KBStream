@@ -8,6 +8,15 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      # Escape hatch for the rare case where the FFmpeg cross-compile is broken
+      # by something outside this repo (an upstream tarball moving, a runner
+      # image change). Without it a missing extension fails the whole job, so
+      # there would be no way to ship an audio-only release until it is fixed.
+      allow_missing_ffmpeg:
+        description: "Ship the release even if the FFmpeg video extension is missing"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -114,10 +123,10 @@ jobs:
       # static libs and the media3 checkout are cached: a warm run only
       # relinks the JNI wrapper.
       #
-      # continue-on-error is deliberate. A broken upstream, a source-only
-      # change to the script or an exhausted runner must not stop the release:
-      # with no AAR the app falls back to the published audio-only artifact,
-      # exactly as it did before this step existed. The APK is always built.
+      # continue-on-error is deliberate: these steps must not fail the job on
+      # their own, because the AAR is optional. Whether the absence is
+      # acceptable is decided later by the "Verify FFmpeg extension" step,
+      # which fails the job unless allow_missing_ffmpeg was set for the run.
       - name: Free disk space for the FFmpeg build
         continue-on-error: true
         run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
@@ -156,18 +165,33 @@ jobs:
           retention-days: 30
 
       # The build and upload steps above are both continue-on-error, so a
-      # failed cross-compile leaves a green run with no artifact and no
-      # explanation. This keeps the release buildable (the app falls back to
-      # the audio-only extension) but makes the absence explicit, with a red
-      # error annotation pointing at the step that failed.
-      - name: Verify FFmpeg extension (optional)
+      # failed cross-compile used to leave a GREEN run with no artifact and no
+      # explanation -- which is exactly how a broken symbol check shipped
+      # releases without video decoding for several runs without anyone
+      # noticing. The absence is therefore a hard failure by default: this step
+      # exits non-zero, the job stops, and no release is published, so the
+      # failure is impossible to miss.
+      #
+      # A missing extension is never a code bug in this repo's build -- the app
+      # deliberately falls back to the published audio-only artifact -- so a
+      # manual run can set allow_missing_ffmpeg to accept the fallback instead
+      # of blocking on an upstream break.
+      - name: Verify FFmpeg extension was produced
         if: always()
+        env:
+          ALLOW_MISSING_FFMPEG: ${{ inputs.allow_missing_ffmpeg || false }}
         run: |
           if [[ -s libs/media3-ffmpeg-decoder.aar ]]; then
             echo "media3-ffmpeg-decoder.aar built: $(wc -c < libs/media3-ffmpeg-decoder.aar) bytes"
-          else
-            echo "::error::media3-ffmpeg-decoder.aar was not produced, so this release's APK falls back to the audio-only FFmpeg extension. See the 'Build FFmpeg video extension (optional)' step above."
+            exit 0
           fi
+          message="media3-ffmpeg-decoder.aar was not produced, so this release's APK would fall back to the audio-only FFmpeg extension. See the 'Build FFmpeg video extension (optional)' step above."
+          if [[ "$ALLOW_MISSING_FFMPEG" == "true" ]]; then
+            echo "::warning::${message} Continuing anyway because allow_missing_ffmpeg was set."
+            exit 0
+          fi
+          echo "::error::${message} Re-run with allow_missing_ffmpeg if this is an upstream problem, not a regression."
+          exit 1
 
       - name: Restore release keystore
         run: |
