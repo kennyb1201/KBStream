@@ -940,7 +940,16 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
 
                 logo =
                     manifest.logo
-                        ?: manifest.icon
+                        ?: manifest.icon,
+
+                // The user's soft on/off switch must survive a refresh. This
+                // addon is rebuilt from scratch from the manifest, so without
+                // carrying it over [enabled] fell back to its default (true)
+                // and every background or manual manifest refresh silently
+                // re-enabled the addons the user had turned off.
+                enabled =
+                    existing?.enabled
+                        ?: true
             )
 
         val index =
@@ -1060,7 +1069,11 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
 
         return getCatalogConfigurations()
             .filter {
-                it.catalog.showOnHome
+                // Search placeholders return nothing on a plain browse, so a
+                // rail built from one is always empty. Excluding them here
+                // means such a rail is never even attempted, whatever an older
+                // build stored for its showOnHome.
+                it.catalog.showOnHome && !it.catalog.isSearchPlaceholder
             }
     }
 
@@ -1101,8 +1114,8 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
      *  - Applies run SEQUENTIALLY through [applyMutex]: each apply is a
      *    read-modify-write of the addon list, so parallel applies would race
      *    and the last writer would clobber the other addons' updates.
-     *  - [updateAddonFromManifest] preserves global catalog order and the
-     *    user's show/hide + custom-name settings for existing catalogs.
+     *  - [updateAddonFromManifest] preserves global catalog order, the user's
+     *    show/hide + custom-name settings and the addon's enabled toggle.
      *  - Unchanged manifests are detected BEFORE saving (version + catalog
      *    set + resource set), so a no-op refresh does not dirty prefs, bump
      *    [catalogOrderVersion], or enqueue a pointless sync upload.

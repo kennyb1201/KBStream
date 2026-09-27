@@ -257,4 +257,45 @@ class CatalogReplacementTest {
         )
         assertEquals(listOf("keep"), merged.map { it.id })
     }
+
+    @Test
+    fun `a new catalog honors the manifest visibility hint`() {
+        val merged = mergeRefreshedCatalogs(
+            oldCatalogs = emptyList(),
+            newCatalogs = listOf(
+                catalog("movie", "top", name = "Top").copy(showInHomeHint = true),
+                catalog("movie", "seed", name = "Director").copy(showInHomeHint = false)
+            )
+        )
+        assertTrue(merged.first { it.id == "top" }.showOnHome)
+        assertFalse(merged.first { it.id == "seed" }.showOnHome)
+    }
+
+    @Test
+    fun `a search placeholder installs hidden`() {
+        val merged = mergeRefreshedCatalogs(
+            oldCatalogs = emptyList(),
+            newCatalogs = listOf(
+                // id/name says it (AIOStreams "AI Search")...
+                catalog("movie", "ai-search", name = "AI Search"),
+                // ...or the manifest declares it (isSearch).
+                catalog("movie", "people", name = "People").copy(isSearchCatalog = true)
+            )
+        )
+        assertTrue(merged.none { it.showOnHome })
+    }
+
+    @Test
+    fun `an existing catalog keeps its own visibility over the hint`() {
+        val merged = mergeRefreshedCatalogs(
+            oldCatalogs = listOf(
+                catalog("movie", "seed", name = "Director")
+                    .copy(showInHomeHint = false, showOnHome = true)
+            ),
+            newCatalogs = listOf(
+                catalog("movie", "seed", name = "Director").copy(showInHomeHint = false)
+            )
+        )
+        assertTrue(merged.single().showOnHome)
+    }
 }

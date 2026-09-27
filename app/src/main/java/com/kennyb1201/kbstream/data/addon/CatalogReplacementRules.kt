@@ -106,7 +106,7 @@ internal fun mergeRefreshedCatalogs(
         val newCatalog = newByKey[k] ?: return@forEach
         val oldCatalog = oldByKey[k]
         result += newCatalog.copy(
-            showOnHome = oldCatalog?.showOnHome ?: true,
+            showOnHome = oldCatalog?.showOnHome ?: newCatalog.defaultShowOnHome,
             customName = oldCatalog?.customName ?: newCatalog.customName
         )
     }
@@ -120,7 +120,11 @@ internal fun mergeRefreshedCatalogs(
     newCatalogs.forEach { catalog ->
         val k = key(catalog.type, catalog.id)
         if (oldByKey[k] == null && seen.add(k)) {
-            result += catalog.copy(showOnHome = true)
+            // A genuinely new catalog honors the manifest's visibility hint,
+            // exactly like the background manifest merge. Defaulting every
+            // newcomer to visible flooded Home with search placeholders and
+            // director/seed rails the addon ships hidden by design.
+            result += catalog.copy(showOnHome = catalog.defaultShowOnHome)
         }
     }
 

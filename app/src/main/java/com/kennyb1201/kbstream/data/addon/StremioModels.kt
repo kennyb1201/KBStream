@@ -263,9 +263,30 @@ data class ManifestCatalog(
     val displayName: String
         get() = customName ?: name
 
-    /** Whether this catalog should appear on Home when first installed. */
+    /**
+     * Whether this catalog is a SEARCH PLACEHOLDER rather than a browsable
+     * rail. Manifests mark these with `isSearch`, but many (AIOStreams,
+     * AIOMetadata) only say so in the id or name ("AI Search", "People
+     * Search", "Collections Search") — a plain browse call returns nothing
+     * for them, so a rail built from one is always empty. They must never
+     * become a Home rail, and they are pure noise in the catalog manager,
+     * where a toggle has no visible effect either way.
+     *
+     * Detection mirrors SearchViewModel's `isSearchStyleCatalog` so the two
+     * agree on what counts as a search catalog.
+     */
+    val isSearchPlaceholder: Boolean
+        get() = isSearchCatalog == true ||
+            id.contains("search", ignoreCase = true) ||
+            name.contains("search", ignoreCase = true)
+
+    /**
+     * Whether this catalog should appear on Home when first installed.
+     * Hidden-by-design rails (search placeholders, director/seed catalogs)
+     * stay off Home unless the user explicitly enables them.
+     */
     val defaultShowOnHome: Boolean
-        get() = showInHomeHint ?: !(isSearchCatalog ?: false)
+        get() = showInHomeHint ?: !isSearchPlaceholder
 }
 
 @JsonClass(generateAdapter = true)

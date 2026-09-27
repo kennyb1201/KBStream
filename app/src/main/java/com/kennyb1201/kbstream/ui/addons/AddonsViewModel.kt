@@ -179,6 +179,13 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         _addons.value = addonManager.getInstalledAddons()
         _catalogConfigurations.value =
             addonManager.getCatalogConfigurations()
+                // Search placeholders (a `isSearch` catalog, or an id/name
+                // containing "search") return nothing on a plain browse, so
+                // they can never be a useful Home rail and toggling one in
+                // the manager has no visible effect either way. Listing them
+                // only buried the real rails under rows that did nothing, so
+                // they are kept out of the catalog manager entirely.
+                .filterNot { it.catalog.isSearchPlaceholder }
         reloadCollections()
     }
 
@@ -546,7 +553,11 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                         description = manifest.description,
                         types = manifest.types,
                         idPrefixes = manifest.idPrefixes,
-                        logo = manifest.logo ?: manifest.icon
+                        logo = manifest.logo ?: manifest.icon,
+                        // Re-adding an addon the user had turned off must not
+                        // silently switch it back on; only its manifest data
+                        // is being refreshed here.
+                        enabled = existing?.enabled ?: true
                     )
 
                     added = existing == null
@@ -989,7 +1000,16 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
 
                 var newCatalogTotal = 0
 
-                val refreshed = current.map { old ->
+                // Apply each fetched manifest through the manager's OWN merge.
+                // That merge is the single canonical one: it carries the user's
+                // rename / visibility / Home arrangement across the refresh,
+                // remaps a swapped catalog id on dynamic rails, preserves the
+                // addon's enabled toggle, and honors the manifest's visibility
+                // hints for genuinely new catalogs. Rebuilding the catalogs
+                // here instead kept drifting from the background refresh. It
+                // reads the CURRENT list under its own lock, so an addon added
+                // or removed while a manifest was downloading is not clobbered.
+                current.forEach { old ->
                     try {
                         val manifest = repository.fetchManifest(old.manifestUrl)
 
@@ -999,7 +1019,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                         // rather than wiping resources/catalogs.
                         if (!manifest.isUsableAddonManifest()) {
                             failureCount++
-                            return@map old
+                            return@forEach
                         }
 
                         successCount++
@@ -1011,34 +1031,9 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                             }
                         }
 
-                        old.copy(
-                            name = manifest.name,
-                            resources = manifest.resources,
-                            catalogs = mergeRefreshedCatalogs(
-                                oldCatalogs = old.catalogs,
-                                newCatalogs = manifest.catalogs
-                            ),
-                            version = manifest.version,
-                            description = manifest.description,
-                            types = manifest.types,
-                            logo = manifest.logo ?: manifest.icon
-                        )
+                        addonManager.updateAddonFromManifest(old.manifestUrl, manifest)
                     } catch (_: Exception) {
                         failureCount++
-                        old
-                    }
-                }
-
-                // Rebase the refreshed copies onto the CURRENT list under the
-                // manager's state lock: manifests were fetched outside it, so
-                // a background apply meanwhile must not be overwritten.
-                addonManager.updateInstalled { current ->
-                    // Iterate the CURRENT list and overlay the refreshed
-                    // copies by id: addons added while fetching are kept,
-                    // addons removed while fetching stay removed, and only
-                    // entries we actually re-fetched get new data.
-                    current.map { live ->
-                        refreshed.firstOrNull { it.id == live.id } ?: live
                     }
                 }
                 refresh()
@@ -1100,28 +1095,11 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                         }
                     }
 
-                // Atomic RMW: the manifest was fetched outside the state
-                // lock, so apply it to the CURRENT list inside the lock.
-                addonManager.updateInstalled { current ->
-                    current.map { old ->
-                        if (old.id == id) {
-                            old.copy(
-                                name = manifest.name,
-                                catalogs = mergeRefreshedCatalogs(
-                                    oldCatalogs = old.catalogs,
-                                    newCatalogs = manifest.catalogs
-                                ),
-                                resources = manifest.resources,
-                                version = manifest.version,
-                                description = manifest.description,
-                                types = manifest.types,
-                                logo = manifest.logo ?: manifest.icon
-                            )
-                        } else {
-                            old
-                        }
-                    }
-                }
+                // Apply through the manager's canonical merge: it reads the
+                // CURRENT list under its own lock (the manifest was fetched
+                // outside it) and carries the user's rename / visibility /
+                // Home arrangement across, remapping a swapped catalog id.
+                addonManager.updateAddonFromManifest(addon.manifestUrl, manifest)
 
                 refresh()
 
