@@ -2856,8 +2856,13 @@ class MpvPlayerActivity : ComponentActivity() {
             raw.startsWith("tmdb:") || raw.all(Char::isDigit) ->
                 raw.removePrefix("tmdb:").toIntOrNull()
 
-            raw.startsWith("tt") -> null
-
+            // Everything else - which in practice means the imdb id every addon
+            // catalog hands out, and the form the history parent is
+            // canonicalized to - resolves through the shared helper (addon meta
+            // -> TMDB, cached in memory and on disk). A `startsWith("tt") ->
+            // null` short-circuit used to stand in for that, and it left this
+            // engine's because-you-watched row with no seed: it built an empty
+            // lineup and hid itself again.
             else -> PlaybackHistoryIds.resolveTmdbId(this, raw, parentType)
         }
         resolvedTmdbId = resolved

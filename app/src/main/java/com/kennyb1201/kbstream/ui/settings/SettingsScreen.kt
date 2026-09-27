@@ -215,6 +215,9 @@ fun SettingsScreen(
         )
     }
     var externalAsk by remember { mutableStateOf(AppPreferences.getExternalPlayerAsk(context)) }
+    var externalTrustReturn by remember {
+        mutableStateOf(AppPreferences.getExternalTrustReturn(context))
+    }
     // Set when the engine pill below is picked and there is more than one
     // installed player to hand a title to.
     var showExternalPlayerPicker by remember { mutableStateOf(false) }
@@ -1016,6 +1019,24 @@ fun SettingsScreen(
                         onToggle = {
                             externalAsk = it
                             AppPreferences.setExternalPlayerAsk(context, it)
+                        }
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    ToggleRow(
+                        label = "Treat coming back as the end",
+                        description = "Your player usually cannot say where you stopped, so " +
+                            "KBStream measures the playhead against the clock while it is in " +
+                            "front. Pause or scrub once and a title you watched through comes " +
+                            "back short of the finish line - no Up Next / because-you-watched " +
+                            "card, and not marked watched. With this on, returning from the " +
+                            "player counts as finishing the title. A playhead your player does " +
+                            "report is still believed first, but anything you back out of early " +
+                            "counts too, so leave it off unless you watch external titles " +
+                            "through to the end.",
+                        checked = externalTrustReturn,
+                        onToggle = {
+                            externalTrustReturn = it
+                            AppPreferences.setExternalTrustReturn(context, it)
                         }
                     )
                 }

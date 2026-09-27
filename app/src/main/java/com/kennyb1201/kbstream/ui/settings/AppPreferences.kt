@@ -47,6 +47,7 @@ object AppPreferences {
     private const val KEY_EXTERNAL_PLAYER_PACKAGE = "external_player_package"
     private const val KEY_EXTERNAL_PLAYER_LABEL = "external_player_label"
     private const val KEY_EXTERNAL_PLAYER_ASK = "external_player_ask_each_time"
+    private const val KEY_EXTERNAL_TRUST_RETURN = "external_player_trust_return"
     private const val KEY_DECODER_MODE = "decoder_mode" // legacy toggle, migrated below
     private const val KEY_DECODER_PRIORITY = "decoder_priority" // combined (one release), migrated below
     private const val KEY_VIDEO_DECODER = "video_decoder" // legacy key, removed on migration
@@ -542,6 +543,25 @@ object AppPreferences {
 
     fun setExternalPlayerAsk(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_EXTERNAL_PLAYER_ASK, enabled).apply()
+    }
+
+    /**
+     * Treat a return from the external player as the end of the title.
+     *
+     * A hand-off's playhead is a wall-clock estimate unless the player reports
+     * one of its own - VLC reports nothing at all. Pause or scrub for the
+     * credits and the estimate comes back short of the completion threshold on
+     * a title that really was watched to the end, which meant no Up Next /
+     * because-you-watched card and no "watched" mark. With this on, the return
+     * itself is taken as finishing the title. Off by default: a title backed out
+     * of early counts as finished too, so it is only worth turning on if you
+     * watch external titles through to the end.
+     */
+    fun getExternalTrustReturn(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_EXTERNAL_TRUST_RETURN, false)
+
+    fun setExternalTrustReturn(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_EXTERNAL_TRUST_RETURN, enabled).apply()
     }
 
     // ── Decoder priority (KB-style) ───────────────────────────────

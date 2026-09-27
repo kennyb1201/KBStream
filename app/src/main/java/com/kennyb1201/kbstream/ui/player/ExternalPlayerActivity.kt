@@ -26,6 +26,7 @@ import com.kennyb1201.kbstream.data.player.ExternalPlayer
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tmdb.displayRuntimeMinutes
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.streams.StreamsViewModel
@@ -304,7 +305,9 @@ class ExternalPlayerActivity : ComponentActivity() {
         if (handoffAtMs == 0L || concluded || refused) return
         // A return that arrives with no result at all (back from the external
         // app after it was killed, say): conclude from the clock.
-        concludeFromMeasurement(reportedPosition = null, reportedDuration = null)
+        lifecycleScope.launch {
+            concludeFromMeasurement(reportedPosition = null, reportedDuration = null)
+        }
     }
 
     override fun onStop() {
@@ -600,18 +603,34 @@ class ExternalPlayerActivity : ComponentActivity() {
             return
         }
 
-        concludeFromMeasurement(reportedPosition, reportedDuration)
+        lifecycleScope.launch {
+            concludeFromMeasurement(reportedPosition, reportedDuration)
+        }
     }
 
     /**
      * Turns the measured position into a result: completed sessions raise the
      * panels, anything else is saved and exits.
+     *
+     * Suspends once, on [ensureDurationMs]: a session neither the launch extras
+     * nor the external player gave a runtime still gets one from TMDB, because
+     * "finished" - which decides the end panels AND the history row - is a
+     * comparison against it.
      */
-    private fun concludeFromMeasurement(reportedPosition: Long?, reportedDuration: Long?) {
+    private suspend fun concludeFromMeasurement(
+        reportedPosition: Long?,
+        reportedDuration: Long?
+    ) {
         if (concluded) return
+        // Claimed BEFORE the first suspension point: the Activity Result
+        // callback and the onResume safety net can both land here, and the
+        // duration lookup must not let the second one raise the panels too.
+        concluded = true
 
         if (reportedDuration != null && reportedDuration > 0L) durationMs = reportedDuration
-        if (durationMs <= 0L) durationMs = (runtimeMinutes ?: 0) * 60_000L
+        if (ensureDurationMs() <= 0L) {
+            Log.i(TAG, "no duration for this session; nothing to conclude against")
+        }
 
         positionMs = when {
             reportedPosition != null -> reportedPosition
@@ -619,15 +638,31 @@ class ExternalPlayerActivity : ComponentActivity() {
         }.coerceAtLeast(0L)
 
         if (isLiveChannel) {
-            concluded = true
             finish()
             return
         }
 
-        val finished = durationMs > 0L &&
+        val measuredFinished = durationMs > 0L &&
             positionMs >= (durationMs * COMPLETION_THRESHOLD_RATIO).toLong()
+        // A playhead the player reported itself is evidence, and it wins. When
+        // it reported nothing the position above is only the wall clock, so a
+        // viewer who paused or scrubbed for the credits comes back short of the
+        // threshold on a title they did finish - nothing was marked watched and
+        // neither end card came up. With the setting on, the return itself is
+        // the answer. (A reported 0 is the same no-answer as no report at all:
+        // players that do not track a playhead send a default.)
+        val reportedEvidence =
+            reportedPosition != null && reportedPosition > MIN_RESUME_POSITION_MS
+        val trustReturn =
+            !reportedEvidence && AppPreferences.getExternalTrustReturn(this)
+        val finished = measuredFinished || trustReturn
 
-        concluded = true
+        Log.i(
+            TAG,
+            "conclude: pos=${positionMs}ms dur=${durationMs}ms finished=$finished " +
+                "(reported=$reportedPosition measured=$measuredFinished trust=$trustReturn)"
+        )
+
         if (finished) {
             saveProgress(forceCompleted = true)
             scrobble("stop", progressOverride = 100.0)
@@ -854,7 +889,14 @@ class ExternalPlayerActivity : ComponentActivity() {
     }
 
     private fun setupEndOfEpisodeHandlers() {
-        btnNextPlay?.setOnClickListener { advanceToPendingNext() }
+        btnNextPlay?.setOnClickListener {
+            // A manual press means a human is there: restart the binge
+            // watchdog, exactly as both in-app engines do. Without this the
+            // count only ever climbed, so "Are you still there?" arrived early
+            // - even on a binge the viewer kept answering.
+            AppPreferences.resetConsecutiveAutoplays(this)
+            advanceToPendingNext()
+        }
         btnNextDismiss?.setOnClickListener { exitPlayer() }
     }
 
@@ -954,6 +996,16 @@ class ExternalPlayerActivity : ComponentActivity() {
         lifecycleScope.launch {
             val picks: List<BywPick> = withContext(Dispatchers.IO) {
                 val tmdb = runCatching { tmdbId() }.getOrNull()
+                // The panel used to vanish without a trace in this case (an
+                // addon-only title TMDB cannot map). Say so, so a missing row
+                // is a line in the log rather than a mystery.
+                if (tmdb == null) {
+                    Log.w(
+                        TAG,
+                        "byw: no TMDB id for parent=$parentId type=$parentType - no row"
+                    )
+                }
+                tmdb
                     ?: return@withContext emptyList()
                 buildBecauseYouWatchedPicks(
                     this@ExternalPlayerActivity,
@@ -1048,36 +1100,88 @@ class ExternalPlayerActivity : ComponentActivity() {
     // ── Watch history ───────────────────────────────────────────────────────
 
     /**
+     * The duration a session is measured against, from whichever source knows
+     * it: the external player's own report, the TMDB runtime the launch
+     * carried, and finally TMDB itself, looked up from the parent id.
+     *
+     * That last one is the fallback that makes an end decision possible at all
+     * for a hand-off carrying no `runtime_minutes` extra (a deep link, a source
+     * picked on the Streams screen). Without it the session had NO duration,
+     * which meant no because-you-watched row - the title could never compare as
+     * finished - and no watch-history row either, so it never even reached
+     * Continue Watching.
+     *
+     * Cached in [durationMs] once resolved, so its two callers (the end
+     * decision and the history write) pay for the lookup at most once.
+     */
+    private suspend fun ensureDurationMs(): Long {
+        if (durationMs > 0L) return durationMs
+
+        durationMs = (runtimeMinutes ?: 0) * 60_000L
+        if (durationMs > 0L) return durationMs
+
+        val tmdb = runCatching { tmdbId() }.getOrNull() ?: return 0L
+        val showSeason = season
+        val showEpisode = episode
+
+        val minutes = withContext(Dispatchers.IO) {
+            val repo = TmdbRepository.getInstance(this@ExternalPlayerActivity)
+            if (showSeason != null && showEpisode != null) {
+                // An episode is measured against ITS runtime, not the show's.
+                runCatching {
+                    repo.getSeasonEpisodes(tmdb, showSeason, parentId)
+                        .firstOrNull { it.episodeNumber == showEpisode }
+                        ?.runtimeMinutes
+                        ?.takeIf { it > 0 }
+                }.getOrNull()
+            } else {
+                null
+            } ?: runCatching {
+                repo.getDetailByTmdbId(tmdb, parentType)
+                    ?.displayRuntimeMinutes()
+            }.getOrNull()
+        }
+
+        durationMs = (minutes ?: 0) * 60_000L
+        if (durationMs > 0L) {
+            Log.i(TAG, "duration resolved from TMDB: ${minutes}min")
+        }
+        return durationMs
+    }
+
+    /**
      * Writes the same row the other engines write - same id, same fields, same
      * canonical parent id - so a title played externally updates the ONE
      * Continue Watching card it already has rather than starting a second.
      *
-     * The position is the measured estimate; the duration is what the external
-     * player reported, else the TMDB runtime the session carried. With neither,
-     * the row is not written at all: a duration is what makes a position mean
-     * "44% through", and a row without one would show as a broken card.
+     * The position is the measured estimate; the duration is the external
+     * player's report, else the runtime the session carried, else TMDB's own
+     * for the parent id ([ensureDurationMs]) - a duration is what makes a
+     * position mean "44% through", so a session without one wrote no row at
+     * all.
      */
     private fun saveProgress(forceCompleted: Boolean) {
         if (isLiveChannel || parentId.isBlank() || historyId.isBlank()) return
-        if (durationMs <= 0L) {
-            Log.i(TAG, "no duration for this session; skipping the history row")
-            return
-        }
-        val rawPosition = if (forceCompleted) durationMs else positionMs
-        if (!forceCompleted && rawPosition < MIN_RESUME_POSITION_MS) return
-
-        val completed = forceCompleted ||
-            rawPosition >= (durationMs * COMPLETION_THRESHOLD_RATIO).toLong()
-        val safePosition = if (completed) 0L else rawPosition.coerceAtMost(durationMs)
-        val now = System.currentTimeMillis()
-        if (completed) completionSent = true
-
-        Log.i(
-            TAG,
-            "save progress: ${safePosition}ms / ${durationMs}ms completed=$completed"
-        )
-
+        val measuredPosition = positionMs
         lifecycleScope.launch(Dispatchers.IO + NonCancellable) {
+            if (ensureDurationMs() <= 0L) {
+                Log.i(TAG, "no duration for this session; skipping the history row")
+                return@launch
+            }
+            val rawPosition = if (forceCompleted) durationMs else measuredPosition
+            if (!forceCompleted && rawPosition < MIN_RESUME_POSITION_MS) return@launch
+
+            val completed = forceCompleted ||
+                rawPosition >= (durationMs * COMPLETION_THRESHOLD_RATIO).toLong()
+            val safePosition = if (completed) 0L else rawPosition.coerceAtMost(durationMs)
+            val now = System.currentTimeMillis()
+            if (completed) completionSent = true
+
+            Log.i(
+                TAG,
+                "save progress: ${safePosition}ms / ${durationMs}ms completed=$completed"
+            )
+
             runCatching {
                 val dao = WatchHistoryDatabase.getInstanceScoped(this@ExternalPlayerActivity)
                     .watchHistoryDao()
@@ -1129,8 +1233,14 @@ class ExternalPlayerActivity : ComponentActivity() {
             raw.startsWith("tmdb:") || raw.all(Char::isDigit) ->
                 raw.removePrefix("tmdb:").toIntOrNull()
 
-            raw.startsWith("tt") -> null
-
+            // Everything else - which in practice means the imdb id every addon
+            // catalog hands out, and the form the history parent is
+            // canonicalized to - resolves through the shared helper (addon meta
+            // -> TMDB, cached in memory and on disk). A `startsWith("tt") ->
+            // null` short-circuit used to stand in for that, and it left the
+            // because-you-watched panel with no seed: it built an empty lineup,
+            // hid itself, and finished the session, so the row never appeared
+            // for a film played in the external engine.
             else -> PlaybackHistoryIds.resolveTmdbId(this, raw, parentType)
         }
         resolvedTmdbId = resolved
@@ -1162,12 +1272,20 @@ class ExternalPlayerActivity : ComponentActivity() {
      */
     private fun scrobble(action: String, progressOverride: Double? = null) {
         if (isLiveChannel || parentId.isBlank()) return
-        val progress = progressOverride ?: if (durationMs > 0L) {
-            ((positionMs.toDouble() / durationMs.toDouble()) * 100.0).coerceIn(0.0, 100.0)
-        } else {
-            0.0
-        }
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            // The percentage IS the report, and a session that never carried a
+            // runtime has to resolve one before it can be computed: telling the
+            // trackers 0% for a film watched to the end is worse than telling
+            // them nothing, because both of them act on it.
+            val progress = progressOverride ?: run {
+                if (durationMs <= 0L) ensureDurationMs()
+                if (durationMs > 0L) {
+                    ((positionMs.toDouble() / durationMs.toDouble()) * 100.0)
+                        .coerceIn(0.0, 100.0)
+                } else {
+                    0.0
+                }
+            }
             runCatching {
                 SimklRepository.getInstance(this@ExternalPlayerActivity).scrobble(
                     action = action,
