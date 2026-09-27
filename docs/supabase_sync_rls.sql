@@ -29,6 +29,10 @@
 --   This file REPLACES the old shared-everything policies
 --   ("kbstream_authenticated_all_*"), which granted every signed-in account
 --   full access to every other account's rows.
+--
+-- Realtime is a separate setting and is NOT enabled here: live propagation
+-- additionally requires these tables to be members of the `supabase_realtime`
+-- publication. See docs/supabase_realtime.sql.
 
 -- ── sync_watch_history ──────────────────────────────────────────────
 create table if not exists public.sync_watch_history (

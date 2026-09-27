@@ -147,7 +147,9 @@ scripts/           # TMDB id-verification probes used while curating the
                    # banner|plate|promo|icon|logo|mark|round` prints one as
                    # ASCII.
 supabase_profiles.sql  # optional dashboard table for inspecting profiles
-docs/              # Supabase RLS policy reference
+docs/              # Supabase RLS + Realtime SQL reference
+                   #   supabase_sync_rls.sql  -- schema + per-user RLS policies
+                   #   supabase_realtime.sql -- enable live sync (publication)
 ```
 
 ## Notes
