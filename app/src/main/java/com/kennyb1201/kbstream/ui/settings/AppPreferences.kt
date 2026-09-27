@@ -54,6 +54,7 @@ object AppPreferences {
     private const val KEY_AUDIO_DOWNMIX = "audio_downmix_target"               // 0=auto, 2=stereo, 6=5.1 (see PlayerAudioTuning)
     private const val KEY_AUDIO_DIALOGUE_BOOST = "audio_dialogue_boost"       // 0=off .. PlayerAudioTuning.DIALOGUE_MAX
     private const val KEY_AUDIO_VOLUME_BOOST_DB = "audio_volume_boost_db"     // 0-15 dB, with the limiter
+    private const val KEY_AUDIO_OUTPUT = "audio_output_mode"                 // 0=auto, 1=passthrough, 2=decode (see PlayerAudioTuning)
     private const val KEY_DV_COMPAT_MODE = "dv_compat_mode"                  // 0=p7->8.1, 1=none, 3=strip all (2=legacy auto+hdr10+, 4=legacy combined 8.1)
     private const val KEY_STRIP_HDR10_PLUS = "strip_hdr10_plus"             // independent of the DV mode
     private const val KEY_CONVERT_P7_TO_81 = "dv_convert_p7_to_81"          // P7 → Profile 8.1 (independent of the DV mode)
@@ -650,6 +651,31 @@ object AppPreferences {
 
     fun setAudioVolumeBoostDb(context: Context, db: Int) {
         prefs(context).edit().putInt(KEY_AUDIO_VOLUME_BOOST_DB, db.coerceIn(0, 15)).apply()
+    }
+
+    /**
+     * Decode-vs-passthrough (see [PlayerAudioTuning.requiresDecode]). Auto by
+     * default, so an untouched install behaves exactly as it did: bitstream to
+     * a capable receiver unless the app's own audio tuning is switched on, at
+     * which point the sink must carry PCM for that tuning to be audible.
+     */
+    fun getAudioOutput(context: Context): Int =
+        prefs(context).getInt(KEY_AUDIO_OUTPUT, PlayerAudioTuning.AUDIO_OUTPUT_AUTO)
+            .coerceIn(
+                PlayerAudioTuning.AUDIO_OUTPUT_AUTO,
+                PlayerAudioTuning.AUDIO_OUTPUT_DECODE
+            )
+
+    fun setAudioOutput(context: Context, mode: Int) {
+        prefs(context).edit()
+            .putInt(
+                KEY_AUDIO_OUTPUT,
+                mode.coerceIn(
+                    PlayerAudioTuning.AUDIO_OUTPUT_AUTO,
+                    PlayerAudioTuning.AUDIO_OUTPUT_DECODE
+                )
+            )
+            .apply()
     }
 
     // ── Dolby Vision compatibility ─────────────────────────────────────

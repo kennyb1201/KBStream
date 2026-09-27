@@ -573,6 +573,11 @@ class NativePlayerActivity : ComponentActivity() {
         if (AppPreferences.getAudioDecoder(this) == AppPreferences.AUDIO_DECODER_PREFER_APP) {
             return
         }
+        // Same when the decode output mode is in force: createPlayer already
+        // keeps the PCM chain in the renderer path, so no rebuild is owed.
+        if (PlayerAudioTuning.requiresDecode(AppPreferences.getAudioOutput(this))) {
+            return
+        }
         if (PlayerAudioTuning.isNeutral == wasNeutral) return
         carryPositionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs
         recreatePlayer()
@@ -4202,7 +4207,21 @@ class NativePlayerActivity : ComponentActivity() {
         // fallback behind MediaCodec, 2 = prefer FFmpeg — decoding DTS/TrueHD
         // ahead of MediaCodec passthrough, which is silent on TVs without a
         // DTS-capable sink.
-        val audioExtMode = when (audioDecoderPriority) {
+        //
+        // Decode vs passthrough. A surround bitstream handed straight to the
+        // receiver never reaches the app's own PCM chain, so when the output
+        // mode asks for decode — explicit "Decode", or "Auto" while the
+        // downmix/dialogue/volume tuning is actually doing something — prefer
+        // the FFmpeg audio decoder, whose output is PCM: the sink then never
+        // engages passthrough and the processors apply. Decode outranks
+        // "Device decoders only" because it is the more specific request; with
+        // no FFmpeg extension present media3 falls back to hardware, so the
+        // worst case is the passthrough that mode had anyway.
+        val audioOutputMode = AppPreferences.getAudioOutput(this)
+        val decodeToPcm = PlayerAudioTuning.requiresDecode(audioOutputMode)
+        val audioExtMode = if (decodeToPcm) {
+            DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
+        } else when (audioDecoderPriority) {
             AppPreferences.AUDIO_DECODER_DEVICE_ONLY ->
                 DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF
             AppPreferences.AUDIO_DECODER_PREFER_APP ->
@@ -4216,6 +4235,7 @@ class NativePlayerActivity : ComponentActivity() {
                 "(p7=$convertP7To81 p5=$convertP5To81) stripHdr10Plus=$stripHdr10Plus " +
                 "nativeDv=$nativeDvSupported deviceNativeDv=$deviceNativeDvSupported " +
                 "audioDecoder=$audioDecoderPriority " +
+                "audioOutput=$audioOutputMode decodeToPcm=$decodeToPcm " +
                 "audioSeparate=${!currentAudioUrl.isNullOrBlank()}"
         )
         // The compat extractor is needed when DV conversion is on OR the

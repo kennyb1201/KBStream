@@ -43,6 +43,47 @@ internal object PlayerAudioTuning {
         )
 
     /**
+     * Decode-vs-passthrough: whose decoder runs the original audio.
+     *
+     * The sink hands a surround bitstream straight to a receiver when the
+     * output advertises it (HDMI/ARC), which is the right thing for someone
+     * whose AVR wants to decode AC-3/DTS itself - but it is also a bypass:
+     * passthrough never reaches the app's own PCM chain, so [downmixTarget],
+     * [dialogueBoost] and [volumeBoostDb] are silently ignored for that track.
+     * This preference decides which of the two the viewer wants.
+     */
+    const val AUDIO_OUTPUT_AUTO = 0
+
+    /** Always bitstream the original format; the receiver decodes it. */
+    const val AUDIO_OUTPUT_PASSTHROUGH = 1
+
+    /** Always decode to PCM, so the app's processing always applies. */
+    const val AUDIO_OUTPUT_DECODE = 2
+
+    /** Every option the UI shows, in one place so screens cannot drift. */
+    val AUDIO_OUTPUT_OPTIONS: List<Pair<String, Int>> =
+        listOf(
+            "Auto" to AUDIO_OUTPUT_AUTO,
+            "Passthrough" to AUDIO_OUTPUT_PASSTHROUGH,
+            "Decode" to AUDIO_OUTPUT_DECODE
+        )
+
+    /**
+     * Whether [AudioDownmixProcessor]'s input must be PCM for this output mode.
+     *
+     * Explicit Decode always, explicit Passthrough never, and Auto exactly when
+     * the tuning is doing something ([isNeutral] false) - because that is the
+     * only case where bitstreaming would silently discard a change the viewer
+     * asked for. With the tuning at its defaults, Auto leaves the device to
+     * passthrough as it always did, so nothing changes for the common case.
+     */
+    fun requiresDecode(outputMode: Int): Boolean = when (outputMode) {
+        AUDIO_OUTPUT_DECODE -> true
+        AUDIO_OUTPUT_PASSTHROUGH -> false
+        else -> !isNeutral
+    }
+
+    /**
      * The top of the dialogue-boost scale. Every step is the same gain the
      * three-step scale always used ([centerGain], [midGain]), so a level a
      * viewer is already on still sounds exactly as it did - the extra steps are

@@ -175,6 +175,8 @@ fun SettingsScreen(
     var audioDownmix by remember { mutableIntStateOf(AppPreferences.getAudioDownmix(context)) }
     var audioDialogueBoost by remember { mutableIntStateOf(AppPreferences.getAudioDialogueBoost(context)) }
     var audioVolumeBoostDb by remember { mutableIntStateOf(AppPreferences.getAudioVolumeBoostDb(context)) }
+    // Decode vs passthrough (device-level, like the audio decoder above).
+    var audioOutput by remember { mutableIntStateOf(AppPreferences.getAudioOutput(context)) }
     var heroTrailerAutoplay by remember { mutableStateOf(AppPreferences.getHeroTrailerAutoplay(context)) }
     var heroTrailerMuted by remember { mutableStateOf(AppPreferences.getHeroTrailerMuted(context)) }
     var use24hClock by remember { mutableStateOf(AppPreferences.getUse24HourClock(context)) }
@@ -780,6 +782,32 @@ fun SettingsScreen(
                 )
 
                 Spacer(modifier = Modifier.height(12.dp))
+
+                AudioTuningRow(
+                    label = "Audio Output",
+                    description = when (audioOutput) {
+                        PlayerAudioTuning.AUDIO_OUTPUT_PASSTHROUGH ->
+                            "Send the original format (Dolby/DTS) to your receiver to decode. " +
+                                "Best when an AVR or soundbar handles the surround, but Downmix, " +
+                                "Dialogue boost and Volume boost are ignored while this is on."
+                        PlayerAudioTuning.AUDIO_OUTPUT_DECODE ->
+                            "Always decode in the app to PCM, so Downmix, Dialogue boost and " +
+                                "Volume boost apply. Surround plays as multichannel PCM rather " +
+                                "than a bitstream."
+                        else ->
+                            "Decode automatically when Downmix, Dialogue boost or Volume boost " +
+                                "is in use (so they apply), otherwise pass the original format " +
+                                "to your receiver. Recommended."
+                    },
+                    options = PlayerAudioTuning.AUDIO_OUTPUT_OPTIONS,
+                    selected = audioOutput,
+                    onSelect = {
+                        audioOutput = it
+                        AppPreferences.setAudioOutput(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
 
                 AudioTuningRow(
                     label = "Audio Downmix",

@@ -1,0 +1,14 @@
+[
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/settings/SettingsScreen.kt",
+    "old": "    var audioVolumeBoostDb by remember { mutableIntStateOf(AppPreferences.getAudioVolumeBoostDb(context)) }",
+    "new": "    var audioVolumeBoostDb by remember { mutableIntStateOf(AppPreferences.getAudioVolumeBoostDb(context)) }\n    // Decode vs passthrough (device-level, like the audio decoder above).\n    var audioOutput by remember { mutableIntStateOf(AppPreferences.getAudioOutput(context)) }",
+    "count": 1
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/settings/SettingsScreen.kt",
+    "old": "                Spacer(modifier = Modifier.height(12.dp))\n\n                AudioTuningRow(\n                    label = \"Audio Downmix\",",
+    "new": "                Spacer(modifier = Modifier.height(12.dp))\n\n                AudioTuningRow(\n                    label = \"Audio Output\",\n                    description = when (audioOutput) {\n                        PlayerAudioTuning.AUDIO_OUTPUT_PASSTHROUGH ->\n                            \"Send the original format (Dolby/DTS) to your receiver to decode. \" +\n                                \"Best when an AVR or soundbar handles the surround, but Downmix, \" +\n                                \"Dialogue boost and Volume boost are ignored while this is on.\"\n                        PlayerAudioTuning.AUDIO_OUTPUT_DECODE ->\n                            \"Always decode in the app to PCM, so Downmix, Dialogue boost and \" +\n                                \"Volume boost apply. Surround plays as multichannel PCM rather \" +\n                                \"than a bitstream.\"\n                        else ->\n                            \"Decode automatically when Downmix, Dialogue boost or Volume boost \" +\n                                \"is in use (so they apply), otherwise pass the original format \" +\n                                \"to your receiver. Recommended.\"\n                    },\n                    options = PlayerAudioTuning.AUDIO_OUTPUT_OPTIONS,\n                    selected = audioOutput,\n                    onSelect = {\n                        audioOutput = it\n                        AppPreferences.setAudioOutput(context, it)\n                    }\n                )\n\n                Spacer(modifier = Modifier.height(10.dp))\n\n                AudioTuningRow(\n                    label = \"Audio Downmix\",",
+    "count": 1
+  }
+]
