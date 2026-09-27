@@ -291,6 +291,21 @@ class MpvPlayerActivity : ComponentActivity() {
     /** True while the seekbar is being dragged, so progress cannot fight it. */
     private var scrubbing = false
 
+    // --- Scrub previews (the main player's, on this engine) ---
+    //
+    // The same decoded frames the main player shows, from the same URL and
+    // headers. None of it goes through mpv - the preview is a second ExoPlayer
+    // that reads the stream itself (see TrickplayFrames) - so switching engines
+    // does not change what a scrub looks like.
+    private var trickplay: TrickplayFrames? = null
+    private var trickplayOverlay: TrickplayOverlay? = null
+
+    /** The view the card tracks, when the frame being asked for has one. */
+    private var trickplayAnchorView: View? = null
+
+    /** True while a scrub is in progress, so a late frame is not shown after it. */
+    private var trickplayWanted = false
+
     // --- Audio tuning: the main player's AUDIO section, on this engine -----
     //
     // Same three knobs, same option lists ([PlayerAudioTuning]), same storage:
@@ -1174,7 +1189,12 @@ class MpvPlayerActivity : ComponentActivity() {
         seekBar?.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
                 if (!fromUser || durationMs <= 0L) return
-                positionView?.text = formatClock(durationMs * progress / 1000L)
+                val posMs = durationMs * progress / 1000L
+                positionView?.text = formatClock(posMs)
+                // The bar is what the viewer is looking at, so the card tracks
+                // its thumb. A remote fires a lot of these on the way, and
+                // TrickplayFrames coalesces them onto one decode per bucket.
+                requestTrickplayFrame(posMs, anchorView = bar)
             }
 
             override fun onStartTrackingTouch(bar: SeekBar?) {
@@ -1188,8 +1208,64 @@ class MpvPlayerActivity : ComponentActivity() {
                     surface?.seekTo(durationMs * (bar?.progress ?: 0) / 1000L)
                 }
                 keepControlsVisible()
+                endTrickplayScrub()
             }
         })
+    }
+
+    // --- Scrub previews -------------------------------------------------------
+
+    /**
+     * Asks for the decoded frame covering [posMs] — the position the seek bar has
+     * been dragged to — and notes [anchorView] for the card to centre itself over
+     * when the frame arrives.
+     *
+     * The guards are the main player's: no duration means nothing to scrub (live,
+     * or a stream that never reported one), and the preview decodes in hardware
+     * only, so a title that needs the software decoder gets a time readout rather
+     * than competing for the CPU the video is using.
+     *
+     * No container hint is passed, because this engine never resolved one - libmpv
+     * probes for itself. TrickplayFrames covers the one shape that would otherwise
+     * be fatal (a playlist whose `.m3u8` marker is only in its query) and leaves
+     * the rest to media3.
+     */
+    private fun requestTrickplayFrame(posMs: Long, anchorView: View?) {
+        if (durationMs <= 0L || currentUrl.isBlank()) return
+        trickplayWanted = true
+        trickplayAnchorView = anchorView
+        val frames = trickplay ?: TrickplayFrames(
+            activity = this,
+            url = currentUrl,
+            headers = streamHeaders
+        ) { _, frame ->
+            if (trickplayWanted) previewCard().show(frame, trickplayAnchorView)
+        }.also { trickplay = it }
+        if (!frames.isUsable) return
+        frames.request(posMs, durationMs)
+    }
+
+    /** The card previews appear in, built the first time a frame arrives. */
+    private fun previewCard(): TrickplayOverlay =
+        trickplayOverlay ?: TrickplayOverlay(this).also { trickplayOverlay = it }
+
+    /**
+     * The scrub is over. The card goes at once; the decoder behind it is given
+     * back a few seconds later, so the next press of the same scrub does not pay
+     * for a new player and a new connection (see [TrickplayFrames.idle]).
+     */
+    private fun endTrickplayScrub() {
+        trickplayWanted = false
+        trickplayOverlay?.hide()
+        trickplay?.idle()
+    }
+
+    /** Hides the card and gives the preview decoder back now (leaving the screen). */
+    private fun stopTrickplay() {
+        trickplayWanted = false
+        trickplayOverlay?.hide()
+        trickplay?.release()
+        trickplay = null
     }
 
     // --- Chrome, matched to the main player's -----------------------------
@@ -3256,6 +3332,9 @@ class MpvPlayerActivity : ComponentActivity() {
         // onDestroy, and a backgrounded player that kept playing would be a bug
         // report of its own.
         surface?.setPaused(true)
+        // The preview decoder goes with the pause: a second decoder held behind a
+        // backgrounded player helps nobody.
+        stopTrickplay()
         // Not when this session is being continued in another engine (the
         // ExoPlayer switch or an installed external player). That engine
         // scrobbles its own "start" and its own "stop"; ours raced the start
@@ -3273,6 +3352,8 @@ class MpvPlayerActivity : ComponentActivity() {
         // Safety net for a player that never reached onStop: leaving this
         // set would hold guide writes back for the life of the process.
         EpgWriteGate.setPlayerActive(false)
+        trickplay?.release()
+        trickplay = null
         sleepTimerSection?.release()
         handler.removeCallbacksAndMessages(null)
         nextUpCountdownHandler.removeCallbacksAndMessages(null)
