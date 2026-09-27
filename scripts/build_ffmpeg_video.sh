@@ -57,10 +57,23 @@ OUTPUT="${OUTPUT:-${REPO_ROOT}/libs/media3-ffmpeg-decoder.aar}"
 ANDROID_SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
 ANDROID_NDK="${ANDROID_NDK:-${ANDROID_SDK:+${ANDROID_SDK}/ndk/${NDK_VERSION}}}"
 
-# Audio decoders exactly as the published Jellyfin build carries them, so the
-# software AUDIO path is unchanged by this swap, plus the video decoders the
-# hardware MediaCodec path cannot cover: AVI/DivX (MPEG-4 ASP, MS-MPEG4 v3),
-# WMV/VC-1, MPEG-1/2, 10-bit AVC and HEVC, VP8/VP9, AV1, Theora, H.263.
+# Audio decoders as the published Jellyfin build carries them, so the software
+# AUDIO path is unchanged by this swap, PLUS the audio decoders Android's
+# MediaCodec does NOT guarantee and the original list therefore left silent:
+#   mp2     MPEG-1 Layer II, the default audio in DVB/IPTV transport streams
+#   wmav1/2 WMA (the audio side of WMV files whose video side already decodes
+#           as wmv3/vc1 - without these the video plays with no sound)
+#   wmapro  WMA Pro
+#   opus    WebM/YouTube audio, in case a box omits its MediaCodec decoder
+#   vorbis  OGG audio, same reasoning
+#   ac4     ATSC 3.0 audio, which nothing on Android decodes
+# When no renderer supports an audio track, ExoPlayer DISABLES it and keeps
+# playing SILENTLY - it throws nothing, so the ExoPlayer->MPV fallback never
+# fires and these decoders are the only thing that makes such tracks audible.
+#
+# Plus the video decoders the hardware MediaCodec path cannot cover:
+# AVI/DivX (MPEG-4 ASP, MS-MPEG4 v3), WMV/VC-1, MPEG-1/2, 10-bit AVC and
+# HEVC, VP8/VP9, AV1, Theora, H.263.
 #
 # "flv1" is deliberately absent: it names the FLV1 container/format tag, not an
 # FFmpeg decoder, so --enable-decoder=flv1 matched nothing and only made
@@ -72,6 +85,7 @@ ANDROID_NDK="${ANDROID_NDK:-${ANDROID_SDK:+${ANDROID_SDK}/ndk/${NDK_VERSION}}}"
 # and then one --enable-decoder per entry, so this list IS the decoder set.
 ENABLED_DECODERS=(
   flac alac pcm_mulaw pcm_alaw mp3 aac ac3 eac3 dca mlp truehd
+  mp2 wmav1 wmav2 wmapro opus vorbis ac4
   h264 hevc mpeg2video mpeg1video mpeg4 msmpeg4v3 wmv3 vc1
   vp8 vp9 av1 theora h263
 )
@@ -166,7 +180,8 @@ if [[ -x "$NM" && -f "$FFMPEG_LIBS_ARM64" ]]; then
   printf '  %s ff_*_decoder symbols visible to llvm-nm\n' \
     "$(grep -c 'ff_.*_decoder' "$NM_FILE" || true)"
   for symbol in ff_h264_decoder ff_hevc_decoder ff_mpeg4_decoder ff_vc1_decoder \
-                ff_wmv3_decoder ff_vp9_decoder ff_aac_decoder; do
+                ff_wmv3_decoder ff_vp9_decoder ff_aac_decoder \
+                ff_mp2_decoder ff_wmav2_decoder ff_opus_decoder; do
     if grep -qw "$symbol" "$NM_FILE"; then
       printf '  ok   %s\n' "$symbol"
     else
