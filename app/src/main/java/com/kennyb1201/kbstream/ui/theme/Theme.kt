@@ -118,6 +118,27 @@ const val KBFocusPressed = 0.97f
 val KBFocusGlow = 12.dp()
 val KBFocusGlowSmall = 8.dp()
 
+// Side room a horizontal CHIP row must leave inside its own scroll bounds.
+//
+// A LazyRow clips its content to its own bounds, so a chip that grows by
+// KBFocusChip (and carries a KBFocusGlowSmall glow) was cut flat along the
+// row's left edge: the discover screens' genre row clipped the focused "All"
+// chip, and the Library filter strip had the same cut on its first control,
+// which is the one focus lands on. Neither could be fixed by padding the row
+// from outside - a parent's padding is OUTSIDE the clip, which is why the
+// chip still lost its left border and glow there.
+//
+// A row pairs `contentPadding = PaddingValues(horizontal = KBFocusChipInset)`
+// (the inset is inside the clip, so the growth has somewhere to go) with
+// `offset(x = -KBFocusChipInset)` (which cancels it on the outside, leaving
+// the caller's left alignment - 28dp on the discover screens, 24dp in the
+// Library - exactly as it was). The last chip gets the mirrored room, so
+// focusing it at the end of the row is not clipped either.
+//
+// 12dp covers the widest chip at this scale (growth is 3% of a chip's own
+// width per side, so only a 400dp chip would outgrow it) plus the 8dp glow.
+val KBFocusChipInset = 12.dp()
+
 private fun Int.dp() = androidx.compose.ui.unit.Dp(this.toFloat())
 
 val OswaldFamily = FontFamily(

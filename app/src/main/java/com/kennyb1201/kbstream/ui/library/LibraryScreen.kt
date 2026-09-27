@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -67,6 +68,7 @@ import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
+import com.kennyb1201.kbstream.ui.theme.KBFocusChipInset
 import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
 import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
 import com.kennyb1201.kbstream.ui.theme.KBFocusRow
@@ -172,7 +174,15 @@ fun LibraryScreen(
         // sort group is separated by a rule rather than pushed to its own line.
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxWidth()
+            // The strip is a lazy row, so it clips its own content - the
+            // first control (which this screen focuses on entry) lost its
+            // grown left edge and glow against that boundary. The inset sits
+            // inside the clip and the offset cancels it outside, so the
+            // chips still line up with the title's 24dp inset.
+            contentPadding = PaddingValues(horizontal = KBFocusChipInset),
+            modifier = Modifier
+                .fillMaxWidth()
+                .offset(x = -KBFocusChipInset)
         ) {
             items(LibraryFilter.entries, key = { "filter_${it.name}" }) { filter ->
                 LibraryFilterChip(

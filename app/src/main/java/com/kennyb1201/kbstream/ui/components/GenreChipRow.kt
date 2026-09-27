@@ -2,6 +2,8 @@ package com.kennyb1201.kbstream.ui.components
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -23,6 +25,7 @@ import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.tmdb.TmdbGenre
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
+import com.kennyb1201.kbstream.ui.theme.KBFocusChipInset
 import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
 import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
@@ -49,7 +52,12 @@ fun GenreChipRow(
 ) {
     LazyRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = modifier
+        // Room for the focused chip's growth and glow on BOTH edges: a lazy
+        // row clips its own content, so the first chip was cut flat along the
+        // row's left edge and the last one against the right. See
+        // [KBFocusChipInset] - the offset restores the caller's left padding.
+        contentPadding = PaddingValues(horizontal = KBFocusChipInset),
+        modifier = modifier.offset(x = -KBFocusChipInset)
     ) {
         item {
             DiscoverFilterChip(
