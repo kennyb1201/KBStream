@@ -1,0 +1,8 @@
+[
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/search/SearchViewModel.kt",
+    "old": "        /**\n         * True for AIOMetadata \"AI Search\" / \"People Search\" /\n         * \"Collections Search\"-style catalogs (matched on the catalog id or\n         * name containing \"search\").\n         */\n        fun ManifestCatalog.isSearchStyleCatalog(): Boolean {\n            val hay = \"$id $name\"\n            return hay.contains(\"search\", ignoreCase = true)\n        }",
+    "new": "        /**\n         * True for AIOMetadata \"AI Search\" / \"People Search\" /\n         * \"Collections Search\"-style catalogs. Delegates to the shared\n         * [ManifestCatalog.isSearchPlaceholder] so the search screen, the\n         * catalog manager and Home agree on exactly which catalogs are search\n         * placeholders — the manifest's `isSearch` flag, or an id/name that\n         * says so. (Previously this looked only at the id/name, so a manifest\n         * that flagged a search catalog with `isSearch` was still treated as a\n         * regular rail everywhere except the manager.)\n         */\n        fun ManifestCatalog.isSearchStyleCatalog(): Boolean = isSearchPlaceholder",
+    "count": 1
+  }
+]

@@ -1862,24 +1862,6 @@ Log.d(
 
         if (completedRows.isEmpty()) return emptyList()
 
-        // One candidate per show, newest completion first: an active show must
-        // win a slot when the cap below trims the tail.
-        val candidates =
-            completedRows
-                .groupBy { row ->
-                    row.parentId.trim().ifBlank { row.id.trim() }
-                }
-                .mapNotNull { (parentId, rows) ->
-                    rows
-                        .maxByOrNull { row ->
-                            row.completedAt ?: row.updatedAt
-                        }
-                        ?.let { row -> parentId to row }
-                }
-                .sortedByDescending { (_, row) ->
-                    row.completedAt ?: row.updatedAt
-                }
-
         // Shows already on the rail (an episode paused part-way) keep their
         // resume card; a next-up twin for them is wasted work.
         val representedIds =
@@ -1887,17 +1869,21 @@ Log.d(
                 .mapNotNull { item -> upNextIdentifier(item.parentId) }
                 .toSet()
 
+        // Candidate selection is pure and unit tested (see
+        // selectLocalNextUpCandidates): one card per show, newest completion
+        // first, minus any show already on the rail, capped.
+        val candidates =
+            selectLocalNextUpCandidates(
+                completedRows = completedRows,
+                representedIdentifiers = representedIds,
+                max = MAX_LOCAL_NEXT_UP_ITEMS
+            )
+
         val semaphore =
             Semaphore(LOCAL_NEXT_UP_CONCURRENCY)
 
         return coroutineScope {
             candidates
-                .asSequence()
-                .filterNot { (parentId, _) ->
-                    val id = upNextIdentifier(parentId)
-                    id != null && id in representedIds
-                }
-                .take(MAX_LOCAL_NEXT_UP_ITEMS)
                 .map { (parentId, row) ->
                     async {
                         semaphore.withPermit {

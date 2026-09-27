@@ -10,6 +10,7 @@ import com.kennyb1201.kbstream.data.addon.CatalogConfiguration
 import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.data.addon.ManifestCatalog
 import com.kennyb1201.kbstream.data.addon.mergeRefreshedCatalogs
+import com.kennyb1201.kbstream.data.addon.setAllCatalogsVisible
 import com.kennyb1201.kbstream.data.kb.KBCollectionProfile
 import com.kennyb1201.kbstream.data.kb.KBHomeOrder
 import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
@@ -17,6 +18,10 @@ import com.kennyb1201.kbstream.data.kb.KBProfilePrefs
 import com.kennyb1201.kbstream.data.kb.KBRepository
 import com.kennyb1201.kbstream.data.kb.moveRailToEnd
 import com.kennyb1201.kbstream.data.kb.toggleCollectionPin
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -637,11 +642,17 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * Bulk enable/disable every catalog from every addon on the home screen.
      * Used by the catalog manager's Show All / Hide All actions.
+     *
+     * Search placeholders are left exactly as they are: they never appear in
+     * the manager or on Home (see [ManifestCatalog.isSearchPlaceholder]), so
+     * flipping their flag would only rewrite state the user cannot see either
+     * way — and a later "Show All" would mark them user-visible, which the
+     * filter would then have to keep suppressing.
      */
     fun setAllCatalogsShowOnHome(showOnHome: Boolean) {
         _addons.value.forEach { addon ->
             updateAddonCatalogs(addon.id) { catalogs ->
-                catalogs.map { it.copy(showOnHome = showOnHome) }
+                setAllCatalogsVisible(catalogs, showOnHome)
             }
         }
         refresh()
@@ -995,46 +1006,60 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 val current = addonManager.getInstalledAddons()
 
+                // Fetch every manifest in PARALLEL, then apply them one at a
+                // time. A manual "Refresh all" over a dozen addons used to
+                // fetch them serially — each one waiting on the last before
+                // it even started — even though the background refresh already
+                // parallelizes the same fetches. Off the main thread so a slow
+                // manifest cannot stall the UI coroutine.
+                val fetched =
+                    coroutineScope {
+                        current
+                            .map { old ->
+                                async(Dispatchers.IO) {
+                                    old to
+                                        runCatching {
+                                            repository.fetchManifest(old.manifestUrl)
+                                        }
+                                }
+                            }
+                            .awaitAll()
+                    }
+
                 var successCount = 0
                 var failureCount = 0
 
                 var newCatalogTotal = 0
 
-                // Apply each fetched manifest through the manager's OWN merge.
-                // That merge is the single canonical one: it carries the user's
-                // rename / visibility / Home arrangement across the refresh,
-                // remaps a swapped catalog id on dynamic rails, preserves the
-                // addon's enabled toggle, and honors the manifest's visibility
-                // hints for genuinely new catalogs. Rebuilding the catalogs
-                // here instead kept drifting from the background refresh. It
-                // reads the CURRENT list under its own lock, so an addon added
-                // or removed while a manifest was downloading is not clobbered.
-                current.forEach { old ->
-                    try {
-                        val manifest = repository.fetchManifest(old.manifestUrl)
-
-                        // Guard: if the URL now serves something that isn't a
-                        // usable add-on (e.g. the add-on moved and a website
-                        // manifest is returned), keep the old stored config
-                        // rather than wiping resources/catalogs.
-                        if (!manifest.isUsableAddonManifest()) {
-                            failureCount++
-                            return@forEach
-                        }
-
-                        successCount++
-
-                        newCatalogTotal += manifest.catalogs.count { catalog ->
-                            old.catalogs.none {
-                                catalogKey(it.type, it.id) ==
-                                    catalogKey(catalog.type, catalog.id)
-                            }
-                        }
-
-                        addonManager.updateAddonFromManifest(old.manifestUrl, manifest)
-                    } catch (_: Exception) {
+                // Apply each fetched manifest through the manager's OWN merge
+                // (see planManifestMerge): it carries the user's rename /
+                // visibility / Home arrangement across the refresh, remaps a
+                // swapped catalog id on dynamic rails, preserves the addon's
+                // enabled toggle, and honors the manifest's visibility hints
+                // for genuinely new catalogs. It reads the CURRENT list under
+                // its own lock, so an addon added or removed while a manifest
+                // was downloading is not clobbered.
+                fetched.forEach { (old, result) ->
+                    // Guard: a failed fetch, or a URL that now serves something
+                    // that isn't a usable add-on (e.g. the add-on moved and a
+                    // website manifest came back), keeps the old stored config
+                    // rather than wiping resources/catalogs.
+                    val manifest = result.getOrNull()
+                    if (manifest == null || !manifest.isUsableAddonManifest()) {
                         failureCount++
+                        return@forEach
                     }
+
+                    successCount++
+
+                    newCatalogTotal += manifest.catalogs.count { catalog ->
+                        old.catalogs.none {
+                            catalogKey(it.type, it.id) ==
+                                catalogKey(catalog.type, catalog.id)
+                        }
+                    }
+
+                    addonManager.updateAddonFromManifest(old.manifestUrl, manifest)
                 }
                 refresh()
 

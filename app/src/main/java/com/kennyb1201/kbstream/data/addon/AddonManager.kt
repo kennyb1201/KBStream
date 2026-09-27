@@ -771,36 +771,6 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         val existingCatalogs =
             existing?.catalogs.orEmpty()
 
-        val existingByKey =
-            existingCatalogs.associateBy {
-                catalogKey(
-                    manifest.id,
-                    it.type,
-                    it.id
-                )
-            }
-
-        // Identity-free replacement pairing for THIS addon (see
-        // pairReplacedCatalogs): dynamic addons swap catalog ids as their
-        // content changes, and the id-key is exactly what breaks. Used below
-        // so a replacement inherits the removed catalog's local settings
-        // (showOnHome / customName) and its Home arrangement slot instead of
-        // appearing as a brand-new, default-positioned rail. Sorted by the
-        // saved order so the pairing matches the freed-slot order above.
-        val replacementPairs =
-            pairReplacedCatalogs(
-                existingCatalogs.sortedBy { it.order },
-                manifest.catalogs
-            )
-        val replacementByKey =
-            replacementPairs.associate { (added, removed) ->
-                catalogKey(
-                    manifest.id,
-                    added.type,
-                    added.id
-                ) to removed
-            }
-
         /*
          * Existing catalogs retain their current
          * global order.
@@ -816,95 +786,23 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                 }
                 .toMap()
 
-        // Catalogs this addon HAD that the fresh manifest no longer lists.
-        // Dynamic addons (BingeCat's because-you-watched rails, curated
-        // lists) frequently swap catalog ids as their content changes —
-        // conceptually the new catalog REPLACES the removed one, so the
-        // replacement inherits the removed slot's order index instead of
-        // appending to the bottom of Home. Freed slots are handed out in
-        // ascending order so one removed slot absorbs exactly one newcomer.
-        val manifestKeys =
-            manifest.catalogs.mapTo(mutableSetOf()) {
-                catalogKey(
-                    manifest.id,
-                    it.type,
-                    it.id
-                )
-            }
-
-        // Restrict the pool to the slots THIS addon vacated. existingGlobalOrder
-        // is the GLOBAL order — every addon's catalogs — so the old filter
-        // ("key not in this manifest") also admitted every OTHER addon's
-        // position, and a newcomer took the lowest of those, usually index 0.
-        // A BingeCat rail whose id changed therefore jumped to the TOP of Home
-        // instead of inheriting the slot it replaced. See slotsFreedByManifest.
-        val freedOrderSlots =
-            slotsFreedByManifest(
-                existingAddonKeys = existingByKey.keys,
-                manifestKeys = manifestKeys,
-                globalOrder = existingGlobalOrder
+        // The whole merge — settings inheritance for surviving catalogs, the
+        // replacement pairing for a swapped id, and the freed-slot order — is
+        // one PURE function (see planManifestMerge), so the exact behavior
+        // that kept regressing into lost renames / pins / slots is unit
+        // tested without a manager, a store, or a network. The addon's own
+        // `enabled` toggle is carried forward where the addon is rebuilt below.
+        val mergePlan =
+            planManifestMerge(
+                existingCatalogs = existingCatalogs,
+                manifestCatalogs = manifest.catalogs,
+                globalOrder = existingGlobalOrder,
+                keyOf = { catalog ->
+                    catalogKey(manifest.id, catalog.type, catalog.id)
+                }
             )
-
-        val fallbackOrderStart =
-            (existingGlobalOrder.values.maxOrNull() ?: -1) + 1
-
-        var freedSlotCursor = 0
-        var overflowOffset = 0
-
-        val mergedCatalogs =
-            manifest.catalogs.map { manifestCatalog ->
-
-                val key =
-                    catalogKey(
-                        manifest.id,
-                        manifestCatalog.type,
-                        manifestCatalog.id
-                    )
-
-                val previous =
-                    existingByKey[key]
-
-                // A swapped catalog id: fall back to the catalog this one
-                // replaced so its local settings carry over.
-                val inherited =
-                    previous ?: replacementByKey[key]
-
-                val existingOrder =
-                    existingGlobalOrder[key]
-
-                manifestCatalog.copy(
-                    // User's pinned/unpinned choice wins for existing
-                    // catalogs; a brand-new catalog honors the manifest's
-                    // KB hints (showInHome/isSearch) so hidden-by-design
-                    // rails (director/seed catalogs, search placeholders)
-                    // don't flood Home on install. This is only the DEFAULT:
-                    // the user can still pin any of them via the manager.
-                    showOnHome =
-                        inherited?.showOnHome
-                            ?: manifestCatalog.defaultShowOnHome,
-
-                    // The display-name override is KBStream-local state, not
-                    // part of the manifest — a refresh must carry it forward.
-                    // Dropping it here is what made a renamed catalog lose its
-                    // name locally on the next launch, and then push the
-                    // nameless copy to every other device.
-                    customName =
-                        inherited?.customName
-                            ?: manifestCatalog.customName,
-
-                    order =
-                        existingOrder
-                            ?: (
-                                freedOrderSlots.getOrNull(
-                                    freedSlotCursor++
-                                )
-                                    ?: (
-                                        fallbackOrderStart +
-                                            overflowOffset++
-                                        )
-                                )
-                )
-            }
+        val mergedCatalogs = mergePlan.catalogs
+        val replacementPairs = mergePlan.replaced
 
         val updatedAddon =
             InstalledAddon(

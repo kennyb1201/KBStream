@@ -71,6 +71,91 @@ internal fun pairReplacedCatalogs(
 }
 
 /**
+ * The result of planning how a refreshed manifest's catalogs merge with what
+ * the user already had.
+ *
+ * [catalogs] is the merged list in manifest order; [replaced] pairs each
+ * newcomer with the removed catalog it stands in for (see
+ * [pairReplacedCatalogs]), so the caller can remap anything keyed by catalog id
+ * — the Home arrangement.
+ */
+internal data class ManifestMergePlan(
+    val catalogs: List<ManifestCatalog>,
+    val replaced: List<Pair<ManifestCatalog, ManifestCatalog>>
+)
+
+/**
+ * Merge a freshly fetched manifest's catalogs with the user's stored ones for
+ * the SAME addon, preserving everything that is KBStream-local:
+ *
+ *  - `customName` (the user's rename),
+ *  - `showOnHome` (the user's pin/hide),
+ *  - `order` (the global slot, inherited by a replacement on an id swap),
+ *
+ * and defaulting a genuinely new catalog to [ManifestCatalog.defaultShowOnHome]
+ * so hidden-by-design rails (search placeholders, director/seed catalogs) stay
+ * off Home on install. [globalOrder] is the GLOBAL order-keyed slot map (every
+ * addon, not just this one), and [keyOf] derives a catalog's key exactly the
+ * way that map is keyed.
+ *
+ * Pure, so the whole merge — the part that regressed into losing a rename, a
+ * pin, or a slot — is unit tested without a manager, a store, or a network.
+ */
+internal fun planManifestMerge(
+    existingCatalogs: List<ManifestCatalog>,
+    manifestCatalogs: List<ManifestCatalog>,
+    globalOrder: Map<String, Int>,
+    keyOf: (ManifestCatalog) -> String
+): ManifestMergePlan {
+    val existingByKey = existingCatalogs.associateBy(keyOf)
+    val replaced =
+        pairReplacedCatalogs(existingCatalogs.sortedBy { it.order }, manifestCatalogs)
+    val replacementByKey =
+        replaced.associate { (added, removed) -> keyOf(added) to removed }
+    val manifestKeys = manifestCatalogs.mapTo(mutableSetOf(), keyOf)
+    val freedOrderSlots =
+        slotsFreedByManifest(existingByKey.keys, manifestKeys, globalOrder)
+    val fallbackOrderStart = (globalOrder.values.maxOrNull() ?: -1) + 1
+
+    var freedSlotCursor = 0
+    var overflowOffset = 0
+
+    val catalogs =
+        manifestCatalogs.map { manifestCatalog ->
+            val key = keyOf(manifestCatalog)
+            val inherited = existingByKey[key] ?: replacementByKey[key]
+            manifestCatalog.copy(
+                showOnHome = inherited?.showOnHome ?: manifestCatalog.defaultShowOnHome,
+                customName = inherited?.customName ?: manifestCatalog.customName,
+                order =
+                    globalOrder[key]
+                        ?: (
+                            freedOrderSlots.getOrNull(freedSlotCursor++)
+                                ?: (fallbackOrderStart + overflowOffset++)
+                            )
+            )
+        }
+
+    return ManifestMergePlan(catalogs = catalogs, replaced = replaced)
+}
+
+/**
+ * Apply the catalog manager's Show All / Hide All to one addon's catalogs.
+ *
+ * Search placeholders are returned untouched: they are hidden from the manager
+ * and from Home ([ManifestCatalog.isSearchPlaceholder]), so flipping their flag
+ * would rewrite state the user can neither see nor act on.
+ */
+internal fun setAllCatalogsVisible(
+    catalogs: List<ManifestCatalog>,
+    showOnHome: Boolean
+): List<ManifestCatalog> =
+    catalogs.map { catalog ->
+        if (catalog.isSearchPlaceholder) catalog
+        else catalog.copy(showOnHome = showOnHome)
+    }
+
+/**
  * Merge a freshly fetched manifest's catalogs with the user's local
  * configuration for the SAME addon.
  *

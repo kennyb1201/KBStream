@@ -1712,13 +1712,15 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
         /**
          * True for AIOMetadata "AI Search" / "People Search" /
-         * "Collections Search"-style catalogs (matched on the catalog id or
-         * name containing "search").
+         * "Collections Search"-style catalogs. Delegates to the shared
+         * [ManifestCatalog.isSearchPlaceholder] so the search screen, the
+         * catalog manager and Home agree on exactly which catalogs are search
+         * placeholders — the manifest's `isSearch` flag, or an id/name that
+         * says so. (Previously this looked only at the id/name, so a manifest
+         * that flagged a search catalog with `isSearch` was still treated as a
+         * regular rail everywhere except the manager.)
          */
-        fun ManifestCatalog.isSearchStyleCatalog(): Boolean {
-            val hay = "$id $name"
-            return hay.contains("search", ignoreCase = true)
-        }
+        fun ManifestCatalog.isSearchStyleCatalog(): Boolean = isSearchPlaceholder
 
         /**
          * True for rank/browse-style catalogs ("Top 10", "Trending",

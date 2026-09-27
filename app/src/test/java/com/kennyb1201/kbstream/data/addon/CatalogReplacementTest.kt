@@ -286,6 +286,39 @@ class CatalogReplacementTest {
     }
 
     @Test
+    fun `Show All skips search placeholders`() {
+        val result = setAllCatalogsVisible(
+            catalogs = listOf(
+                catalog("movie", "top", name = "Top").copy(showOnHome = false),
+                catalog("movie", "ai-search", name = "AI Search").copy(showOnHome = false),
+                catalog("movie", "people", name = "People").copy(
+                    isSearchCatalog = true,
+                    showOnHome = false
+                )
+            ),
+            showOnHome = true
+        )
+        assertTrue(result.first { it.id == "top" }.showOnHome)
+        // The placeholders keep their value either way.
+        assertFalse(result.first { it.id == "ai-search" }.showOnHome)
+        assertFalse(result.first { it.id == "people" }.showOnHome)
+    }
+
+    @Test
+    fun `Hide All skips search placeholders`() {
+        val result = setAllCatalogsVisible(
+            catalogs = listOf(
+                catalog("movie", "top", name = "Top").copy(showOnHome = true),
+                catalog("movie", "ai-search", name = "AI Search").copy(showOnHome = true)
+            ),
+            showOnHome = false
+        )
+        assertFalse(result.first { it.id == "top" }.showOnHome)
+        // Left alone rather than rewritten.
+        assertTrue(result.first { it.id == "ai-search" }.showOnHome)
+    }
+
+    @Test
     fun `an existing catalog keeps its own visibility over the hint`() {
         val merged = mergeRefreshedCatalogs(
             oldCatalogs = listOf(

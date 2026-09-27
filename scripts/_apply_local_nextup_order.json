@@ -1,0 +1,8 @@
+[
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/home/HomeViewModel.kt",
+    "old": "        // Candidate selection is pure and unit tested (see\n        // selectLocalNextUpCandidates): one card per show, newest completion\n        // first, minus any show already on the rail, capped.\n        val candidates =\n            selectLocalNextUpCandidates(\n                completedRows = completedRows,\n                representedIdentifiers = representedIds,\n                max = MAX_LOCAL_NEXT_UP_ITEMS\n            )\n\n        // Shows already on the rail (an episode paused part-way) keep their\n        // resume card; a next-up twin for them is wasted work.\n        val representedIds =\n            existing\n                .mapNotNull { item -> upNextIdentifier(item.parentId) }\n                .toSet()\n",
+    "new": "        // Shows already on the rail (an episode paused part-way) keep their\n        // resume card; a next-up twin for them is wasted work.\n        val representedIds =\n            existing\n                .mapNotNull { item -> upNextIdentifier(item.parentId) }\n                .toSet()\n\n        // Candidate selection is pure and unit tested (see\n        // selectLocalNextUpCandidates): one card per show, newest completion\n        // first, minus any show already on the rail, capped.\n        val candidates =\n            selectLocalNextUpCandidates(\n                completedRows = completedRows,\n                representedIdentifiers = representedIds,\n                max = MAX_LOCAL_NEXT_UP_ITEMS\n            )\n",
+    "count": 1
+  }
+]

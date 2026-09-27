@@ -1080,6 +1080,11 @@ class NativePlayerActivity : ComponentActivity() {
     private var fallbackTextureView: android.view.TextureView? = null
     // Whether P5 color correction via GLES is currently active
     private var p5GlesActive = false
+    // Resolved for this session in createPlayer: true when the app is decoding
+    // the audio to PCM itself (decode-vs-passthrough), so the info panel can
+    // state what the receiver is — or is not — being handed. A false value
+    // only means passthrough is ALLOWED; the sink decides per track.
+    private var audioDecodeToPcmActive = false
     // One-shot latch: P5 is only known after onTracksChanged delivers the
     // declared (pre-rewrite) codec, which is after the player was built. When
     // that happens before the first frame, rebuild once so the GLES/FFmpeg
@@ -4219,6 +4224,8 @@ class NativePlayerActivity : ComponentActivity() {
         // worst case is the passthrough that mode had anyway.
         val audioOutputMode = AppPreferences.getAudioOutput(this)
         val decodeToPcm = PlayerAudioTuning.requiresDecode(audioOutputMode)
+        // Remembered for the info panel (see buildInfoPanel).
+        audioDecodeToPcmActive = decodeToPcm
         val audioExtMode = if (decodeToPcm) {
             DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
         } else when (audioDecoderPriority) {
@@ -6145,7 +6152,40 @@ class NativePlayerActivity : ComponentActivity() {
                 }
             }
         }
-        infoAudio.text = if (audioLines.isEmpty()) "—" else audioLines.joinToString("\n")
+        // Decode vs passthrough, resolved for this session: the one thing a
+        // viewer tuning "Audio Output" needs to confirm which side is doing the
+        // decoding, and why their downmix / dialogue / volume settings do or do
+        // not apply. Prepended so it reads first.
+        val outputModeLabel =
+            when (AppPreferences.getAudioOutput(applicationContext)) {
+                PlayerAudioTuning.AUDIO_OUTPUT_PASSTHROUGH -> "Passthrough"
+                PlayerAudioTuning.AUDIO_OUTPUT_DECODE -> "Decode (PCM)"
+                else -> "Auto"
+            }
+        val outputLine =
+            "Output: $outputModeLabel · " +
+                (if (audioDecodeToPcmActive) "app decodes to PCM" else "passthrough allowed") +
+                " · output up to ${PlayerAudioTuning.deviceMaxChannels} ch"
+        val tuningLine = buildString {
+            append("Tuning: downmix=")
+            append(
+                when (PlayerAudioTuning.downmixTarget) {
+                    PlayerAudioTuning.DOWNMIX_STEREO -> "stereo"
+                    PlayerAudioTuning.DOWNMIX_SURROUND -> "5.1"
+                    else -> "auto"
+                }
+            )
+            append(" · dialogue=")
+            append(
+                if (PlayerAudioTuning.dialogueBoost == 0) "off"
+                else PlayerAudioTuning.dialogueBoost.toString()
+            )
+            if (PlayerAudioTuning.volumeBoostDb > 0) {
+                append(" · volume=+${PlayerAudioTuning.volumeBoostDb}dB")
+            }
+        }
+        infoAudio.text =
+            (listOf(outputLine, tuningLine) + audioLines).joinToString("\n")
     }
 
 

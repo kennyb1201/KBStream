@@ -1,0 +1,20 @@
+[
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+    "old": "    // Whether P5 color correction via GLES is currently active\n    private var p5GlesActive = false",
+    "new": "    // Whether P5 color correction via GLES is currently active\n    private var p5GlesActive = false\n    // Resolved for this session in createPlayer: true when the app is decoding\n    // the audio to PCM itself (decode-vs-passthrough), so the info panel can\n    // state what the receiver is — or is not — being handed. A false value\n    // only means passthrough is ALLOWED; the sink decides per track.\n    private var audioDecodeToPcmActive = false",
+    "count": 1
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+    "old": "        val audioOutputMode = AppPreferences.getAudioOutput(this)\n        val decodeToPcm = PlayerAudioTuning.requiresDecode(audioOutputMode)",
+    "new": "        val audioOutputMode = AppPreferences.getAudioOutput(this)\n        val decodeToPcm = PlayerAudioTuning.requiresDecode(audioOutputMode)\n        // Remembered for the info panel (see buildInfoPanel).\n        audioDecodeToPcmActive = decodeToPcm",
+    "count": 1
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+    "old": "        infoAudio.text = if (audioLines.isEmpty()) \"—\" else audioLines.joinToString(\"\\n\")",
+    "new": "        // Decode vs passthrough, resolved for this session: the one thing a\n        // viewer tuning \"Audio Output\" needs to confirm which side is doing the\n        // decoding, and why their downmix / dialogue / volume settings do or do\n        // not apply. Prepended so it reads first.\n        val outputModeLabel =\n            when (AppPreferences.getAudioOutput(applicationContext)) {\n                PlayerAudioTuning.AUDIO_OUTPUT_PASSTHROUGH -> \"Passthrough\"\n                PlayerAudioTuning.AUDIO_OUTPUT_DECODE -> \"Decode (PCM)\"\n                else -> \"Auto\"\n            }\n        val outputLine =\n            \"Output: $outputModeLabel · \" +\n                (if (audioDecodeToPcmActive) \"app decodes to PCM\" else \"passthrough allowed\") +\n                \" · output up to ${PlayerAudioTuning.deviceMaxChannels} ch\"\n        val tuningLine = buildString {\n            append(\"Tuning: downmix=\")\n            append(\n                when (PlayerAudioTuning.downmixTarget) {\n                    PlayerAudioTuning.DOWNMIX_STEREO -> \"stereo\"\n                    PlayerAudioTuning.DOWNMIX_SURROUND -> \"5.1\"\n                    else -> \"auto\"\n                }\n            )\n            append(\" · dialogue=\")\n            append(\n                if (PlayerAudioTuning.dialogueBoost == 0) \"off\"\n                else PlayerAudioTuning.dialogueBoost.toString()\n            )\n            if (PlayerAudioTuning.volumeBoostDb > 0) {\n                append(\" · volume=+${PlayerAudioTuning.volumeBoostDb}dB\")\n            }\n        }\n        infoAudio.text =\n            (listOf(outputLine, tuningLine) + audioLines).joinToString(\"\\n\")",
+    "count": 1
+  }
+]
