@@ -832,11 +832,18 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                 )
             }
 
+        // Restrict the pool to the slots THIS addon vacated. existingGlobalOrder
+        // is the GLOBAL order — every addon's catalogs — so the old filter
+        // ("key not in this manifest") also admitted every OTHER addon's
+        // position, and a newcomer took the lowest of those, usually index 0.
+        // A BingeCat rail whose id changed therefore jumped to the TOP of Home
+        // instead of inheriting the slot it replaced. See slotsFreedByManifest.
         val freedOrderSlots =
-            existingGlobalOrder.entries
-                .filter { (key, _) -> key !in manifestKeys }
-                .map { it.value }
-                .sorted()
+            slotsFreedByManifest(
+                existingAddonKeys = existingByKey.keys,
+                manifestKeys = manifestKeys,
+                globalOrder = existingGlobalOrder
+            )
 
         val fallbackOrderStart =
             (existingGlobalOrder.values.maxOrNull() ?: -1) + 1

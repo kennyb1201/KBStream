@@ -72,4 +72,116 @@ class CatalogReplacementTest {
         )
         assertEquals(1, pairs.size)
     }
+
+    @Test
+    fun `a reorder cannot pair a newcomer with a removed catalog of another type`() {
+        // Two ids swap in the SAME refresh and the addon also reorders them.
+        // Pairing across types matched the series newcomer with the removed
+        // MOVIE rail (and vice versa), so each inherited the other's showOnHome
+        // / customName — a rail the user hid came back on, renamed.
+        val pairs = pairReplacedCatalogs(
+            existing = listOf(
+                catalog("movie", "movie-old"),
+                catalog("series", "series-old")
+            ),
+            fresh = listOf(
+                catalog("series", "series-new"),
+                catalog("movie", "movie-new")
+            )
+        )
+
+        assertEquals(
+            listOf("series-new" to "series-old", "movie-new" to "movie-old"),
+            pairs.map { it.first.id to it.second.id }
+        )
+    }
+
+    @Test
+    fun `a same-type reorder pairs by name, not by slot`() {
+        // Both ids churn AND the manifest reorders them. Pairing purely by
+        // position hands each newcomer the other rail's settings — the rail the
+        // user renamed loses its name and a hidden rail comes back on.
+        val pairs = pairReplacedCatalogs(
+            existing = listOf(
+                catalog("series", "search-1", name = "Search"),
+                catalog("series", "trending-1", name = "Trending")
+            ),
+            fresh = listOf(
+                catalog("series", "trending-2", name = "Trending"),
+                catalog("series", "search-2", name = "Search")
+            )
+        )
+
+        assertEquals(
+            listOf("trending-2" to "trending-1", "search-2" to "search-1"),
+            pairs.map { it.first.id to it.second.id }
+        )
+    }
+
+    @Test
+    fun `a content-embedded rename falls back to the positional pairing`() {
+        // "Because you watched X" -> "...Y": nothing matches by name, so the
+        // saved-order rule still carries the settings across.
+        val pairs = pairReplacedCatalogs(
+            existing = listOf(
+                catalog("movie", "bwc-1", name = "Because you watched A"),
+                catalog("movie", "bwc-2", name = "Because you watched B")
+            ),
+            fresh = listOf(
+                catalog("movie", "bwc-8", name = "Because you watched C"),
+                catalog("movie", "bwc-9", name = "Because you watched D")
+            )
+        )
+
+        assertEquals(
+            listOf("bwc-8" to "bwc-1", "bwc-9" to "bwc-2"),
+            pairs.map { it.first.id to it.second.id }
+        )
+    }
+
+    @Test
+    fun `slots freed are only this addon's own, never a sibling addon's position`() {
+        // Global order: two Cinemeta catalogs at 0/1, the BingeCat rail at 2,
+        // an AIOStreams list at 3. Only the BingeCat rail's id changed.
+        val globalOrder = mapOf(
+            "cinemeta::movie::top" to 0,
+            "cinemeta::series::top" to 1,
+            "bingecat::movie::railA" to 2,
+            "aiostreams::movie::list" to 3
+        )
+
+        val slots = slotsFreedByManifest(
+            existingAddonKeys = setOf("bingecat::movie::railA"),
+            manifestKeys = setOf("bingecat::movie::railB"),
+            globalOrder = globalOrder
+        )
+
+        // 2, not [0, 1, 2, 3]: reusing index 0 is what planted the rail at the
+        // top of Home on every refresh.
+        assertEquals(listOf(2), slots)
+    }
+
+    @Test
+    fun `an unchanged manifest frees no slots`() {
+        val globalOrder = mapOf("addon::movie::a" to 0, "addon::series::b" to 1)
+
+        assertTrue(
+            slotsFreedByManifest(
+                existingAddonKeys = setOf("addon::movie::a", "addon::series::b"),
+                manifestKeys = setOf("addon::movie::a", "addon::series::b"),
+                globalOrder = globalOrder
+            ).isEmpty()
+        )
+    }
+
+    @Test
+    fun `a catalog removed with no stored position frees nothing`() {
+        assertTrue(
+            slotsFreedByManifest(
+                existingAddonKeys = setOf("addon::movie::gone"),
+                manifestKeys = emptySet(),
+                globalOrder = emptyMap()
+            ).isEmpty()
+        )
+    }
 }
