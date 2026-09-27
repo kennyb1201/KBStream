@@ -393,30 +393,62 @@ private class VideoCompatTrackOutput(
                     "stripping DV RPU/EL + HDR10+ metadata NALs " +
                     "(nativeDv=$nativeDvSupported stripAll=$convertAllProfiles)"
             )
-            var builder = format.buildUpon().setCodecs(rewriteCodec)
-            // Keep the original declared DV codec (e.g. "dvhe.08.06") on the
-            // label so the player UI can badge the profile playing as HDR10.
-            if (!format.codecs.isNullOrBlank()) {
-                builder = builder.setLabel(format.codecs)
+            // Building the stripped Format must never be able to fail the load.
+            // This branch runs on the RESCUE path: the player has already seen
+            // the hardware Dolby Vision decoder refuse this stream
+            // (0x80001000), forced the strip on, and is relying on the retry
+            // ladder to find something that works. Throwing out of format()
+            // destroyed that: the rewritten Format construction raised
+            // IllegalStateException inside VideoCompatTrackOutput, the load
+            // task died as a SOURCE error (`Unexpected IllegalStateException`)
+            // that the ladder has no case for, and the player rebuilt itself
+            // forever with the identical failure — a DV file that could not be
+            // played at all, on a box whose DV decoder was never going to
+            // accept it. Degrade to "no rewrite" instead: pass the original
+            // format through and let the ladder move on (another renderer,
+            // the FFmpeg software path, the MPV engine).
+            val stripped = runCatching {
+                var builder = format.buildUpon().setCodecs(rewriteCodec)
+                // Keep the original declared DV codec (e.g. "dvhe.08.06") on the
+                // label so the player UI can badge the profile playing as HDR10.
+                if (!format.codecs.isNullOrBlank()) {
+                    builder = builder.setLabel(format.codecs)
+                }
+                if (format.sampleMimeType == MimeTypes.VIDEO_DOLBY_VISION) {
+                    builder = builder.setSampleMimeType(MimeTypes.VIDEO_H265)
+                }
+                builder = builder.setInitializationData(
+                    rewriteInitData(format.initializationData)
+                )
+                // The rewritten format must carry explicit HDR10 color metadata,
+                // same as the general strip path below — declared DV tracks don't
+                // reliably have Format.colorInfo populated coming out of the
+                // wrapping extractor chain, and buildUpon() only carries over
+                // whatever was already there. Without KEY_COLOR_TRANSFER /
+                // STANDARD / RANGE on the negotiated MediaFormat, MTK-class OMX
+                // decoders can accept 10-bit input samples and never emit an
+                // output frame — this is what was actually happening on P4/P8
+                // sources, not a VPS problem (P8/P4 usually carry no VPS
+                // extension to begin with, so vpsRewritten=false here is normal).
+                builder.build().buildUpon().setColorInfo(hdr10ColorInfo).build()
             }
-            if (format.sampleMimeType == MimeTypes.VIDEO_DOLBY_VISION) {
-                builder = builder.setSampleMimeType(MimeTypes.VIDEO_H265)
+            val strippedFormat = stripped.getOrNull()
+            if (strippedFormat != null) {
+                delegate.format(strippedFormat)
+                mode = Mode.STRIPPING
+            } else {
+                // Logged loudly and with the cause: the next capture has to show
+                // that the rewrite was abandoned rather than a load failure.
+                Log.w(
+                    "PLAYER_DV",
+                    "DV strip rewrite failed (${stripped.exceptionOrNull()?.javaClass?.simpleName}: " +
+                        "${stripped.exceptionOrNull()?.message}) — playing the stream unchanged " +
+                        "instead of failing the load",
+                    stripped.exceptionOrNull()
+                )
+                mode = Mode.NORMAL
+                delegate.format(format)
             }
-            builder = builder.setInitializationData(
-                rewriteInitData(format.initializationData)
-            )
-            // The rewritten format must carry explicit HDR10 color metadata,
-            // same as the general strip path below — declared DV tracks don't
-            // reliably have Format.colorInfo populated coming out of the
-            // wrapping extractor chain, and buildUpon() only carries over
-            // whatever was already there. Without KEY_COLOR_TRANSFER /
-            // STANDARD / RANGE on the negotiated MediaFormat, MTK-class OMX
-            // decoders can accept 10-bit input samples and never emit an
-            // output frame — this is what was actually happening on P4/P8
-            // sources, not a VPS problem (P8/P4 usually carry no VPS
-            // extension to begin with, so vpsRewritten=false here is normal).
-            delegate.format(builder.build().buildUpon().setColorInfo(hdr10ColorInfo).build())
-            mode = Mode.STRIPPING
             return
         }
         mode = when {
