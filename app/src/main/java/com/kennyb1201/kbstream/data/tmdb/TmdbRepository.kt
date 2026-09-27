@@ -7,6 +7,7 @@ import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.cache.ImdbResolutionEntity
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheDao
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheEntity
+import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheMaintenance
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.memory.evictOldest
@@ -31,6 +32,7 @@ import retrofit2.converter.moshi.MoshiConverterFactory
 import java.time.LocalDate
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 
 data class StudioItem(val item: TmdbDiscoverItem, val mediaType: String)
@@ -321,6 +323,9 @@ class TmdbRepository private constructor(context: Context) :
     private val cachePruned = AtomicBoolean(false)
     private val jsonCachePruned = AtomicBoolean(false)
 
+    /** Writes since the last JSON-cache budget check (see [cacheJson]). */
+    private val jsonCacheWrites = AtomicInteger(0)
+
     init {
         pruneImdbCacheOnce()
         pruneJsonCacheOnce()
@@ -439,13 +444,52 @@ class TmdbRepository private constructor(context: Context) :
         }
     }
 
+    /**
+     * Ages the JSON cache and enforces its byte budget, once per process.
+     *
+     * The table used to be bounded by age alone, which is not a bound at all:
+     * `updatedAt` is refreshed by every re-fetch, so the titles the user keeps
+     * looking at never expired, and nothing capped the sum of the rest. It
+     * reached gigabytes on real devices (see [TmdbJsonCacheMaintenance] for
+     * the measurements and the third reason - a file that never gives pages
+     * back). This is the launch-time pass; [cacheJson] keeps it bounded while
+     * the app is up.
+     */
     private fun pruneJsonCacheOnce() {
         if (jsonCachePruned.compareAndSet(false, true)) {
-            val cutoff = System.currentTimeMillis() - 30L * 24L * 60L * 60L * 1000L
             CoroutineScope(Dispatchers.IO).launch {
-                runCatching {
-                    tmdbJsonCacheDao.deleteOlderThan(cutoff)
-                }
+                runCatching { TmdbJsonCacheMaintenance.trim(tmdbJsonCacheDao) }
+            }
+        }
+    }
+
+    /**
+     * The single write path for the JSON cache: stores one payload and, every
+     * [JSON_CACHE_TRIM_EVERY_WRITES] writes, re-checks the table against its
+     * budget.
+     *
+     * Every write in this class goes through here rather than calling the DAO
+     * directly, because "which call sites remember to maintain the cache" is
+     * not a property anyone can review - the budget has to be enforced by the
+     * write path itself. Counting rather than trimming on every write is what
+     * keeps that free: a trim reads the whole size index, and at the measured
+     * 65-280 KB per row, one check per 32 writes leaves at most a few
+     * megabytes of drift against a 64 MB budget.
+     *
+     * A failed write is swallowed exactly as the inline `runCatching` blocks
+     * it replaces did: this is a cache, and the caller already holds the
+     * object that was just fetched.
+     */
+    private suspend fun cacheJson(key: String, json: String, now: Long) {
+        runCatching {
+            tmdbJsonCacheDao.upsert(
+                TmdbJsonCacheEntity(key = key, json = json, updatedAt = now)
+            )
+        }
+        if (jsonCacheWrites.incrementAndGet() >= JSON_CACHE_TRIM_EVERY_WRITES) {
+            jsonCacheWrites.set(0)
+            CoroutineScope(Dispatchers.IO).launch {
+                runCatching { TmdbJsonCacheMaintenance.trim(tmdbJsonCacheDao) }
             }
         }
     }
@@ -564,15 +608,7 @@ class TmdbRepository private constructor(context: Context) :
         // retry. Only a real answer is remembered, in memory and on disk.
         if (result != null) {
             detailCache[key] = now to result
-            runCatching {
-                tmdbJsonCacheDao.upsert(
-                    TmdbJsonCacheEntity(
-                        key = diskKey,
-                        json = detailJsonAdapter.toJson(result),
-                        updatedAt = now
-                    )
-                )
-            }
+            cacheJson(diskKey, detailJsonAdapter.toJson(result), now)
         }
         return result
     }
@@ -785,15 +821,7 @@ class TmdbRepository private constructor(context: Context) :
     }
 
     private suspend fun writeGenresToDisk(key: String, genres: List<TmdbGenre>) {
-        runCatching {
-            tmdbJsonCacheDao.upsert(
-                TmdbJsonCacheEntity(
-                    key = "genres:$key",
-                    json = genresJsonAdapter.toJson(genres),
-                    updatedAt = System.currentTimeMillis()
-                )
-            )
-        }
+        cacheJson("genres:$key", genresJsonAdapter.toJson(genres), System.currentTimeMillis())
     }
 
     suspend fun getCollection(collectionId: Int): TmdbCollectionDetail? {
@@ -1015,15 +1043,7 @@ class TmdbRepository private constructor(context: Context) :
         if (result != null) {
             pruneMemoryCaches()
             reviewsCache[key] = now to result
-            runCatching {
-                tmdbJsonCacheDao.upsert(
-                    TmdbJsonCacheEntity(
-                        key = diskKey,
-                        json = reviewsJsonAdapter.toJson(result),
-                        updatedAt = now
-                    )
-                )
-            }
+            cacheJson(diskKey, reviewsJsonAdapter.toJson(result), now)
         }
         return result
     }
@@ -1082,15 +1102,7 @@ class TmdbRepository private constructor(context: Context) :
         }
 
         seasonEpisodesCache[key] = now to episodes
-        runCatching {
-            tmdbJsonCacheDao.upsert(
-                TmdbJsonCacheEntity(
-                    key = diskKey,
-                    json = seasonEpisodesJsonAdapter.toJson(episodes),
-                    updatedAt = now
-                )
-            )
-        }
+        cacheJson(diskKey, seasonEpisodesJsonAdapter.toJson(episodes), now)
         return episodes
     }
 
@@ -1152,15 +1164,7 @@ class TmdbRepository private constructor(context: Context) :
 
         detailCache[key] = now to result
         if (result != null) {
-            runCatching {
-                tmdbJsonCacheDao.upsert(
-                    TmdbJsonCacheEntity(
-                        key = diskKey,
-                        json = detailJsonAdapter.toJson(result),
-                        updatedAt = now
-                    )
-                )
-            }
+            cacheJson(diskKey, detailJsonAdapter.toJson(result), now)
         }
         return result
     }
@@ -2378,5 +2382,14 @@ class TmdbRepository private constructor(context: Context) :
          */
         private const val MIN_LOGO_PIXELS = 16
         private const val MAX_IMDB_DISK_AGE_MS = 90L * 24L * 60L * 60L * 1000L
+
+        /**
+         * How many JSON-cache writes go by between budget checks. See
+         * [TmdbRepository.cacheJson]: small enough that one session cannot
+         * meaningfully overshoot the budget, large enough that the check
+         * (which reads the table's whole size index) is invisible next to the
+         * network fetches that produced those writes.
+         */
+        private const val JSON_CACHE_TRIM_EVERY_WRITES = 32
     }
 }

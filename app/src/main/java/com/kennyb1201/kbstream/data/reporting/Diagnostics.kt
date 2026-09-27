@@ -40,6 +40,21 @@ object Diagnostics {
     private const val MAX_OUTBOX_ROWS = 10
     private const val LOGCAT_CHUNK = 1500
 
+    /** The un-scoped history database: where the JSON cache table lives. */
+    private const val WATCH_HISTORY_DB = "kbstream_watch_history"
+
+    /**
+     * Cache subdirectories worth naming. These are the ones that can reach
+     * hundreds of megabytes on their own (see [storageLine]); the rest of the
+     * app's cache is subtitle files and staged update downloads, which are
+     * small enough that listing them would only add noise.
+     */
+    private val CACHE_DIRS = listOf(
+        "image_cache",
+        "media_cache",
+        "addon_http_cache"
+    )
+
     private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.US)
     private val dateTimeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
 
@@ -59,6 +74,7 @@ object Diagnostics {
         report.appendLine(cleanupLine(app))
         report.appendLine(syncLine())
         report.appendLine(localLine(app))
+        report.appendLine(storageLine(app))
         markerLines(app).forEach { report.appendLine(it) }
         report.appendLine(addonLine(app))
         // The launch breakdown, printed explicitly: it is the one set of samples
@@ -205,6 +221,61 @@ object Diagnostics {
                 append(outbox.joinToString(", "))
             }
         }
+    }
+
+    /**
+     * Where the app's bytes actually are.
+     *
+     * "Why is KBStream using 1.6 GB?" was previously unanswerable from the
+     * outside: every candidate store is invisible from the UI, and the answer
+     * is a different one per install. The two figures that settle it are the
+     * history database (whose `tmdb_json_cache` table was the app's only
+     * unbounded disk store) and the two big caches, so both are reported
+     * here — named, in MB, next to the row count that explains the size.
+     *
+     * `db` is the file, `json` the cached TMDB payloads inside it; a wide gap
+     * between them is free pages a delete has released but not returned, which
+     * is what [com.kennyb1201.kbstream.data.cache.TmdbJsonCacheMaintenance]
+     * reclaims.
+     */
+    private suspend fun storageLine(context: Context): String = withContext(Dispatchers.IO) {
+        runCatching {
+            val dbFile = context.getDatabasePath(WATCH_HISTORY_DB)
+            val cache = WatchHistoryDatabase.getInstance(context).tmdbJsonCacheDao()
+            val jsonBytes = cache.totalBytes() ?: 0L
+            val jsonRows = cache.count()
+
+            buildString {
+                append("storage: db=").append(mb(dbFile.length()))
+                append(" jsonCache=").append(mb(jsonBytes))
+                append("/").append(jsonRows).append("row")
+                appendLine()
+                append("storage caches: ")
+                append(
+                    CACHE_DIRS.joinToString(" ") { name ->
+                        "${name}=${mb(dirBytes(java.io.File(context.cacheDir, name)))}"
+                    }
+                )
+            }
+        }.getOrElse { "storage: unavailable (${it.message})" }
+    }
+
+    private fun mb(bytes: Long): String = "${bytes / 1_048_576}MB"
+
+    /** Recursive size of [dir], or 0 when it does not exist. */
+    private fun dirBytes(dir: java.io.File): Long {
+        if (!dir.exists()) return 0L
+        var total = 0L
+        val pending = ArrayDeque<java.io.File>()
+        pending.addLast(dir)
+        while (pending.isNotEmpty()) {
+            val next = pending.removeLast()
+            val children = next.listFiles() ?: continue
+            children.forEach { child ->
+                if (child.isDirectory) pending.addLast(child) else total += child.length()
+            }
+        }
+        return total
     }
 
     private suspend fun localLine(context: Context): String = withContext(Dispatchers.IO) {

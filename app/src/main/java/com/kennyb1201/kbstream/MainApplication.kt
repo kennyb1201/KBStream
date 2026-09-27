@@ -21,6 +21,7 @@ import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.data.reporting.Redaction
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.work.AddonManifestRefreshWorker
+import com.kennyb1201.kbstream.work.CacheMaintenanceWorker
 import com.kennyb1201.kbstream.work.NewEpisodeWorker
 import com.kennyb1201.kbstream.work.OutboxFlushWorker
 import com.kennyb1201.kbstream.work.ReminderWorker
@@ -101,6 +102,15 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             }
             startupStep("startup.addonWorker", "app_create_addon_worker") {
                 scheduleAddonManifestRefresh()
+            }
+            // Storage: the TMDB JSON cache is the app's only unbounded disk
+            // store, and deleting rows from it never gave the file's space
+            // back. Both halves are handled here - the budget on the write
+            // path, and the VACUUM that only a background pass can take the
+            // lock for - with a one-off run so an install that already grew
+            // gets reclaimed now rather than at the next daily tick.
+            startupStep("startup.cacheMaintenance", "app_create_cache_maintenance") {
+                CacheMaintenanceWorker.schedule(applicationContext)
             }
             // IPTV guide: enqueue the periodic EPG refresh. The only caller
             // used to be the cloud-sync prefs applier, so a guide configured in
