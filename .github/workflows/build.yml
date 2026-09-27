@@ -35,7 +35,12 @@ jobs:
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
       SENTRY_PROJECT: android
       SENTRY_ORG: kbstream
-      SENTRY_URL: https://us.sentry.io
+      # sentry-cli takes the region from the auth token, and this token is a
+      # sentry.io (US) one, so us.sentry.io here only produced "Using
+      # https://sentry.io (embedded in token) rather than manually-configured
+      # URL https://us.sentry.io" on every upload. The DSN the app itself uses
+      # is a separate secret and is unaffected by this.
+      SENTRY_URL: https://sentry.io
       OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_PUBLISHABLE_KEY }}
@@ -141,10 +146,8 @@ jobs:
       # re-ran -- so a newly added decoder would silently never reach the AAR
       # while CI stayed green.
       #
-      # The effective NDK is deliberately absent: the runner image exports
-      # ANDROID_NDK, which the build script prefers over NDK_VERSION, so the
-      # toolchain in use cannot be derived from this file at all. Keying the
-      # cache on it would require pinning it first.
+      # The effective NDK is not derived here: see the ANDROID_NDK pin in the
+      # build step below, and the cache keys on NDK_VERSION directly.
       - name: Compute FFmpeg build signature
         id: decoder_sig
         run: |
@@ -170,9 +173,12 @@ jobs:
           # then caches under the corrected key. That one rebuild is the price
           # of making the cache honest -- the old entries were built from the
           # previous decoder list and cannot be trusted.
-          key: ffmpeg-ext-v2-${{ runner.os }}-${{ env.MEDIA3_TAG }}-${{ steps.decoder_sig.outputs.sig }}-${{ hashFiles('scripts/build_ffmpeg_video.sh') }}
+          # NDK_VERSION is part of the key too: the toolchain now pinned by the
+          # build step compiles the .a files, so a different NDK must not
+          # restore a build made by the old one.
+          key: ffmpeg-ext-v2-${{ runner.os }}-${{ env.MEDIA3_TAG }}-${{ steps.decoder_sig.outputs.sig }}-${{ env.NDK_VERSION }}-${{ hashFiles('scripts/build_ffmpeg_video.sh') }}
           restore-keys: |
-            ffmpeg-ext-v2-${{ runner.os }}-${{ env.MEDIA3_TAG }}-${{ steps.decoder_sig.outputs.sig }}-
+            ffmpeg-ext-v2-${{ runner.os }}-${{ env.MEDIA3_TAG }}-${{ steps.decoder_sig.outputs.sig }}-${{ env.NDK_VERSION }}-
 
       - name: Build FFmpeg video extension (optional)
         continue-on-error: true
@@ -180,6 +186,19 @@ jobs:
           SDKMANAGER="$(command -v sdkmanager || echo "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager")"
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
           "$SDKMANAGER" "ndk;${NDK_VERSION}" "cmake;3.22.1"
+          # The runner image exports ANDROID_NDK pointing at a preinstalled NDK,
+          # and the build script prefers it over NDK_VERSION. So this step
+          # installed 26.1.10909125 and then compiled FFmpeg with the image's
+          # 27.3.13750724, while the script pinned media3's ndkVersion to 26.1:
+          # the .a files and the CMake link that consumes them ended up on
+          # different toolchains, which is exactly what the script's own
+          # ndkVersion comment exists to prevent. Pin the whole build to the
+          # version declared and installed here.
+          export ANDROID_NDK="${ANDROID_HOME}/ndk/${NDK_VERSION}"
+          if [[ ! -d "$ANDROID_NDK" ]]; then
+            echo "::error::NDK ${NDK_VERSION} missing at ${ANDROID_NDK}; refusing to silently build with a different toolchain"
+            exit 1
+          fi
           bash scripts/build_ffmpeg_video.sh
 
       # Kept even when the build failed: the log above is the only record of
