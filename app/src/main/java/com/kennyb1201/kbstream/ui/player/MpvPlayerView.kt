@@ -145,6 +145,17 @@ class MpvPlayerView @JvmOverloads constructor(
     private var volumeBoostDb = 0
 
     /**
+     * Multiplier over the boost, 0-1: the sleep timer's fade.
+     *
+     * Kept as its own factor because the two answer different questions - the
+     * boost is how this *title* is mixed, the fade is how long is left tonight -
+     * and because only one of them persists: the boost is remembered per show
+     * (see PlayerTitlePrefs) while a fade left applied would open the next title
+     * silent.
+     */
+    private var outputGain = 1f
+
+    /**
      * Buffering profile: 0 balanced, 1 low latency.
      *
      * `cache` / `demuxer-max-bytes` are per-file mpv options, so a change made
@@ -321,10 +332,29 @@ class MpvPlayerView @JvmOverloads constructor(
      */
     fun setVolumeBoostDb(db: Int) {
         volumeBoostDb = db.coerceIn(0, 15)
+        applyVolume()
+    }
+
+    /**
+     * The sleep timer's fade, as a multiplier over the boost: 1 is "no fade",
+     * and the timer walks it down to 0 over its last twenty seconds.
+     */
+    fun setOutputGain(fraction: Float) {
+        outputGain = fraction.coerceIn(0f, 1f)
+        applyVolume()
+    }
+
+    /**
+     * Writes the one property mpv plays at: `volume`, boost and fade together.
+     * `volume-max` is raised with the boost because mpv clips at it, and its
+     * default 130 sits below every step above +2dB.
+     */
+    private fun applyVolume() {
         if (!initialized) return
-        val percent =
+        val boost =
             if (volumeBoostDb <= 0) VOLUME_NORMAL
             else VOLUME_NORMAL * 10.0.pow(volumeBoostDb / 20.0)
+        val percent = boost * outputGain
         runCatching {
             MPVLib.setPropertyDouble("volume-max", VOLUME_MAX)
             MPVLib.setPropertyDouble("volume", percent)
