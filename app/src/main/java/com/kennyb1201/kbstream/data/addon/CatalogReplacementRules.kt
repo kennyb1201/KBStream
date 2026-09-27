@@ -71,6 +71,63 @@ internal fun pairReplacedCatalogs(
 }
 
 /**
+ * Merge a freshly fetched manifest's catalogs with the user's local
+ * configuration for the SAME addon.
+ *
+ * Existing catalogs (matched by type+id) keep their position and the settings
+ * that are KBStream-local rather than part of the manifest:
+ *  - `showOnHome` (the user's pin/hide), and
+ *  - `customName` (the user's rename).
+ *
+ * Catalogs the manifest no longer lists are dropped; genuinely new ones append
+ * in manifest order and default to visible.
+ *
+ * Carrying `customName` here matters as much as it does in
+ * [pairReplacedCatalogs]'s caller ([AddonManager.updateAddonFromManifest]):
+ * rebuilding a catalog from the fresh manifest without it made a renamed rail
+ * silently revert to the manifest's own name on the next refresh, and then push
+ * that nameless copy to every other device.
+ */
+internal fun mergeRefreshedCatalogs(
+    oldCatalogs: List<ManifestCatalog>,
+    newCatalogs: List<ManifestCatalog>
+): List<ManifestCatalog> {
+    fun key(type: String, id: String): String =
+        "${type.trim().lowercase()}::${id.trim().lowercase()}"
+
+    val oldByKey = oldCatalogs.associateBy { key(it.type, it.id) }
+    val oldOrder = oldCatalogs.sortedBy { it.order }.map { key(it.type, it.id) }
+    val newByKey = newCatalogs.associateBy { key(it.type, it.id) }
+
+    val result = mutableListOf<ManifestCatalog>()
+
+    // Preserve the user's existing order first.
+    oldOrder.forEach { k ->
+        val newCatalog = newByKey[k] ?: return@forEach
+        val oldCatalog = oldByKey[k]
+        result += newCatalog.copy(
+            showOnHome = oldCatalog?.showOnHome ?: true,
+            customName = oldCatalog?.customName ?: newCatalog.customName
+        )
+    }
+
+    // Append catalogs that are new in the refreshed manifest. Some addons
+    // (e.g. AIOStreams) list the same catalog more than once in their manifest
+    // — dedupe by (type, id) so Home never builds two rails with the same key
+    // (duplicate LazyColumn keys crash the rail list, which is why catalogs
+    // showed in the add-on screen but never appeared on Home).
+    val seen = mutableSetOf<String>()
+    newCatalogs.forEach { catalog ->
+        val k = key(catalog.type, catalog.id)
+        if (oldByKey[k] == null && seen.add(k)) {
+            result += catalog.copy(showOnHome = true)
+        }
+    }
+
+    return result.mapIndexed { index, catalog -> catalog.copy(order = index) }
+}
+
+/**
  * Global-order slots a manifest refresh is allowed to hand to its newcomers:
  * the positions of THIS addon's catalogs that the fresh manifest no longer
  * lists, ascending.

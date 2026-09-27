@@ -1,6 +1,8 @@
 package com.kennyb1201.kbstream.data.addon
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -183,5 +185,76 @@ class CatalogReplacementTest {
                 globalOrder = emptyMap()
             ).isEmpty()
         )
+    }
+
+    // ── mergeRefreshedCatalogs: the manifest-refresh merge ───────────────
+    //
+    // The bug these pin: renaming a catalog rail and then refreshing the addon
+    // rebuilt the catalog from the fresh manifest without its customName, so
+    // the rail silently reverted to the name the addon ships — "Latest Digital
+    // Movie Releases" after the user had trimmed it to "Latest Digital
+    // Releases". The name change then synced to every other device.
+
+    @Test
+    fun `a renamed catalog keeps its override across a refresh`() {
+        val merged = mergeRefreshedCatalogs(
+            oldCatalogs = listOf(
+                catalog("movie", "digital", name = "Latest Digital Movie Releases")
+                    .copy(customName = "Latest Digital Releases")
+            ),
+            newCatalogs = listOf(
+                catalog("movie", "digital", name = "Latest Digital Movie Releases")
+            )
+        )
+
+        assertEquals(1, merged.size)
+        assertEquals("Latest Digital Releases", merged.single().customName)
+        // The manifest name is untouched underneath, so clearing the rename
+        // still restores it.
+        assertEquals("Latest Digital Movie Releases", merged.single().name)
+    }
+
+    @Test
+    fun `showOnHome survives a refresh`() {
+        val merged = mergeRefreshedCatalogs(
+            oldCatalogs = listOf(catalog("movie", "a").copy(showOnHome = false)),
+            newCatalogs = listOf(catalog("movie", "a"))
+        )
+        assertFalse(merged.single().showOnHome)
+    }
+
+    @Test
+    fun `a brand-new catalog has no inherited rename`() {
+        val merged = mergeRefreshedCatalogs(
+            oldCatalogs = emptyList(),
+            newCatalogs = listOf(catalog("series", "fresh", name = "Fresh"))
+        )
+        assertNull(merged.single().customName)
+    }
+
+    @Test
+    fun `existing order is kept and new catalogs append`() {
+        val merged = mergeRefreshedCatalogs(
+            oldCatalogs = listOf(
+                catalog("movie", "b").copy(order = 0),
+                catalog("movie", "a").copy(order = 1)
+            ),
+            newCatalogs = listOf(
+                catalog("movie", "a"),
+                catalog("movie", "b"),
+                catalog("movie", "c")
+            )
+        )
+        assertEquals(listOf("b", "a", "c"), merged.map { it.id })
+        assertEquals(listOf(0, 1, 2), merged.map { it.order })
+    }
+
+    @Test
+    fun `a catalog dropped from the manifest disappears`() {
+        val merged = mergeRefreshedCatalogs(
+            oldCatalogs = listOf(catalog("movie", "gone"), catalog("movie", "keep")),
+            newCatalogs = listOf(catalog("movie", "keep"))
+        )
+        assertEquals(listOf("keep"), merged.map { it.id })
     }
 }

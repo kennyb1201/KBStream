@@ -9,6 +9,7 @@ import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.CatalogConfiguration
 import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.data.addon.ManifestCatalog
+import com.kennyb1201.kbstream.data.addon.mergeRefreshedCatalogs
 import com.kennyb1201.kbstream.data.kb.KBCollectionProfile
 import com.kennyb1201.kbstream.data.kb.KBHomeOrder
 import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
@@ -529,7 +530,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                 addonManager.updateInstalled { current ->
                     val existing = current.firstOrNull { it.id == manifest.id }
 
-                    val catalogs = mergeCatalogSettings(
+                    val catalogs = mergeRefreshedCatalogs(
                         oldCatalogs = existing?.catalogs.orEmpty(),
                         newCatalogs = manifest.catalogs
                     )
@@ -956,68 +957,6 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         updated?.let { _addons.value = it }
     }
 
-    /**
-     * Merge a newly downloaded manifest with the user's local
-     * catalog configuration.
-     *
-     * Existing catalogs retain:
-     * - showOnHome
-     * - local order
-     *
-     * New catalogs default to visible and are placed after
-     * the existing catalogs.
-     */
-    private fun mergeCatalogSettings(
-        oldCatalogs: List<ManifestCatalog>,
-        newCatalogs: List<ManifestCatalog>
-    ): List<ManifestCatalog> {
-
-        val oldByKey = oldCatalogs.associateBy {
-            catalogKey(it.type, it.id)
-        }
-
-        val oldOrder = oldCatalogs
-            .sortedBy { it.order }
-            .map { catalogKey(it.type, it.id) }
-
-        val newByKey = newCatalogs.associateBy {
-            catalogKey(it.type, it.id)
-        }
-
-        val result = mutableListOf<ManifestCatalog>()
-
-        // Preserve the user's existing order first.
-        oldOrder.forEach { key ->
-            val newCatalog = newByKey[key] ?: return@forEach
-            val oldCatalog = oldByKey[key]
-
-            result += newCatalog.copy(
-                showOnHome = oldCatalog?.showOnHome ?: true
-            )
-        }
-
-        // Append catalogs that are new in the refreshed manifest.
-        // Some addons (e.g. AIOStreams) list the same catalog more than once
-        // in their manifest — dedupe by (type, id) so Home never builds two
-        // rails with the same key (duplicate LazyColumn keys crash the rail
-        // list, which is why catalogs showed in the add-on screen but never
-        // appeared on Home).
-        val seen = mutableSetOf<String>()
-        newCatalogs.forEach { catalog ->
-            val key = catalogKey(catalog.type, catalog.id)
-
-            if (oldByKey[key] == null && seen.add(key)) {
-                result += catalog.copy(
-                    showOnHome = true
-                )
-            }
-        }
-
-        return result.mapIndexed { index, catalog ->
-            catalog.copy(order = index)
-        }
-    }
-
     private fun catalogKey(
         type: String,
         id: String
@@ -1075,7 +1014,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                         old.copy(
                             name = manifest.name,
                             resources = manifest.resources,
-                            catalogs = mergeCatalogSettings(
+                            catalogs = mergeRefreshedCatalogs(
                                 oldCatalogs = old.catalogs,
                                 newCatalogs = manifest.catalogs
                             ),
@@ -1168,7 +1107,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                         if (old.id == id) {
                             old.copy(
                                 name = manifest.name,
-                                catalogs = mergeCatalogSettings(
+                                catalogs = mergeRefreshedCatalogs(
                                     oldCatalogs = old.catalogs,
                                     newCatalogs = manifest.catalogs
                                 ),
