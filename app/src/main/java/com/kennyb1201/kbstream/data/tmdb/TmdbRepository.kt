@@ -2141,89 +2141,159 @@ class TmdbRepository private constructor(context: Context) :
         getInitialNetworkSections(networkId, companyId)
 
     /**
-     * Best transparent clear-logo for a studio or network, or null when TMDB
-     * has none. Networks live in a different TMDB ID space than companies, so
-     * the correct endpoint is used per type (company first as a fallback).
-     * Prefers an English logo, then the highest-voted, widest one.
+     * Logo candidates, in id order, for a network or company page that has no
+     * artwork of its own; see [watchProviderLogoUrl]. Null until the registry
+     * is fetched successfully, which is once per process.
      */
-    suspend fun getEntityLogoUrl(entityId: Int, isNetwork: Boolean): String? {
-        if (apiKey.isBlank()) return null
+    @Volatile
+    private var watchProviderLogos: Map<Int, String>? = null
 
-        suspend fun fetchLogos(company: Boolean): List<TmdbCompanyLogo> = runCatching {
+    /**
+     * Every transparent clear-logo the header may draw for a studio, network
+     * or streaming service, best first.
+     *
+     * A LIST rather than one URL, because the best-ranked mark is not always
+     * drawable: TMDB ships some networks only as a plate the header reads as
+     * blank, or as a 1x1 stub, and the screen walks past those to the next
+     * candidate (see BrandLogo). The candidates, in order:
+     *
+     *  1. the entity's own logos, in its own ID space (a network id is not a
+     *     company id);
+     *  2. the same id in the OTHER space - a network's company twin, and vice
+     *     versa. This is what E! needs (its network page holds plates the
+     *     header cannot read, while its company page has the real 1997x1211
+     *     mark) and what TNT needs (a single 1x1 network stub against seven
+     *     company logos);
+     *  3. for a service whose brand has no entity artwork at all (The Roku
+     *     Channel, Plex, ALLBLK, fuboTV, Xumo Play), the logo TMDB holds for
+     *     its WATCH PROVIDER - the only place that brand mark lives. Looked up
+     *     only when 1 and 2 came back empty, so every page that has real
+     *     entity artwork pays nothing for it.
+     */
+    suspend fun getEntityLogoUrls(
+        entityId: Int,
+        isNetwork: Boolean,
+        providerId: Int? = null
+    ): List<String> {
+        if (apiKey.isBlank()) return emptyList()
+
+        val candidates = buildList {
+            if (isNetwork) addAll(entityLogoUrls(entityId, company = false))
+            addAll(entityLogoUrls(entityId, company = true))
+        }.distinct()
+
+        if (candidates.isNotEmpty()) return candidates
+        return providerId?.let { listOfNotNull(watchProviderLogoUrl(it)) }.orEmpty()
+    }
+
+    /**
+     * One entity's ranked logo URLs (company or network space), best first,
+     * with marks too small to draw filtered out.
+     */
+    private suspend fun entityLogoUrls(entityId: Int, company: Boolean): List<String> {
+        val fetched = runCatching {
             if (company) {
                 api.getCompanyImages(entityId, apiKey).logos
-            } else if (isNetwork) {
-                api.getNetworkImages(entityId, apiKey).logos
             } else {
-                emptyList()
+                api.getNetworkImages(entityId, apiKey).logos
             }
         }.getOrDefault(emptyList())
 
-        fun rankLogos(logos: List<TmdbCompanyLogo>): List<TmdbCompanyLogo> =
-            logos.filter { !it.filePath.isNullOrBlank() }
-                .sortedWith(
-                    compareByDescending<TmdbCompanyLogo> { it.iso6391 == "en" }
-                        .thenByDescending { it.iso6391 == null }
-                        .thenByDescending { it.voteAverage ?: 0.0 }
-                        .thenByDescending { it.width ?: 0 }
-                )
+        val ranked = fetched
+            .filter { !it.filePath.isNullOrBlank() }
+            // Junk stubs, which would otherwise win on their dimensions alone:
+            // TNT's network entry is one 1x1 pixel. Dropping them is what lets
+            // the entity's other marks - or its twin's - be offered at all.
+            .filter {
+                (it.width ?: 0) >= MIN_LOGO_PIXELS && (it.height ?: 0) >= MIN_LOGO_PIXELS
+            }
+            .sortedWith(
+                compareByDescending<TmdbCompanyLogo> { it.iso6391 == "en" }
+                    .thenByDescending { it.iso6391 == null }
+                    .thenByDescending { it.voteAverage ?: 0.0 }
+                    .thenByDescending { it.width ?: 0 }
+            )
+        if (ranked.isEmpty()) return emptyList()
 
-        /**
-         * True when the logo is a solid filled badge — a near-square mark
-         * with most of its bounding box opaque (ABC's top-voted logo is a
-         * filled disc). White-tinted on the dark header these read as an
-         * anonymous circle, so the picker skips them when a letterform
-         * option exists. Downloads a w185 thumbnail (a few KB) only for the
-         * top-ranked candidate; any failure returns false (keep the pick).
-         */
-        suspend fun isSolidBadge(filePath: String): Boolean = runCatching {
-            // Network + decode must stay off the caller's (Main) dispatcher.
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                val request = okhttp3.Request.Builder()
-                    .url("https://image.tmdb.org/t/p/w185$filePath")
-                    .build()
-                TmdbRepository.sharedOkHttpClient().newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) return@withContext false
-                    val bytes = response.body?.bytes() ?: return@withContext false
-                    val bitmap = android.graphics.BitmapFactory.decodeByteArray(
-                        bytes, 0, bytes.size
-                    ) ?: return@withContext false
-                    val pixels = IntArray(bitmap.width * bitmap.height)
-                    bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
-                    if (pixels.isEmpty()) return@withContext false
-                    var opaque = 0
-                    for (pixel in pixels) {
-                        if (((pixel ushr 24) and 0xFF) > 200) opaque++
-                    }
-                    val coverage = opaque.toFloat() / pixels.size
-                    val aspect = bitmap.width.toFloat() / bitmap.height
-                    coverage > 0.80f && aspect in 0.70f..1.40f
+        // An English logo first, then the highest-voted, widest one - except
+        // that a solid filled badge (ABC's top-voted logo is a filled disc)
+        // whitens into an anonymous circle, so when the top-ranked mark is one
+        // and the entity offers a letterform too, the letterform goes first
+        // and the badge is kept as the last resort.
+        val ordered = if (isSolidBadge(ranked.first().filePath!!)) {
+            ranked.drop(1) + ranked.first()
+        } else {
+            ranked
+        }
+        return ordered.map { LOGO_BASE + it.filePath }
+    }
+
+    /**
+     * The logo TMDB holds for a US watch provider, or null when the registry
+     * has none for it.
+     *
+     * The provider registry is what drives every "where to watch" row, and its
+     * entry carries the brand's own mark - the only source for a streamer whose
+     * company/network pages have no artwork at all. Both media types are read
+     * because a service can be listed under one and not the other (fuboTV is
+     * TV-only, ALLBLK movie-and-TV).
+     *
+     * Memoized for the session: this changes about as often as TMDB adds a
+     * service. A failure is not cached, so it can be retried.
+     */
+    private suspend fun watchProviderLogoUrl(providerId: Int): String? {
+        watchProviderLogos?.let { cached ->
+            return cached[providerId]?.let { LOGO_BASE + it }
+        }
+        val byId = mutableMapOf<Int, String>()
+        listOf(true, false).forEach { movie ->
+            val results = runCatching {
+                if (movie) api.getWatchProvidersMovie("US", apiKey).results
+                else api.getWatchProvidersTv("US", apiKey).results
+            }.getOrDefault(emptyList())
+            results.forEach { provider ->
+                provider.logoPath?.takeIf { it.isNotBlank() }?.let { path ->
+                    byId[provider.providerId] = path
                 }
             }
-        }.getOrDefault(false)
-
-        suspend fun pickSmartLogo(company: Boolean): String? {
-            val ranked = rankLogos(fetchLogos(company))
-            val best = ranked.firstOrNull() ?: return null
-            val bestPath = best.filePath ?: return null
-            val path = if (isSolidBadge(bestPath)) {
-                ranked.firstOrNull { candidate ->
-                    candidate.filePath != null && !isSolidBadge(candidate.filePath)
-                }?.filePath ?: bestPath
-            } else {
-                bestPath
-            }
-            return TmdbRepository.LOGO_BASE + path
         }
-
-        if (isNetwork) {
-            // Primary: the network's own logos. Fallback: same id as a company
-            // (some entries exist in both spaces).
-            return pickSmartLogo(company = false)
-                ?: pickSmartLogo(company = true)
-        }
-        return pickSmartLogo(company = true)
+        if (byId.isNotEmpty()) watchProviderLogos = byId
+        return byId[providerId]?.let { LOGO_BASE + it }
     }
+
+    /**
+     * True when the logo is a solid filled badge - a near-square mark with most
+     * of its bounding box opaque (ABC's top-voted logo is a filled disc).
+     * White-tinted on the dark header these read as an anonymous circle, so the
+     * ranking demotes them when a letterform option exists. Downloads a w185
+     * thumbnail (a few KB) for the path it is asked about; any failure returns
+     * false (keep the pick).
+     */
+    private suspend fun isSolidBadge(filePath: String): Boolean = runCatching {
+        // Network + decode must stay off the caller's (Main) dispatcher.
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val request = okhttp3.Request.Builder()
+                .url("https://image.tmdb.org/t/p/w185$filePath")
+                .build()
+            TmdbRepository.sharedOkHttpClient().newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext false
+                val bytes = response.body?.bytes() ?: return@withContext false
+                val bitmap = android.graphics.BitmapFactory.decodeByteArray(
+                    bytes, 0, bytes.size
+                ) ?: return@withContext false
+                val pixels = IntArray(bitmap.width * bitmap.height)
+                bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+                if (pixels.isEmpty()) return@withContext false
+                var opaque = 0
+                for (pixel in pixels) {
+                    if (((pixel ushr 24) and 0xFF) > 200) opaque++
+                }
+                val coverage = opaque.toFloat() / pixels.size
+                val aspect = bitmap.width.toFloat() / bitmap.height
+                coverage > 0.80f && aspect in 0.70f..1.40f
+            }
+        }
+    }.getOrDefault(false)
 
     /** Company/network metadata (description, headquarters, origin country). */
     suspend fun getEntityDetail(entityId: Int, isNetwork: Boolean): TmdbCompanyDetail? {
@@ -2293,6 +2363,20 @@ class TmdbRepository private constructor(context: Context) :
         // only made headers look logo-less for as long as the download
         // took.
         const val LOGO_BASE = "https://image.tmdb.org/t/p/w780"
+
+        /**
+         * The stub threshold, on both axes. TMDB carries a handful of
+         * degenerate entries - TNT's network logo is one 1x1 pixel - that make
+         * a brand look logo-less once the header has drawn them.
+         *
+         * Deliberately far below the size of a real mark: plenty of brands
+         * publish nothing but a small, short-and-wide wordmark (REELZ at
+         * 255x42, BET at 140x40, Angel Studios at 90x22) and they render
+         * today, so a filter that removed them would be the bug. Only artwork
+         * too small to be anything but a placeholder is dropped here; the
+         * screen walks past an unreadable mark on its own.
+         */
+        private const val MIN_LOGO_PIXELS = 16
         private const val MAX_IMDB_DISK_AGE_MS = 90L * 24L * 60L * 60L * 1000L
     }
 }

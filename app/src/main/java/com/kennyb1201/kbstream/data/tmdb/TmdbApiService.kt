@@ -332,6 +332,22 @@ suspend fun searchCollection(
         @Query("api_key") apiKey: String
     ): TmdbCompanyDetail
 
+    // The US watch-provider registry: every streaming service TMDB knows,
+    // each with its own brand logo. The only logo source for services whose
+    // company/network pages carry no artwork (see
+    // TmdbRepository.watchProviderLogoUrl).
+    @GET("watch/providers/movie")
+    suspend fun getWatchProvidersMovie(
+        @Query("watch_region") watchRegion: String,
+        @Query("api_key") apiKey: String
+    ): TmdbWatchProviderList
+
+    @GET("watch/providers/tv")
+    suspend fun getWatchProvidersTv(
+        @Query("watch_region") watchRegion: String,
+        @Query("api_key") apiKey: String
+    ): TmdbWatchProviderList
+
     // Networks are a separate TMDB ID space from companies, so they need
     // their own endpoints (a network id is NOT a valid company id).
     @GET("network/{id}/images")

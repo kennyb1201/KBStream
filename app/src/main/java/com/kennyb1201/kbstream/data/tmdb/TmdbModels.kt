@@ -55,7 +55,23 @@ data class TmdbCompanyLogo(
     @Json(name = "file_path") val filePath: String? = null,
     @Json(name = "iso_639_1") val iso6391: String? = null,
     @Json(name = "vote_average") val voteAverage: Double? = null,
-    val width: Int? = null
+    val width: Int? = null,
+    // Needed to spot the junk stubs: TNT's network entry is a single 1x1
+    // pixel, which a width-only check cannot tell from a wide banner.
+    val height: Int? = null
+)
+
+/** /watch/providers/{movie|tv} — the US registry of streaming services. */
+@JsonClass(generateAdapter = true)
+data class TmdbWatchProviderList(
+    val results: List<TmdbWatchProviderEntry> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class TmdbWatchProviderEntry(
+    @Json(name = "provider_id") val providerId: Int = 0,
+    @Json(name = "provider_name") val providerName: String? = null,
+    @Json(name = "logo_path") val logoPath: String? = null
 )
 
 @JsonClass(generateAdapter = true)

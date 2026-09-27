@@ -51,8 +51,12 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     private val _pagingStates = MutableStateFlow<Map<String, StudioRailPagingState>>(emptyMap())
     val pagingStates: StateFlow<Map<String, StudioRailPagingState>> = _pagingStates.asStateFlow()
 
-    private val _logoUrl = MutableStateFlow<String?>(null)
-    val logoUrl: StateFlow<String?> = _logoUrl.asStateFlow()
+    // Every logo the header may draw, best first (see
+    // TmdbRepository.getEntityLogoUrls). More than one because the top-ranked
+    // mark for a brand is not always drawable - TMDB ships some networks only
+    // as a plate the header cannot read - and the screen walks the list.
+    private val _logoUrls = MutableStateFlow<List<String>>(emptyList())
+    val logoUrls: StateFlow<List<String>> = _logoUrls.asStateFlow()
 
     private val _companyInfo = MutableStateFlow<TmdbCompanyDetail?>(null)
     val companyInfo: StateFlow<TmdbCompanyDetail?> = _companyInfo.asStateFlow()
@@ -240,7 +244,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             _sections.value = emptyList()
             _resolvedIds.value = emptyMap()
             _pagingStates.value = emptyMap()
-            _logoUrl.value = null
+            _logoUrls.value = emptyList()
             _companyInfo.value = null
             _isService.value = serviceRoute
 
@@ -254,10 +258,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             // instead of the slowest one.
             val logoDeferred = async {
                 try {
-                    tmdbRepository.getEntityLogoUrl(id, isNetwork)
+                    tmdbRepository.getEntityLogoUrls(id, isNetwork, providerId)
                 } catch (e: Exception) {
                     Log.w("STUDIO_VM", "Logo lookup failed for id=$id", e)
-                    null
+                    emptyList()
                 }
             }
             val detailDeferred = async {
@@ -314,7 +318,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             // Collected last: the rails are what the screen is for, so they
             // own the loading state, while the header art/blurb have been in
             // flight alongside them and land in the same frame.
-            _logoUrl.value = logoDeferred.await()
+            _logoUrls.value = logoDeferred.await()
             _companyInfo.value = detailDeferred.await()
             _isLoading.value = false
 
