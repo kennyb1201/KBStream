@@ -511,8 +511,7 @@ val BROWSE_NETWORKS = listOf(
     //   Channel 658 (2020), VICE TV 3706 (2024), CNN 59 (2025), HLN 181
     //   (2020), IFC 124 (2023), SundanceTV 270 (2024), VH1 158 (2022),
     //   CMT 85 (2019), TV Land 397 (2017), Logo 62 (2016), AXS TV 206
-    //   (2013), REELZ 367 (2022), The Weather Channel 306, Bloomberg
-    //   Television 666, C-SPAN 322, NBA TV 301, NHL Network 907, FS1 2317.
+    //   (2013), REELZ 367 (2022), The Weather Channel 306.
     // Skipped because TMDB has no network page at all: American Heroes
     // Channel, Discovery Life, Fox Business, NewsNation, NFL / MLB / Golf /
     // Tennis / Big Ten / SEC Network, UniMás, Galavisión, Estrella TV,
@@ -531,12 +530,7 @@ val BROWSE_NETWORKS = listOf(
     BrowseEntry(62, "Logo"),
     BrowseEntry(206, "AXS TV"),
     BrowseEntry(367, "REELZ"),
-    BrowseEntry(306, "The Weather Channel"),
-    BrowseEntry(666, "Bloomberg Television"),
-    BrowseEntry(322, "C-SPAN"),
-    BrowseEntry(301, "NBA TV"),
-    BrowseEntry(907, "NHL Network"),
-    BrowseEntry(2317, "FS1")
+    BrowseEntry(306, "The Weather Channel")
 )
 
 // ---------------------------------------------------------------------------
@@ -1030,12 +1024,8 @@ val BROWSE_SERVICES = listOf(
     BrowseService("TCM", providerId = 361, networkOrCompanyId = null, networkIsCompany = false),
     BrowseService("Fox One", providerId = 2545, networkOrCompanyId = null, networkIsCompany = false),
     BrowseService("HiDive", providerId = 430, networkOrCompanyId = null, networkIsCompany = false),
-    BrowseService("RetroCrush", providerId = 446, networkOrCompanyId = null, networkIsCompany = false),
-    BrowseService("Kocowa", providerId = 464, networkOrCompanyId = null, networkIsCompany = false),
     BrowseService("Rakuten Viki", providerId = 344, networkOrCompanyId = null, networkIsCompany = false),
-    BrowseService("iQIYI", providerId = 581, networkOrCompanyId = null, networkIsCompany = false),
     BrowseService("AsianCrush", providerId = 514, networkOrCompanyId = null, networkIsCompany = false),
-    BrowseService("MHz Choice", providerId = 427, networkOrCompanyId = null, networkIsCompany = false),
     BrowseService("MagellanTV", providerId = 551, networkOrCompanyId = null, networkIsCompany = false),
     BrowseService("OVID", providerId = 433, networkOrCompanyId = null, networkIsCompany = false),
     BrowseService("Kino Film Collection", providerId = 2135, networkOrCompanyId = null, networkIsCompany = false),
@@ -1051,12 +1041,9 @@ val BROWSE_SERVICES = listOf(
     BrowseService("Revry", providerId = 473, networkOrCompanyId = null, networkIsCompany = false),
     BrowseService("Dekkoo", providerId = 444, networkOrCompanyId = null, networkIsCompany = false),
     BrowseService("Here TV", providerId = 417, networkOrCompanyId = null, networkIsCompany = false),
-    BrowseService("WOW Presents Plus", providerId = 546, networkOrCompanyId = null, networkIsCompany = false),
     BrowseService("Chai Flicks", providerId = 438, networkOrCompanyId = null, networkIsCompany = false),
     BrowseService("BroadwayHD", providerId = 554, networkOrCompanyId = null, networkIsCompany = false),
     BrowseService("Lifetime Movie Club", providerId = 284, networkOrCompanyId = null, networkIsCompany = false),
-    BrowseService("Ovation TV", providerId = 1953, networkOrCompanyId = null, networkIsCompany = false),
-    BrowseService("Vice TV", providerId = 458, networkOrCompanyId = null, networkIsCompany = false),
     BrowseService("VIX", providerId = 457, networkOrCompanyId = null, networkIsCompany = false),
     BrowseService("Cineverse", providerId = 1957, networkOrCompanyId = null, networkIsCompany = false),
     BrowseService("DistroTV", providerId = 1971, networkOrCompanyId = null, networkIsCompany = false),

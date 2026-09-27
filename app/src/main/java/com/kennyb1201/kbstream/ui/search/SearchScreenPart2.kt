@@ -500,7 +500,13 @@ private fun SubmenuChipFlowRow(
     returnChip: Pair<String, Int>?,
     onReturnChipConsumed: () -> Unit
 ) {
-    var returnChipConsumed by remember { mutableStateOf(false) }
+    // Keyed on the armed chip, not a plain `remember`: consuming one arm used
+    // to latch this flag for the rest of the composition, so the NEXT arm -
+    // which hideBrowseChip sets to move focus onto a hidden chip's neighbour -
+    // found `returnChipConsumed` already true and never grabbed focus. Only
+    // the first Hide could place focus; every later one fell back to the
+    // strip's first chip again.
+    var returnChipConsumed by remember(returnChip) { mutableStateOf(false) }
 
     FlowRow(
         modifier = Modifier

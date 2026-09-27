@@ -1162,15 +1162,55 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             }
     }
 
-    /** Long-press "Hide" on a browse chip. */
+    /**
+     * Long-press "Hide" on a browse chip.
+     *
+     * Focus is re-armed onto the chip that takes the hidden one's place. The
+     * hidden chip's focus node leaves composition with it, and with nothing
+     * named to replace it the strip put focus back on its FIRST chip: in a
+     * submenu of dozens of entries (Services & Networks holds 91) that threw
+     * the viewer to the top of the list, so they had to scroll back down to
+     * where they were. The neighbour - the next chip, or the previous one when
+     * the hidden chip was the last - is where they were already looking.
+     */
     fun hideBrowseChip(categoryKey: String, entry: BrowseEntry) {
         if (entry.name.isBlank()) return
+
+        // Index within the VISIBLE list, which is what the strip renders and
+        // what the armed chip is looked up by. Captured before the entry goes.
+        val hiddenIndex =
+            _browseCategories.value
+                .firstOrNull { it.key == categoryKey }
+                ?.entries
+                ?.indexOfFirst { candidate ->
+                    // Same comparison the click path uses: ids can repeat
+                    // across categories, names are the chip's identity.
+                    candidate.id == entry.id &&
+                        candidate.name == entry.name
+                }
+                ?.takeIf { it >= 0 }
+
         _hiddenBrowseChips.value =
             BrowseChipVisibility.hide(app, categoryKey, entry.name)
         publishBrowseCategories(rawBrowseCategories)
+
         // The chip that opened a discover screen may no longer exist, so an
         // armed return chip would focus nothing on the way back.
         browseReturnChip = null
+
+        val remaining =
+            _browseCategories.value
+                .firstOrNull { it.key == categoryKey }
+                ?.entries
+                .orEmpty()
+
+        if (hiddenIndex != null && remaining.isNotEmpty()) {
+            // Clamped, never wrapped: hiding the last chip - or several in a
+            // row - must land on the chip that is now last, not jump to the
+            // first one, which is the very thing this fixes.
+            browseReturnChip =
+                categoryKey to hiddenIndex.coerceAtMost(remaining.lastIndex)
+        }
     }
 
     /** Long-press on a category chip: bring back everything hidden in it. */
@@ -1281,9 +1321,11 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         _selectedBrowseCategoryKey.asStateFlow()
 
     /**
-     * The exact chip (category + index within its submenu) that launched the
-     * current discover screen, so Back can re-focus that chip — the TV
-     * convention of focus returning to the thing that opened the screen.
+     * The exact chip (category + index within its submenu) the browse strip
+     * should put focus on: the one that launched the current discover screen,
+     * so Back re-focuses it — the TV convention of focus returning to the
+     * thing that opened the screen — or, after a Hide, the chip that took the
+     * hidden one's place (see [hideBrowseChip]).
      */
     var browseReturnChip: Pair<String, Int>? = null
 
