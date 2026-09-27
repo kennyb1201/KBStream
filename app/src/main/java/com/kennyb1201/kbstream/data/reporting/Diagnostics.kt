@@ -229,15 +229,23 @@ object Diagnostics {
      *
      * "Why is KBStream using 1.6 GB?" was previously unanswerable from the
      * outside: every candidate store is invisible from the UI, and the answer
-     * is a different one per install. The two figures that settle it are the
+     * is a different one per install. The figures that settle it are the
      * history database (whose `tmdb_json_cache` table was the app's only
-     * unbounded disk store) and the two big caches, so both are reported
-     * here — named, in MB, next to the row count that explains the size.
+     * unbounded disk store), the IPTV guide database, and the two big caches,
+     * so all of them are reported here — named, in MB, next to the row count
+     * that explains the size.
      *
-     * `db` is the file, `json` the cached TMDB payloads inside it; a wide gap
-     * between them is free pages a delete has released but not returned, which
-     * is what [com.kennyb1201.kbstream.data.cache.TmdbJsonCacheMaintenance]
-     * reclaims.
+     * `db` is the history database, `json` the cached TMDB payloads inside it;
+     * a wide gap between them is free pages a delete has released but not
+     * returned, which is what
+     * [com.kennyb1201.kbstream.data.cache.TmdbJsonCacheMaintenance] reclaims.
+     * `iptv` is the ACTIVE profile's `iptv_epg.db` — the other store that
+     * reaches hundreds of megabytes, and the one whose size depends on how much
+     * of the EPG window was imported.
+     *
+     * Both database figures are the whole FOOTPRINT, sidecars included (see
+     * [dbBytes]), because in WAL mode the main file is not where a big write
+     * lands.
      */
     private suspend fun storageLine(context: Context): String = withContext(Dispatchers.IO) {
         runCatching {
@@ -245,11 +253,20 @@ object Diagnostics {
             val cache = WatchHistoryDatabase.getInstance(context).tmdbJsonCacheDao()
             val jsonBytes = cache.totalBytes() ?: 0L
             val jsonRows = cache.count()
+            // Resolved, not hardcoded: the guide is per profile (the base name
+            // is `iptv_epg.db`, prefixed with the active profile's id), and a
+            // failed resolution must not take the rest of the line with it.
+            val iptvBytes = runCatching {
+                context.getDatabasePath(
+                    com.kennyb1201.kbstream.data.iptv.db.IptvDatabase.activeFileName(context)
+                )
+            }.getOrNull()?.let { dbBytes(it) } ?: 0L
 
             buildString {
-                append("storage: db=").append(mb(dbFile.length()))
+                append("storage: db=").append(mb(dbBytes(dbFile)))
                 append(" jsonCache=").append(mb(jsonBytes))
                 append("/").append(jsonRows).append("row")
+                append(" iptv=").append(mb(iptvBytes))
                 appendLine()
                 append("storage caches: ")
                 append(
@@ -262,6 +279,22 @@ object Diagnostics {
     }
 
     private fun mb(bytes: Long): String = "${bytes / 1_048_576}MB"
+
+    /**
+     * Bytes occupied by the SQLite database [file] as a whole: the file plus
+     * its `-wal`/`-shm` sidecars.
+     *
+     * The sidecars are not rounding error. Both databases run in WAL mode, and
+     * a single large transaction (an EPG import is thousands of inserts) sits
+     * in `<file>-wal` until SQLite checkpoints it back, which it does on its
+     * own schedule and in pages. Measuring the main file alone would report a
+     * guide that was just imported as a handful of megabytes and leave the
+     * rest of the app's total unexplained — the exact question this line
+     * exists to answer.
+     */
+    private fun dbBytes(file: java.io.File): Long =
+        listOf(file, java.io.File("${file.path}-wal"), java.io.File("${file.path}-shm"))
+            .sumOf { if (it.exists()) it.length() else 0L }
 
     /** Recursive size of [dir], or 0 when it does not exist. */
     private fun dirBytes(dir: java.io.File): Long {
