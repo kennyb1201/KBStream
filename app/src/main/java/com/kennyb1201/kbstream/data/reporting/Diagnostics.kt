@@ -40,21 +40,12 @@ object Diagnostics {
     private const val MAX_OUTBOX_ROWS = 10
     private const val LOGCAT_CHUNK = 1500
 
-    /** The un-scoped history database: where the JSON cache table lives. */
-    private const val WATCH_HISTORY_DB = "kbstream_watch_history"
+    /** A cache entry or database smaller than this is not worth naming. */
+    private const val STORAGE_MIN_BYTES = 1L * 1024 * 1024
 
-    /**
-     * Cache subdirectories worth naming. These are the ones that can reach
-     * hundreds of megabytes on their own (see [storageLine]); the rest of the
-     * app's cache is subtitle files and staged update downloads, which are
-     * small enough that listing them would only add noise.
-     */
-    private val CACHE_DIRS = listOf(
-        "image_cache",
-        "media_cache",
-        "addon_http_cache",
-        com.kennyb1201.kbstream.data.cache.DiskSweep.SUBTITLE_DIR
-    )
+    /** Entries named per storage line, before the rest is summed as `other`. */
+    private const val MAX_CACHE_ENTRIES = 8
+    private const val MAX_DB_ENTRIES = 6
 
     private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.US)
     private val dateTimeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
@@ -229,53 +220,114 @@ object Diagnostics {
      *
      * "Why is KBStream using 1.6 GB?" was previously unanswerable from the
      * outside: every candidate store is invisible from the UI, and the answer
-     * is a different one per install. The figures that settle it are the
-     * history database (whose `tmdb_json_cache` table was the app's only
-     * unbounded disk store), the IPTV guide database, and the two big caches,
-     * so all of them are reported here — named, in MB, next to the row count
-     * that explains the size.
+     * is a different one per install. Four lines settle it now, and between
+     * them they account for the whole number the platform charges the app:
      *
-     * `db` is the history database, `json` the cached TMDB payloads inside it;
-     * a wide gap between them is free pages a delete has released but not
-     * returned, which is what
-     * [com.kennyb1201.kbstream.data.cache.TmdbJsonCacheMaintenance] reclaims.
-     * `iptv` is the ACTIVE profile's `iptv_epg.db` — the other store that
-     * reaches hundreds of megabytes, and the one whose size depends on how much
-     * of the EPG window was imported.
+     *  - `storage:` the totals. `code` is the installed APK (plus any extracted
+     *    native libraries) — libmpv and the FFmpeg decoder make that a fixed
+     *    ~120 MB that no setting can trim, which is worth knowing before
+     *    hunting for a leak. `data` is everything under the app's data
+     *    directory, `cache/` included; `cache` is the re-downloadable share of
+     *    it, i.e. the only part that can be cleared without losing anything.
+     *  - `storage stores:` the stores that are NOT cache — the
+     *    `tmdb_json_cache` table next to its row count (a wide gap between it
+     *    and the history database's size is free pages a delete released but
+     *    never returned, which is what
+     *    [com.kennyb1201.kbstream.data.cache.TmdbJsonCacheMaintenance]
+     *    reclaims), plus the `files/` and `shared_prefs/` totals.
+     *  - `storage caches:` every cache child over [STORAGE_MIN_BYTES], largest
+     *    first. Enumerated rather than checked against a fixed list of names:
+     *    the list used to name four directories by hand, so a cache added later
+     *    was invisible to the very report meant to find it.
+     *  - `storage dbs:` every `*.db` the app owns, largest first — the history
+     *    database, each PROFILE's scoped history database, and each profile's
+     *    guide. The guide is per profile (`iptv_epg_<id>.db`), so naming the
+     *    default file would have hidden every other profile's.
      *
-     * Both database figures are the whole FOOTPRINT, sidecars included (see
+     * Every database figure is the whole FOOTPRINT, sidecars included (see
      * [dbBytes]), because in WAL mode the main file is not where a big write
      * lands.
      */
     private suspend fun storageLine(context: Context): String = withContext(Dispatchers.IO) {
         runCatching {
-            val dbFile = context.getDatabasePath(WATCH_HISTORY_DB)
+            val dataDir = java.io.File(context.applicationInfo.dataDir)
             val cache = WatchHistoryDatabase.getInstance(context).tmdbJsonCacheDao()
             val jsonBytes = cache.totalBytes() ?: 0L
             val jsonRows = cache.count()
-            // Resolved, not hardcoded: the guide is per profile (the base name
-            // is `iptv_epg.db`, prefixed with the active profile's id), and a
-            // failed resolution must not take the rest of the line with it.
-            val iptvBytes = runCatching {
-                context.getDatabasePath(
-                    com.kennyb1201.kbstream.data.iptv.db.IptvDatabase.activeFileName(context)
-                )
-            }.getOrNull()?.let { dbBytes(it) } ?: 0L
 
             buildString {
-                append("storage: db=").append(mb(dbBytes(dbFile)))
-                append(" jsonCache=").append(mb(jsonBytes))
-                append("/").append(jsonRows).append("row")
-                append(" iptv=").append(mb(iptvBytes))
+                append("storage: code=").append(mb(codeBytes(context)))
+                append(" data=").append(mb(dirBytes(dataDir)))
+                append(" cache=").append(mb(dirBytes(context.cacheDir)))
                 appendLine()
-                append("storage caches: ")
-                append(
-                    CACHE_DIRS.joinToString(" ") { name ->
-                        "${name}=${mb(dirBytes(java.io.File(context.cacheDir, name)))}"
-                    }
-                )
+                append("storage stores: jsonCache=").append(mb(jsonBytes))
+                    .append("/").append(jsonRows).append("row")
+                append(" files=").append(mb(dirBytes(context.filesDir)))
+                append(" prefs=").append(mb(dirBytes(java.io.File(dataDir, "shared_prefs"))))
+                appendLine()
+                append("storage caches: ").append(cacheBreakdown(context))
+                appendLine()
+                append("storage dbs: ").append(databaseLine(dataDir))
             }
         }.getOrElse { "storage: unavailable (${it.message})" }
+    }
+
+    /**
+     * The installed code: the APK plus its splits, and the native-library
+     * directory when the platform extracted the `.so` files out of them.
+     *
+     * This is the floor under the app's size, not a leak: the release APK is
+     * ~126 MB, almost all of it libmpv and the FFmpeg decoder. Reporting it is
+     * what stops the rest of the accounting from looking short by a fixed
+     * hundred megabytes. Returns 0 when the package manager will not say.
+     */
+    private fun codeBytes(context: Context): Long = runCatching {
+        val info = context.packageManager.getApplicationInfo(context.packageName, 0)
+        val apks = buildList {
+            info.splitSourceDirs?.toList()?.let { addAll(it) }
+            add(info.sourceDir)
+        }.filterNotNull().distinct()
+        apks.sumOf { java.io.File(it).length() } +
+            (info.nativeLibraryDir?.let { dirBytes(java.io.File(it)) } ?: 0L)
+    }.getOrDefault(0L)
+
+    /**
+     * Cache children worth naming, largest first, with the rest summed.
+     *
+     * Only cache — [context.cacheDir] is a directory the platform may clear
+     * itself, so everything named here is re-downloadable and safe to drop.
+     */
+    private fun cacheBreakdown(context: Context): String {
+        val sizes = context.cacheDir.listFiles().orEmpty()
+            .map { file -> file.name to if (file.isDirectory) dirBytes(file) else file.length() }
+            .filter { it.second >= STORAGE_MIN_BYTES }
+            .sortedByDescending { it.second }
+        if (sizes.isEmpty()) return "empty"
+        val named = sizes.take(MAX_CACHE_ENTRIES)
+            .joinToString(" ") { (name, bytes) -> "$name=${mb(bytes)}" }
+        val rest = sizes.drop(MAX_CACHE_ENTRIES).sumOf { it.second }
+        return if (rest > 0L) "$named other=${mb(rest)}" else named
+    }
+
+    /**
+     * Every SQLite file the app owns, largest first.
+     *
+     * Read from the directory rather than from a list of known names: the app
+     * keeps one scoped history database and one guide per profile, so the set
+     * of files on disk is a function of how many profiles exist — something a
+     * hardcoded pair of names could not follow.
+     */
+    private fun databaseLine(dataDir: java.io.File): String {
+        val dbs = java.io.File(dataDir, "databases").listFiles().orEmpty()
+            .filter { it.isFile && it.name.endsWith(".db") }
+            .map { it.name to dbBytes(it) }
+            .filter { it.second >= STORAGE_MIN_BYTES }
+            .sortedByDescending { it.second }
+        if (dbs.isEmpty()) return "none over 1MB"
+        val named = dbs.take(MAX_DB_ENTRIES)
+            .joinToString(" ") { (name, bytes) -> "$name=${mb(bytes)}" }
+        val more = dbs.size - MAX_DB_ENTRIES
+        return if (more > 0) "$named +$more more" else named
     }
 
     private fun mb(bytes: Long): String = "${bytes / 1_048_576}MB"

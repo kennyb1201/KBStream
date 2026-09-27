@@ -1,0 +1,68 @@
+[
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+    "old": "    private val nextUpCountdownRunnable = object : Runnable {\n        override fun run() {\n            if (!nextUpHandoffArmed) {\n                nextUpCountdownHeld = false\n                nextUpCountdownRemaining = 0\n                return\n            }\n            nextUpCountdownRemaining--\n",
+    "new": "    private val nextUpCountdownRunnable = object : Runnable {\n        override fun run() {\n            if (!nextUpHandoffArmed) {\n                nextUpCountdownHeld = false\n                nextUpCountdownRemaining = 0\n                return\n            }\n            // A sleep timer armed while this countdown was already running (the\n            // card opens during the credits, so that is the ordinary way the two\n            // meet) wins: the countdown stops here instead of handing off seconds\n            // before the end the timer is waiting for. Re-checked every tick, so\n            // the timer is honoured whenever it is armed - up to the last second.\n            if (sleepTimerBlocksAutoAdvance(SleepTimer.state.value)) {\n                nextUpCountdownHeld = false\n                nextUpCountdownRemaining = 0\n                nextUpCountdown.text = \"Stopping here - sleep timer\"\n                return\n            }\n            nextUpCountdownRemaining--\n",
+    "count": 1
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+    "old": "        // One handoff per session: whichever trigger gets here first wins, and\n        // the rest are no-ops (see [nextEpisodeHandoffStarted]).\n        if (nextEpisodeHandoffStarted) return\n        nextEpisodeHandoffStarted = true\n",
+    "new": "        // One handoff per session: whichever trigger gets here first wins, and\n        // the rest are no-ops (see [nextEpisodeHandoffStarted]).\n        if (nextEpisodeHandoffStarted) return\n        nextEpisodeHandoffStarted = true\n        // Reaching here while a timer is armed to stop at the end of this\n        // episode means the viewer pressed PLAY NEXT: an explicit press beats\n        // the timer, so the timer goes with the episode it was waiting for. A\n        // minutes timer is left alone - that intent is about the clock, not\n        // about this episode.\n        if (SleepTimer.state.value.stopsAtEndOfItem) SleepTimer.cancel()\n",
+    "count": 1
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+    "old": "        // A sleep timer armed for the end of this episode suppresses the card\n        // entirely: offering PLAY NEXT while the timer is about to stop the\n        // session is a promise this player cannot keep.\n        if (SleepTimer.state.value.stopsAtEndOfItem) return\n",
+    "new": "        // A sleep timer armed for the end of this episode suppresses the card\n        // entirely: offering PLAY NEXT while the timer is about to stop the\n        // session is a promise this player cannot keep.\n        if (sleepTimerBlocksAutoAdvance(SleepTimer.state.value)) return\n",
+    "count": 1
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+    "old": "        if (SleepTimer.state.value.stopsAtEndOfItem) {\n            exitForSleepTimer(savePartialProgress = false)\n            return\n        }\n",
+    "new": "        if (sleepTimerBlocksAutoAdvance(SleepTimer.state.value)) {\n            exitForSleepTimer(savePartialProgress = false)\n            return\n        }\n",
+    "count": 1
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt",
+    "old": "    private val nextUpCountdownRunnable = object : Runnable {\n        override fun run() {\n            nextUpCountdownRemaining--\n",
+    "new": "    private val nextUpCountdownRunnable = object : Runnable {\n        override fun run() {\n            // A sleep timer armed while this countdown was already running (the\n            // card opens during the credits, so that is the ordinary way the two\n            // meet) wins: the countdown stops here instead of handing off seconds\n            // before the end the timer is waiting for. Re-checked every tick, so\n            // the timer is honoured whenever it is armed - up to the last second.\n            if (sleepTimerBlocksAutoAdvance(SleepTimer.state.value)) {\n                nextUpCountdownHeld = false\n                nextUpCountdownRemaining = 0\n                nextUpCountdown?.text = \"Stopping here - sleep timer\"\n                return\n            }\n            nextUpCountdownRemaining--\n",
+    "count": 1
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt",
+    "old": "    private fun launchNextEpisode(targetSeason: Int, targetEpisode: Int) {\n        // One handoff per session: whichever trigger gets here first wins.\n        if (nextEpisodeHandoffStarted) return\n        nextEpisodeHandoffStarted = true\n",
+    "new": "    private fun launchNextEpisode(targetSeason: Int, targetEpisode: Int) {\n        // One handoff per session: whichever trigger gets here first wins.\n        if (nextEpisodeHandoffStarted) return\n        nextEpisodeHandoffStarted = true\n        // Reaching here while a timer is armed to stop at the end of this\n        // episode means the viewer pressed PLAY NEXT: an explicit press beats\n        // the timer, so the timer goes with the episode it was waiting for. A\n        // minutes timer is left alone - that intent is about the clock, not\n        // about this episode.\n        if (SleepTimer.state.value.stopsAtEndOfItem) SleepTimer.cancel()\n",
+    "count": 1
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt",
+    "old": "        if (SleepTimer.state.value.stopsAtEndOfItem) return\n",
+    "new": "        if (sleepTimerBlocksAutoAdvance(SleepTimer.state.value)) return\n",
+    "count": 1
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt",
+    "old": "            if (SleepTimer.state.value.stopsAtEndOfItem) {\n                exitForSleepTimer(savePartialProgress = false)\n                return@runOnUiThread\n            }\n",
+    "new": "            if (sleepTimerBlocksAutoAdvance(SleepTimer.state.value)) {\n                exitForSleepTimer(savePartialProgress = false)\n                return@runOnUiThread\n            }\n",
+    "count": 1
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/PipSupport.kt",
+    "old": " *  - **Never without the system feature.** A box that does not declare\n *    `FEATURE_PICTURE_IN_PICTURE` has no window to shrink into, whatever the\n *    manufacturer string says, and `enterPictureInPictureMode` on such a device\n *    throws.\n *  - **Never against the setting.** Settings → Playback owns the switch; a\n *    viewer who turned PiP off wants a Home press to leave playback alone.\n */\ninternal fun enterPipMode(activity: Activity): Boolean {\n    if (activity.isFinishing || activity.isDestroyed) return false\n    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false\n    if (Build.MANUFACTURER.equals(\"Amazon\", ignoreCase = true)) return false\n    if (!pipSupported(activity)) return false\n    if (!AppPreferences.getEnablePip(activity)) return false\n",
+    "new": " *  - **Never against the setting.** Settings → Playback owns the switch; a\n *    viewer who turned PiP off wants a Home press to leave playback alone.\n *\n * What is deliberately *not* consulted is `FEATURE_PICTURE_IN_PICTURE`. A box\n * that lacks it returns false from the call below and nothing happens, so the\n * flag would only ever be able to take PiP away - from the cheap Android TV\n * boxes that do not declare it while still honouring a PiP window. Whether the\n * platform really shrinks the window is answered by `enterPictureInPictureMode`\n * itself, not by a manifest flag.\n */\ninternal fun enterPipMode(activity: Activity): Boolean {\n    if (activity.isFinishing || activity.isDestroyed) return false\n    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false\n    if (Build.MANUFACTURER.equals(\"Amazon\", ignoreCase = true)) return false\n    if (!AppPreferences.getEnablePip(activity)) return false\n",
+    "count": 1
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/PipSupport.kt",
+    "old": "/**\n * Whether the device can show a PiP window at all, independent of the user's\n * preference — what the code paths that want to *announce* the feature (a\n * notice, a settings row) should consult.\n */\ninternal fun pipSupported(context: Context): Boolean =\n    Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&\n        runCatching {\n            context.packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)\n        }.getOrDefault(false)\n\n/** The log tag every engine's PiP failures land under. */\ninternal const val PIP_TAG = \"PLAYER_PIP\"\n",
+    "new": "/** The log tag every engine's PiP failures land under. */\ninternal const val PIP_TAG = \"PLAYER_PIP\"\n",
+    "count": 1
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/PipSupport.kt",
+    "old": "import android.app.Activity\nimport android.content.Context\nimport android.content.pm.PackageManager\nimport android.os.Build\n",
+    "new": "import android.app.Activity\nimport android.os.Build\n",
+    "count": 1
+  }
+]
