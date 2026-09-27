@@ -18,6 +18,7 @@ import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache
 import com.kennyb1201.kbstream.data.reporting.CrashReporter
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
+import com.kennyb1201.kbstream.data.reporting.Redaction
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.work.AddonManifestRefreshWorker
 import com.kennyb1201.kbstream.work.NewEpisodeWorker
@@ -171,6 +172,33 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             options.release = "kbstream@${BuildConfig.VERSION_NAME}"
             options.dist = BuildConfig.VERSION_CODE.toString()
             options.setTag("git_sha", BuildConfig.GIT_SHA.take(10))
+            // Scrub the TEXT of everything that leaves the device. supabase-kt
+            // request exceptions embed the full request URL and headers --
+            // bearer token included -- in the exception message (see the note
+            // in SupabaseSync.recordSyncError), and the raw Throwable is what
+            // gets captured, so the event is kept and only its message text is
+            // rewritten. The stack trace -- the reason the report exists -- is
+            // untouched. See Redaction for what is masked.
+            options.beforeSend = io.sentry.SentryOptions.BeforeSendCallback { event, _ ->
+                event.message?.let { message -> message.message = Redaction.text(message.message) }
+                event.exceptions?.forEach { exception ->
+                    exception.value = Redaction.text(exception.value)
+                }
+                event
+            }
+            // Breadcrumbs carry text too, and a future logcat/HTTP integration
+            // would route Log.* and request URLs through here without any other
+            // code change, so they get the same scrub.
+            options.beforeBreadcrumb = io.sentry.SentryOptions.BeforeBreadcrumbCallback { crumb, _ ->
+                crumb.message = Redaction.text(crumb.message)
+                crumb.data?.let { data ->
+                    data.keys.toList().forEach { key ->
+                        val value = data[key]
+                        if (value is String) crumb.setData(key, Redaction.text(value))
+                    }
+                }
+                crumb
+            }
         }
     }
 

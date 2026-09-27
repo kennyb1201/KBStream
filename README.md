@@ -159,3 +159,14 @@ docs/              # Supabase RLS policy reference
 - `scripts/build_ffmpeg_video.sh` builds the optional video-enabled FFmpeg
   decoder extension (see Building → Optional: software video decoding). It
   needs an NDK, which the normal Gradle build does not.
+
+## License
+
+KBStream is licensed under the **GNU General Public License v3.0 or later**
+(GPL-3.0-or-later); the full text is in [`LICENSE`](LICENSE).
+
+That is not a free choice here: the app bundles NewPipeExtractor, which is
+GPLv3, so any distributed build has to carry GPL-compatible terms and ship
+corresponding source. [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) lists
+the other bundled components (mpv, FFmpeg, libass, and the permissive
+libraries) with their licenses.

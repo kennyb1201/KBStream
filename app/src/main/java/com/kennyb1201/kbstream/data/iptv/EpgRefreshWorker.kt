@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import com.kennyb1201.kbstream.data.reporting.Redaction
 
 class EpgRefreshWorker(
     appContext: Context,
@@ -41,7 +42,11 @@ class EpgRefreshWorker(
                 .onSuccess { imported++ }
                 .onFailure { error ->
                     if (error is kotlinx.coroutines.CancellationException) throw error
-                    Log.w(TAG, "GUIDE REFRESH FAILED source=$url", error)
+                    Log.w(
+                        TAG,
+                        "GUIDE REFRESH FAILED source=${Redaction.url(url)}",
+                        Redaction.throwable(error)
+                    )
                 }
         }
 

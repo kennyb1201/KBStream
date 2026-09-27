@@ -12,6 +12,7 @@ import com.kennyb1201.kbstream.data.iptv.db.EpgSearchIndex
 import com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
 import com.kennyb1201.kbstream.data.iptv.db.PlaylistEpgMatchEntity
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
+import com.kennyb1201.kbstream.data.reporting.Redaction
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CompletableDeferred
@@ -251,10 +252,10 @@ class IptvRepository(
 
         val activeImport = importRequestMutex.withLock {
             activeGuideImports[requestKey]?.also {
-                Log.w(TAG, "GUIDE IMPORT JOIN source=$normalizedUrl")
+                Log.w(TAG, "GUIDE IMPORT JOIN source=${Redaction.url(normalizedUrl)}")
             } ?: waiter.also {
                 activeGuideImports[requestKey] = it
-                Log.d(TAG, "GUIDE IMPORT START source=$normalizedUrl")
+                Log.d(TAG, "GUIDE IMPORT START source=${Redaction.url(normalizedUrl)}")
             }
         }
 
@@ -285,7 +286,7 @@ class IptvRepository(
                 activeGuideImports.remove(requestKey, waiter)
             }
 
-            Log.d(TAG, "GUIDE IMPORT END source=$normalizedUrl")
+            Log.d(TAG, "GUIDE IMPORT END source=${Redaction.url(normalizedUrl)}")
         }
     }
 
@@ -346,7 +347,7 @@ class IptvRepository(
         val snapshots = normalizedGuideUrls.mapNotNull { url ->
             val snapshot = getOrCreateGuideSnapshot(url)
             if (snapshot.guideChannels.isEmpty()) {
-                Log.w(TAG, "LINEUP QUERY no guide channels epgUrl=$url")
+                Log.w(TAG, "LINEUP QUERY no guide channels epgUrl=${Redaction.url(url)}")
                 null
             } else {
                 snapshot
@@ -796,7 +797,7 @@ class IptvRepository(
             return@withContext null
         }
 
-        Log.w(TAG, "PLAYLIST CACHE READ START source=$normalizedUrl")
+        Log.w(TAG, "PLAYLIST CACHE READ START source=${Redaction.url(normalizedUrl)}")
 
         val channels = ArrayList<IptvChannel>()
         var offset = 0

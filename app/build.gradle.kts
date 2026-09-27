@@ -142,13 +142,14 @@ android {
     sentry {
         includeProguardMapping.set(true)
         telemetry.set(false)
-        // The org token is region-scoped (us.sentry.io); pointing the CLI
-        // straight at the region endpoint skips the region-URL lookup that
-        // upload-only tokens get 403 on.
+        // Default to the main sentry.io host. The org token is a sentry.io
+        // token and that host performs the region redirect itself; a
+        // hardcoded region endpoint (us.sentry.io) only helps upload-only
+        // tokens, and mismatching the host is what made uploads fail.
         url.set(
             System.getenv("SENTRY_URL")
                 ?: localProps.getProperty("SENTRY_URL")
-                ?: "https://us.sentry.io"
+                ?: "https://sentry.io"
         )
         org.set(
             System.getenv("SENTRY_ORG")
@@ -302,7 +303,12 @@ dependencies {
     // native libraries on a device they were not built for.
     implementation("dev.jdtech.mpv:libmpv:0.5.1")
     implementation("androidx.recyclerview:recyclerview:1.3.2")
-implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.26.4")
+    // Pinned to the COMMIT behind tag v0.26.4 (43f8e6ebeef4…, full hash
+    // 43f8e6ebeef469db7c5328714bc5f33c9f06f092), not the tag itself: tags are
+    // mutable, so "v0.26.4" can silently resolve to different code than the
+    // build that was reviewed and shipped. JitPack resolves the commit prefix;
+    // NewPipeExtractor is GPLv3, see THIRD_PARTY_NOTICES.md.
+    implementation("com.github.TeamNewPipe:NewPipeExtractor:43f8e6ebeef4")
 
 
     implementation("androidx.room:room-runtime:2.7.1")

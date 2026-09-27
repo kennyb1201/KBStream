@@ -17,6 +17,7 @@ import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.iptv.IptvPlaylist
 import com.kennyb1201.kbstream.data.iptv.IptvRepository
 import com.kennyb1201.kbstream.data.iptv.guideWindowFingerprint
+import com.kennyb1201.kbstream.data.reporting.Redaction
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -655,7 +656,9 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             return
         }
         _isLoading.value = true
-        Log.w(TAG, "CACHE RESTORE START source=$url")
+        // Playlist URLs go through Redaction.url: Xtream-style providers put
+        // the account username and password in the query string.
+        Log.w(TAG, "CACHE RESTORE START source=${Redaction.url(url)}")
         viewModelScope.launch {
             try {
                 val cachedPlaylist = repository.loadCachedPlaylist(url, name)
@@ -664,7 +667,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                     // cached restore shows only the primary playlist until
                     // the user manually reloads (applyPlaylist merges them).
                     applyPlaylist(cachedPlaylist)
-                    Log.w(TAG, "CACHE RESTORE HIT channels=${cachedPlaylist.channels.size} source=$url")
+                    Log.w(TAG, "CACHE RESTORE HIT channels=${cachedPlaylist.channels.size} source=${Redaction.url(url)}")
                     refreshIfNeeded()
                 } else {
                     // URL is configured but nothing cached (first entry after
@@ -675,13 +678,13 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                     // instruction to load, so fetch it now. The UI keeps the
                     // guide usable meanwhile: channels appear the moment the
                     // fetch + cache write finish.
-                    Log.w(TAG, "CACHE RESTORE MISS source=$url — auto-loading playlist")
+                    Log.w(TAG, "CACHE RESTORE MISS source=${Redaction.url(url)} — auto-loading playlist")
                     load()
                 }
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 reportFailure(_error, t)
-                Log.e(TAG, "CACHE RESTORE FAILED source=$url", t)
+                Log.e(TAG, "CACHE RESTORE FAILED source=${Redaction.url(url)}", Redaction.throwable(t))
             } finally {
                 _isLoading.value = false
             }
@@ -708,11 +711,11 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                 val loadedPlaylist = loadPlaylistResilient(url, name)
                 applyPlaylist(loadedPlaylist)
                 markUpdated(KEY_PLAYLIST_UPDATED_AT)
-                Log.d(TAG, "PLAYLIST LOAD SUCCESS channels=${loadedPlaylist.channels.size} source=$url")
+                Log.d(TAG, "PLAYLIST LOAD SUCCESS channels=${loadedPlaylist.channels.size} source=${Redaction.url(url)}")
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 reportFailure(_error, t)
-                Log.e(TAG, "PLAYLIST LOAD FAILED source=$url", t)
+                Log.e(TAG, "PLAYLIST LOAD FAILED source=${Redaction.url(url)}", Redaction.throwable(t))
                 if (!hasPlaylist) _playlist.value = null
             } finally {
                 _isLoading.value = false
@@ -757,7 +760,11 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             } catch (t: Throwable) {
                 // Failures are non-fatal: the primary playlist still loads.
                 if (t is CancellationException) throw t
-                Log.w(TAG, "EXTRA PLAYLIST SKIPPED source=$extraUrl error=${t.message}")
+                Log.w(
+                    TAG,
+                    "EXTRA PLAYLIST SKIPPED source=${Redaction.url(extraUrl)} " +
+                        "error=${Redaction.text(t.message)}"
+                )
             }
         }
         if (added == 0) return primary
@@ -808,7 +815,12 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         withDatabaseSwapRetry(
             attempts = DB_SWAP_RETRY_LONG_ATTEMPTS,
             onRetry = { attempt, error ->
-                Log.w(TAG, "GUIDE IMPORT RETRY $attempt after database swap source=$url", error)
+                Log.w(
+                    TAG,
+                    "GUIDE IMPORT RETRY $attempt after database swap " +
+                        "source=${Redaction.url(url)}",
+                    Redaction.throwable(error)
+                )
             }
         ) {
             repository.importGuide(url)
@@ -833,7 +845,12 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     ): IptvPlaylist = withDatabaseSwapRetry(
         attempts = DB_SWAP_RETRY_LONG_ATTEMPTS,
         onRetry = { attempt, error ->
-            Log.w(TAG, "PLAYLIST LOAD RETRY $attempt after database swap source=$url", error)
+            Log.w(
+                TAG,
+                "PLAYLIST LOAD RETRY $attempt after database swap " +
+                    "source=${Redaction.url(url)}",
+                Redaction.throwable(error)
+            )
         }
     ) {
         repository.loadPlaylist(url, name)
@@ -914,7 +931,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                 } catch (t: Throwable) {
                     if (t is CancellationException) throw t
                     lastError = t
-                    Log.e(TAG, "GUIDE IMPORT FAILED source=$url", t)
+                    Log.e(TAG, "GUIDE IMPORT FAILED source=${Redaction.url(url)}", Redaction.throwable(t))
                 }
             }
             if (imported == 0) {

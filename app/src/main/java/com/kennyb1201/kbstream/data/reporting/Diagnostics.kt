@@ -156,9 +156,12 @@ object Diagnostics {
     private fun accountLine(): String {
         val state = SupabaseSync.authState.value
         val description = when (state) {
-            is SupabaseSync.AuthState.SignedIn -> state.email
+            // Masked: this block is designed to be pasted into a public issue,
+            // and the address identifies the user's account. The domain stays
+            // so a report can still tell which provider is affected.
+            is SupabaseSync.AuthState.SignedIn -> Redaction.email(state.email)
             is SupabaseSync.AuthState.SigningIn -> "signing in"
-            is SupabaseSync.AuthState.Error -> "error: ${state.message}"
+            is SupabaseSync.AuthState.Error -> "error: ${Redaction.text(state.message)}"
             else -> "signed out"
         }
         return "account: $description · syncEnabled=${SupabaseSync.syncEnabled.value} · " +
@@ -169,8 +172,21 @@ object Diagnostics {
         val profiles = ProfileManager.profiles.value
         val active = ProfileManager.activeProfile.value
         val kids = active?.kidsMaxAge?.let { "kids(ceil=$it)" } ?: "standard"
-        return "profiles: ${profiles.size} · active=${active?.name ?: "none"} " +
+        return "profiles: ${profiles.size} · active=${profileLabel(profiles, active?.id)} " +
             "(${active?.id?.take(8) ?: "—"}) · $kids"
+    }
+
+    /**
+     * Non-identifying label for a profile: `profile/1`, ordered as stored.
+     * Profile names are usually a real person's name, and this block is meant
+     * to be pasted into a public issue, so the name never appears here. The id
+     * itself is a random UUID and identifies nothing, so it stays for log
+     * correlation.
+     */
+    private fun profileLabel(profiles: List<ProfileManager.Profile>, id: String?): String {
+        if (id == null) return "none"
+        val index = profiles.indexOfFirst { it.id == id }
+        return if (index >= 0) "profile/${index + 1}" else "unknown"
     }
 
     private fun cleanupLine(context: Context): String =
@@ -216,14 +232,15 @@ object Diagnostics {
         val eyeBadge = runCatching {
             AppPreferences.getPosterPartialWatchBadge(context)
         }.getOrNull()
+        val profiles = ProfileManager.profiles.value
         val activeId = ProfileManager.activeProfile.value?.id
-        val active = ProfileManager.profiles.value.firstOrNull { it.id == activeId }
         val lines = mutableListOf(
-            "markers: eyeBadge=${eyeBadge ?: "?"} (active=${active?.name ?: "none"})"
+            "markers: eyeBadge=${eyeBadge ?: "?"} (active=${profileLabel(profiles, activeId)})"
         )
-        ProfileManager.profiles.value.forEach { profile ->
+        profiles.forEach { profile ->
             val marker = if (profile.id == activeId) "*" else " "
-            lines += "  marker$marker${profile.name}: simkl=${simklConnected(context, profile.id)}" +
+            lines += "  marker$marker${profileLabel(profiles, profile.id)}: " +
+                "simkl=${simklConnected(context, profile.id)}" +
                 " overrides=${overridesCount(context, profile.id)}" +
                 " cache=${watchedCacheCounts(context, profile.id)}"
         }

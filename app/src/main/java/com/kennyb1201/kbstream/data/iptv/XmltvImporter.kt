@@ -4,6 +4,7 @@ import android.util.Log
 import com.kennyb1201.kbstream.data.iptv.db.EpgChannelEntity
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramEntity
 import com.kennyb1201.kbstream.data.iptv.db.IptvDao
+import com.kennyb1201.kbstream.data.reporting.Redaction
 import java.io.BufferedInputStream
 import java.io.InputStream
 import java.io.InputStreamReader
@@ -106,7 +107,9 @@ class XmltvImporter(
         dateParseFailureLogsRemaining = MAX_DATE_PARSE_FAILURE_LOGS
 
         val startedAt = System.currentTimeMillis()
-        Log.i(TAG, "IMPORT START source=$sourceUrl")
+        // Guide URLs are redacted like playlist URLs: an Xtream-style provider
+        // puts the account username and password in the query string.
+        Log.i(TAG, "IMPORT START source=${Redaction.url(sourceUrl)}")
         Log.i(TAG, "IMPORT WINDOW start=$windowStartMs end=$windowEndMs")
 
         // Clear any stale rows left by a previously failed attempt, and
@@ -250,7 +253,7 @@ class XmltvImporter(
             // scope teardown still cancels cleanly.
             throw cancellation
         } catch (swapError: Throwable) {
-            Log.e(TAG, "IMPORT SWAP FAILED source=$sourceUrl", swapError)
+            Log.e(TAG, "IMPORT SWAP FAILED source=${Redaction.url(sourceUrl)}", Redaction.throwable(swapError))
             swapFailure = swapError
             false
         }
@@ -260,7 +263,7 @@ class XmltvImporter(
             TAG,
             "IMPORT END channels=$parsedChannels parsedPrograms=$parsedPrograms " +
                 "keptPrograms=$keptPrograms skippedPrograms=$skippedPrograms swapped=$swapped " +
-                "hadLiveGuide=$hadLiveGuide elapsedMs=$elapsedMs source=$sourceUrl"
+                "hadLiveGuide=$hadLiveGuide elapsedMs=$elapsedMs source=${Redaction.url(sourceUrl)}"
         )
 
         if (!swapped) {
@@ -271,13 +274,16 @@ class XmltvImporter(
             // caller recognises a swap by walking the cause chain
             // (data/db/DatabaseSwapRetry.kt). A bare message here would read as
             // a real failure and the guide would be left empty.
-            throw IllegalStateException("guide swap failed for source=$sourceUrl", swapFailure)
+            throw IllegalStateException(
+                "guide swap failed for source=${Redaction.url(sourceUrl)}",
+                swapFailure
+            )
         }
     } catch (error: Throwable) {
         // The staged rows may be half-written; they live under the staging
         // key and are swept at the start of the next attempt, so the live
         // guide (if any) is untouched by a failed import.
-        Log.e(TAG, "IMPORT FAILED source=$sourceUrl", error)
+        Log.e(TAG, "IMPORT FAILED source=${Redaction.url(sourceUrl)}", Redaction.throwable(error))
         throw error
     } finally {
         runCatching { xmlInput?.close() ?: input.close() }

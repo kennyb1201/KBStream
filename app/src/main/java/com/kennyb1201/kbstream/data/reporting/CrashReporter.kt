@@ -40,6 +40,12 @@ object CrashReporter {
         // diagnostics export has to work on dev builds too, where nothing is
         // ever sent to Sentry.
         remember(throwable, context)
+        // Note on what is sent: the raw Throwable goes to Sentry (its stack is
+        // the point), but Sentry scrubs the message text on the way out via the
+        // beforeSend/beforeBreadcrumb hooks in MainApplication.initCrashReporting
+        // -- supabase-kt messages embed the request URL and bearer token.
+        // Everything WE build from the message (the retained summary, log lines)
+        // is redacted here.
         try {
             if (com.kennyb1201.kbstream.BuildConfig.SENTRY_DSN.isBlank()) return
             // SentryAndroid.init() in MainApplication installs the global
@@ -51,13 +57,13 @@ object CrashReporter {
             }
         } catch (t: Throwable) {
             // Reporting must never be the thing that kills the app.
-            Log.w(TAG, "non-fatal report failed: ${t.message}")
+            Log.w(TAG, "non-fatal report failed: ${Redaction.text(t.message)}")
         }
     }
 
     private fun remember(throwable: Throwable, context: Map<String, String>) {
         val summary = throwable::class.java.simpleName +
-            (throwable.message?.let { ": ${it.take(160)}" } ?: "")
+            (throwable.message?.let { ": ${Redaction.text(it).take(160)}" } ?: "")
         val entry = RecentError(
             atMs = System.currentTimeMillis(),
             source = context["source"] ?: "unknown",
