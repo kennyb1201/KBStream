@@ -505,6 +505,20 @@ class ExternalPlayerActivity : ComponentActivity() {
             addCategory(Intent.CATEGORY_DEFAULT)
         }
 
+        // The hand-off used to be silent, which left the refused-stream card as
+        // the only evidence that anything went wrong - and no way to tell a
+        // player that refused a header-gated URL from one that could not take
+        // the mime at all. Header VALUES are never logged (they carry the
+        // addon's tokens); the key names are, because "was a Referer attached"
+        // is the fact that decides whether an external player could ever have
+        // loaded this source.
+        Log.i(
+            TAG,
+            "handoff -> ${target?.label ?: "chooser"} " +
+                "pkg=${target?.packageName ?: "-"} mime=${launch.type ?: "-"} " +
+                "headers=[${streamHeaders.keys.joinToString(",")}] seek=${seekMs}ms"
+        )
+
         handoffAtMs = SystemClock.elapsedRealtime()
         val launched = ErrorLog.runCatching {
             handoffLauncher.launch(launch)
@@ -554,16 +568,35 @@ class ExternalPlayerActivity : ComponentActivity() {
         } else {
             0L
         }
+        // The Activity Result callback is delivered once we are STARTED again,
+        // so elapsedMs is how long the other app actually stayed up in front of
+        // the viewer - not a measurement taken while it was still launching.
+        Log.i(
+            TAG,
+            "handoff returned resultCode=$resultCode elapsed=${elapsedMs}ms " +
+                "position=${reportedPosition ?: "-"} duration=${reportedDuration ?: "-"} " +
+                "headers=[${streamHeaders.keys.joinToString(",")}]"
+        )
         if (resultCode != RESULT_OK &&
             reportedPosition == null &&
             elapsedMs < BOUNCE_THRESHOLD_MS
         ) {
             val label = ExternalPlayer.target(this)?.label ?: "The external player"
-            showRefused(
-                "$label closed straight away",
+            // Name the most likely cause instead of leaving the viewer to guess.
+            // A source that carries request headers is the case the External
+            // engine cannot fix: the extras we send are the MX Player / VLC
+            // convention, and a player that ignores them makes its own bare
+            // request, gets a 403 and bounces. That is worth saying outright.
+            val hint = if (streamHeaders.isNotEmpty()) {
+                "It may not support this source. This one needs request headers " +
+                    "(${streamHeaders.keys.joinToString(", ")}), which external players " +
+                    "often ignore - so it may have been refused for that alone. Play it in " +
+                    "KBStream's own player, which sends them."
+            } else {
                 "It may not support this source. Try again, or play it in KBStream's own " +
                     "player - the other engine can use the request headers this source needs."
-            )
+            }
+            showRefused("$label closed straight away", hint)
             return
         }
 

@@ -1,0 +1,14 @@
+[
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+    "old": "            if (!forceDvStripForSession &&\n                (!resourceExhausted || dvDecoderRefused) &&",
+    "new": "            // Out-of-resources wins outright, and [dvDecoderRefused] must NOT\n            // be allowed to override it. It cannot: [dvPassthroughDecoderRefused]\n            // looks only at whether this was a decoder failure on an active DV\n            // passthrough session -- it never reads the error code -- so a plain\n            // 0x80001000 (the box having no 4K decoder to hand out, which is what\n            // a second decode in a process gets) satisfies it too. The old\n            // `(!resourceExhausted || dvDecoderRefused)` carve-out therefore let\n            // exactly the case it was written to exclude through: one transient\n            // resource failure on a DV passthrough was read as \"this box cannot\n            // do Dolby Vision\", recorded for 14 days, and it forced the strip on\n            // every later DV title -- on boxes where plain passthrough plays the\n            // file untouched. A resource failure is not a verdict on Dolby Vision;\n            // the branch below handles it (next source, then MPV) and clears any\n            // verdict a previous failure left behind.\n            if (!forceDvStripForSession &&\n                !resourceExhausted &&",
+    "count": 1
+  },
+  {
+    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+    "old": "                // Reaching this branch with [resourceExhausted] set is only\n                // possible through [dvDecoderRefused], which has already\n                // established that the failure was the vendor DV decoder\n                // refusing a DV passthrough session (not the box running dry),\n                // so the verdict is safe to keep there too.",
+    "new": "                // The verdict is only safe to keep because [resourceExhausted]\n                // is required to be false to reach here -- this is a DV decoder\n                // refusing the FORMAT, not the box running dry. A resource\n                // failure is handled below and clears the verdict instead.",
+    "count": 1
+  }
+]

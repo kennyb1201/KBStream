@@ -4919,8 +4919,22 @@ class NativePlayerActivity : ComponentActivity() {
             // for this session, which hands the stream to the ordinary HEVC
             // decoder as plain HDR10. An explicit "None" (pure pass-through)
             // is the user's own choice and is left alone.
+            // Out-of-resources wins outright, and [dvDecoderRefused] must NOT
+            // be allowed to override it. It cannot: [dvPassthroughDecoderRefused]
+            // looks only at whether this was a decoder failure on an active DV
+            // passthrough session -- it never reads the error code -- so a plain
+            // 0x80001000 (the box having no 4K decoder to hand out, which is what
+            // a second decode in a process gets) satisfies it too. The old
+            // `(!resourceExhausted || dvDecoderRefused)` carve-out therefore let
+            // exactly the case it was written to exclude through: one transient
+            // resource failure on a DV passthrough was read as "this box cannot
+            // do Dolby Vision", recorded for 14 days, and it forced the strip on
+            // every later DV title -- on boxes where plain passthrough plays the
+            // file untouched. A resource failure is not a verdict on Dolby Vision;
+            // the branch below handles it (next source, then MPV) and clears any
+            // verdict a previous failure left behind.
             if (!forceDvStripForSession &&
-                (!resourceExhausted || dvDecoderRefused) &&
+                !resourceExhausted &&
                 decoderFailure &&
                 dvLabelFromCodec(declaredDvCodec) != null &&
                 AppPreferences.getDvCompatMode(this@NativePlayerActivity) !=
@@ -4939,11 +4953,10 @@ class NativePlayerActivity : ComponentActivity() {
                 // off every title for the next 14 days on a TV that had just
                 // played it — which is the "DV is struggling" state.
                 //
-                // Reaching this branch with [resourceExhausted] set is only
-                // possible through [dvDecoderRefused], which has already
-                // established that the failure was the vendor DV decoder
-                // refusing a DV passthrough session (not the box running dry),
-                // so the verdict is safe to keep there too.
+                // The verdict is only safe to keep because [resourceExhausted]
+                // is required to be false to reach here -- this is a DV decoder
+                // refusing the FORMAT, not the box running dry. A resource
+                // failure is handled below and clears the verdict instead.
                 AppPreferences.setDvPassthroughFailedAt(
                     this@NativePlayerActivity,
                     System.currentTimeMillis()
