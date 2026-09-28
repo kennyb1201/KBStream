@@ -246,6 +246,12 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             add(
                 "streams: ${streams.size} source(s), " +
                     (if (ranked) "ranked" else "add-on order") +
+                    // The request the block belongs to, named here rather than
+                    // inferred from a source's "[declared != requested]"
+                    // bracket: when nothing in the list declares an episode
+                    // there is no bracket at all, and the one block per episode
+                    // is otherwise indistinguishable from its neighbours.
+                    (requestedEpisode?.let { " for S%02dE%02d".format(it.first, it.second) } ?: "") +
                     ", top $RANK_REPORT_TOP:"
             )
             streams.take(RANK_REPORT_TOP).forEach { stream ->

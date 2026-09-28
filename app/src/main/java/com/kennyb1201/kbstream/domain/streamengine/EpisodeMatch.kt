@@ -88,6 +88,27 @@ object EpisodeMatch {
             """(?<![0-9a-z])season ?(\d{1,2}) ?(?:episode|ep\.?) ?(\d{1,3})(?![0-9])"""
         )
 
+    /**
+     * The highest rate worth entertaining for one episode, in Mbps: above the
+     * UHD Blu-ray maximum, so nothing a consumer release of that length
+     * carries reaches it.
+     *
+     * A size says nothing on its own — it has to be read against a length — and
+     * this is the ceiling that turns the pair into a yes or no. Deliberately
+     * generous: it exists to catch a whole season sitting where an episode
+     * should be (a 12-minute episode cannot be 13 GB without 150 Mbps), never
+     * to second-guess an unusual but honest release.
+     */
+    private const val MAX_EPISODE_MBPS = 100.0
+
+    /**
+     * A name that pins a season without ever naming an episode of it — "S03",
+     * "Season 3", "S03 COMPLETE". Read only when [declared] found no episode,
+     * since "S03E15" names the season too and is emphatically not a pack.
+     */
+    private val SEASON_MARKER =
+        Regex("""(?<![0-9a-z])(?:s|season ?)(\d{1,2})(?![0-9])""")
+
     // A bare "E15". Read, but it can never contradict a request: see [verdict].
     // The digit cap is what keeps an absolutely-numbered "E1100" out of this -
     // it is not an episode number this app's metadata will ever name, and
@@ -195,19 +216,32 @@ object EpisodeMatch {
      * to the picker instead.
      *
      * The episode the request is for wins outright; failing that, a source that
-     * says nothing about the episode (the unlabeled release, the season pack
-     * file, the absolute numbering) is the next best thing. A source that
-     * declares another episode of the same season is never taken by itself —
-     * that is the whole point: it is a file the app *knows* holds something
-     * else, and starting it silently is the "playing the wrong episodes"
-     * report. When every playable source is one of those, the answer is null
-     * and the picker is shown, labeled, with the filenames in front of the
-     * viewer.
+     * says nothing about the episode (the unlabeled release, the absolute
+     * numbering) is the next best thing. A source that declares another episode
+     * of the same season is never taken by itself — that is the whole point: it
+     * is a file the app *knows* holds something else, and starting it silently
+     * is the "playing the wrong episodes" report. Neither is a whole season: a
+     * pack declares no episode, so it used to qualify as "says nothing" and be
+     * taken, and it then plays from its own beginning — which is the same
+     * complaint arriving by a different route, and the one a diagnostics
+     * capture showed outright (11 sources for S03E35, and the head of the list
+     * a 13 GB file against a 12-minute episode). When nothing is left, the
+     * answer is null and the picker is shown, labeled, with the filenames in
+     * front of the viewer.
+     *
+     * [runtimeMinutes] is the requested episode's own length, used only to read
+     * a size: without one, a pack is recognised by the way it names itself
+     * instead (see [isSeasonPack]).
      *
      * With no episode in the request (a movie, a live channel) this is the
      * first playable source, exactly as before.
      */
-    fun autoplayPick(streams: List<Stream>, season: Int?, episode: Int?): Stream? {
+    fun autoplayPick(
+        streams: List<Stream>,
+        season: Int?,
+        episode: Int?,
+        runtimeMinutes: Int? = null
+    ): Stream? {
         val playable = streams.filter { !it.url.isNullOrBlank() }
         if (season == null || episode == null) return playable.firstOrNull()
 
@@ -215,11 +249,43 @@ object EpisodeMatch {
         for (stream in playable) {
             when (verdict(stream, season, episode)) {
                 Verdict.MATCHES -> return stream
-                Verdict.UNKNOWN -> if (undeclared == null) undeclared = stream
+                Verdict.UNKNOWN -> {
+                    if (undeclared == null && !isSeasonPack(stream, runtimeMinutes)) {
+                        undeclared = stream
+                    }
+                }
+
                 Verdict.DIFFERENT -> Unit
             }
         }
         return undeclared
+    }
+
+    /**
+     * True when [stream] is a whole season (or a whole series) rather than one
+     * episode.
+     *
+     * A pack is the one wrong file this object could not previously see: it
+     * contradicts no episode, because it names none — so [verdict] calls it
+     * [Verdict.UNKNOWN], the tier auto-play falls back to, and the file that
+     * starts is a season beginning at its own first episode.
+     *
+     * Two readings, and the size wins when both are available. A size against a
+     * length is a fact about the file: 13 GB in 12 minutes needs 150 Mbps, which
+     * no release of that length carries, while a 700 MB file named for its
+     * season is one episode whose name simply omitted the number. With no
+     * length, or no size to read against it, the name is all there is: a source
+     * that pins a season and never an episode is a pack.
+     */
+    fun isSeasonPack(stream: Stream, runtimeMinutes: Int?): Boolean {
+        val runtime = runtimeMinutes?.takeIf { it > 0 }
+        val sizeGb = if (runtime != null) StreamRanker.sizeGb(stream) else null
+        if (runtime != null && sizeGb != null) {
+            // GB to bits, over the episode's own seconds, in Mbps.
+            return sizeGb * 8_000.0 / (runtime * 60.0) > MAX_EPISODE_MBPS
+        }
+        return declared(stream) == null &&
+            textFields(stream).any { SEASON_MARKER.containsMatchIn(it) }
     }
 
     /**

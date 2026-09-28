@@ -332,7 +332,7 @@ object StreamRanker {
      * `description` - so every reported source line read "(no title)", which
      * is exactly the field that would have answered "which file did it play?".
      */
-    private fun labelOf(stream: Stream): String =
+    internal fun labelOf(stream: Stream): String =
         listOfNotNull(
             stream.title,
             stream.description,
@@ -536,4 +536,12 @@ object StreamRanker {
             else -> value
         }
     }
+
+    /**
+     * The release's own size in GB, read from the text [rank] reads. Exposed
+     * for [EpisodeMatch], which needs a size to decide whether a file can be
+     * one episode at all — a different question from how good a copy it is,
+     * which is all the scoring above asks.
+     */
+    internal fun sizeGb(stream: Stream): Double? = sizeInGb(stream, searchableText(stream))
 }

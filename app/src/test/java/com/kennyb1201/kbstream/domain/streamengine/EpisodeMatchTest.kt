@@ -206,6 +206,95 @@ class EpisodeMatchTest {
         assertEquals(playable, EpisodeMatch.autoplayPick(listOf(torrent, playable), 3, 30))
     }
 
+    // ── season packs ────────────────────────────────────────────────────────
+
+    @Test
+    fun `a season pack does not play in place of the episode that was asked for`() {
+        // The reported capture, to scale: sources for S03E35 whose head is a
+        // 13.48 GB usenet file at 0% availability, the only source naming an
+        // episode naming S03E34, and the episode itself 12 minutes long. The
+        // pack declares no episode at all, so it read as "says nothing" - the
+        // tier auto-play falls back to - and a season plays from its own first
+        // episode.
+        val pack = stream(
+            title = "Paw Patrol S03 COMPLETE 1080p WEB-DL",
+            description = "13.48 GB | 3 Mbps | usenet | NZBGeek",
+            url = "https://host/pack.nzb"
+        )
+        val previous = stream(
+            title = "Paw Patrol S03E34 1080p WEB-DL",
+            description = "716.38 MB | 8 Mbps | EN | debrid",
+            url = "https://store-9.torbox.app/download/e34.mkv"
+        )
+
+        assertNull(EpisodeMatch.autoplayPick(listOf(pack, previous), 3, 35, 12))
+    }
+
+    @Test
+    fun `a pack whose size cannot fit the episode is refused on its own`() {
+        val pack = stream(
+            title = "Paw Patrol S03 COMPLETE 1080p",
+            description = "13.48 GB",
+            url = "https://host/pack.nzb"
+        )
+
+        assertTrue(EpisodeMatch.isSeasonPack(pack, runtimeMinutes = 12))
+        assertNull(EpisodeMatch.autoplayPick(listOf(pack), 3, 35, 12))
+    }
+
+    @Test
+    fun `an episode-sized file whose name omits the number still plays`() {
+        // The size read against the length is a fact about the file, and it says
+        // one episode: a name that happens to be spelled for the season is not
+        // enough on its own to refuse it.
+        val quiet = stream(
+            title = "Paw Patrol S03 1080p WEB-DL",
+            description = "716 MB",
+            url = "https://host/a.mkv"
+        )
+
+        assertFalse(EpisodeMatch.isSeasonPack(quiet, runtimeMinutes = 12))
+        assertEquals(quiet, EpisodeMatch.autoplayPick(listOf(quiet), 3, 35, 12))
+    }
+
+    @Test
+    fun `with no length to read a size against, the name decides`() {
+        val pack = stream(
+            title = "Paw Patrol S03 Complete 1080p WEB-DL",
+            url = "https://host/pack.nzb"
+        )
+        val quiet = stream(title = "Paw Patrol 1080p WEB-DL", url = "https://host/a.mkv")
+
+        assertTrue(EpisodeMatch.isSeasonPack(pack, runtimeMinutes = null))
+        assertNull(EpisodeMatch.autoplayPick(listOf(pack), 3, 35))
+        assertEquals(quiet, EpisodeMatch.autoplayPick(listOf(quiet), 3, 35))
+    }
+
+    @Test
+    fun `a source that names the episode is played however large it is`() {
+        // It says it is the episode, so the size cannot outvote it: the pack
+        // rule only ever judges the files that name nothing.
+        val remux = stream(
+            title = "Paw Patrol S03E35 2160p REMUX",
+            description = "13.48 GB",
+            url = "https://host/e35.mkv"
+        )
+
+        assertEquals(remux, EpisodeMatch.autoplayPick(listOf(remux), 3, 35, 12))
+    }
+
+    @Test
+    fun `the pack rule does not touch a movie request`() {
+        val film = stream(
+            title = "Some Film 2024 2160p REMUX",
+            description = "60 GB",
+            url = "https://host/a.mkv"
+        )
+
+        assertFalse(EpisodeMatch.isSeasonPack(film, runtimeMinutes = null))
+        assertEquals(film, EpisodeMatch.autoplayPick(listOf(film), null, null, 180))
+    }
+
     // ── the id's own pair ───────────────────────────────────────────────────
 
     @Test

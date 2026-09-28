@@ -41,7 +41,9 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.data.reporting.StreamRankReport
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
+import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
@@ -111,7 +113,17 @@ fun StreamsScreen(
             // it by itself is the "playing the wrong episodes" report. Every
             // source in that state means no auto-select at all, with the cards
             // below naming what each file says it is.
-            val top = EpisodeMatch.autoplayPick(streams, season, episode)
+            val top = EpisodeMatch.autoplayPick(streams, season, episode, runtimeMinutes)
+            // What auto-play did, recorded rather than inferred: the rank block
+            // names the HEAD of the list, and the head is not always what a pick
+            // takes - it skips every source that declares another episode and
+            // every one that is a whole season, and it decides nothing at all
+            // when the viewer presses a card instead.
+            StreamRankReport.noteAutoPlay(
+                top?.let { "started · ${StreamRanker.labelOf(it)}" }
+                    ?: "none - the picker is showing instead " +
+                    "(episode length ${runtimeMinutes?.let { "$it min" } ?: "unknown"})"
+            )
             if (top != null) {
                 selectSource(top, streams)
             }

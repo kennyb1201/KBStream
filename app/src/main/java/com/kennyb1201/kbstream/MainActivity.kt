@@ -42,6 +42,7 @@ import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.domain.streamengine.BingeGroupResolver
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
+import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.update.AppUpdater
@@ -741,7 +742,19 @@ fun AppRoot() {
         val top = EpisodeMatch.autoplayPick(
             ordered,
             pending.target.season,
-            pending.target.episode
+            pending.target.episode,
+            pending.target.runtimeMinutes
+        )
+        // Recorded, not inferred from the head of the list: this is the
+        // episode-handoff path a wrong episode is reported from, and the rank
+        // block cannot say whether auto-play started anything at all (see
+        // StreamRankReport.noteAutoPlay).
+        com.kennyb1201.kbstream.data.reporting.StreamRankReport.noteAutoPlay(
+            top?.let { "started · ${StreamRanker.labelOf(it)}" }
+                ?: "none - the picker is showing instead " +
+                "(episode length ${
+                    pending.target.runtimeMinutes?.let { "$it min" } ?: "unknown"
+                })"
         )
         pendingAutoPlay = null
         screen = if (top != null) {
