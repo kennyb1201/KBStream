@@ -89,7 +89,6 @@ import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
-import com.kennyb1201.kbstream.ui.streams.StreamsViewModel
 import coil3.load
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -2476,6 +2475,19 @@ class NativePlayerActivity : ComponentActivity() {
                 // press instead of letting it become an overlay toggle.
                 return true
             }
+        }
+        // The credits recommendations own UP/DOWN and OK too, for as long as
+        // they are up. UP/DOWN used to raise the controls overlay, and raising
+        // it moved focus to it as well - so the row silently lost the D-pad
+        // mid-panel and a press aimed at a pick did nothing. Nothing lives
+        // above or below the row, so the press is swallowed; if focus has
+        // drifted out of the panel it is parked on the first pick first, the
+        // same way LEFT/RIGHT does it.
+        if (event.action == KeyEvent.ACTION_DOWN && creditsPanelForeground() &&
+            (isOverlayRaisingKey(event.keyCode) || isConfirmKey(event.keyCode))
+        ) {
+            if (!bywUi.hasFocus() && bywUi.focusFirst()) return true
+            if (isOverlayRaisingKey(event.keyCode)) return true
         }
         return super.dispatchKeyEvent(event)
     }
@@ -8103,47 +8115,30 @@ class NativePlayerActivity : ComponentActivity() {
         }
     }
 
-    /** PLAY: resolve streams for the pick and hand the top one back. */
+    /**
+     * PLAY: hand the pick back unresolved.
+     *
+     * Which of the two things happens next is the rule PLAY follows everywhere
+     * else - auto-select on resolves and plays the best source, off opens the
+     * source list - and MainActivity owns that setting. This used to resolve the
+     * sources here and hand over the single top stream whatever the setting
+     * said, so with auto-select off there was no way to reach the other sources.
+     */
     private fun bywPlayPick(pick: BywPick, imdbId: String) {
-        val ctx = this
-        scope?.launch {
-            val vm = StreamsViewModel(application = ctx.application)
-            val streams = withContext(Dispatchers.IO) {
-                runCatchingCancellable {
-                    vm.resolve(pick.type, imdbId)
-                }.getOrNull()
-            }.orEmpty()
-
-            val top = streams.firstOrNull { !it.url.isNullOrBlank() }
-            bywDismissed = true
-            finishWithBywResult(
-                action = if (top != null) "play_now" else "go_details",
-                pick = pick,
-                imdbId = imdbId,
-                streamUrl = top?.url,
-                streamName = top?.name ?: top?.title
-            )
-        }
+        bywDismissed = true
+        finishWithBywResult(action = "play_now", pick = pick, imdbId = imdbId)
     }
 
     private fun bywOpenDetails(pick: BywPick, imdbId: String) {
         bywDismissed = true
-        finishWithBywResult(
-            action = "go_details",
-            pick = pick,
-            imdbId = imdbId,
-            streamUrl = null,
-            streamName = null
-        )
+        finishWithBywResult(action = "go_details", pick = pick, imdbId = imdbId)
     }
 
     /** Hands the pick back to MainActivity (which owns Detail/Player nav). */
     private fun finishWithBywResult(
         action: String,
         pick: BywPick,
-        imdbId: String,
-        streamUrl: String?,
-        streamName: String?
+        imdbId: String
     ) {
         setResult(
             RESULT_OK,
@@ -8154,8 +8149,6 @@ class NativePlayerActivity : ComponentActivity() {
                 putExtra("byw_name", pick.name)
                 putExtra("byw_poster", pick.posterUrl)
                 putExtra("byw_backdrop", pick.backdropUrl)
-                putExtra("byw_stream_url", streamUrl)
-                putExtra("byw_stream_name", streamName)
             }
         )
         mediaSession?.release()

@@ -1894,42 +1894,49 @@ fun AppRoot() {
                                 )
                             }
                         }
-                                            "play_now" -> {
-                            val bywUrl = data.getStringExtra("byw_stream_url")
+                        "play_now" -> {
+                            // PLAY on a recommendation follows the same rule as
+                            // PLAY anywhere else (the detail page, the Up Next
+                            // card): auto-select on resolves and plays the best
+                            // source, off opens the source list. It used to hand
+                            // over the one stream the panel had already
+                            // resolved whatever the setting said - and with
+                            // auto-select off there was no way to reach the
+                            // other sources at all.
                             val bywType = data.getStringExtra("byw_type") ?: "movie"
                             val bywId = data.getStringExtra("byw_id").orEmpty()
                             val bywName = data.getStringExtra("byw_name").orEmpty()
                             val bywPoster = data.getStringExtra("byw_poster")
                             val bywBackdrop = data.getStringExtra("byw_backdrop")
-                            if (!bywUrl.isNullOrBlank()) {
-                                screen = Screen.Player(
-                                    url = bywUrl,
-                                    audioUrl = null,
+                            val bywTarget = StreamsTarget(
+                                contentType = bywType,
+                                streamId = bywId,
+                                title = bywName,
+                                displayName = bywName.ifBlank { bywId },
+                                season = null,
+                                episode = null,
+                                resumePositionMs = 0L
+                            )
+                            if (AppPreferences.getAutoSelectStream(context)) {
+                                pendingAutoPlay = PendingPlay(
+                                    target = bywTarget,
                                     parentId = bywId,
                                     parentType = bywType,
-                                    season = null,
-                                    episode = null,
-                                    episodeStreamId = bywId,
-                                    itemName = bywName,
                                     itemPoster = bywPoster,
                                     backdropUrl = bywBackdrop,
-                                    startPositionMs = 0L,
-                                    sources = listOf(
-                                        Stream(
-                                            name = data.getStringExtra("byw_stream_name"),
-                                            title = data.getStringExtra("byw_stream_name"),
-                                            url = bywUrl
-                                        )
-                                    ),
+                                    clearLogoUrl = null,
+                                    overview = null,
+                                    cast = emptyList(),
                                     returnTo = stableBackDestination(current.returnTo)
                                 )
                             } else {
-                                screen = Screen.Detail(
-                                    bywType,
-                                    bywId,
+                                screen = Screen.Streams(
+                                    target = bywTarget,
+                                    parentId = bywId,
+                                    returnTo = stableBackDestination(current.returnTo),
+                                    parentType = bywType,
                                     itemPoster = bywPoster,
-                                    itemBackdrop = bywBackdrop,
-                                    returnTo = stableBackDestination(current.returnTo)
+                                    backdropUrl = bywBackdrop
                                 )
                             }
                         }

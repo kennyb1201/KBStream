@@ -28,7 +28,6 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.displayRuntimeMinutes
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
-import com.kennyb1201.kbstream.ui.streams.StreamsViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -1025,47 +1024,35 @@ class ExternalPlayerActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * PLAY: hand the pick back unresolved.
+     *
+     * Which of the two things happens next is the rule PLAY follows everywhere
+     * else - auto-select on resolves and plays the best source, off opens the
+     * source list - and MainActivity owns that setting. This used to resolve the
+     * sources here and hand over the single top stream whatever the setting
+     * said, so with auto-select off there was no way to reach the other sources.
+     */
     private fun bywPlayPick(pick: BywPick, imdbId: String) {
-        lifecycleScope.launch {
-            val vm = StreamsViewModel(application = application)
-            val streams = withContext(Dispatchers.IO) {
-                runCatchingCancellable { vm.resolve(pick.type, imdbId) }.getOrNull()
-            }.orEmpty()
-
-            val top = streams.firstOrNull { !it.url.isNullOrBlank() }
-            bywDismissed = true
-            finishWithBywResult(
-                action = if (top != null) "play_now" else "go_details",
-                pick = pick,
-                imdbId = imdbId,
-                streamUrl = top?.url,
-                streamName = top?.name ?: top?.title
-            )
-        }
+        bywDismissed = true
+        finishWithBywResult(action = "play_now", pick = pick, imdbId = imdbId)
     }
 
     private fun bywOpenDetails(pick: BywPick, imdbId: String) {
         bywDismissed = true
-        finishWithBywResult(
-            action = "go_details",
-            pick = pick,
-            imdbId = imdbId,
-            streamUrl = null,
-            streamName = null
-        )
+        finishWithBywResult(action = "go_details", pick = pick, imdbId = imdbId)
     }
 
     /**
      * The result contract MainActivity already understands from the other two
-     * players: "play_now" reopens the player on the resolved stream,
+     * players: "play_now" applies the autoplay rule for the pick (the best
+     * source when auto-select is on, the source list when it is off), and
      * "go_details" opens the detail screen.
      */
     private fun finishWithBywResult(
         action: String,
         pick: BywPick,
-        imdbId: String,
-        streamUrl: String?,
-        streamName: String?
+        imdbId: String
     ) {
         nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
         if (!concluded) concluded = true
@@ -1078,8 +1065,6 @@ class ExternalPlayerActivity : ComponentActivity() {
                 putExtra("byw_name", pick.name)
                 putExtra("byw_poster", pick.posterUrl)
                 putExtra("byw_backdrop", pick.backdropUrl)
-                putExtra("byw_stream_url", streamUrl)
-                putExtra("byw_stream_name", streamName)
             }
         )
         finish()

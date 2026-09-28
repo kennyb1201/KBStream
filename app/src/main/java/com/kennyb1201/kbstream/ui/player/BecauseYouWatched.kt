@@ -33,7 +33,6 @@ import com.kennyb1201.kbstream.data.tmdb.displayMetaLine
 import com.kennyb1201.kbstream.data.tmdb.keepRecommendedGenre
 import com.kennyb1201.kbstream.data.tmdb.list
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
-import com.kennyb1201.kbstream.ui.streams.StreamsViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -544,12 +543,6 @@ internal class BecauseYouWatchedUi(
     private val pills = mutableListOf<Pair<TextView, Boolean>>()
     private var featured: Int? = null
 
-    /** The pick whose sources are being resolved right now, if any. */
-    private var resolving: Int? = null
-
-    /** The hint line's own text, so a status message can be undone. */
-    private var hintDefault: CharSequence? = null
-
     /**
      * The end-credits arrangement, from [setCreditsLayout]: how far the header
      * stops short of the shrunk video's corner, how tall that corner is, and the
@@ -570,38 +563,6 @@ internal class BecauseYouWatchedUi(
         }
         panel.addOnLayoutChangeListener(onLayout)
         row.addOnLayoutChangeListener(onLayout)
-        // Captured once, from the layout's own copy: a status message must not
-        // become the text it is restored to.
-        hintDefault = hintView()?.text
-    }
-
-    /**
-     * The hint line under the row ("Pick a title, or press BACK to exit").
-     *
-     * Found by position rather than by id: each player's copy lives in its own
-     * layout, and the two ids differ (byw_hint / mpv_byw_hint). The hint is the
-     * panel's last direct TextView - the kicker and the title come before it,
-     * and the featured strip is a container, so it cannot be mistaken for one.
-     */
-    private fun hintView(): TextView? {
-        for (index in panel.childCount - 1 downTo 0) {
-            val child = panel.getChildAt(index)
-            if (child is TextView && child !== title) return child
-        }
-        return null
-    }
-
-    /** Shows a one-line status where the row's hint text normally sits. */
-    private fun setHint(text: CharSequence) {
-        val hint = hintView() ?: return
-        if (hintDefault == null) hintDefault = hint.text
-        hint.text = text
-    }
-
-    /** Puts the hint line's own text back. */
-    private fun restoreHint() {
-        val hint = hintView() ?: return
-        hintDefault?.let { hint.text = it }
     }
 
     val isVisible: Boolean
@@ -760,8 +721,6 @@ internal class BecauseYouWatchedUi(
         metaCache.clear()
         logoCache.clear()
         featured = null
-        resolving = null
-        restoreHint()
 
         picks.forEachIndexed { index, pick ->
             val card = LinearLayout(host).apply {
@@ -930,45 +889,19 @@ internal class BecauseYouWatchedUi(
         pick.imdbId ?: cards[pick.tmdbId]?.imdbId ?: "tmdb:${pick.tmdbId}"
 
     /**
-     * PLAY for one card: resolve its sources here, then hand the pick to the
-     * activity only when there is something to play.
+     * PLAY for one card: hand the pick straight over, unresolved.
      *
-     * The press used to fire the activity's own resolve and - when the addons
-     * answered nothing - the activity quietly swapped to the DETAILS screen,
-     * leaving no way to tell a slow resolve from a dead button. Resolving in the
-     * panel makes the press visible while it runs, and an empty answer is
-     * reported on the hint line instead of bouncing the user elsewhere. A pick
-     * that does resolve is handed off exactly as before, and the activity's own
-     * resolve then hits the addon repository's short-lived cache, so this adds
-     * no wait of its own.
+     * Which of the two things happens next is not this panel's decision: PLAY
+     * follows one rule everywhere in the app - auto-select resolves and plays
+     * the best source, and with it off the source list opens (see MainActivity).
+     * The panel used to resolve the sources here and hand over the single top
+     * stream whatever the setting said, so with auto-select off there was no way
+     * to reach the other sources, and a pick whose addons answered nothing
+     * turned the press into DETAILS instead. What the press looks like while it
+     * runs is the hand-off splash over the screen behind, not a hint line.
      */
     private fun playPick(pick: BywPick) {
-        if (resolving != null) return
-        val resolveScope = scope()
-        if (resolveScope == null) {
-            // No live scope to resolve on: keep the old behaviour rather than
-            // turning the button into a no-op.
-            onPlay(pick, imdbFor(pick))
-            return
-        }
-        val imdbId = imdbFor(pick)
-        resolving = pick.tmdbId
-        setHint("Finding a stream for ${pick.name}…")
-        resolveScope.launch {
-            val streams = withContext(Dispatchers.IO) {
-                runCatchingCancellable {
-                    StreamsViewModel(host.application).resolve(pick.type, imdbId)
-                }.getOrNull()
-            }.orEmpty()
-            resolving = null
-            if (!isVisible) return@launch
-            if (streams.any { !it.url.isNullOrBlank() }) {
-                restoreHint()
-                onPlay(pick, imdbId)
-            } else {
-                setHint("No stream found for ${pick.name} — press DETAILS to open it")
-            }
-        }
+        onPlay(pick, imdbFor(pick))
     }
 
     /**

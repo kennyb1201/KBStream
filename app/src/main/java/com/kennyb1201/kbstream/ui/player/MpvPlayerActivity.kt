@@ -49,7 +49,6 @@ import kotlinx.coroutines.withContext
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
-import com.kennyb1201.kbstream.ui.streams.StreamsViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -2562,49 +2561,36 @@ class MpvPlayerActivity : ComponentActivity() {
         )
     }
 
-    /** PLAY: resolve streams for the pick and hand the top one back. */
+    /**
+     * PLAY: hand the pick back unresolved.
+     *
+     * Which of the two things happens next is the rule PLAY follows everywhere
+     * else - auto-select on resolves and plays the best source, off opens the
+     * source list - and MainActivity owns that setting. This used to resolve the
+     * sources here and hand over the single top stream whatever the setting
+     * said, so with auto-select off there was no way to reach the other sources.
+     */
     private fun bywPlayPick(pick: BywPick, imdbId: String) {
-        lifecycleScope.launch {
-            val vm = StreamsViewModel(application = application)
-            val streams = withContext(Dispatchers.IO) {
-                runCatchingCancellable { vm.resolve(pick.type, imdbId) }.getOrNull()
-            }.orEmpty()
-
-            val top = streams.firstOrNull { !it.url.isNullOrBlank() }
-            bywDismissed = true
-            finishWithBywResult(
-                action = if (top != null) "play_now" else "go_details",
-                pick = pick,
-                imdbId = imdbId,
-                streamUrl = top?.url,
-                streamName = top?.name ?: top?.title
-            )
-        }
+        bywDismissed = true
+        finishWithBywResult(action = "play_now", pick = pick, imdbId = imdbId)
     }
 
     /** DETAILS: hand the pick back for the catalog's detail screen. */
     private fun bywOpenDetails(pick: BywPick, imdbId: String) {
         bywDismissed = true
-        finishWithBywResult(
-            action = "go_details",
-            pick = pick,
-            imdbId = imdbId,
-            streamUrl = null,
-            streamName = null
-        )
+        finishWithBywResult(action = "go_details", pick = pick, imdbId = imdbId)
     }
 
     /**
      * The result contract MainActivity already understands from the main
-     * player: "play_now" reopens the player on the resolved stream,
+     * player: "play_now" applies the autoplay rule for the pick (the best
+     * source when auto-select is on, the source list when it is off), and
      * "go_details" opens the detail screen.
      */
     private fun finishWithBywResult(
         action: String,
         pick: BywPick,
-        imdbId: String,
-        streamUrl: String?,
-        streamName: String?
+        imdbId: String
     ) {
         surface?.setPaused(true)
         setResult(
@@ -2616,8 +2602,6 @@ class MpvPlayerActivity : ComponentActivity() {
                 putExtra("byw_name", pick.name)
                 putExtra("byw_poster", pick.posterUrl)
                 putExtra("byw_backdrop", pick.backdropUrl)
-                putExtra("byw_stream_url", streamUrl)
-                putExtra("byw_stream_name", streamName)
             }
         )
         finish()
@@ -3456,6 +3440,25 @@ class MpvPlayerActivity : ComponentActivity() {
         if (bywUi?.isVisible == true) {
             val horizontal = event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
                 event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
+            // UP/DOWN have nothing above or below the row to move to, and
+            // letting them run focus search walked out of the row onto the
+            // controls overlay - the panel then sat there without the D-pad,
+            // so OK on a pick did nothing. A vertical press is swallowed, and
+            // any press arriving before the row has focus parks it on the
+            // first pick instead of reaching what is underneath.
+            val vertical = event.keyCode == KeyEvent.KEYCODE_DPAD_UP ||
+                event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN
+            val confirm = event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
+                event.keyCode == KeyEvent.KEYCODE_ENTER ||
+                event.keyCode == KeyEvent.KEYCODE_BUTTON_SELECT
+            if (event.action == KeyEvent.ACTION_DOWN && vertical) {
+                if (bywUi?.hasFocus() == false) bywUi?.focusFirst()
+                return true
+            }
+            if (event.action == KeyEvent.ACTION_DOWN && confirm && bywUi?.hasFocus() == false) {
+                bywUi?.focusFirst()
+                return true
+            }
             if (event.action == KeyEvent.ACTION_DOWN && horizontal &&
                 bywUi?.hasFocus() == false && bywUi?.focusFirst() == true
             ) {
