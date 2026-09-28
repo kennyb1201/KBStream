@@ -68,6 +68,17 @@ fun LandscapeCard(
     // to the plain title text instead of a silent blank corner.
     var logoFailed by remember(logoUrl) { mutableStateOf(false) }
     val showLogo = !logoUrl.isNullOrBlank() && !logoFailed
+    // ...and a logo URL that exists but has not LOADED is not art on screen
+    // either. The corner used to go blank for as long as the fetch took, which
+    // on a rail of cards is the same blank corner the 404 above was fixed for -
+    // and the same bug the pre-playback splash had (a title that is missing and
+    // then there on the next pass, because that one is a cache hit).
+    var logoPainted by remember(logoUrl) { mutableStateOf(false) }
+    // What the corner shows: the title until the art has painted, and the
+    // title alone when there is no usable art at all. No fade on the handover,
+    // unlike the splash's - this composes once per card in a rail and the swap
+    // lands in a single frame, because these requests do not crossfade.
+    val showTitle = !showLogo || !logoPainted
 
     KBCard(
         onClick = onClick,
@@ -141,13 +152,19 @@ fun LandscapeCard(
                     contentDescription = fallbackTitle?.takeIf { it.isNotBlank() },
                     contentScale = ContentScale.Fit,
                     onError = { logoFailed = true },
+                    onSuccess = { logoPainted = true },
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .padding(start = 8.dp, bottom = 6.dp)
                         .height(logoHeight)
                         .widthIn(max = logoMaxWidth)
                 )
-            } else if (!fallbackTitle.isNullOrBlank()) {
+            }
+
+            // The corner title, in the same slot as the logo: the no-logo and
+            // dead-logo case, which is where it always was, plus the load the
+            // logo has not finished (see showTitle).
+            if (showTitle && !fallbackTitle.isNullOrBlank()) {
                 Text(
                     text = fallbackTitle,
                     color = KBTextHi,

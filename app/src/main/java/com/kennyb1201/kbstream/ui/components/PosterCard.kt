@@ -103,6 +103,13 @@ fun PosterCard(
 ) {
     val context = LocalContext.current
     var hasError by remember(posterUrl) { mutableStateOf(false) }
+    // ...and a poster URL that exists but has not LOADED is not art on screen
+    // either. The tile used to be an empty KBSurface for as long as the fetch
+    // took - a grid of them is what a first paint looks like - while the
+    // fallback text below only ever covered a poster that was missing or had
+    // already failed. Same class of blank-box bug as the splash's and the rail
+    // card's corner logo.
+    var posterPainted by remember(posterUrl) { mutableStateOf(false) }
 
     // Settings toggle: the eye badge (started-but-not-finished shows) can be
     // switched off app-wide; the completed checkmark is always unaffected.
@@ -125,13 +132,19 @@ fun PosterCard(
                     contentDescription = contentDescription,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
+                    onSuccess = { posterPainted = true },
                     onError = { state -> 
                         hasError = true
                         onPosterError?.invoke(state.result.throwable) 
                     }
                 )
-            } else {
-                // Fallback text view when URL is missing or failed to load
+            }
+
+            // The fallback text, for a poster that is missing, failed, or still
+            // on its way in (see posterPainted). It is the tile's designed
+            // placeholder either way, so a loading tile reads as this card's
+            // own art rather than as a hole in the rail.
+            if (posterUrl.isNullOrBlank() || hasError || !posterPainted) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()

@@ -65,6 +65,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -699,37 +700,51 @@ private fun HeroClearLogo(
     modifier: Modifier = Modifier
 ) {
     var logoIsDark by remember(url) { mutableStateOf(false) }
-    // A logo URL that exists but fails to load (dead TMDB path, CDN 404)
-    // used to render as blank space. Fall back to the plain title text,
-    // same as the no-logo case.
-    var loadFailed by remember(url) { mutableStateOf(false) }
+    // Has the art actually PAINTED? A logo URL that exists is not a logo on
+    // screen: the fetch takes a moment, and it is a fetch again whenever Coil's
+    // decoded-bitmap cache has been dropped (which is this device's normal
+    // state - see com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache),
+    // or when the hero is the first thing in the session to want that art. The
+    // blank box that left is the same one the 404 case below was fixed for, and
+    // the same bug the pre-playback splash had: a title that is missing and
+    // then there on the next load, because that one is a cache hit.
+    var artPainted by remember(url) { mutableStateOf(false) }
 
-    if (loadFailed) {
-        Text(
-            text = name,
-            color = KBTextHi,
-            style = MaterialTheme.typography.headlineLarge,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
+    // The caller hands this a fixed box (see heroLogoWidth/heroLogoHeight), so
+    // the name can stand in the space the logo will take and nothing under it
+    // moves when the art lands. The name staying up IS the failure case, which
+    // is what the removed loadFailed branch used to do by hand.
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center
+    ) {
+        if (!artPainted) {
+            Text(
+                text = name,
+                color = KBTextHi,
+                style = MaterialTheme.typography.headlineLarge,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
+            )
+        }
+
+        AsyncImage(
+            model = ImageRequest.Builder(LocalContext.current)
+                .data(url)
+                .build(),
+            contentDescription = name,
+            contentScale = ContentScale.Fit,
+            onSuccess = { state ->
+                artPainted = true
+                logoIsDark = runCatching {
+                    isDarkMonochromeArtwork(state.result.image.toBitmap())
+                }.getOrDefault(false)
+            },
+            colorFilter = if (logoIsDark) ColorFilter.tint(KBTextHi) else null,
+            modifier = Modifier.fillMaxSize()
         )
-        return
     }
-
-    AsyncImage(
-        model = ImageRequest.Builder(LocalContext.current)
-            .data(url)
-            .build(),
-        contentDescription = name,
-        contentScale = ContentScale.Fit,
-        onSuccess = { state ->
-            logoIsDark = runCatching {
-                isDarkMonochromeArtwork(state.result.image.toBitmap())
-            }.getOrDefault(false)
-        },
-        onError = { loadFailed = true },
-        colorFilter = if (logoIsDark) ColorFilter.tint(KBTextHi) else null,
-        modifier = modifier
-    )
 }
 
 private fun isDarkMonochromeArtwork(bitmap: android.graphics.Bitmap): Boolean {

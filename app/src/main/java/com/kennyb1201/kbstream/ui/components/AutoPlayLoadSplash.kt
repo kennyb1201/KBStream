@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.components
 
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -12,15 +13,20 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.MaterialTheme
@@ -49,6 +55,10 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
  *  - the Continue Watching / Up Next deep link, which opens DetailScreen only
  *    to hand the player its backdrop/cast and auto-plays as soon as metadata
  *    lands (a spinner on black for that whole load looked like a failure).
+ *
+ * "No logo art" here means no logo URL, NOT a logo that has not arrived yet:
+ * the name stands in until the art has actually painted. See
+ * [PulsingClearLogo] for why that distinction is the whole point.
  */
 @Composable
 fun AutoPlayLoadSplash(
@@ -85,6 +95,7 @@ fun AutoPlayLoadSplash(
             if (resolvedLogo != null) {
                 PulsingClearLogo(
                     url = resolvedLogo,
+                    title = title,
                     contentDescription = title
                 )
             } else {
@@ -124,16 +135,62 @@ private fun absoluteTmdbArt(url: String?, base: String): String? =
         else base + if (raw.startsWith("/")) raw else "/$raw"
     }
 
+/** The logo slot's standing size, and so the size the name has to fit in. */
+private val LOGO_WIDTH = 240.dp
+private val LOGO_HEIGHT = 80.dp
+
+/** How long the name takes to hand over to the art, once the art is in. */
+private const val NAME_HANDOVER_MS = 220
+
+/**
+ * Coil's own fade for the art. Named because the name's fade is scheduled
+ * against it: the art fades up from nothing over this window, and the name is
+ * held for it so the two overlap instead of the slot going briefly dark.
+ */
+private const val ART_FADE_MS = 120
+
 /**
  * Title graphic for the loading splash: the clearlogo art breathing in place
- * (1.0 -> 1.08, alpha 0.7 -> 1.0). A title with no logo art gets the name text
- * instead — see [AutoPlayLoadSplash].
+ * (1.0 -> 1.08, alpha 0.7 -> 1.0), with the title's NAME standing in until the
+ * art has actually painted — and staying if it never does.
+ *
+ * The stand-in is why `title` is a parameter. The logo is a remote image, and
+ * it is fetched again whenever Coil's decoded-bitmap cache has been dropped
+ * ([com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache] does exactly
+ * that under memory pressure, which is the field TV's normal state) or when the
+ * splash is the first thing in the session to ask for that art. A splash that
+ * is up for part of a second can therefore outlive its own artwork. Choosing
+ * the branch by whether a logo URL EXISTS — as this did — leaves the title slot
+ * empty in that case, and an empty title slot on the pre-playback splash reads
+ * as a screen that failed to load. Reported from the field as the "Finding
+ * sources" splash sometimes showing no logo, with the logo back on the NEXT
+ * splash (that one a cache hit).
+ *
+ * So the name covers the load, and the art takes over the moment it paints,
+ * with the crossfade in [ART_FADE_MS] run underneath the name's fade so the
+ * handover never shows an empty slot. A failed fetch leaves the name up, which
+ * is a better answer than an empty slot and is what a logo-less title shows
+ * anyway.
  */
 @Composable
 fun PulsingClearLogo(
     url: String,
+    title: String,
     contentDescription: String
 ) {
+    // Keyed on the url: a splash for a different title starts its own handover
+    // rather than inheriting the previous one's "already painted".
+    var artPainted by remember(url) { mutableStateOf(false) }
+
+    val nameAlpha by animateFloatAsState(
+        targetValue = if (artPainted) 0f else 1f,
+        animationSpec = tween(
+            durationMillis = NAME_HANDOVER_MS,
+            delayMillis = if (artPainted) ART_FADE_MS else 0
+        ),
+        label = "clearLogoName"
+    )
+
     val pulse = rememberInfiniteTransition(label = "clearLogoPulse")
     val scale by pulse.animateFloat(
         initialValue = 1f,
@@ -153,20 +210,44 @@ fun PulsingClearLogo(
         ),
         label = "clearLogoAlpha"
     )
-    AsyncImage(
-        model = ImageRequest.Builder(LocalContext.current)
-            .data(url)
-            .crossfade(true)
-            .build(),
-        contentDescription = contentDescription,
-        contentScale = ContentScale.Fit,
-        modifier = Modifier
-            .width(240.dp)
-            .height(80.dp)
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-                this.alpha = alpha
-            }
-    )
+
+    // One slot for both, at the logo's standing size, so the switch from name
+    // to art cannot move the subtitle underneath it: a two-line name is shorter
+    // than the logo, and a wider one is centered in a wider box (see
+    // LOGO_HEIGHT / LOGO_WIDTH).
+    Box(
+        modifier = Modifier.heightIn(min = LOGO_HEIGHT),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = title,
+            color = KBTextHi,
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            // Faded rather than removed from the composition: the slot keeps its
+            // size for the art that is about to fill it.
+            modifier = Modifier.graphicsLayer { this.alpha = nameAlpha }
+        )
+
+        AsyncImage(
+            model = ImageRequest.Builder(LocalContext.current)
+                .data(url)
+                .crossfade(ART_FADE_MS)
+                .build(),
+            contentDescription = contentDescription,
+            contentScale = ContentScale.Fit,
+            onSuccess = { artPainted = true },
+            modifier = Modifier
+                .width(LOGO_WIDTH)
+                .height(LOGO_HEIGHT)
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                    this.alpha = alpha
+                }
+        )
+    }
 }
