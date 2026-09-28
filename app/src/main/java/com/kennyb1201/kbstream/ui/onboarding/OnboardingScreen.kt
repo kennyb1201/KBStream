@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
@@ -34,7 +36,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -83,9 +84,28 @@ object OnboardingPrefs {
 
 /**
  * First-run welcome screen shown until the user taps "Start Browsing".
- * It's a guided shortcut row into the three real setup surfaces — Add-ons,
- * Live TV (Guide), and Simkl — and never blocks: every action hands off to
- * the actual screens, and the user can finish setup later from Settings.
+ *
+ * Two panes rather than one column, and that is a layout fix, not a taste one.
+ * The TV canvas is ~960x540dp whatever the panel resolution (1080p reports at
+ * 2px/dp, 4K at 4), so a single column stacking the welcome copy, the three
+ * setup cards, the account form and the start button came to roughly 800dp of
+ * content against 540dp of screen. Everything past the first setup card ran off
+ * the bottom edge with nothing to scroll — the account form and "Start
+ * Browsing" itself were unreachable from the D-pad, the same failure the
+ * Settings rail documents. The TV is wide and short, so the fix is to use the
+ * width it has: the account form on the left, the source rows in their own
+ * column on the right, and both fit with room to spare.
+ *
+ * The account step is the FIRST of the four options, ahead of the three source
+ * hand-offs. It is the only one that can arrive already finished — on a second
+ * TV, signing in brings this device's add-ons, IPTV and settings *from* the
+ * account, so the source rows are usually not needed at all. They stay for an
+ * install with nothing to inherit, and for adding a source afterwards.
+ *
+ * It never blocks: every action hands off to a real screen, signing in is
+ * optional, and the user can finish setup later from Settings. The scroll is
+ * insurance for a larger system font scale rather than something anyone should
+ * need — focus scrolls the focused control into view on its own.
  */
 @Composable
 fun OnboardingScreen(
@@ -95,133 +115,128 @@ fun OnboardingScreen(
     onFinish: () -> Unit
 ) {
     Box(
+        contentAlignment = Alignment.Center,
         modifier = Modifier
             .fillMaxSize()
             .background(KBVoid)
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 56.dp, vertical = 44.dp)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 48.dp, vertical = 24.dp)
         ) {
-            Spacer(modifier = Modifier.weight(0.55f))
+            Column(modifier = Modifier.width(392.dp)) {
+                Text(
+                    text = "KBSTREAM",
+                    color = KBAccent,
+                    style = MaterialTheme.typography.displayMedium,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 6.sp
+                )
+                Text(
+                    text = "Welcome — set up your sources in a couple of minutes",
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+                Text(
+                    text = "None of this is required, and every part of it can be " +
+                        "changed later in Settings.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
 
-            Text(
-                text = "KBSTREAM",
-                color = KBAccent,
-                style = MaterialTheme.typography.displayMedium,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 6.sp
-            )
-            Text(
-                text = "Welcome — set up your sources in a couple of minutes",
-                color = KBTextHi,
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.SemiBold,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(top = 10.dp)
-            )
-            Text(
-                text = "Add streaming sources, live TV, and scrobbling. Everything here can be changed later in Settings.",
-                color = KBTextLo,
-                style = MaterialTheme.typography.bodyLarge,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(top = 6.dp)
-            )
+                Spacer(modifier = Modifier.height(18.dp))
 
-            Spacer(modifier = Modifier.height(34.dp))
+                // The account step comes FIRST, ahead of the three source
+                // hand-offs, because it is the only step that can arrive
+                // already finished: signing in brings this device's add-ons,
+                // IPTV and settings from the account. It also used to be
+                // reachable only from Settings → Sync, so a new install on a
+                // second TV had no obvious way to get any of it.
+                OnboardingAccountPanel()
+            }
 
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(20.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                OnboardingCard(
+            Spacer(modifier = Modifier.width(34.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                OnboardingSourceRow(
                     title = "Add Add-ons",
                     description = "Stremio manifests for movies, series & more",
                     icon = Icons.Filled.Add,
-                    onClick = onOpenAddons,
-                    modifier = Modifier.weight(1f)
+                    onClick = onOpenAddons
                 )
-                OnboardingCard(
+                Spacer(modifier = Modifier.height(10.dp))
+                OnboardingSourceRow(
                     title = "Live TV",
                     description = "Import an M3U playlist and EPG guide",
                     icon = Icons.Filled.LiveTv,
-                    onClick = onOpenGuide,
-                    modifier = Modifier.weight(1f)
+                    onClick = onOpenGuide
                 )
-                OnboardingCard(
+                Spacer(modifier = Modifier.height(10.dp))
+                OnboardingSourceRow(
                     title = "Connect Simkl",
                     description = "Scrobble and sync your watched state",
                     icon = Icons.Filled.Sync,
-                    onClick = onOpenSimkl,
-                    modifier = Modifier.weight(1f)
+                    onClick = onOpenSimkl
+                )
+
+                Spacer(modifier = Modifier.height(22.dp))
+
+                androidx.tv.material3.Surface(
+                    onClick = onFinish,
+                    shape = ClickableSurfaceDefaults.shape(shape = KBShapeCard),
+                    colors = ClickableSurfaceDefaults.colors(
+                        containerColor = KBAccent,
+                        contentColor = KBVoid,
+                        focusedContainerColor = KBAccent,
+                        focusedContentColor = KBVoid,
+                        pressedContainerColor = KBAccent.copy(alpha = 0.85f),
+                        pressedContentColor = KBVoid
+                    ),
+                    scale = ClickableSurfaceDefaults.scale(
+                        focusedScale = KBFocusButton,
+                        pressedScale = KBFocusPressed
+                    ),
+                    glow = ClickableSurfaceDefaults.glow(
+                        focusedGlow = Glow(elevationColor = KBAccent, elevation = KBFocusGlowSmall)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 22.dp, vertical = 13.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Check,
+                            contentDescription = null,
+                            tint = KBVoid,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            text = "START BROWSING",
+                            color = KBVoid,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(start = 10.dp)
+                        )
+                    }
+                }
+
+                Text(
+                    text = "You can also skip everything and browse now.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 8.dp)
                 )
             }
-
-            Spacer(modifier = Modifier.height(26.dp))
-
-            // Account step. Sync is the one part of setup that needs an
-            // ACCOUNT rather than a source, and it used to be reachable only
-            // from Settings → Sync — so a new install on a second TV had no
-            // obvious way to get its history, add-ons and settings from the
-            // first one. Sign in or create the KBStream account right here; it
-            // is optional like everything else on this screen.
-            OnboardingAccountPanel()
-
-            Spacer(modifier = Modifier.height(30.dp))
-
-            androidx.tv.material3.Surface(
-                onClick = onFinish,
-                shape = ClickableSurfaceDefaults.shape(shape = KBShapeCard),
-                colors = ClickableSurfaceDefaults.colors(
-                    containerColor = KBAccent,
-                    contentColor = KBVoid,
-                    focusedContainerColor = KBAccent,
-                    focusedContentColor = KBVoid,
-                    pressedContainerColor = KBAccent.copy(alpha = 0.85f),
-                    pressedContentColor = KBVoid
-                ),
-                scale = ClickableSurfaceDefaults.scale(
-                    focusedScale = KBFocusButton,
-                    pressedScale = KBFocusPressed
-                ),
-                glow = ClickableSurfaceDefaults.glow(
-                    focusedGlow = Glow(elevationColor = KBAccent, elevation = KBFocusGlowSmall)
-                ),
-                modifier = Modifier.width(360.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 22.dp, vertical = 14.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Check,
-                        contentDescription = null,
-                        tint = KBVoid,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Text(
-                        text = "START BROWSING",
-                        color = KBVoid,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(start = 10.dp)
-                    )
-                }
-            }
-
-            Text(
-                text = "You can also skip everything and browse now.",
-                color = KBTextLo,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(top = 12.dp)
-            )
-
-            Spacer(modifier = Modifier.weight(0.55f))
         }
     }
 }
@@ -252,12 +267,10 @@ private fun OnboardingAccountPanel() {
     val signedIn = authState as? SupabaseSync.AuthState.SignedIn
     val credentialsValid = email.isNotBlank() && password.length >= 6
     val shape = KBShapePanel
-    // Only ever "the KBStream account" in front of the user: which backend
-    // stores it is our business, not theirs.
 
     androidx.tv.material3.Surface(
         // Plain (non-clickable) Surface: it takes a Shape, SurfaceColors and a
-        // Border, not the Clickable*Defaults variants the cards below use.
+        // Border, not the Clickable*Defaults variants the rows beside it use.
         shape = shape,
         colors = SurfaceDefaults.colors(
             containerColor = KBSurface.copy(alpha = 0.95f),
@@ -269,12 +282,12 @@ private fun OnboardingAccountPanel() {
         ),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(modifier = Modifier.padding(horizontal = 22.dp, vertical = 18.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(38.dp)
                         .background(KBAccent.copy(alpha = 0.16f), KBShapeCard)
                 ) {
                     Icon(
@@ -285,10 +298,10 @@ private fun OnboardingAccountPanel() {
                         },
                         contentDescription = null,
                         tint = KBAccent,
-                        modifier = Modifier.size(22.dp)
+                        modifier = Modifier.size(21.dp)
                     )
                 }
-                Column(modifier = Modifier.padding(start = 14.dp)) {
+                Column(modifier = Modifier.padding(start = 12.dp)) {
                     Text(
                         text = if (signedIn != null) {
                             "SIGNED IN — SYNC IS ON"
@@ -302,17 +315,16 @@ private fun OnboardingAccountPanel() {
                     Text(
                         text = if (signedIn != null) {
                             "${signedIn.email} — watch history, resume positions, " +
-                                "add-ons, IPTV and settings now follow this account " +
-                                "to every device."
+                                "watched status, add-ons, IPTV and settings now " +
+                                "follow this account to every device."
                         } else {
-                            "One KBStream account keeps every device in step: watch " +
-                                "history, resume positions, watched status, add-ons, " +
-                                "IPTV and settings. Sign in with the one you already " +
-                                "use on your other TVs, or make one here."
+                            "One account keeps every device in step: watch " +
+                                "history, resume positions, watched status, " +
+                                "add-ons, IPTV and settings."
                         },
                         color = KBTextLo,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(top = 3.dp)
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 2.dp)
                     )
                 }
             }
@@ -335,31 +347,32 @@ private fun OnboardingAccountPanel() {
                     )
                 }
 
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(top = 12.dp)
-                ) {
-                    KBTextField(
-                        value = email,
-                        onValueChange = { email = it },
-                        placeholder = "Email",
-                        keyboardType = KeyboardType.Email,
-                        // Committing a field must not drop focus, or the next
-                        // D-pad Down escapes the form (same as Settings → Sync).
-                        keepFocusOnDone = true,
-                        modifier = Modifier.weight(1f)
-                    )
-                    KBTextField(
-                        value = password,
-                        onValueChange = { password = it },
-                        placeholder = "Password (6+ characters)",
-                        keyboardType = KeyboardType.Password,
-                        visualTransformation = PasswordVisualTransformation(),
-                        keepFocusOnDone = true,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
+                // Stacked, like Settings → Sync: two fields side by side in a
+                // column this narrow would put the password's own placeholder
+                // out of view.
+                KBTextField(
+                    value = email,
+                    onValueChange = { email = it },
+                    placeholder = "Email",
+                    keyboardType = KeyboardType.Email,
+                    // Committing a field must not drop focus, or the next
+                    // D-pad Down escapes the form (same as Settings → Sync).
+                    keepFocusOnDone = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp)
+                )
+                KBTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    placeholder = "Password (6+ characters)",
+                    keyboardType = KeyboardType.Password,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keepFocusOnDone = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp)
+                )
 
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -367,7 +380,7 @@ private fun OnboardingAccountPanel() {
                     modifier = Modifier.padding(top = 12.dp)
                 ) {
                     OnboardingActionButton(
-                        label = if (busy) "Signing in…" else "SIGN IN",
+                        label = if (busy) "SIGNING IN…" else "SIGN IN",
                         enabled = !busy && credentialsValid
                     ) {
                         SupabaseSync.signIn(context, email, password)
@@ -378,14 +391,15 @@ private fun OnboardingAccountPanel() {
                     ) {
                         SupabaseSync.signUp(context, email, password)
                     }
-                    Text(
-                        text = "Any email + password (6+ characters). Already made " +
-                            "one on another TV? Sign in with the same email.",
-                        color = KBTextLo.copy(alpha = 0.8f),
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.padding(start = 4.dp)
-                    )
                 }
+
+                Text(
+                    text = "Any email + password (6+ characters). Already made one " +
+                        "on another TV? Sign in with the same email.",
+                    color = KBTextLo.copy(alpha = 0.8f),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
             }
         }
     }
@@ -427,13 +441,16 @@ private fun OnboardingActionButton(
     }
 }
 
+/**
+ * One setup hand-off: a compact row rather than a tall card, so three of them
+ * plus the welcome copy still fit above the start button on a 540dp canvas.
+ */
 @Composable
-private fun OnboardingCard(
+private fun OnboardingSourceRow(
     title: String,
     description: String,
     icon: ImageVector,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    onClick: () -> Unit
 ) {
     androidx.tv.material3.Surface(
         onClick = onClick,
@@ -463,45 +480,46 @@ private fun OnboardingCard(
         glow = ClickableSurfaceDefaults.glow(
             focusedGlow = Glow(elevationColor = KBAccent, elevation = KBFocusGlowSmall)
         ),
-        modifier = modifier
+        modifier = Modifier.fillMaxWidth()
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 26.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .size(58.dp)
-                    .background(KBAccent.copy(alpha = 0.16f), KBShapePanel)
-                    .border(1.dp, KBAccent.copy(alpha = 0.4f), KBShapePanel)
+                    .size(42.dp)
+                    .background(KBAccent.copy(alpha = 0.16f), KBShapeCard)
+                    .border(1.dp, KBAccent.copy(alpha = 0.4f), KBShapeCard)
             ) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
                     tint = KBAccent,
-                    modifier = Modifier.size(30.dp)
+                    modifier = Modifier.size(22.dp)
                 )
             }
-            Text(
-                text = title,
-                color = KBTextHi,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(top = 16.dp)
-            )
-            Text(
-                text = description,
-                color = KBTextLo,
-                style = MaterialTheme.typography.bodyMedium,
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 5.dp)
-            )
+            Column(modifier = Modifier.padding(start = 14.dp)) {
+                Text(
+                    text = title,
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = description,
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
         }
     }
 }
