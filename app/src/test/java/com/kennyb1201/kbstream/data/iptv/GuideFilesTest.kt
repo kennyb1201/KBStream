@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.iptv
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -109,5 +110,59 @@ class GuideFilesTest {
         assertTrue(guideNameFor("profile-1", null).endsWith(GuideStorage.DB_SUFFIX))
         assertTrue(guideNameFor("profile-1", "abc123abc123").endsWith(GuideStorage.DB_SUFFIX))
         assertNotEquals(GuideStorage.LEGACY_DB_NAME, guideNameFor("profile-1", null))
+    }
+
+    // ---- is the freshness marker about the guide being read? ---------------
+
+    private val shared = "abc123abc123.iptv_epg.db"
+
+    @Test
+    fun `a marker for the guide being read is not stale`() {
+        assertTrue(markerMatchesGuideFile(shared, shared, "profile-1"))
+        assertTrue(
+            markerMatchesGuideFile(
+                "profile-1.iptv_epg.db",
+                "profile-1.iptv_epg.db",
+                "profile-1"
+            )
+        )
+    }
+
+    @Test
+    fun `a marker from before the guide moved does not match`() {
+        // The state this exists for: the profile's guide is now the shared file,
+        // which is empty until a re-import, while the marker still says fresh.
+        assertFalse(markerMatchesGuideFile("profile-1.iptv_epg.db", shared, "profile-1"))
+    }
+
+    @Test
+    fun `a marker written before names were recorded refers to the profile file`() {
+        // Every marker on a device that has never shared a guide is this one, and
+        // it must keep meaning what it meant then — otherwise every install would
+        // re-import its guide once on upgrade for nothing.
+        assertTrue(
+            markerMatchesGuideFile(null, "profile-1.iptv_epg.db", "profile-1")
+        )
+        assertFalse(markerMatchesGuideFile(null, shared, "profile-1"))
+    }
+
+    @Test
+    fun `with no profile the guide is the legacy file`() {
+        assertEquals(
+            GuideStorage.LEGACY_DB_NAME,
+            recordedGuideName(null, null)
+        )
+        assertTrue(
+            markerMatchesGuideFile(null, GuideStorage.LEGACY_DB_NAME, null)
+        )
+        assertFalse(markerMatchesGuideFile("profile-1.iptv_epg.db", GuideStorage.LEGACY_DB_NAME, null))
+    }
+
+    @Test
+    fun `a recorded name is compared verbatim`() {
+        // The marker is a file name, not a key to re-derive: whatever was
+        // written is what it is compared against, profile stored or not.
+        assertTrue(markerMatchesGuideFile(shared, shared, "profile-2"))
+        assertFalse(markerMatchesGuideFile(shared, "other.iptv_epg.db", "profile-2"))
     }
 }

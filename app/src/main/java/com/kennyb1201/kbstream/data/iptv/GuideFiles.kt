@@ -34,6 +34,14 @@ import java.security.MessageDigest
  * only paid where it buys a whole copy back. Every other profile keeps the name
  * it already has.
  *
+ * The name is therefore a function of EVERY profile's playlist, not of one
+ * profile's own settings: making profile B match profile A moves A's guide to
+ * the shared name too, and A pays the re-import above without its own
+ * configuration having been touched. That is the price of the copy sharing
+ * saves, and it is bounded to one import, on A's next visit to Live TV — a
+ * marker written about the old file no longer matches the new one
+ * ([markerMatchesGuideFile]), so the import cannot be missed.
+ *
  * The one-time cost where it does apply is the bargain the idle sweep already
  * makes: a guide is a cache, and the refresh worker rebuilds it from the
  * provider.
@@ -175,6 +183,41 @@ private const val PLAYLIST_KEY_BYTES = 6
  */
 internal fun guideNameFor(profileId: String, sharedKey: String?): String =
     "${sharedKey ?: profileId}${GuideStorage.DB_SUFFIX}"
+
+/**
+ * The guide file a freshness marker refers to when the marker did not record
+ * one: the file named after the profile, which is the only name a guide had
+ * before profiles could share one ([guideNameFor]).
+ */
+internal fun recordedGuideName(recordedName: String?, profileId: String?): String {
+    if (recordedName != null) return recordedName
+    return if (profileId == null) {
+        GuideStorage.LEGACY_DB_NAME
+    } else {
+        guideNameFor(profileId, null)
+    }
+}
+
+/**
+ * Whether a guide's freshness marker still describes the guide the app will
+ * read.
+ *
+ * The marker (`epg_updated_at`) says "this profile's guide was imported
+ * recently", and until profiles could share a guide the file that meant was
+ * unambiguous: the profile's own. It is not any more — a profile whose playlist
+ * is shared reads `<playlistKey>.iptv_epg.db` — and the file that name points at
+ * starts EMPTY, because merely opening it creates it. Marker recent plus new
+ * file empty is the one state a staleness check cannot see through: it skips the
+ * import and draws a guide with nothing in it, for as long as the marker stays
+ * fresh. So the marker records which file it marked, and a marker about a
+ * different file than the one the app would open means the one-time re-import
+ * that sharing costs has not happened yet.
+ */
+internal fun markerMatchesGuideFile(
+    recordedName: String?,
+    activeName: String,
+    profileId: String?
+): Boolean = recordedGuideName(recordedName, profileId) == activeName
 
 /** The shared playlist key for [profileId], or null when it stands alone. */
 private fun sharedKeyFor(context: Context, profileId: String): String? {

@@ -6775,8 +6775,9 @@ private suspend fun calculateEpisodesRemaining(
                                 )
                             }
 
-                            // What the pinned rails cost, however much of it
-                            // now runs beside the catalog fan-out.
+                            // When the pinned rails LANDED, measured from the
+                            // build start. They now run beside the catalog
+                            // fan-out, so this no longer includes it.
                             PerfTrace.record(
                                 "home.pinned",
                                 android.os.SystemClock.elapsedRealtime() -
@@ -6795,13 +6796,21 @@ private suspend fun calculateEpisodesRemaining(
                                     landscapeCards
                                 )?.let { rail ->
 
-                                    // The rail's fetch above needed no such
-                                    // wait - it started with the pinned rails
-                                    // - but the ORDER it publishes in does:
-                                    // pinned rows come first, so a catalog rail
-                                    // that resolved first must not take the top
-                                    // of Home (the append below places it after
-                                    // the last catalog rail already on screen).
+                                    // The fetch above needed no such wait -
+                                    // it started with the pinned rails - but
+                                    // the PUBLISH does, and not because of the
+                                    // order of the appends: the pinned rows are
+                                    // never streamed. They land in the single
+                                    // publish at the end of this build
+                                    // (finalRails), which REPLACES the list, so
+                                    // a row streamed before it is moved down.
+                                    // Waiting here means the first catalog row
+                                    // appears at about the moment the pinned
+                                    // batch is ready, rather than appearing and
+                                    // then moving. It costs no fetch time (that
+                                    // is already done) and, whenever the pinned
+                                    // batch is the slower half, no latency
+                                    // either - see home.firstRail.
                                     pinnedDeferred.await()
 
                                     // Stale-profile guard (see the final
@@ -6813,7 +6822,9 @@ private suspend fun calculateEpisodesRemaining(
                                     collected.add(rail)
                                     // The first row on screen: the number a
                                     // "Home is slow" report is really about,
-                                    // since rails publish as they resolve.
+                                    // since rails publish as they resolve -
+                                    // here, once the pinned batch above is in
+                                    // hand (see the wait above).
                                     // Atomic because the fan-out resolves
                                     // several rails on different threads.
                                     if (
@@ -6880,10 +6891,18 @@ private suspend fun calculateEpisodesRemaining(
 
                 // Everything this build publishes, on screen. It sits between
                 // home.firstRail (the first row) and home.refreshAll (which ends
-                // with bookkeeping the viewer never sees), and it is the figure
-                // that says whether the overlap above bought anything: pitting it
-                // against home.pinned plus home.catalogRails is exactly the serial
-                // prefix that used to be spent before the first catalog request.
+                // with bookkeeping the viewer never sees).
+                //
+                // It is the figure that says whether the overlap above bought
+                // anything, but NOT by being compared with home.pinned alone:
+                // home.pinned and home.catalogRails are both measured from
+                // before the pinned launch, so their SUM is the total a build
+                // that fetched the pinned rails before starting the fan-out
+                // would have cost. A railsReady below that sum is the overlap's
+                // saving; a railsReady level with it means the shared request
+                // throttle was the real limit and the overlap bought nothing,
+                // in which case the fan-out should go back to starting after
+                // the pinned rows.
                 PerfTrace.record(
                     "home.railsReady",
                     android.os.SystemClock.elapsedRealtime() - buildStartedAtMs

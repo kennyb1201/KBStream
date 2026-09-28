@@ -119,6 +119,13 @@ internal object EpgWindow {
  * through here, because reading and rewriting hundreds of thousands of rows to
  * shorten them is far more I/O than one `UPDATE` is; the shape they produce is
  * the same, and `EpgWindowTest` pins it.
+ *
+ * With one honest exception: SQLite counts Unicode code points where Kotlin
+ * counts UTF-16 units, so a description containing astral characters comes back
+ * from the pass up to one character shorter than this function would have made
+ * it. Both avoid cutting a surrogate pair, and neither is a byte contract with
+ * the other - a stored description is bounded by this cap and drawable by every
+ * screen, which is all it is for.
  */
 internal fun epgDescriptionForStorage(raw: String?): String? {
 

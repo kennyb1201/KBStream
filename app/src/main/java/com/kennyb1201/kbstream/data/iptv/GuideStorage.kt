@@ -90,9 +90,17 @@ internal fun guideFilesToDelete(
  * A profile whose playlist is shared with another profile files its guide under
  * the playlist's name rather than its own (see [GuideFiles]), so the file named
  * after the profile is a duplicate from the moment that shared file exists.
- * Both being on disk is the condition, deliberately: naming the old file before
- * its replacement has been written would throw away a guide a re-import has not
- * yet covered, which is the one failure this sweep must never cause.
+ *
+ * Both being on disk is the condition, and it is deliberately the FILE rather
+ * than its contents: `exists` is not "holds the guide" — SQLite creates the
+ * shared file empty the first time the app opens it, which happens before any
+ * import — and a rule that waited for rows would keep both copies on a device
+ * whose new file is waiting on the network. What makes dropping the old one safe
+ * is the other half of the naming: a marker written about the old file no longer
+ * matches the file the app reads, so the next visit to Live TV re-imports on the
+ * spot (see [GuideFiles.markerMatchesGuideFile]) instead of showing nothing for
+ * a refresh interval. The old file is a duplicate nothing can read; the guide
+ * comes back from the provider rather than from it.
  *
  * Nothing here needs to know which file is the active one. The old name is
  * never the active profile's name — the active profile's file is the EXPECTED
@@ -359,6 +367,22 @@ internal object GuideStorage {
      * never split. It runs whether or not a stream is playing: in WAL mode a
      * writer does not block the guide's readers, unlike the VACUUM below, which
      * is why only that one is gated on [EpgWriteGate].
+     */
+    /**
+     * Shortens every stored description to [EpgWindow.MAX_DESCRIPTION_CHARS].
+     *
+     * The cut is the SAME cut the import makes, and this statement reads like it
+     * on purpose: 399 characters, trailing whitespace dropped, an ellipsis
+     * appended — `rtrim(substr(…, 1, 399))` is Kotlin's
+     * `take(399).trimEnd()` (see [EpgWindow.epgDescriptionForStorage]). Keep the
+     * two in step: a guide that had been through maintenance must not hold
+     * something the importer would never write.
+     *
+     * They are not byte-identical for a description containing astral
+     * characters, because SQLite counts Unicode code points where Kotlin counts
+     * UTF-16 units, so the Kotlin side can land one character shorter. Both avoid
+     * cutting a surrogate pair in half (SQLite by counting code points, Kotlin by
+     * its own guard); the cap is a display cap, not a byte contract.
      */
     private fun trimDescriptions(sql: Sql): Int =
         runCatching {

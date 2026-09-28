@@ -61,10 +61,24 @@ class EpgRefreshWorker(
         // marked stale so the next chance retries it.
         prefs.edit()
             .putLong(KEY_EPG_UPDATED_AT, System.currentTimeMillis())
+            .putString(KEY_EPG_DB_NAME, activeGuideName())
             .apply()
 
         return Result.success()
     }
+
+    /**
+     * The guide file this run imported into.
+     *
+     * Recorded beside the freshness marker, because the marker is only about a
+     * file: a profile whose playlist is shared reads a guide named after the
+     * playlist rather than the profile (see [GuideFiles]), and a marker that did
+     * not say which file it was about would leave the in-app staleness check
+     * unable to tell a freshly imported guide from an empty one under a new name
+     * (see IptvViewModel.guideFileMoved).
+     */
+    private fun activeGuideName(): String =
+        com.kennyb1201.kbstream.data.iptv.db.IptvDatabase.activeFileName(applicationContext)
 
     /**
      * The configured guide sources, assembled exactly as
@@ -92,10 +106,11 @@ class EpgRefreshWorker(
 
         // Keys of the profile-scoped "iptv_prefs" store; must stay in step
         // with IptvViewModel's KEY_EPG_URL / KEY_EXTRA_EPG_URLS /
-        // KEY_EPG_UPDATED_AT.
+        // KEY_EPG_UPDATED_AT / KEY_EPG_DB_NAME.
         const val PREFS_NAME = "iptv_prefs"
         const val KEY_EPG_URL = "epg_url"
         const val KEY_EXTRA_EPG_URLS = "extra_epg_urls"
         const val KEY_EPG_UPDATED_AT = "epg_updated_at"
+        const val KEY_EPG_DB_NAME = "epg_db_name"
     }
 }

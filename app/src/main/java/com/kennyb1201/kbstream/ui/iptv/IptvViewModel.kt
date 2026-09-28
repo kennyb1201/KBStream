@@ -896,7 +896,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         if (refreshJob?.isActive == true) return
         val playlistNeedsRefresh = isStale(KEY_PLAYLIST_UPDATED_AT, PLAYLIST_REFRESH_MS)
         val guideNeedsRefresh = allEpgUrls().isNotEmpty() &&
-            isStale(KEY_EPG_UPDATED_AT, EPG_REFRESH_MS)
+            (isStale(KEY_EPG_UPDATED_AT, EPG_REFRESH_MS) || guideFileMoved())
         if (!playlistNeedsRefresh && !guideNeedsRefresh) return
         refreshJob = viewModelScope.launch {
             if (playlistNeedsRefresh) {
@@ -969,6 +969,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             _guideRefreshTick.value += 1
             requestInitialGuideWindow()
             markUpdated(KEY_EPG_UPDATED_AT)
+            markGuideFile()
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
             reportFailure(_guideError, t)
@@ -1091,6 +1092,41 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     ): String =
         "${playlist?.sourceUrl}|${guideUrls.joinToString(",")}|$refreshTick"
 
+    /**
+     * True when the guide the app would read is not the one the freshness marker
+     * was written about.
+     *
+     * A profile whose playlist is shared with another profile reads a guide
+     * named after the playlist instead of after itself (see
+     * [com.kennyb1201.kbstream.data.iptv.GuideFiles]), and the file that name
+     * points at is created empty the first time it is opened — so without this
+     * the marker would keep saying the guide is fresh while the guide has no
+     * rows in it. The cost is the one-time re-import that sharing a guide file
+     * is documented to cost, paid on the next visit to Live TV instead of up to
+     * a refresh interval later; after that import the marker records the file it
+     * wrote and this stops firing.
+     */
+    private fun guideFileMoved(): Boolean =
+        !com.kennyb1201.kbstream.data.iptv.markerMatchesGuideFile(
+            recordedName = prefs.getString(KEY_EPG_DB_NAME, null),
+            activeName =
+                com.kennyb1201.kbstream.data.iptv.db.IptvDatabase.activeFileName(app),
+            profileId = com.kennyb1201.kbstream.data.sync.ProfileStorage.activeProfileId(app)
+        )
+
+    /**
+     * Records the guide file [markUpdated] has just marked fresh, so a later
+     * check can tell whether the marker is about the file being read
+     * ([guideFileMoved]).
+     */
+    private fun markGuideFile() {
+        prefs.edit()
+            .putString(
+                KEY_EPG_DB_NAME,
+                com.kennyb1201.kbstream.data.iptv.db.IptvDatabase.activeFileName(app)
+            )            .apply()
+    }
+
     private fun isStale(key: String, maxAgeMs: Long): Boolean {
         val updatedAt = prefs.getLong(key, 0L)
         return updatedAt == 0L || System.currentTimeMillis() - updatedAt >= maxAgeMs
@@ -1172,6 +1208,14 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         const val KEY_HIDDEN_CHANNEL_IDS = "hidden_channel_ids"
         const val KEY_PLAYLIST_UPDATED_AT = "playlist_updated_at"
         const val KEY_EPG_UPDATED_AT = "epg_updated_at"
+
+        /**
+         * The guide FILE [KEY_EPG_UPDATED_AT] was written about. Read only
+         * together with [guideFileMoved]: a marker about a different file than
+         * the app would open is a guide that has not been re-imported under its
+         * new name yet.
+         */
+        const val KEY_EPG_DB_NAME = "epg_db_name"
         const val STOP_TIMEOUT_MS = 5_000L
         const val INITIAL_GUIDE_WINDOW_SIZE = 80
         const val MAX_GUIDE_CHANNELS_PER_REQUEST = 80

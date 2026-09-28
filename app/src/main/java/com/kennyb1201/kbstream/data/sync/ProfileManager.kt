@@ -78,20 +78,42 @@ object ProfileManager {
      * The ids of every profile this device holds.
      *
      * From the in-memory list when it is loaded, and from the stored blob
-     * otherwise: a background worker runs without [init] having populated it,
-     * and there the parse is once per pass. Callers in the running app get the
-     * loaded list, which is what makes this cheap enough to ask per database
-     * open — a guide's file name depends on which profiles exist (see
-     * [com.kennyb1201.kbstream.data.iptv.GuideFiles]).
+     * otherwise - a background worker runs without [init] having populated it.
+     * The decoded blob is cached against the blob it was decoded from, because
+     * the caller is a hot one: a guide's file name depends on which profiles
+     * exist (see [com.kennyb1201.kbstream.data.iptv.GuideFiles]), so this is
+     * asked on every database open, and re-decoding the profiles JSON on a path
+     * that never used to touch it is work for nothing.
      */
     fun profileIds(context: Context): List<String> {
         val loaded = _profiles.value
-        return if (loaded.isNotEmpty()) {
-            loaded.map { profile -> profile.id }
-        } else {
-            loadProfiles(context).map { profile -> profile.id }
-        }
+        if (loaded.isNotEmpty()) return loaded.map { profile -> profile.id }
+
+        val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_PROFILES, null)
+        idsCache?.takeIf { cached -> cached.raw == raw }?.let { cached -> return cached.ids }
+
+        val ids =
+            if (raw == null) {
+                emptyList()
+            } else {
+                loadProfiles(context).map { profile -> profile.id }
+            }
+        idsCache = IdsCache(raw, ids)
+        return ids
     }
+
+    /**
+     * Decoded profile ids, with the blob they were decoded from.
+     *
+     * One object rather than two fields so a reader can never see the ids of one
+     * blob beside the raw text of another: the pair is replaced in a single
+     * @Volatile write.
+     */
+    private class IdsCache(val raw: String?, val ids: List<String>)
+
+    @Volatile
+    private var idsCache: IdsCache? = null
 
     /**
      * The active profile id: the bound one when there is one, otherwise the
@@ -395,6 +417,17 @@ object ProfileManager {
                 .closeScopedInstanceForSwitch()
         }
 
+        // The guide this profile is reading, resolved BEFORE the profile and its
+        // stores are gone: a profile whose playlist is shared with another keeps
+        // its guide under the playlist's name rather than its own (see
+        // com.kennyb1201.kbstream.data.iptv.GuideFiles), and the deleteDatabase
+        // calls below only know the profile-named one.
+        val guideName =
+            runCatching {
+                com.kennyb1201.kbstream.data.iptv.GuideFiles
+                    .expectedNameByProfile(context)[profileId]
+            }.getOrNull()
+
         val updated = loadProfiles(context).filterNot { it.id == profileId }
         saveProfiles(context, updated)
         _profiles.value = updated
@@ -406,6 +439,24 @@ object ProfileManager {
         }
         context.deleteDatabase(ProfileStorage.dbName(profileId, "kbstream_watch_history"))
         context.deleteDatabase(ProfileStorage.dbName(profileId, "iptv_epg.db"))
+
+        // ...plus the guide that is NOT named after the profile, when no profile
+        // that is LEFT expects that file. Two profiles on one playlist share one
+        // guide, so deleting it unasked would take a surviving profile's guide
+        // with it - and leaving it holds hundreds of megabytes for a profile the
+        // viewer has just removed. Its playlist prefs are read from the profiles
+        // that remain, so the deleted profile's own (already cleared) store is
+        // never consulted.
+        if (guideName != null && guideName != ProfileStorage.dbName(profileId, "iptv_epg.db")) {
+            val stillExpected =
+                runCatching {
+                    com.kennyb1201.kbstream.data.iptv.GuideFiles
+                        .expectedNameByProfile(context)
+                        .values
+                        .contains(guideName)
+                }.getOrDefault(true)
+            if (!stillExpected) context.deleteDatabase(guideName)
+        }
 
         // Remove any uploaded avatar files for this profile.
         java.io.File(context.filesDir, "avatars").listFiles()
@@ -688,7 +739,20 @@ object ProfileStorage {
         return root.listFiles()?.map { it.nameWithoutExtension } ?: emptyList()
     }
 
-    /** Copies legacy un-namespaced stores into a profile's namespace. */
+    /**
+     * Copies legacy un-namespaced stores into a profile's namespace.
+     *
+     * The guide is copied to the name the profile's own file has, which is the
+     * name it will actually be read by while this profile is the only one
+     * configured with its playlist ([com.kennyb1201.kbstream.data.iptv.GuideFiles]
+     * shares a file only when two profiles are on the same playlist URLs). This
+     * runs for the FIRST profile to adopt the legacy snapshot, so no other
+     * profile exists to share with — the one exception being a device whose
+     * profiles arrived from sync before the adoption ran, where the copy lands
+     * under a name the app does not open. That is a stale file the sweep
+     * reclaims, and the guide costs one re-import rather than being lost
+     * (see [com.kennyb1201.kbstream.data.iptv.markerMatchesGuideFile]).
+     */
     fun copyLegacyIntoProfile(context: Context, profileId: String) {
         val legacyPrefs = listOf(
             "kbstream_player_prefs", "kbstream_addons", "kbstream_watched_overrides",
