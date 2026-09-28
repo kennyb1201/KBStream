@@ -5929,25 +5929,6 @@ private suspend fun calculateEpisodesRemaining(
         }
     }
 
-    private fun badgePriority(
-        badge: UpNextBadge
-    ): Int =
-
-        when (badge) {
-
-            UpNextBadge.NEW_SEASON ->
-                0
-
-            UpNextBadge.NEW_EPISODE ->
-                1
-
-            UpNextBadge.CONTINUE_WATCHING ->
-                2
-
-            UpNextBadge.NEXT_UP ->
-                3
-        }
-
     private fun progressFromHistory(
         positionMs: Long,
         durationMs: Long
@@ -6041,20 +6022,10 @@ private suspend fun calculateEpisodesRemaining(
                         }
                 )
             }
-            .sortedWith(
-
-                compareBy<UpNextItem> {
-                    badgePriority(it.badge)
-                }
-
-                    .thenByDescending {
-                        it.recencyTimestamp
-                    }
-
-                    .thenBy {
-                        it.title.lowercase()
-                    }
-            )
+            // Watching first, most recently watched first, and the news
+            // behind it - see UpNextRailOrder.kt for why that order is the
+            // rail's whole point, and UpNextRailOrderTest for the rule.
+            .sortedWith(upNextRailComparator)
     }
 
     private fun showDedupeKey(
