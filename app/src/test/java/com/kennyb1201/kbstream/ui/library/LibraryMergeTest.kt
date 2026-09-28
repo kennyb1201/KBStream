@@ -14,6 +14,9 @@ import org.junit.Test
  *    Simkl watchlist AND an MDBList list renders exactly one row.
  *  - applyUnwatched drops watched rows, keeps rows that cannot be
  *    resolved to a badge key yet (no IMDB id), and is a no-op when off.
+ *  - applyYears backfills a release year a source never sent (the pinned
+ *    "Top Today" catalogs send none) without ever overwriting one that a
+ *    row already carries.
  */
 class LibraryMergeTest {
 
@@ -151,6 +154,60 @@ class LibraryMergeTest {
         )
         // "apple" (tt2) is watched and drops; the rest stay alphabetical.
         assertEquals(listOf("Banana", "Cherry"), out.map { it.title })
+    }
+
+    // ── release-year backfill (asserts against the real extracted helper) ──
+
+    @Test
+    fun `a row whose source sent no year takes the resolved one`() {
+        // The pinned "Top Today" previews hold an IMDB id, a name and artwork
+        // and nothing else, which is how a row saved from one of those rails
+        // ended up as the only title in the grid with no year under it.
+        val saved = item("UNABOMBER", LibrarySource.LOCAL, imdb = "tt6933238")
+        val years = mapOf("movie:tt6933238:-" to 2026)
+
+        assertEquals(listOf(2026), applyYears(listOf(saved), years).map { it.year })
+    }
+
+    @Test
+    fun `a year the row already carries is never overwritten`() {
+        val dated = item("Dune", LibrarySource.LOCAL, imdb = "tt15239678", tmdb = 447365)
+            .copy(year = 2021)
+        val years = mapOf("movie:tt15239678:447365" to 1999)
+
+        assertEquals(listOf(2021), applyYears(listOf(dated), years).map { it.year })
+    }
+
+    @Test
+    fun `a row with no resolved year is left alone`() {
+        val unknown = item("Mystery", LibrarySource.LOCAL, imdb = "tt1")
+        val years = mapOf("movie:tt2:-" to 2020)
+
+        assertEquals(listOf(unknown), applyYears(listOf(unknown), years))
+    }
+
+    @Test
+    fun `an empty map is a no-op`() {
+        val items = listOf(item("A", LibrarySource.LOCAL, imdb = "tt1"))
+
+        assertEquals(items, applyYears(items, emptyMap()))
+    }
+
+    @Test
+    fun `the DATE chip orders by a backfilled year`() {
+        // The sort reads the row it is handed, so a year applied after the
+        // sort would caption correctly and still order wrongly.
+        val old = item("Old", LibrarySource.LOCAL, imdb = "tt1").copy(year = 1999)
+        val backfilled = item("New", LibrarySource.LOCAL, imdb = "tt2")
+        val years = mapOf("movie:tt2:-" to 2024)
+
+        val sorted = sortLibraryItems(
+            applyYears(listOf(old, backfilled), years),
+            LibrarySort.RELEASE_DATE,
+            emptyMap()
+        )
+
+        assertEquals(listOf("New", "Old"), sorted.map { it.title })
     }
 
     /** Test bridge: the store object is pure Kotlin for key computation. */

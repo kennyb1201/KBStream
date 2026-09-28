@@ -13,6 +13,7 @@ import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -81,6 +82,15 @@ data class LibraryUiState(
     // so those grids show real posters instead of title-only placeholders.
     val posters: Map<String, String> = emptyMap(),
 
+    // Release year per dedupe key, filled in during enrichment for rows whose
+    // source carried none. The pinned "Top Today" catalogs are the case that
+    // matters: their previews hold an IMDB id, a name and artwork and nothing
+    // else - no `releaseInfo` - so anything saved from those rails used to be
+    // the one row in the grid with no year under its poster. Applied by
+    // [LibraryViewModel.pushDisplay] before sorting, so the DATE chip orders by
+    // the real year too.
+    val years: Map<String, Int> = emptyMap(),
+
     // Watched badges: set of "type::imdbId" keys, same convention the
     // genre/actor screens use.
     val watchedKeys: Set<String> = emptyList<String>().toSet(),
@@ -93,9 +103,9 @@ data class LibraryUiState(
  * Library tab: personal lists and watchlists from local storage, Simkl and
  * MDBList in one screen. Every remote fetch fails soft — an unreachable
  * tracker keeps its section empty instead of breaking the whole tab.
- * Remote rows pass through the Kids Mode ceiling filter; ratings resolve
- * through the TMDB detail cache so the sort + captions match other
- * screens.
+ * Remote rows pass through the Kids Mode ceiling filter; ratings, posters and
+ * missing release years resolve through the TMDB detail cache so the sort +
+ * captions match other screens.
  */
 class LibraryViewModel(
     application: Application
@@ -482,7 +492,8 @@ class LibraryViewModel(
 
     /**
      * Background enrichment for a batch of rows: resolves ratings through
-     * the TMDB detail cache, applies the Kids Mode ceiling to remote
+     * the TMDB detail cache, backfills a missing poster and release year
+     * from the same cached record, applies the Kids Mode ceiling to remote
      * rows, and collects watched badges.
      */
     private fun enrich(items: List<LibraryItem>, version: Int) {
@@ -494,7 +505,8 @@ class LibraryViewModel(
                 val key: String,
                 val rating: Double?,
                 val watched: String?,
-                val poster: String?
+                val poster: String?,
+                val year: Int?
             )
 
             val resolved = coroutineScope {
@@ -544,11 +556,24 @@ class LibraryViewModel(
                                 null
                             }
 
+                            // Release-year backfill, off the same record: an
+                            // add-on catalog is not obliged to send one, and
+                            // the pinned "Top Today" rails send none at all, so
+                            // a title saved from them had no year under its
+                            // poster while every other row had one. A year the
+                            // row already carries always wins.
+                            val year = if (item.year == null) {
+                                detail?.releaseYear()?.toIntOrNull()
+                            } else {
+                                null
+                            }
+
                             Resolved(
                                 key = LocalLibraryStore.dedupeKey(item),
                                 rating = rating,
                                 watched = watched,
-                                poster = poster
+                                poster = poster,
+                                year = year
                             )
                         }
                     }.awaitAll()
@@ -558,14 +583,17 @@ class LibraryViewModel(
 
             val ratings = _uiState.value.ratings.toMutableMap()
             val posters = _uiState.value.posters.toMutableMap()
+            val years = _uiState.value.years.toMutableMap()
             resolved.forEach { r ->
                 r.rating?.let { ratings[r.key] = it }
                 r.poster?.let { posters[r.key] = it }
+                r.year?.let { years[r.key] = it }
             }
 
             _uiState.value = _uiState.value.copy(
                 ratings = ratings,
                 posters = posters,
+                years = years,
                 watchedKeys = _uiState.value.watchedKeys +
                     resolved.mapNotNull { it.watched }.toSet()
             )
@@ -604,18 +632,41 @@ class LibraryViewModel(
         val watched = state.watchedKeys
         val hide = state.hideWatched
         val posters = state.posters
+        val years = state.years
+        // Years are applied BEFORE the sort: the DATE chip orders on the row's
+        // own year, so a backfilled one has to be on the row the sort reads.
         _uiState.value = state.copy(
             allItems = applyUnwatched(
-                applyPosters(sortItems(canonicalAll, sort, ratings), posters), watched, hide
+                applyPosters(
+                    sortItems(applyYears(canonicalAll, years), sort, ratings),
+                    posters
+                ),
+                watched,
+                hide
             ),
             localItems = applyUnwatched(
-                applyPosters(sortItems(canonicalLocal, sort, ratings), posters), watched, hide
+                applyPosters(
+                    sortItems(applyYears(canonicalLocal, years), sort, ratings),
+                    posters
+                ),
+                watched,
+                hide
             ),
             watchlistItems = applyUnwatched(
-                applyPosters(sortItems(canonicalWatchlist, sort, ratings), posters), watched, hide
+                applyPosters(
+                    sortItems(applyYears(canonicalWatchlist, years), sort, ratings),
+                    posters
+                ),
+                watched,
+                hide
             ),
             selectedListItems = applyUnwatched(
-                applyPosters(sortItems(canonicalListItems, sort, ratings), posters), watched, hide
+                applyPosters(
+                    sortItems(applyYears(canonicalListItems, years), sort, ratings),
+                    posters
+                ),
+                watched,
+                hide
             )
         )
     }
@@ -702,6 +753,29 @@ internal fun sortLibraryItems(
     LibrarySort.RATING -> items.sortedWith(
         compareByDescending { ratings[LocalLibraryStore.dedupeKey(it)] ?: 0.0 }
     )
+}
+
+/**
+ * Fills in a missing release year from the resolved-year map (keyed by the
+ * same dedupe rule the merge pipeline uses), leaving a row that already
+ * carries one untouched — a tracker that sent a year knows better than a
+ * backfill. Extracted alongside [sortLibraryItems] for the same testability
+ * reasons, and applied before the sort so the DATE chip sees the real year.
+ */
+internal fun applyYears(
+    items: List<LibraryItem>,
+    years: Map<String, Int>
+): List<LibraryItem> {
+    if (years.isEmpty()) return items
+    return items.map { item ->
+        if (item.year != null) {
+            item
+        } else {
+            years[LocalLibraryStore.dedupeKey(item)]
+                ?.let { item.copy(year = it) }
+                ?: item
+        }
+    }
 }
 
 /**

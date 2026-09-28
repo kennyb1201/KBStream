@@ -72,31 +72,43 @@ private val MyAnimeListTint = Color(0xFF4E7BF0)
  *
  * Split into its own file because DetailScreen.kt is past the size where a
  * single file stays editable (the same reason [DetailRatingEnrichment] lives
- * apart from it). It is a pure function of [ratings]: no state, no view model.
+ * apart from it). It is a pure function of its two arguments: no state, no
+ * view model.
+ *
+ * [tmdbFallback] is TMDB's own vote_average, and it is used ONLY when MDBList
+ * sent no TMDB figure - which is every title when no MDBList key is set. The
+ * detail screen deliberately keeps TMDB's score out of the meta add-on line,
+ * where it would be labelled "IMDb x.x" (see DetailViewModel's meta build),
+ * so the chip labelled TMDB is where it belongs: a title whose catalog and
+ * trackers sent no rating at all still shows its audience score instead of an
+ * empty row.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun MdbListRatingsStrip(ratings: MdbListRatings) {
+internal fun MdbListRatingsStrip(
+    ratings: MdbListRatings?,
+    tmdbFallback: Double? = null
+) {
     val sources = listOfNotNull(
-        ratings.imdb?.let {
+        ratings?.imdb?.let {
             RatingSource("IMDb", it, R.drawable.ic_rating_imdb, ImdbTint)
         },
-        ratings.rottenTomatoes?.let {
+        ratings?.rottenTomatoes?.let {
             RatingSource("Rotten Tomatoes", it, R.drawable.ic_rating_rt, RottenTomatoesTint)
         },
-        ratings.tmdb?.let {
+        (ratings?.tmdb ?: tmdbFallback?.let { "%.1f".format(it) })?.let {
             RatingSource("TMDB", it, R.drawable.ic_rating_tmdb, TmdbTint)
         },
-        ratings.metacritic?.let {
+        ratings?.metacritic?.let {
             RatingSource("Metacritic", it, R.drawable.ic_rating_metacritic, MetacriticTint)
         },
-        ratings.trakt?.let {
+        ratings?.trakt?.let {
             RatingSource("Trakt", it, R.drawable.ic_rating_trakt, TraktTint)
         },
-        ratings.letterboxd?.let {
+        ratings?.letterboxd?.let {
             RatingSource("Letterboxd", it, R.drawable.ic_rating_letterboxd, LetterboxdTint)
         },
-        ratings.myAnimeList?.let {
+        ratings?.myAnimeList?.let {
             RatingSource("MyAnimeList", it, R.drawable.ic_rating_mal, MyAnimeListTint)
         }
     )

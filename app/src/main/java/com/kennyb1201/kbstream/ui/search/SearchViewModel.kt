@@ -17,6 +17,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchTitleResult
+import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.watched.WatchStateBus
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.Deferred
@@ -697,15 +698,24 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
                 val enriched = results.toMutableList()
                 needed.forEach { (index, result) ->
-                    val imdbId = result.meta.id.takeIf { it.startsWith("tt") }
+                    // ANY id flavour reaches TMDB here, not just "tt...":
+                    // fetchEnrichedMetaCached resolves a raw Stremio id (imdb,
+                    // tmdb:, tvdb:, bare numeric). The guard used to drop the
+                    // others, so a catalog keyed by TMDB or TVDB ids never got
+                    // its year/rating filled and its tiles stayed bare.
+                    val rawId = result.meta.id.takeIf { it.isNotBlank() }
                         ?: return@forEach
                     val type = normalizedType(result.type) ?: return@forEach
                     val detail = runCatchingCancellable {
-                        tmdbRepository.fetchEnrichedMetaCached(imdbId, type)
+                        tmdbRepository.fetchEnrichedMetaCached(rawId, type)
                     }.getOrNull() ?: return@forEach
+                    // releaseYear() rather than the raw release_date: it
+                    // prefers the date the audience knows the title by (the US
+                    // release_dates entry) and falls back through the plain
+                    // release/first-air date, which is the same rule the year
+                    // captions elsewhere read.
                     val year = result.year
-                        ?: detail.releaseDate?.take(4)?.toIntOrNull()
-                        ?: detail.firstAirDate?.take(4)?.toIntOrNull()
+                        ?: detail.releaseYear()?.toIntOrNull()
                     val rating = result.rating
                         ?: detail.voteAverage?.takeIf { it > 0.0 }
                     if (year != result.year || rating != result.rating) {

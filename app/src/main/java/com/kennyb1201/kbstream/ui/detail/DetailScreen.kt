@@ -2041,9 +2041,22 @@ fun DetailScreen(
                         // They used to render at the very BOTTOM of the page
                         // inside the REVIEWS section — under cast, network and
                         // production — so in practice they were never seen.
-                        mdbListRatings?.takeIf { it.hasAny }?.let { ratings ->
+                        //
+                        // The row now needs EITHER source: MDBList's chips, or
+                        // TMDB's own score as the TMDB chip. Requiring an
+                        // MDBList figure meant a title with no tracker ratings
+                        // showed nothing here at all, even though TMDB's score
+                        // was already loaded for this screen.
+                        val tmdbScore =
+                            tmdbDetail
+                                ?.voteAverage
+                                ?.takeIf { it > 0.0 }
+                        if (mdbListRatings?.hasAny == true || tmdbScore != null) {
                             item(key = "ratingsrow") {
-                                MdbListRatingsStrip(ratings = ratings)
+                                MdbListRatingsStrip(
+                                    ratings = mdbListRatings,
+                                    tmdbFallback = tmdbScore
+                                )
                             }
                         }
 

@@ -1312,7 +1312,26 @@ Log.d(
     ?.takeIf { it.isNotBlank() }
             ?: resolvedTmdbDetail
                 ?.displayDescription()
-            ?: item.description
+            ?: item.description,
+
+    // Year and score, from TMDB when the add-on sent neither. An add-on is
+    // authoritative about its own catalog entry, but plenty of them ship a
+    // preview with a name and artwork and nothing else - the pinned "Top
+    // Today" rails are the extreme case, and a catalog-only add-on resolves
+    // no meta at all (which is why the `?:` below already fills both from
+    // TMDB). Filling them here too means every reader of this Meta gets the
+    // same answer instead of each one re-deriving a fallback, and it costs
+    // nothing: resolvedTmdbDetail is resolved for this hero either way.
+    releaseInfo =
+        resolvedAddonMeta.releaseInfo
+    ?.trim()
+    ?.takeIf { it.isNotBlank() }
+            ?: resolvedTmdbDetail?.releaseYear(),
+    imdbRating =
+        resolvedAddonMeta.imdbRating
+    ?.trim()
+    ?.takeIf { it.isNotBlank() }
+            ?: resolvedTmdbDetail?.displayRating()
 ) ?: resolvedTmdbDetail?.let { tmdb ->
     Meta(
         id = requestedId,
@@ -2432,6 +2451,12 @@ Log.d(
      * Long-press "Add to Library" on a catalog poster: saves to this
      * profile's local My List, then mirrors to the Simkl and/or MDBList
      * watchlists when connected (best-effort; local write always wins).
+     *
+     * A catalog is not obliged to send a release year - the pinned "Top
+     * Today" rails send none at all - so a missing one is resolved first
+     * (see [resolveLibraryFacts]). The row is then complete the moment it
+     * lands, rather than only once the Library tab's own enrichment pass has
+     * been round, and the tracker mirrors carry the year too.
      */
     fun addToLibrary(
         mediaType: String,
@@ -2441,15 +2466,57 @@ Log.d(
         year: Int? = null,
         posterUrl: String? = null
     ) {
-        LibraryMirror.addToLibrary(
-            context = getApplication(),
-            scope = viewModelScope,
-            mediaType = mediaType,
+        viewModelScope.launch {
+            val facts = resolveLibraryFacts(mediaType, imdbId, tmdbId, year)
+            LibraryMirror.addToLibrary(
+                context = getApplication(),
+                scope = viewModelScope,
+                mediaType = mediaType,
+                imdbId = facts.imdbId,
+                tmdbId = facts.tmdbId,
+                title = title,
+                year = facts.year,
+                posterUrl = posterUrl
+            )
+        }
+    }
+
+    /** The facts a library entry needs that its catalog may not have sent. */
+    private data class LibraryFacts(
+        val imdbId: String?,
+        val tmdbId: Int?,
+        val year: Int?
+    )
+
+    /**
+     * Fills in the TMDB id and the release year for a library add.
+     *
+     * Skipped outright when both are already known, which is every
+     * TMDB-sourced rail: only a catalog that sends neither pays for the
+     * lookup, and that lookup is the cached TMDB detail the pinned rails'
+     * own artwork and the Kids Mode ceiling already read, so it is normally
+     * a memory hit rather than a request.
+     */
+    private suspend fun resolveLibraryFacts(
+        mediaType: String,
+        imdbId: String?,
+        tmdbId: Int?,
+        year: Int?
+    ): LibraryFacts {
+        if (year != null && tmdbId != null) return LibraryFacts(imdbId, tmdbId, year)
+
+        val rawId = imdbId?.takeIf { it.isNotBlank() }
+            ?: tmdbId?.takeIf { it > 0 }?.let { "tmdb:$it" }
+            ?: return LibraryFacts(imdbId, tmdbId, year)
+
+        val detail = runCatchingCancellable {
+            tmdbRepository.fetchEnrichedMetaCached(rawId, mediaType)
+        }.getOrNull() ?: return LibraryFacts(imdbId, tmdbId, year)
+
+        return LibraryFacts(
             imdbId = imdbId,
-            tmdbId = tmdbId,
-            title = title,
-            year = year,
-            posterUrl = posterUrl
+            tmdbId = tmdbId ?: detail.id.takeIf { it > 0 },
+            year = year ?: detail.releaseYear()?.toIntOrNull()
         )
     }
 
