@@ -449,11 +449,19 @@ class MainActivity : ComponentActivity() {
         // cumulative figure rather than a phase delta, so it is recorded here
         // instead of through recordStartupPhase — but it is still LOGGED, or
         // `adb logcat -s STARTUP` would show only three of the four phases.
+        //
+        // FIRST create only (recordLaunch), because the figure is cumulative:
+        // this activity is re-created on a configuration change, on the
+        // theme/profile `recreate()`, and whenever the user comes back to Home
+        // from the player, and on every one of those a plain record() would
+        // write the session's whole elapsed time down as a startup cost.
         val sinceAppStartMs =
             com.kennyb1201.kbstream.data.reporting.PerfTrace.sinceAppStartMs()
-        if (sinceAppStartMs >= 0) {
+        if (
+            sinceAppStartMs >= 0 &&
             com.kennyb1201.kbstream.data.reporting.PerfTrace
-                .record("startup.mainCreate", sinceAppStartMs)
+                .recordLaunch("startup.mainCreate", sinceAppStartMs)
+        ) {
             Log.w(
                 TAG_STARTUP,
                 "startup.mainCreate=${sinceAppStartMs}ms " +

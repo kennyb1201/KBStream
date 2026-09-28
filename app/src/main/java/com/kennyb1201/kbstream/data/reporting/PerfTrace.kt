@@ -50,6 +50,33 @@ internal object PerfTrace {
         return SystemClock.elapsedRealtime() - start
     }
 
+    /**
+     * Labels already recorded through [recordLaunch]. Process-lifetime, and
+     * deliberately NOT cleared by [reset]: the launch happens once per process,
+     * while `reset` is the "clear diagnostics" button.
+     */
+    private val launchLabels = mutableSetOf<String>()
+
+    /**
+     * [record] for a ONE-OFF launch figure, returning whether it landed.
+     *
+     * A launch figure is elapsed-PROCESS time, so it only means what its label
+     * says on the process's first create. Recorded again from a re-created
+     * activity — a configuration change, a theme or profile `recreate()`, or
+     * simply coming back to Home after an episode — the same label reports the
+     * whole session as a "startup" cost. That is not hypothetical: a capture
+     * with 7 minutes of playback on it put `startup.mainCreate=441900ms` at the
+     * head of both [summary]'s slowest list and the diagnostics startup
+     * breakdown, while the real cold start in that same capture was 118ms. It
+     * buried the one genuine symptom in the report under an artifact, and it
+     * reads exactly like a hung launch.
+     */
+    fun recordLaunch(label: String, ms: Long): Boolean {
+        if (!synchronized(lock) { launchLabels.add(label) }) return false
+        record(label, ms)
+        return true
+    }
+
     /** Records one finished operation. Safe from any thread. */
     fun record(label: String, ms: Long, ok: Boolean = true) {
         val sample = Sample(label, ms, SystemClock.elapsedRealtime(), ok)
@@ -79,7 +106,13 @@ internal object PerfTrace {
         }
     }
 
-    /** Drops every sample (used by the "clear diagnostics" action). */
+    /**
+     * Drops every sample (used by the "clear diagnostics" action).
+     *
+     * Leaves the [launchLabels] latch alone on purpose: with the ring empty, a
+     * re-created activity would otherwise be free to record the whole session's
+     * elapsed time as a launch figure all over again.
+     */
     fun reset() {
         synchronized(lock) { samples.clear() }
     }
