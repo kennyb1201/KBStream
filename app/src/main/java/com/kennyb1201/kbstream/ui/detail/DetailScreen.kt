@@ -112,6 +112,8 @@ import com.kennyb1201.kbstream.ui.components.AutoPlayLoadSplash
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
+import com.kennyb1201.kbstream.ui.components.formatRuntimeLabel
+import com.kennyb1201.kbstream.ui.components.formatRuntimeMinutes
 import com.kennyb1201.kbstream.ui.components.heroSharedElement
 import com.kennyb1201.kbstream.ui.player.randomAiredEpisode
 import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
@@ -1742,10 +1744,10 @@ fun DetailScreen(
 
                                     else -> null
                                 },
-                                tmdbDetail?.runtime
-                                    ?.takeIf { it > 0 }
-                                    ?.let { "${it} min" }
-                                    ?: m.runtime,
+                                formatRuntimeLabel(
+                                    tmdbDetail?.runtime,
+                                    m.runtime
+                                ),
                                 m.language?.takeIf { it.isNotBlank() }?.uppercase(),
                                 // IMDb score. MDBList's figure wins over the
                                 // meta add-on's so this line can never
@@ -4436,15 +4438,9 @@ private fun EpisodeCard(
                                     (runtime * (1f - progressFraction))
                                         .toInt()
                                         .coerceAtLeast(1)
-                                val hours = remaining / 60
-                                val minutes = remaining % 60
-                                when {
-                                    hours > 0 && minutes > 0 -> "${hours}h ${minutes}m left"
-                                    hours > 0 -> "${hours}h left"
-                                    else -> "${minutes}m left"
-                                }
+                                "${formatRuntimeMinutes(remaining)} left"
                             } else {
-                                "${runtime}m"
+                                formatRuntimeMinutes(runtime)
                             }
                         Text(
                             text = "🕒 $runtimeLabel",

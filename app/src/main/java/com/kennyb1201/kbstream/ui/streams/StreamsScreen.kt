@@ -45,6 +45,7 @@ import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
 import com.kennyb1201.kbstream.ui.components.StreamBadgeRow
+import com.kennyb1201.kbstream.ui.components.formatRuntimeMinutes
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -318,7 +319,7 @@ private fun StreamsHeader(
                     episodeTitle?.let { append(" · $it") }
                     // Runtime rides on the episode line so the meta line below
                     // stays a single clean "N sources found".
-                    runtimeMinutes?.let { append(" · ${formatStreamRuntime(it)}") }
+                    runtimeMinutes?.let { append(" · ${formatRuntimeMinutes(it)}") }
                 },
                 color = KBAccent,
                 style = MaterialTheme.typography.titleMedium.copy(
@@ -341,7 +342,7 @@ private fun StreamsHeader(
                 sourceLabel
             } else {
                 listOfNotNull(
-                    runtimeMinutes?.let(::formatStreamRuntime),
+                    runtimeMinutes?.let(::formatRuntimeMinutes),
                     sourceLabel
                 ).joinToString(" · ")
             },
@@ -354,16 +355,6 @@ private fun StreamsHeader(
             ),
             modifier = Modifier.padding(top = 8.dp)
         )
-    }
-}
-
-private fun formatStreamRuntime(minutes: Int): String {
-    val hours = minutes / 60
-    val mins = minutes % 60
-    return when {
-        hours > 0 && mins > 0 -> "${hours}h ${mins}m"
-        hours > 0 -> "${hours}h"
-        else -> "${mins}m"
     }
 }
 
