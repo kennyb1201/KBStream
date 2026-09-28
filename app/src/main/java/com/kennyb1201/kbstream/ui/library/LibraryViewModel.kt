@@ -10,6 +10,7 @@ import com.kennyb1201.kbstream.data.library.LibraryMirror
 import com.kennyb1201.kbstream.data.library.LibrarySource
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
@@ -428,7 +429,7 @@ class LibraryViewModel(
             val localLists = LocalLibraryStore.userLists(appContext)
             val mdbListConfigured = MdbListClient.isConfigured(appContext)
             val mdbLists = if (mdbListConfigured) {
-                runCatching {
+                runCatchingCancellable {
                     MdbListClient.getUserLists(appContext).map { list ->
                         LibraryList(
                             id = list.id,
@@ -507,7 +508,7 @@ class LibraryViewModel(
                             }
                             var imdbId = item.imdbId
                             if (imdbId == null && item.tmdbId != null) {
-                                imdbId = runCatching {
+                                imdbId = runCatchingCancellable {
                                     tmdbRepository.resolveImdbId(item.tmdbId, normalizedType)
                                 }.getOrNull()
                             }

@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.detail
 import android.app.Application
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.simkl.SimklPlaybackItem
 import com.kennyb1201.kbstream.data.tmdb.displayRuntimeMinutes
 
@@ -127,7 +128,7 @@ internal object DetailPlaybackResume {
             name = match.movie?.title ?: "movie-$id"
             // Position estimate needs the movie runtime.
             val movieDetail = tmdbId?.let {
-                runCatching { vm.tmdbRepository.getDetailByTmdbId(it, "movie") }.getOrNull()
+                runCatchingCancellable { vm.tmdbRepository.getDetailByTmdbId(it, "movie") }.getOrNull()
             }
             runtimeMinutes = movieDetail?.displayRuntimeMinutes()
         } else {
@@ -139,7 +140,7 @@ internal object DetailPlaybackResume {
             // runtime is often empty for TV, so also try the show-level
             // episode_run_time list.
             val detail = tmdbId?.let {
-                runCatching { vm.tmdbRepository.getDetailByTmdbId(it, "tv") }.getOrNull()
+                runCatchingCancellable { vm.tmdbRepository.getDetailByTmdbId(it, "tv") }.getOrNull()
             }
             runtimeMinutes = detail?.displayRuntimeMinutes()
         }
@@ -248,7 +249,7 @@ internal object DetailPlaybackResume {
             name = match.title ?: "movie-$id"
             // Position estimate needs the movie runtime.
             val movieDetail = tmdbId?.let {
-                runCatching { vm.tmdbRepository.getDetailByTmdbId(it, "movie") }.getOrNull()
+                runCatchingCancellable { vm.tmdbRepository.getDetailByTmdbId(it, "movie") }.getOrNull()
             }
             runtimeMinutes = movieDetail?.displayRuntimeMinutes()
                 ?: runtimeMinutes
@@ -260,7 +261,7 @@ internal object DetailPlaybackResume {
             // runtime is often empty for TV, so also try the show-level
             // episode_run_time list.
             val detail = tmdbId?.let {
-                runCatching { vm.tmdbRepository.getDetailByTmdbId(it, "tv") }.getOrNull()
+                runCatchingCancellable { vm.tmdbRepository.getDetailByTmdbId(it, "tv") }.getOrNull()
             }
             runtimeMinutes = detail?.displayRuntimeMinutes()
                 ?: runtimeMinutes

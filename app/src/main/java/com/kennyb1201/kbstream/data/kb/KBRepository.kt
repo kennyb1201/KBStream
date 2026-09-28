@@ -14,6 +14,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.Request
 import java.io.File
 import java.util.concurrent.TimeUnit
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 /**
  * Loads KB collections profiles: JSON documents (a top-level array of
@@ -235,7 +236,7 @@ class KBRepository private constructor(context: Context) {
                 .delete()
         }
         if (isLocalUrl(url)) {
-            runCatching {
+            runCatchingCancellable {
                 File(context.filesDir, LOCAL_DIR)
                     .resolve(url.removePrefix(LOCAL_SCHEME) + ".json")
                     .delete()
@@ -311,17 +312,17 @@ class KBRepository private constructor(context: Context) {
 
     private suspend fun readDiskCache(url: String): DiskEntry? =
         withContext(Dispatchers.IO) {
-            runCatching {
+            runCatchingCancellable {
                 val file = File(context.filesDir, CACHE_DIR).apply { mkdirs() }
                     .resolve(cacheFileFor(url))
-                if (!file.exists()) return@runCatching null
+                if (!file.exists()) return@runCatchingCancellable null
                 val text = file.readText()
                 // Line 1 is the cache timestamp; the profile JSON follows it.
                 val newline = text.indexOf('\n')
-                if (newline <= 0) return@runCatching null
-                val ts = text.substring(0, newline).toLongOrNull() ?: return@runCatching null
+                if (newline <= 0) return@runCatchingCancellable null
+                val ts = text.substring(0, newline).toLongOrNull() ?: return@runCatchingCancellable null
                 val parsed = profileListAdapter.fromJson(text.substring(newline + 1))
-                    ?: return@runCatching null
+                    ?: return@runCatchingCancellable null
                 DiskEntry(ts, parsed)
             }.getOrNull()
         }
@@ -330,7 +331,7 @@ class KBRepository private constructor(context: Context) {
         url: String,
         profiles: List<KBCollectionProfile>
     ): Unit = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingCancellable {
             val dir = File(context.filesDir, CACHE_DIR).apply { mkdirs() }
             val tmp = dir.resolve(cacheFileFor(url) + ".tmp")
             val final = dir.resolve(cacheFileFor(url))

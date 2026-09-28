@@ -17,6 +17,7 @@ import com.kennyb1201.kbstream.data.kb.KBProfilePrefs
 import com.kennyb1201.kbstream.data.kb.KBRepository
 import com.kennyb1201.kbstream.data.kb.moveRailToEnd
 import com.kennyb1201.kbstream.data.kb.toggleCollectionPin
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -1017,7 +1018,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                             .map { old ->
                                 async(Dispatchers.IO) {
                                     old to
-                                        runCatching {
+                                        runCatchingCancellable {
                                             repository.fetchManifest(old.manifestUrl)
                                         }
                                 }

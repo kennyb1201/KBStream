@@ -21,6 +21,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.player.ExternalPlayer
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
@@ -818,7 +819,7 @@ class ExternalPlayerActivity : ComponentActivity() {
 
         val initialThumb = backdropUrl ?: itemPoster
         if (!initialThumb.isNullOrBlank()) {
-            runCatching { nextUpThumb?.load(initialThumb) }
+            runCatchingCancellable { nextUpThumb?.load(initialThumb) }
         } else {
             nextUpThumb?.setImageDrawable(null)
         }
@@ -869,7 +870,7 @@ class ExternalPlayerActivity : ComponentActivity() {
     private fun fetchNextEpisodeDetails(targetSeason: Int, targetEpisode: Int) {
         lifecycleScope.launch {
             val tmdb = withContext(Dispatchers.IO) {
-                runCatching { tmdbId() }.getOrNull()
+                runCatchingCancellable { tmdbId() }.getOrNull()
             } ?: return@launch
             val nextEp = withContext(Dispatchers.IO) {
                 runCatching {
@@ -881,7 +882,7 @@ class ExternalPlayerActivity : ComponentActivity() {
             pendingNextEpisodeName = nextEp.name
             nextUpEpisodeTitle?.text = nextEp.name ?: "S${targetSeason}E$targetEpisode"
             nextEp.thumbnail?.takeIf { it.isNotBlank() }?.let { still ->
-                runCatching { nextUpThumb?.load(still) }
+                runCatchingCancellable { nextUpThumb?.load(still) }
             }
         }
     }
@@ -1028,7 +1029,7 @@ class ExternalPlayerActivity : ComponentActivity() {
         lifecycleScope.launch {
             val vm = StreamsViewModel(application = application)
             val streams = withContext(Dispatchers.IO) {
-                runCatching { vm.resolve(pick.type, imdbId) }.getOrNull()
+                runCatchingCancellable { vm.resolve(pick.type, imdbId) }.getOrNull()
             }.orEmpty()
 
             val top = streams.firstOrNull { !it.url.isNullOrBlank() }
@@ -1126,7 +1127,7 @@ class ExternalPlayerActivity : ComponentActivity() {
             val repo = TmdbRepository.getInstance(this@ExternalPlayerActivity)
             if (showSeason != null && showEpisode != null) {
                 // An episode is measured against ITS runtime, not the show's.
-                runCatching {
+                runCatchingCancellable {
                     repo.getSeasonEpisodes(tmdb, showSeason, parentId)
                         .firstOrNull { it.episodeNumber == showEpisode }
                         ?.runtimeMinutes
@@ -1134,7 +1135,7 @@ class ExternalPlayerActivity : ComponentActivity() {
                 }.getOrNull()
             } else {
                 null
-            } ?: runCatching {
+            } ?: runCatchingCancellable {
                 repo.getDetailByTmdbId(tmdb, parentType)
                     ?.displayRuntimeMinutes()
             }.getOrNull()

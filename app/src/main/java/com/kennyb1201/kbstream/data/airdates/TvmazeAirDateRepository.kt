@@ -18,6 +18,7 @@ import kotlinx.coroutines.withContext
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import java.util.concurrent.ConcurrentHashMap
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 /**
  * Episode air dates from TVmaze, used to correct TMDB's (see
@@ -134,7 +135,7 @@ class TvmazeAirDateRepository private constructor(context: Context) {
             // a week would pin a missing show as "no dates" long after it
             // appeared.
             if (fetched.isNotEmpty()) {
-                runCatching {
+                runCatchingCancellable {
                     cacheDao.upsert(
                         TmdbJsonCacheEntity(
                             key = diskKey,

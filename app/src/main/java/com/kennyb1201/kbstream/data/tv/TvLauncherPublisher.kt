@@ -9,6 +9,7 @@ import android.os.Build
 import android.util.Log
 import com.kennyb1201.kbstream.MainActivity
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -259,7 +260,7 @@ object TvLauncherPublisher {
 
     private fun parseRows(json: String?): Map<String, String> {
         if (json.isNullOrBlank()) return emptyMap()
-        return runCatching {
+        return runCatchingCancellable {
             val obj = JSONObject(json)
             val result = mutableMapOf<String, String>()
             val keys = obj.keys()

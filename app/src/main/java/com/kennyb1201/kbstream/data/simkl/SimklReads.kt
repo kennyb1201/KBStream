@@ -1,5 +1,7 @@
 package com.kennyb1201.kbstream.data.simkl
 
+import com.kennyb1201.kbstream.data.runCatchingCancellable
+
 /*
  * Read endpoints for [SimklRepository]: live playback sessions, the
  * watching-shows feed, library totals for the connect screen, the account
@@ -129,7 +131,7 @@ suspend fun SimklRepository.getAccountInfoImpl(): SimklUser? {
         runCatching { trackedAccessToken() }.getOrNull()
             ?: return null
 
-    return runCatching {
+    return runCatchingCancellable {
         api.getUserSettings(
             authorization = trackedAuthHeaderFor(accessToken)
         ).user

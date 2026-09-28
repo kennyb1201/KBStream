@@ -37,6 +37,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import org.json.JSONArray
 import java.util.concurrent.atomic.AtomicReferenceArray
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 /**
  * A searchable title result. `meta` is the navigation payload the detail
@@ -817,7 +818,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 val perCatalog = coroutineScope {
                     searchableCatalogs.map { catalog ->
                         async {
-                            catalog to runCatching {
+                            catalog to runCatchingCancellable {
                                 repository.searchCatalog(
                                     baseUrl,
                                     catalog.type,

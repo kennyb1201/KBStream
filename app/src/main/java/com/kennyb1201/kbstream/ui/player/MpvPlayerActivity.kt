@@ -54,6 +54,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 /**
  * The cast card's avatar circle fill, as fixed by its XML. A pure-black theme
@@ -591,10 +592,10 @@ class MpvPlayerActivity : ComponentActivity() {
         // Splash art, the same shape as the main player's: backdrop with the
         // clear logo over it, or the name when there is no logo art.
         (backdropUrl ?: itemPoster)?.takeIf { it.isNotBlank() }?.let { art ->
-            runCatching { loadingBackdropView?.load(art) }
+            runCatchingCancellable { loadingBackdropView?.load(art) }
         }
         clearLogoUrl?.takeIf { it.isNotBlank() }?.let { logo ->
-            runCatching {
+            runCatchingCancellable {
                 loadingLogoView?.load(logo)
                 loadingLogoView?.visibility = View.VISIBLE
                 loadingTitle?.visibility = View.GONE
@@ -2399,7 +2400,7 @@ class MpvPlayerActivity : ComponentActivity() {
         // answers - the same order the main player's card uses.
         val initialThumb = backdropUrl ?: itemPoster
         if (!initialThumb.isNullOrBlank()) {
-            runCatching { nextUpThumb?.load(initialThumb) }
+            runCatchingCancellable { nextUpThumb?.load(initialThumb) }
         } else {
             nextUpThumb?.setImageDrawable(null)
         }
@@ -2466,7 +2467,7 @@ class MpvPlayerActivity : ComponentActivity() {
     private fun fetchNextEpisodeDetails(targetSeason: Int, targetEpisode: Int) {
         lifecycleScope.launch {
             val tmdb = withContext(Dispatchers.IO) {
-                runCatching { tmdbId() }.getOrNull()
+                runCatchingCancellable { tmdbId() }.getOrNull()
             } ?: return@launch
             val nextEp = withContext(Dispatchers.IO) {
                 runCatching {
@@ -2478,7 +2479,7 @@ class MpvPlayerActivity : ComponentActivity() {
             pendingNextEpisodeName = nextEp.name
             nextUpEpisodeTitle?.text = nextEp.name ?: "S${targetSeason}E$targetEpisode"
             nextEp.thumbnail?.takeIf { it.isNotBlank() }?.let { still ->
-                runCatching { nextUpThumb?.load(still) }
+                runCatchingCancellable { nextUpThumb?.load(still) }
             }
         }
     }
@@ -2565,7 +2566,7 @@ class MpvPlayerActivity : ComponentActivity() {
         lifecycleScope.launch {
             val vm = StreamsViewModel(application = application)
             val streams = withContext(Dispatchers.IO) {
-                runCatching { vm.resolve(pick.type, imdbId) }.getOrNull()
+                runCatchingCancellable { vm.resolve(pick.type, imdbId) }.getOrNull()
             }.orEmpty()
 
             val top = streams.firstOrNull { !it.url.isNullOrBlank() }

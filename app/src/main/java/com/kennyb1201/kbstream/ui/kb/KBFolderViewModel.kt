@@ -42,6 +42,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 /** Per-rail load-more state, mirroring StudioScreen's paging model. */
 data class KBRailPagingState(
@@ -204,7 +205,7 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
 
                 coroutineScope {
                     val tmdbDetailDeferred = async {
-                        runCatching {
+                        runCatchingCancellable {
                             when {
                                 item.tmdbId != null && item.tmdbId > 0 ->
                                     tmdbRepository.getDetailByTmdbId(item.tmdbId, type)
@@ -229,7 +230,7 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
                         if (tmdbId == null || tmdbId <= 0) {
                             return@async null
                         }
-                        runCatching {
+                        runCatchingCancellable {
                             heroArtworkRepository.resolve(
                                 id = "tmdb:$tmdbId",
                                 type = type,
@@ -638,7 +639,7 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
                     async {
                         val tmdbId = key.substringAfter("::").toIntOrNull()
                         val imdbId = tmdbId?.let {
-                            runCatching {
+                            runCatchingCancellable {
                                 tmdbRepository.resolveImdbId(it, normalizedType)
                             }.getOrNull()
                         }
@@ -675,7 +676,7 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             val imdbId = item.tmdbId?.let { tmdbId ->
                 _resolvedIds.value[lookupKey(tmdbId, normalized)]
-                    ?: runCatching {
+                    ?: runCatchingCancellable {
                         tmdbRepository.resolveImdbId(tmdbId, normalized)
                     }.getOrNull()
             } ?: item.id.takeIf { it.startsWith("tt") }
@@ -690,7 +691,7 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             val normalized = normalizeType(item.type) ?: return@launch
             val imdbId = resolveForWatchAction(item, normalized) ?: return@launch
-            runCatching {
+            runCatchingCancellable {
                 watchedStatusRepository.markWatchedLocal(imdbId, normalized)
             }
         }
@@ -700,7 +701,7 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             val normalized = normalizeType(item.type) ?: return@launch
             val imdbId = resolveForWatchAction(item, normalized) ?: return@launch
-            runCatching {
+            runCatchingCancellable {
                 watchedStatusRepository.markUnwatchedLocal(imdbId, normalized)
             }
         }

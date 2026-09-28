@@ -42,6 +42,7 @@ import com.kennyb1201.kbstream.data.cache.WatchedStatusEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 /**
  * Cross-device sync over Supabase.
@@ -522,6 +523,12 @@ object SupabaseSync {
      */
     fun persistSessionBeforeProcessExit() {
         val context = appContextRef?.get() ?: return
+        // Plain runCatching on purpose, not runCatchingCancellable: this runs
+        // during an APK install, on a path where the process is about to be
+        // replaced and nothing may throw. The block does not suspend (it
+        // bridges with runBlocking), so there is no cancellation to swallow -
+        // which is also why the migration scanner skips blocks that reach their
+        // suspend calls through runBlocking.
         runCatching {
             kotlinx.coroutines.runBlocking { persistSessionFromClient(context) }
         }
@@ -936,7 +943,7 @@ object SupabaseSync {
             while (isSignedIn()) {
                 delay(OUTBOX_RETRY_MS)
                 if (!outbox.isEmpty) {
-                    runCatching { flushOutbox() }
+                    runCatchingCancellable { flushOutbox() }
                 }
             }
         }

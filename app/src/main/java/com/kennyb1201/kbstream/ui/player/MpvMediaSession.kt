@@ -10,6 +10,7 @@ import android.os.Looper
 import android.util.Log
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 /**
  * The system's now-playing session for the MPV engine.
@@ -142,7 +143,7 @@ internal class MpvMediaSession(
                 )
                 .setState(state, snapshot.positionMs.coerceAtLeast(0L), snapshot.speed)
             if (snapshot.durationMs > 0L) builder.setBufferedPosition(snapshot.durationMs)
-            runCatching { session.setPlaybackState(builder.build()) }
+            runCatchingCancellable { session.setPlaybackState(builder.build()) }
         }
 
         val made = runCatching { mediaMetadata(snapshot) }.getOrNull() ?: return

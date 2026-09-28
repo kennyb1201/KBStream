@@ -23,6 +23,7 @@ import kotlinx.coroutines.sync.withLock
 import com.kennyb1201.kbstream.data.reporting.NetworkTraceInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 /**
  * The profile whose Simkl token produced this repository's process-wide
@@ -174,7 +175,7 @@ class SimklRepository(
         // thread. The warm-up below covers it, so the sweep only needs to stay
         // out of the constructor's way.
         CoroutineScope(Dispatchers.IO).launch {
-            runCatching {
+            runCatchingCancellable {
                 tmdbJsonCacheDao?.deleteByKeys(
                     listOf(
                         "simkl:all_show_items",
@@ -253,7 +254,7 @@ class SimklRepository(
                 ?: return false
 
         return parentIds.any { parentId ->
-            runCatching {
+            runCatchingCancellable {
                 dao
                     .getCompletedForParent(parentId)
                     .any { row ->
@@ -350,7 +351,7 @@ class SimklRepository(
             shows = if (!isMovie) listOf(entry) else emptyList()
         )
 
-        return runCatching {
+        return runCatchingCancellable {
             api.addToWatchlist(bearer(requireAccessToken()), body).isSuccessful
         }.getOrDefault(false)
     }
@@ -472,7 +473,7 @@ class SimklRepository(
         CoroutineScope(
             Dispatchers.IO
         ).launch {
-            runCatching {
+            runCatchingCancellable {
                 tmdbJsonCacheDao?.deleteByKeys(
                     diskKeysToDrop
                 )
@@ -791,7 +792,7 @@ class SimklRepository(
         // Clears the Continue Watching feed in memory and on disk too.
         clearContinueWatchingCache()
 
-        runCatching {
+        runCatchingCancellable {
             tmdbJsonCacheDao?.deleteByKeys(
                 simklDiskKeys(
                     COMPLETED_MOVIES_DISK_KEY_BASE
@@ -810,7 +811,7 @@ class SimklRepository(
         cachedAllShowItemsFetchedAt = 0L
         cachedAllShowItemsToken = null
 
-        runCatching {
+        runCatchingCancellable {
             tmdbJsonCacheDao?.deleteByKeys(
                 simklDiskKeys(
                     ALL_SHOW_ITEMS_DISK_KEY_BASE
@@ -828,7 +829,7 @@ class SimklRepository(
     internal suspend fun clearContinueWatchingCache() {
         cachedContinueWatching = null
         cachedContinueWatchingFetchedAt = 0L
-        runCatching {
+        runCatchingCancellable {
             tmdbJsonCacheDao?.deleteByKeys(
                 simklDiskKeys(
                     CONTINUE_WATCHING_DISK_KEY_BASE
@@ -858,7 +859,7 @@ class SimklRepository(
         CoroutineScope(
             Dispatchers.IO
         ).launch {
-            runCatching {
+            runCatchingCancellable {
                 tmdbJsonCacheDao?.deleteByKeys(
                     keys
                 )
@@ -1479,7 +1480,7 @@ class SimklRepository(
     private suspend fun readSimklJsonFromDisk(
         key: String
     ): TmdbJsonCacheEntity? {
-        return runCatching {
+        return runCatchingCancellable {
             tmdbJsonCacheDao?.getByKey(
                 key
             )
@@ -2209,7 +2210,7 @@ class SimklRepository(
 
                             val movieLocallyCompleted =
                                 movieParentIds.any { parentId ->
-                                    runCatching {
+                                    runCatchingCancellable {
                                         scopedHistoryDao
                                             ?.getCompletedForParent(parentId)
                                             ?.isNotEmpty() == true

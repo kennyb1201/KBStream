@@ -25,6 +25,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 class AddonManager(
     private val context: Context
@@ -1047,7 +1048,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
             targets
                 .map { (baseUrl, type, catalogId) ->
                     async {
-                        runCatching {
+                        runCatchingCancellable {
                             permits.withPermit {
                                 repository.getCatalog(
                                     baseUrl = baseUrl,

@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.player
 
 import android.content.Context
 import android.util.Log
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -70,7 +71,7 @@ object PlaybackHistoryIds {
         if (tmdbId == null || tmdbId <= 0) return raw
 
         val imdb = withTimeoutOrNull(2500L) {
-            runCatching {
+            runCatchingCancellable {
                 TmdbRepository.getInstance(context)
                     .resolveImdbId(tmdbId, parentType)
                     ?.trim()
@@ -147,7 +148,7 @@ object PlaybackHistoryIds {
     ): Int? {
         if (parentId.isBlank()) return null
         return withContext(Dispatchers.IO) {
-            runCatching {
+            runCatchingCancellable {
                 TmdbRepository.getInstance(context)
                     .fetchEnrichedMetaCached(parentId, parentType)
                     ?.id

@@ -141,6 +141,7 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
 import com.kennyb1201.kbstream.data.youtube.YoutubeChunkedDataSourceFactory
 import kotlinx.coroutines.delay
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 private val HomePosterWidth = 124.dp
 private val HomePosterHeight = 180.dp
@@ -1794,7 +1795,7 @@ private fun HomeHeroHost(
             !key.isNullOrBlank() &&
             AppPreferences.getHeroTrailerAutoplay(context)
         ) {
-            runCatching {
+            runCatchingCancellable {
                 TrailerPlayerLauncher.resolvePlayableUrl(
                     key,
                     recordFailure = false

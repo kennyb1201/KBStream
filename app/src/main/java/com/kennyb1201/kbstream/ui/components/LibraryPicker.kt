@@ -41,6 +41,7 @@ import com.kennyb1201.kbstream.data.library.LibraryList
 import com.kennyb1201.kbstream.data.library.LibraryMirror
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
 import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
@@ -266,7 +267,7 @@ fun LibraryAddToListDialog(
                         if (!LibraryMirror.mdbListConnected(context)) {
                             false
                         } else {
-                            runCatching {
+                            runCatchingCancellable {
                                 com.kennyb1201.kbstream.data.mdblist.MdbListClient.addToWatchlist(
                                     context,
                                     listOf(

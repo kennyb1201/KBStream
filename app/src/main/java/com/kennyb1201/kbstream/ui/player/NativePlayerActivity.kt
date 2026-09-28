@@ -104,6 +104,7 @@ import java.util.Locale
 import okhttp3.OkHttpClient
 import org.json.JSONArray
 import java.util.concurrent.TimeUnit
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 private const val TAG = "NativePlayer"
 private const val PERIODIC_SAVE_INTERVAL_MS = 5_000L
@@ -8072,7 +8073,7 @@ class NativePlayerActivity : ComponentActivity() {
         scope?.launch {
             val vm = StreamsViewModel(application = ctx.application)
             val streams = withContext(Dispatchers.IO) {
-                runCatching {
+                runCatchingCancellable {
                     vm.resolve(pick.type, imdbId)
                 }.getOrNull()
             }.orEmpty()

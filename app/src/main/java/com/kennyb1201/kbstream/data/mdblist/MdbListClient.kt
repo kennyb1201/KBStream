@@ -33,6 +33,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 /**
  * `progress` for POST /scrobble/{start,pause,stop}, as the whole percentage
@@ -639,7 +640,7 @@ object MdbListClient {
             if (fetched != null && fetched.hasAny) {
                 if (ratingsCache.size > RATINGS_CACHE_MAX) ratingsCache.clear()
                 ratingsCache[cacheKey] = now to fetched
-                runCatching {
+                runCatchingCancellable {
                     jsonCacheDao?.upsert(
                         TmdbJsonCacheEntity(
                             key = diskKey,
@@ -827,7 +828,7 @@ object MdbListClient {
         // dashboard for the whole playback. A one-shot progress write must
         // not be droppable by whoever happens to cancel its parent.
         scrobbleSendMutex.withLock {
-            runCatching {
+            runCatchingCancellable {
                 val request = Request.Builder()
                     .url("$BASE/scrobble/$action?apikey=$apiKey")
                     .post(body.toString().toRequestBody("application/json".toMediaType()))
@@ -1015,7 +1016,7 @@ object MdbListClient {
         }
 
         return withContext(Dispatchers.IO) {
-            runCatching {
+            runCatchingCancellable {
                 val request = Request.Builder()
                     .url("$BASE/sync/watched?apikey=$apiKey")
                     .post(payload.toString().toRequestBody("application/json".toMediaType()))
@@ -1108,7 +1109,7 @@ object MdbListClient {
         url: String,
         payload: JSONObject
     ): Boolean = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingCancellable {
             val request = Request.Builder()
                 .url(url)
                 .post(payload.toString().toRequestBody("application/json".toMediaType()))
@@ -1211,7 +1212,7 @@ object MdbListClient {
         }
 
         val ok = withContext(Dispatchers.IO) {
-            runCatching {
+            runCatchingCancellable {
                 val request = Request.Builder()
                     .url("$BASE/sync/watched/remove?apikey=$apiKey")
                     .post(payload.toString().toRequestBody("application/json".toMediaType()))
@@ -1240,7 +1241,7 @@ object MdbListClient {
             JSONArray().put(JSONObject().put("ids", ids))
         )
         val ok = withContext(Dispatchers.IO) {
-            runCatching {
+            runCatchingCancellable {
                 val request = Request.Builder()
                     .url("$BASE/sync/watched/remove?apikey=$apiKey")
                     .post(payload.toString().toRequestBody("application/json".toMediaType()))
@@ -1344,7 +1345,7 @@ object MdbListClient {
                     cachedPlaybackKey = apiKey
                     val key = playbackDiskKey(apiKey)
                     val at = cachedPlaybackAt
-                    runCatching {
+                    runCatchingCancellable {
                         jsonCacheDao?.upsert(
                             TmdbJsonCacheEntity(
                                 key = key,
@@ -1420,7 +1421,7 @@ object MdbListClient {
             val episodeKeys = mutableSetOf<String>()
 
             val result = withContext(Dispatchers.IO) {
-            runCatching {
+            runCatchingCancellable {
                 var cursor: String? = null
                 var guard = 0
                 do {
@@ -1504,7 +1505,7 @@ object MdbListClient {
                 val key = snapshotDiskKey(apiKey)
                 val at = cachedSnapshotAt
                 withContext(Dispatchers.IO) {
-                    runCatching {
+                    runCatchingCancellable {
                         jsonCacheDao?.upsert(
                             TmdbJsonCacheEntity(
                                 key = key,
@@ -1546,7 +1547,7 @@ object MdbListClient {
                 if (playbackKey.isNotBlank()) add(playbackDiskKey(playbackKey))
             }
             sessionScope.launch {
-                runCatching { jsonCacheDao?.deleteByKeys(keys) }
+                runCatchingCancellable { jsonCacheDao?.deleteByKeys(keys) }
             }
         }
     }
@@ -1568,7 +1569,7 @@ object MdbListClient {
     /** Shared GET returning a parsed body string, or null when not 2xx. */
     private suspend fun getString(url: String): String? =
         withContext(Dispatchers.IO) {
-            runCatching {
+            runCatchingCancellable {
                 client.newCall(Request.Builder().url(url).get().build())
                     .execute()
                     .use { response ->
@@ -1756,7 +1757,7 @@ object MdbListClient {
         if (apiKey.isBlank()) return null
         val payload = JSONObject().put("name", name)
         return withContext(Dispatchers.IO) {
-            runCatching {
+            runCatchingCancellable {
                 val request = Request.Builder()
                     .url("$BASE/lists/user/add?apikey=$apiKey")
                     .post(payload.toString().toRequestBody("application/json".toMediaType()))
@@ -1787,7 +1788,7 @@ object MdbListClient {
         if (apiKey.isBlank()) return emptyList()
         val body = getString("$BASE/watchlist/items?apikey=$apiKey&limit=1000")
             ?: return emptyList()
-        return runCatching {
+        return runCatchingCancellable {
             val root = JSONObject(body)
             val out = mutableListOf<MdbListEntry>()
             fun collect(key: String, fallbackType: String) {

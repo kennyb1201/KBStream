@@ -49,6 +49,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 /**
  * Ceiling on the add-on meta probe, which stands between the Detail screen and
@@ -747,7 +748,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 // ever spared a reopen inside its own minute; the cache is what
                 // makes later revisits instant too.
                 val tmdbDeferred = async {
-                    runCatching {
+                    runCatchingCancellable {
                         // full = true: THIS is the screen that reads the bulk
                         // (cast, trailer, keywords, reviews), and the object
                         // published to _tmdbDetail is what every one of those
@@ -860,7 +861,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                     simklRepository.hasToken()
                 ) {
                     val tmdbShowId = tmdbDetailResult.getOrNull()?.id
-                    runCatching {
+                    runCatchingCancellable {
                         simklRepository.getWatchedEpisodesForShowByImdb(imdbId = id, tmdbId = tmdbShowId)
                     }.getOrDefault(emptySet())
                 } else {

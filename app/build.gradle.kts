@@ -2,6 +2,9 @@ import java.util.Properties
 
 plugins {
     id("com.android.application")
+    // Consumes the baseline profile the :baselineprofile generator writes:
+    // `./gradlew :app:generateBaselineProfile` on a connected device.
+    id("androidx.baselineprofile")
     id("org.jetbrains.kotlin.android")
     id("com.google.devtools.ksp")
     id("org.jetbrains.kotlin.plugin.compose")
@@ -146,6 +149,11 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = true
+            // Keep the generated profile in the source tree rather than in
+            // build/: it is input to the build (and reviewable in a diff),
+            // the way the exported Room schemas are. Without a generated file
+            // this is a no-op.
+            baselineProfile { saveInSrc = true }
             isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -241,6 +249,29 @@ android {
         // "Method isEmpty in android.text.TextUtils not mocked" from every
         // such test.
         unitTests.isReturnDefaultValues = true
+        // Robolectric tests resolve resources and assets through the merged
+        // debug resources: without this the migration test cannot read the
+        // exported schemas it is handed (see the assets wiring below), and
+        // Room's helper reports them as missing.
+        unitTests.isIncludeAndroidResources = true
+    }
+
+    sourceSets {
+        // MigrationTestHelper reads the exported schemas from ASSETS, not from
+        // the filesystem: it looks for "<database class name>/<version>.json"
+        // in the instrumentation context's assets, and refuses to run without
+        // it. The committed app/schemas directory is exactly that tree, so it
+        // is wired in as an asset root - the same directory the KSP
+        // room.schemaLocation argument above writes.
+        //
+        // On the debug VARIANT rather than a test source set: local unit tests
+        // resolve assets through the merged debug assets
+        // (com/android/tools/test_config.properties -> android_merged_assets),
+        // so anything added to the `test` source set is never seen. Keeping it
+        // off `main` keeps the exported schemas out of the released APK, which
+        // costs a `testReleaseUnitTest` run the same wiring if that is ever
+        // added.
+        getByName("debug") { assets.srcDirs(files("$projectDir/schemas")) }
     }
 }
 
@@ -270,6 +301,17 @@ dependencies {
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
     implementation("com.squareup.moshi:moshi-kotlin:1.15.1")
     implementation("com.google.zxing:core:3.5.3")
+
+    // Baseline profiles, runtime half. The profile itself (a list of the
+    // classes/methods startup touches) is captured by :baselineprofile on a
+    // device and committed under app/src/release/generated/baselineProfiles/;
+    // this dependency is what INSTALLS it. Android 12+ compiles a profile at
+    // install time on its own, but an app that installs itself from a GitHub
+    // release - which is how this one ships, see AppUpdater - is never
+    // installed by Play, so on the API 23-30 boxes it also runs on, nothing
+    // would apply the profile without this. Small, and it does nothing when no
+    // profile is present.
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
 
     // Crash reporting (Sentry)
     implementation("io.sentry:sentry-android:7.19.0")
@@ -392,6 +434,22 @@ dependencies {
     // path of every response instead of the parse they are there for. Test
     // scope only: the app itself still uses the platform's org.json.
     testImplementation("org.json:json:20250107")
+
+    // Room migration tests (see data/history): MigrationTestHelper drives a
+    // real SQLite database through a Migration and validates the result
+    // against the exported schema - the one class of test the JVM-only suite
+    // could not reach, and the gap that let the watch-history schema sit one
+    // version bump away from being dropped unnoticed.
+    testImplementation("androidx.room:room-testing:2.7.1")
+    // ...and Robolectric is what supplies the Android runtime room-testing and
+    // MigrationTestHelper's instrumentation need, so it stays a UNIT test: no
+    // device, no emulator, no androidTest variant, run by the same
+    // `./gradlew testDebugUnitTest` gate as everything else.
+    // 4.14 is the floor here: it is the first release with API 35 support, and
+    // this module compiles against 35 (Robolectric picks the target SDK).
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("androidx.test.ext:junit:1.2.1")
+    testImplementation("androidx.test:core-ktx:1.6.1")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

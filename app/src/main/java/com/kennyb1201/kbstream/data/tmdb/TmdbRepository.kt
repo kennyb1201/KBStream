@@ -33,6 +33,7 @@ import java.time.LocalDate
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 data class StudioItem(val item: TmdbDiscoverItem, val mediaType: String)
 data class StudioSection(val title: String, val items: List<StudioItem>)
@@ -502,7 +503,7 @@ class TmdbRepository private constructor(context: Context) :
         if (cachePruned.compareAndSet(false, true)) {
             val cutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(90)
             CoroutineScope(Dispatchers.IO).launch {
-                runCatching {
+                runCatchingCancellable {
                     imdbResolutionDao.deleteOlderThan(cutoff)
                 }
             }
@@ -523,7 +524,7 @@ class TmdbRepository private constructor(context: Context) :
     private fun pruneJsonCacheOnce() {
         if (jsonCachePruned.compareAndSet(false, true)) {
             CoroutineScope(Dispatchers.IO).launch {
-                runCatching { TmdbJsonCacheMaintenance.trim(tmdbJsonCacheDao) }
+                runCatchingCancellable { TmdbJsonCacheMaintenance.trim(tmdbJsonCacheDao) }
             }
         }
     }
@@ -554,7 +555,7 @@ class TmdbRepository private constructor(context: Context) :
         if (jsonCacheWrites.incrementAndGet() >= JSON_CACHE_TRIM_EVERY_WRITES) {
             jsonCacheWrites.set(0)
             CoroutineScope(Dispatchers.IO).launch {
-                runCatching { TmdbJsonCacheMaintenance.trim(tmdbJsonCacheDao) }
+                runCatchingCancellable { TmdbJsonCacheMaintenance.trim(tmdbJsonCacheDao) }
             }
         }
     }
@@ -620,12 +621,12 @@ class TmdbRepository private constructor(context: Context) :
         normalizedType: String
     ): TmdbDetail? {
         if (normalizedType == "series") {
-            return runCatching {
+            return runCatchingCancellable {
                 api.getTv(tmdbId, apiKey)
             }.getOrNull()
         }
         if (normalizedType == "movie") {
-            return runCatching {
+            return runCatchingCancellable {
                 api.getMovie(tmdbId, apiKey)
             }.getOrNull()
         }
@@ -634,7 +635,7 @@ class TmdbRepository private constructor(context: Context) :
         return runCatching {
             api.getTv(tmdbId, apiKey)
         }.getOrNull()
-            ?: runCatching {
+            ?: runCatchingCancellable {
                 api.getMovie(tmdbId, apiKey)
             }.getOrNull()
     }
@@ -778,7 +779,7 @@ class TmdbRepository private constructor(context: Context) :
         if (!imdbId.isNullOrBlank()) {
             imdbResolutionMemoryCache[key] = now to imdbId
 
-            runCatching {
+            runCatchingCancellable {
                 imdbResolutionDao.upsert(
                     ImdbResolutionEntity(
                         key = key,
@@ -879,13 +880,13 @@ class TmdbRepository private constructor(context: Context) :
 
     suspend fun searchPerson(query: String): List<TmdbSearchPersonResult> {
         if (apiKey.isBlank()) return emptyList()
-        return runCatching { api.searchPerson(query, apiKey).results }
+        return runCatchingCancellable { api.searchPerson(query, apiKey).results }
             .getOrDefault(emptyList())
     }
 
     suspend fun searchCompany(query: String): List<TmdbSearchStudioResult> {
         if (apiKey.isBlank()) return emptyList()
-        return runCatching { api.searchCompany(query, apiKey).results }
+        return runCatchingCancellable { api.searchCompany(query, apiKey).results }
             .getOrDefault(emptyList())
     }
 
@@ -911,7 +912,7 @@ class TmdbRepository private constructor(context: Context) :
 
     suspend fun searchTv(query: String): List<TmdbSearchTitleResult> {
         if (apiKey.isBlank()) return emptyList()
-        return runCatching { api.searchTv(query, apiKey).results }
+        return runCatchingCancellable { api.searchTv(query, apiKey).results }
             .getOrDefault(emptyList())
     }
 
@@ -1103,7 +1104,7 @@ class TmdbRepository private constructor(context: Context) :
     ): List<com.kennyb1201.kbstream.data.tmdb.TmdbKeywordDiscoverItem>? {
         if (apiKey.isBlank()) return null
         val isTv = normalizeType(type) == "series"
-        return runCatching {
+        return runCatchingCancellable {
             if (isTv) {
                 api.discoverTvGeneric(
                     apiKey = apiKey,
@@ -1133,7 +1134,7 @@ class TmdbRepository private constructor(context: Context) :
 
     suspend fun getKBCollectionItems(collectionId: Int): List<TmdbCollectionPart>? {
         if (apiKey.isBlank()) return null
-        return runCatching {
+        return runCatchingCancellable {
             getCollection(collectionId)?.parts
         }.getOrNull()
     }
@@ -1247,7 +1248,7 @@ class TmdbRepository private constructor(context: Context) :
 ): Double? {
     if (apiKey.isBlank()) return null
 
-    return runCatching {
+    return runCatchingCancellable {
         api.getSeasonDetail(
             id = tmdbId,
             seasonNumber = season,
@@ -1608,7 +1609,7 @@ class TmdbRepository private constructor(context: Context) :
 
                     val verdict = availabilitySemaphore.withPermit {
 
-                        runCatching {
+                        runCatchingCancellable {
 
                             fetchEnrichedMetaCached(
                                 imdbId = "tmdb:$tmdbId",
@@ -1656,7 +1657,7 @@ class TmdbRepository private constructor(context: Context) :
         val isSeries = mediaType.equals("series", ignoreCase = true) ||
             mediaType.equals("tv", ignoreCase = true)
         val detail = availabilitySemaphore.withPermit {
-            runCatching {
+            runCatchingCancellable {
                 fetchEnrichedMetaCached(
                     imdbId = "tmdb:$tmdbId",
                     type = if (isSeries) "series" else "movie"
@@ -1702,7 +1703,7 @@ class TmdbRepository private constructor(context: Context) :
                         meta.type.equals("tv", ignoreCase = true)
                     val ceiling = kidsMaxAge()
                     val detail = availabilitySemaphore.withPermit {
-                        runCatching {
+                        runCatchingCancellable {
                             fetchEnrichedMetaCached(
                                 imdbId = meta.id,
                                 type = if (isSeries) "series" else "movie"
@@ -1939,7 +1940,7 @@ class TmdbRepository private constructor(context: Context) :
      */
     suspend fun searchKeywords(query: String): List<TmdbSearchKeywordResult> {
         if (apiKey.isBlank()) return emptyList()
-        return runCatching { api.searchKeyword(query, apiKey).results }
+        return runCatchingCancellable { api.searchKeyword(query, apiKey).results }
             .getOrDefault(emptyList())
     }
 
@@ -2165,7 +2166,7 @@ class TmdbRepository private constructor(context: Context) :
     ): List<StudioSection> = coroutineScope {
         val networkOriginals = async {
             if (networkOrCompanyId != null && !networkIsCompany) {
-                runCatching { getNetworkRailPage(networkOrCompanyId, "SERIES · RECENT", 1) }
+                runCatchingCancellable { getNetworkRailPage(networkOrCompanyId, "SERIES · RECENT", 1) }
                     .getOrNull()
             } else {
                 null
@@ -2173,7 +2174,7 @@ class TmdbRepository private constructor(context: Context) :
         }
         val companyOriginals = async {
             if (originalsCompanyId != null) {
-                runCatching { getCompanyRailPage(originalsCompanyId, "MOVIES · RECENT", 1) }
+                runCatchingCancellable { getCompanyRailPage(originalsCompanyId, "MOVIES · RECENT", 1) }
                     .getOrNull()
             } else {
                 null
@@ -2181,7 +2182,7 @@ class TmdbRepository private constructor(context: Context) :
         }
         val providerPages = SERVICE_RAIL_TITLES.map { title ->
             async {
-                providerId?.let { runCatching { getServiceRailPage(it, title, 1) }.getOrNull() }
+                providerId?.let { runCatchingCancellable { getServiceRailPage(it, title, 1) }.getOrNull() }
             }
         }.awaitAll()
 
@@ -2262,7 +2263,7 @@ class TmdbRepository private constructor(context: Context) :
 
     suspend fun searchCollection(query: String): List<TmdbSearchCollectionResult> {
     if (apiKey.isBlank()) return emptyList()
-    return runCatching { api.searchCollection(query, apiKey).results }
+    return runCatchingCancellable { api.searchCollection(query, apiKey).results }
         .getOrDefault(emptyList())
     }
 
@@ -2445,9 +2446,9 @@ class TmdbRepository private constructor(context: Context) :
             if (networkDetail != null && !networkDetail.name.isNullOrBlank()) {
                 return networkDetail
             }
-            return runCatching { api.getCompanyDetail(entityId, apiKey) }.getOrNull()
+            return runCatchingCancellable { api.getCompanyDetail(entityId, apiKey) }.getOrNull()
         }
-        return runCatching { api.getCompanyDetail(entityId, apiKey) }.getOrNull()
+        return runCatchingCancellable { api.getCompanyDetail(entityId, apiKey) }.getOrNull()
     }
 
     private fun imdbResolutionKey(tmdbId: Int, type: String): String {

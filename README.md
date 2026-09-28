@@ -115,6 +115,11 @@ and the kids catalog invariants:
 ./gradlew testDebugUnitTest
 ```
 
+The suite also covers the Room migration path (see `data/history`): a real
+SQLite database is built at an older version, migrated, and validated against
+the committed schema. That runs under Robolectric, so it is still part of
+`testDebugUnitTest` and still needs no device.
+
 CI (`.github/workflows/build.yml`) runs `ktlintCheck`, the tests and Android
 Lint, then builds the debug and signed release APKs on every push to `main`.
 Nothing is published by a push to `main` — see Releases below.
@@ -162,6 +167,31 @@ could review. The single rule is the one piece of junk the compiler accepts in
 silence, which is how several hundred of them accumulated before they were
 swept out by hand. CI runs `ktlintCheck` before the tests.
 
+## Baseline profile
+
+The release build consumes a baseline profile: the classes and methods Android
+touches during startup and first-frame work, which ART compiles ahead of time
+instead of interpreting. On a TV box the difference is visible — all of the
+cold-start cost (Application.setup's WorkManager enqueues and Coil loader,
+then the Home rail fan-out) lands in the first seconds.
+
+```sh
+# with a device attached (adb devices must list it)
+./gradlew :app:generateBaselineProfile
+```
+
+- `baselineprofile/` is a test-only module that generates it: it drives the app
+  on the device and writes `app/src/release/generated/baselineProfiles/baseline-prof.txt`,
+  which is committed (`baselineProfile { saveInSrc = true }` in
+  `app/build.gradle.kts`).
+- `androidx.profileinstaller` in the app is what *installs* the profile on the
+  versions that need it: Android compiles a profile at install time when Play
+  installs the app, and this app installs itself from a GitHub release.
+
+Nothing fails when the file is absent — the app just gets the slower,
+interpreted path — so the generator needs no CI step and no managed device.
+Re-run it when startup changes, or when a screen on the startup path does.
+
 ## Project layout
 
 ```
@@ -172,6 +202,7 @@ app/src/main/java/com/kennyb1201/kbstream/
   ui/              # Compose for Android TV screens (home, detail, player,
                    # search, profiles, settings, addons, IPTV, streams)
   work/            # background workers (EPG refresh, Simkl sync, addons)
+baselineprofile/   # baseline profile generator (test-only module, ships nothing)
 app/schemas/       # exported Room schema JSON, one per released watch-history
                    # version: the record a Migration is reviewed against.
                    # Watch history is user data (resume points, watched state),
@@ -202,6 +233,10 @@ scripts/           # TMDB id-verification probes used while curating the
                    # both exist because this tree has declarations past the
                    # size one editor tool call can reach. Their docstrings
                    # carry the byte offsets that measured it.
+                   # migrate_runcatching.py moves `runCatching` over suspending
+                   # work to runCatchingCancellable; it reports every call site
+                   # and only rewrites the ones it can prove safe. See
+                   # data/RunCatchingCancellable.kt for what the difference is.
 supabase_profiles.sql  # optional dashboard table for inspecting profiles
 docs/              # Supabase RLS + Realtime SQL reference
                    #   supabase_sync_rls.sql  -- schema + per-user RLS policies

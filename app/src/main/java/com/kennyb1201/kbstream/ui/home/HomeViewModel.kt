@@ -81,6 +81,7 @@ import java.time.format.DateTimeParseException
 import java.time.OffsetDateTime
 import java.time.temporal.ChronoUnit
 import org.json.JSONObject
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 private const val PREFS_DISMISSED_UPNEXT =
     "continue_watching_dismissals"
@@ -1819,7 +1820,7 @@ Log.d(
 
     private fun persistDismissedContinueWatching() {
 
-        runCatching {
+        runCatchingCancellable {
 
             val json =
                 JSONObject()
@@ -2049,7 +2050,7 @@ Log.d(
                     .take(MAX_CAUGHT_UP_UPCOMING_ITEMS)
                     .map { candidate ->
                         async {
-                            runCatching {
+                            runCatchingCancellable {
                                 buildSimklUpNextItem(candidate)
                             }.getOrNull()
                         }
@@ -2178,7 +2179,7 @@ Log.d(
                 .map { (parentId, row) ->
                     async {
                         semaphore.withPermit {
-                            runCatching {
+                            runCatchingCancellable {
                                 buildLocalNextUpItem(parentId, row)
                             }.getOrNull()
                         }
@@ -3371,7 +3372,7 @@ Log.d(
         imdbId: String
     ): String? {
         if (tmdbId == null || tmdbId <= 0) return null
-        return runCatching {
+        return runCatchingCancellable {
             tmdbRepository.getSeasonEpisodes(tmdbId, season, imdbId)
                 .firstOrNull { it.episodeNumber == episode }
                 ?.name
@@ -3406,7 +3407,7 @@ Log.d(
             val imdbId = parentId
                 .takeIf { it.startsWith("tt", ignoreCase = true) }
                 ?: item.tmdbId?.let { tmdbId ->
-                    runCatching {
+                    runCatchingCancellable {
                         tmdbRepository.resolveImdbId(
                             tmdbId,
                             item.parentType ?: "series"
@@ -4266,7 +4267,7 @@ Log.d(
                 session.tmdbId?.let { "tmdb:$it" }
             )
             val stale = parentIds.any { parentId ->
-                runCatching {
+                runCatchingCancellable {
                     historyDao
                         .getCompletedForParent(parentId)
                         .any { row ->
@@ -6388,7 +6389,7 @@ private suspend fun calculateEpisodesRemaining(
         val detail =
             landscapeArtSemaphore.withPermit {
 
-                runCatching {
+                runCatchingCancellable {
 
                     tmdbRepository.fetchEnrichedMetaCached(
                         imdbId = request.id,
@@ -7758,7 +7759,7 @@ private suspend fun calculateEpisodesRemaining(
             // (the debounce keeps a burst of writes to one recompute).
             _refreshTrigger.value += 1
 
-            runCatching {
+            runCatchingCancellable {
                 loadRailsInternal(
                     forceRefresh = true,
                     clearCatalogCache = true,

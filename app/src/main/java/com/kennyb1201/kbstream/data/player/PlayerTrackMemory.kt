@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.player
 
 import android.content.Context
 import android.util.Log
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -104,7 +105,7 @@ internal object PlayerTrackMemory {
     }
 
     fun clear(context: Context) {
-        runCatching { prefs(context).edit().remove(KEY_ENTRIES).apply() }
+        runCatchingCancellable { prefs(context).edit().remove(KEY_ENTRIES).apply() }
     }
 
     private fun read(context: Context): Store {

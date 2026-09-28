@@ -5,6 +5,7 @@ import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheDao
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
@@ -223,7 +224,7 @@ class TmdbHeroArtworkRepository(
         }
 
         if (artwork != null) {
-            runCatching {
+            runCatchingCancellable {
                 tmdbJsonCacheDao?.upsert(
                     TmdbJsonCacheEntity(
                         key = DISK_KEY_PREFIX + key,

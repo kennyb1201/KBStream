@@ -23,6 +23,7 @@ import androidx.core.content.ContextCompat
 import coil3.load
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.tmdb.TmdbPersonCredit
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.UNSCRIPTED_TV_GENRES
@@ -257,7 +258,7 @@ internal suspend fun buildBecauseYouWatchedPicks(
         coroutineScope {
             people.map { personId ->
                 async(Dispatchers.IO) {
-                    runCatching {
+                    runCatchingCancellable {
                         repo.getPerson(personId)
                     }.getOrNull()
                 }
@@ -884,7 +885,7 @@ internal class BecauseYouWatchedUi(
         scope()?.launch {
             picks.forEach { pick ->
                 val detail = withContext(Dispatchers.IO) {
-                    runCatching {
+                    runCatchingCancellable {
                         TmdbRepository.getInstance(host)
                             .getDetailByTmdbId(pick.tmdbId, pick.type)
                     }.getOrNull()
@@ -906,7 +907,7 @@ internal class BecauseYouWatchedUi(
                             ?.let { TmdbRepository.BACKDROP_BASE + it }
                 )
                 val imdb = withContext(Dispatchers.IO) {
-                    runCatching {
+                    runCatchingCancellable {
                         TmdbRepository.getInstance(host).resolveImdbId(pick.tmdbId, pick.type)
                     }.getOrNull()
                 }
@@ -955,7 +956,7 @@ internal class BecauseYouWatchedUi(
         setHint("Finding a stream for ${pick.name}…")
         resolveScope.launch {
             val streams = withContext(Dispatchers.IO) {
-                runCatching {
+                runCatchingCancellable {
                     StreamsViewModel(host.application).resolve(pick.type, imdbId)
                 }.getOrNull()
             }.orEmpty()
