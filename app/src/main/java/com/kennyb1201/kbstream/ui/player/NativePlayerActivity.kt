@@ -4482,8 +4482,21 @@ class NativePlayerActivity : ComponentActivity() {
         // connection below realtime this trades one long stall for shorter, more
         // frequent ones; the 12s no-progress watchdog is unaffected, because a
         // genuinely dead source never reaches this threshold at all.
+        //
+        // The START threshold is the third figure, and it is now higher than the
+        // after-rebuffer one on purpose. Starting the moment three seconds of
+        // media exist leaves a session with no cushion for the fill rate to dip
+        // below realtime, which is exactly what a launch does: the TCP ramp and
+        // the app's own startup bursts (hero TMDB work, a subtitle fetch, the
+        // intro-database lookup) share the link, so the buffer that was just
+        // filled drains about a second into playback and the viewer gets the
+        // pattern this is meant to prevent — picture, a spinner, then normal
+        // playback for the rest of the file. Six seconds costs a moment on a
+        // fast source (the loader is already targeting ten) and buys three more
+        // seconds of runway on a slow one. Resuming after a rebuffer keeps the
+        // lower 3_000: by then the connection is warm and the buffer full.
         val bufferDurations = if (resolvedBufferMode == 1) intArrayOf(5_000, 10_000, 1_500, 3_000)
-        else intArrayOf(10_000, 30_000, 3_000, 3_000)
+        else intArrayOf(10_000, 30_000, 6_000, 3_000)
 
         // Media3 buffers sample data as JAVA-HEAP byte[] blocks (DefaultAllocator
         // uses a plain `newarray byte`, never native/direct buffers), so a
@@ -4768,6 +4781,10 @@ class NativePlayerActivity : ComponentActivity() {
      * rebuild by passing nothing.
      */
     private fun recreatePlayer(settleMs: Long = 0L) {
+        // Counted for the diagnostics report: a rebuild throws away the whole
+        // read-ahead buffer, so "it stalled just after starting" is a rebuild
+        // as often as it is a slow source, and the two want opposite fixes.
+        com.kennyb1201.kbstream.data.reporting.PerfTrace.record("playback.rebuild", 0L)
         // Disarm any outstanding stall/black-video timers tied to the old
         // player instance; fresh ones are armed when the new session is ready.
         stallWatchdogToken++
@@ -4834,10 +4851,29 @@ class NativePlayerActivity : ComponentActivity() {
                 Player.STATE_READY -> {
                     // First READY of this attempt: the point that splits
                     // "source loaded" from "decoder painted".
-                    if (firstReadyAtMs == 0L) firstReadyAtMs = System.currentTimeMillis()
+                    if (firstReadyAtMs == 0L) {
+                        firstReadyAtMs = System.currentTimeMillis()
+                        if (startupTraceStartMs > 0L) {
+                            com.kennyb1201.kbstream.data.reporting.PerfTrace.record(
+                                "playback.source_ready",
+                                firstReadyAtMs - startupTraceStartMs
+                            )
+                        }
+                    }
                     if (rebufferStartedAtMs != 0L) {
                         val stalledMs = System.currentTimeMillis() - rebufferStartedAtMs
                         Log.w("PLAYER_PERF", "Rebuffer stall: ${stalledMs}ms")
+                        // Only a stall AFTER the first frame is a mid-playback
+                        // rebuffer. The first buffering of a session is the
+                        // initial load, which source_ready above already
+                        // reports — counting it here would make every session
+                        // look like it stalled.
+                        if (firstFrameRendered) {
+                            com.kennyb1201.kbstream.data.reporting.PerfTrace.record(
+                                "playback.stall",
+                                stalledMs
+                            )
+                        }
                         rebufferStartedAtMs = 0L
                     }
                     updateUIReady()
@@ -5584,6 +5620,13 @@ class NativePlayerActivity : ComponentActivity() {
                     "total=${firstFrameRenderedAtMs - startupTraceStartMs}ms " +
                     "codec=${streamCodec ?: "?"} ${streamWidth}x$streamHeight " +
                     "bitrate=${streamBitrate} mime=${streamMimeType ?: "?"}"
+            )
+            // Into the diagnostics report too: this split is what says whether
+            // a slow start was the network or the decoder, and the report is
+            // the only one of the two a viewer can read off the TV.
+            com.kennyb1201.kbstream.data.reporting.PerfTrace.record(
+                "playback.first_frame",
+                firstFrameRenderedAtMs - firstReadyAtMs
             )
         }
         reconnectingContainer.visibility = View.GONE

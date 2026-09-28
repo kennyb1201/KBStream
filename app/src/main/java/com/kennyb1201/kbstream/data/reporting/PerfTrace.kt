@@ -108,6 +108,23 @@ internal object PerfTrace {
     }
 
     /**
+     * How many samples were recorded under [prefix].
+     *
+     * [latestByPrefix] answers "how long", which is the wrong question for an
+     * event that REPEATS: one 2.6s stall and five of them read identically when
+     * only the newest duration is printed, and the count is the part that says
+     * whether a symptom is a one-off or a pattern.
+     */
+    fun count(prefix: String): Int = synchronized(lock) {
+        samples.count { it.label.startsWith(prefix) }
+    }
+
+    /** The longest sample recorded under [prefix], or 0 when there is none. */
+    fun maxMs(prefix: String): Long = synchronized(lock) {
+        samples.filter { it.label.startsWith(prefix) }.maxOfOrNull { it.ms } ?: 0L
+    }
+
+    /**
      * Multi-line summary for the diagnostics dump. Empty string when nothing
      * was recorded, so a quiet session adds no noise.
      */

@@ -72,6 +72,7 @@ object Diagnostics {
         // The launch breakdown, printed explicitly: it is the one set of samples
         // the perf summary's ranking below is most likely to crowd out.
         startupLine()?.let { report.appendLine(it) }
+        playbackLine()?.let { report.appendLine(it) }
         // Where the time goes: startup + per-service HTTP + home refresh, with
         // the slowest samples named. Empty on a session that recorded nothing.
         PerfTrace.summary().takeIf { it.isNotEmpty() }?.let { perf ->
@@ -159,6 +160,41 @@ object Diagnostics {
             "${label.removePrefix("startup.")}=${ms}ms"
         }
         return "startup: $breakdown"
+    }
+
+    /**
+     * What the last playback session cost.
+     *
+     * "It plays for a second, buffers for a couple, then plays fine" is a
+     * symptom with several possible owners — a source that fills slower than
+     * realtime for its first seconds, a decoder taking its time on the first
+     * frame, or the player being rebuilt underneath the viewer — and the player
+     * already measures every one of them into logcat under `PLAYER_PERF`, which
+     * is not reachable from a TV remote. Printed here so the same figures travel
+     * with the rest of the report: `source→ready` is the fill needed before
+     * playback can start at all, `ready→firstFrame` the decoder's own first
+     * paint, `stalls` the buffering episodes AFTER playback began (with the
+     * worst one), and `rebuilds` whether the player was torn down and rebuilt
+     * mid-session, which discards the buffer whatever it held.
+     *
+     * Null on a session that never played anything, so a Home-only report stays
+     * as short as it was.
+     */
+    private fun playbackLine(): String? {
+        val ready = PerfTrace.latestByPrefix("playback.source_ready").firstOrNull()?.second
+        val firstFrame = PerfTrace.latestByPrefix("playback.first_frame").firstOrNull()?.second
+        val stalls = PerfTrace.count("playback.stall")
+        val rebuilds = PerfTrace.count("playback.rebuild")
+        if (ready == null && firstFrame == null && stalls == 0 && rebuilds == 0) return null
+        return buildString {
+            append("playback: source→ready=").append(ready?.let { "${it}ms" } ?: "—")
+            append(" ready→firstFrame=").append(firstFrame?.let { "${it}ms" } ?: "—")
+            append(" stalls=").append(stalls)
+            if (stalls > 0) {
+                append("/").append(PerfTrace.maxMs("playback.stall")).append("ms worst")
+            }
+            append(" rebuilds=").append(rebuilds)
+        }
     }
 
     private fun accountLine(): String {
