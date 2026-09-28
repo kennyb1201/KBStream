@@ -2140,17 +2140,25 @@ class NativePlayerActivity : ComponentActivity() {
         }
     }
 
-    /** Downloads the picked subtitle into cache and attaches it sidecar-style. */
+    /**
+     * Downloads the picked subtitle into cache and attaches it sidecar-style.
+     *
+     * The failure sentence comes ready-made from the helper: an exhausted daily
+     * quota, a rejected API key and an unreachable server need different
+     * answers, and this used to show "Subtitle download failed" for all three.
+     */
     private fun downloadOnlineSubtitle(hit: SubtitleSearchResult) {
         Toast.makeText(this, "Loading subtitle…", Toast.LENGTH_SHORT).show()
         lifecycleScope.launch {
-            val body = SubtitleSearchHelper.download(this@NativePlayerActivity, hit)
-            if (body.isNullOrBlank()) {
-                Toast.makeText(this@NativePlayerActivity, "Subtitle download failed", Toast.LENGTH_SHORT).show()
-                return@launch
+            when (val result = SubtitleSearchHelper.download(this@NativePlayerActivity, hit)) {
+                is SubtitleDownload.Failed ->
+                    Toast.makeText(this@NativePlayerActivity, result.reason, Toast.LENGTH_LONG).show()
+
+                is SubtitleDownload.Ready -> {
+                    val uri = SubtitleSearchHelper.toCacheUri(this@NativePlayerActivity, hit, result.body)
+                    attachExternalSubtitle(uri)
+                }
             }
-            val uri = SubtitleSearchHelper.toCacheUri(this@NativePlayerActivity, hit, body)
-            attachExternalSubtitle(uri)
         }
     }
 
@@ -3659,9 +3667,12 @@ class NativePlayerActivity : ComponentActivity() {
         playerView.isClickable = true
         playerView.setOnFocusChangeListener { _, hasFocus ->
             // Never yank focus to the overlay while a panel is up — that is
-            // one of the ways the settings panel loses focus.
+            // one of the ways the settings panel loses focus. When it does move
+            // it, it moves it to the overlay's primary control rather than to
+            // the container, so the press that follows always has a button it
+            // can actually see under it.
             if (hasFocus && controlsVisible && !showSettingsPanel && !isPickerShowing) {
-                controlsOverlay.requestFocus()
+                focusControlsPrimary()
             }
         }
         playerView.isFocusableInTouchMode = true
@@ -3709,6 +3720,17 @@ class NativePlayerActivity : ComponentActivity() {
                         // overlay is hidden: OK activates the skip directly
                         // instead of popping the controls overlay over it.
                         btnSkipIntro.performClick()
+                        true
+                    } else if (controlsVisible && !controlsOverlay.hasFocus()) {
+                        // The overlay is up but nothing in it holds the D-pad,
+                        // which is the state a closing picker leaves behind
+                        // (the row that owned focus goes with its container).
+                        // The press used to be read as "the surface has focus,
+                        // so OK means hide the controls": it collapsed the
+                        // overlay the viewer had just come back to, and
+                        // playing took three presses (hide, raise, play).
+                        // Hand the press to the overlay instead.
+                        focusControlsPrimary()
                         true
                     } else {
                         if (!controlsVisible) showControls() else hideControls()
@@ -6741,6 +6763,43 @@ class NativePlayerActivity : ComponentActivity() {
 }
 
     // --- Controls Visibility ---
+    /**
+     * Parks the D-pad on the overlay's primary control.
+     *
+     * One definition, because three places need the same answer - raising the
+     * overlay, handing focus back when a picker or panel closes, and catching a
+     * focus that landed on the video surface - and the answer is not "the
+     * overlay's first focusable child". Requesting focus on the container lets
+     * the framework choose among its descendants, which is not the play button,
+     * so a viewer who pressed OK there was pressing a button they could not
+     * see. While a skip prompt is up that prompt is the primary target
+     * (Netflix-style), and on a live channel it is CH up, since pausing live
+     * television is not a thing.
+     */
+    private fun focusControlsPrimary() {
+        if (btnSkipIntro.visibility == View.VISIBLE) {
+            btnSkipIntro.requestFocus()
+        } else if (isLiveChannel && btnChannelUp?.visibility == View.VISIBLE) {
+            btnChannelUp?.requestFocus()
+        } else {
+            btnPlayPause.requestFocus()
+        }
+    }
+
+    /**
+     * Gives the D-pad back to the overlay after a panel or picker closes.
+     *
+     * Silent unless the overlay is actually up and no other panel has taken
+     * over in the same call: showPicker() and the info panel each dismiss one
+     * panel and then focus a container of their own, and this must not fight
+     * them for it.
+     */
+    private fun restoreControlsFocus() {
+        if (!controlsVisible || showSettingsPanel || isPickerShowing) return
+        if (infoPanel.visibility == View.VISIBLE) return
+        focusControlsPrimary()
+    }
+
     private fun showControls() {
         stopSurfaceScrub()
 
@@ -6760,21 +6819,7 @@ class NativePlayerActivity : ComponentActivity() {
             return
         }
         if (!showSettingsPanel && !isPickerShowing) {
-            controlsOverlay.post {
-                // While a skip prompt is up it is the primary target —
-                // park focus there (Netflix-style) instead of play/pause
-                // so the button is always one OK press away.
-                if (btnSkipIntro.visibility == View.VISIBLE) {
-                    btnSkipIntro.requestFocus()
-                } else if (isLiveChannel && btnChannelUp?.visibility == View.VISIBLE) {
-                    // Live: changing channel is the primary action in the
-                    // overlay, so open on CH up rather than play/pause
-                    // (pausing live television is not a thing).
-                    btnChannelUp?.requestFocus()
-                } else {
-                    btnPlayPause.requestFocus()
-                }
-            }
+            controlsOverlay.post { focusControlsPrimary() }
         }
         scheduleAutoHide()
         // Best-effort: resolve the next episode's name so the Next button's
@@ -7235,8 +7280,11 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     private fun showSettingsPanelView() {
-        dismissPicker()
+        // The flag goes up before the picker comes down so the picker's focus
+        // hand-back (see dismissPicker) sees a panel taking over and leaves the
+        // D-pad alone - the panel parks it on its own first row below.
         showSettingsPanel = true
+        dismissPicker()
         settingsContainer.visibility = View.VISIBLE
         scrim.visibility = View.VISIBLE
         settingsContainer.isFocusable = true
@@ -7249,12 +7297,29 @@ class NativePlayerActivity : ComponentActivity() {
         showSettingsPanel = false
         settingsContainer.visibility = View.GONE
         if (!isPickerShowing) scrim.visibility = View.GONE
+        restoreControlsFocus()
     }
 
+    /**
+     * Closes the picker and hands the D-pad back to the controls overlay.
+     *
+     * The hand-back is the point. A picker row owns focus while the picker is
+     * up, and the row that owned it is gone the moment the container is, so
+     * without this the framework moves focus to the next focusable view it can
+     * find - the video surface - where the viewer's next OK is read as "hide
+     * the controls" instead of "play". MpvPlayerActivity.dismissPicker() has
+     * always handed it back; this engine's now does too.
+     *
+     * Deliberately synchronous: a posted requestFocus() loses the race to the
+     * framework's own hand-off, which is why showControls()'s post() was not
+     * enough on its own (the settings panel's focus guard carries the same
+     * note).
+     */
     private fun dismissPicker() {
         isPickerShowing = false
         pickerContainer.visibility = View.GONE
         if (!showSettingsPanel) scrim.visibility = View.GONE
+        restoreControlsFocus()
     }
 
     private fun dismissAllPanels() {

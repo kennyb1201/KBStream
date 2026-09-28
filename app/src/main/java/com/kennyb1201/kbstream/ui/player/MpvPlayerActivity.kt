@@ -1740,21 +1740,28 @@ class MpvPlayerActivity : ComponentActivity() {
         }
     }
 
-    /** Downloads the picked hit into cache and hands it to mpv. */
+    /**
+     * Downloads the picked hit into cache and hands it to mpv.
+     *
+     * The failure sentence comes ready-made from the helper: an exhausted daily
+     * quota, a rejected API key and an unreachable server need different
+     * answers, and this used to say "Subtitle download failed" for all three.
+     */
     private fun downloadOnlineSubtitle(hit: SubtitleSearchResult) {
         showToast("Loading subtitle\u2026")
         lifecycleScope.launch {
-            val body = SubtitleSearchHelper.download(this@MpvPlayerActivity, hit)
-            if (body.isNullOrBlank()) {
-                showToast("Subtitle download failed", 4_000L)
-                return@launch
+            when (val result = SubtitleSearchHelper.download(this@MpvPlayerActivity, hit)) {
+                is SubtitleDownload.Failed -> showToast(result.reason, 4_000L)
+
+                is SubtitleDownload.Ready -> {
+                    val uri = SubtitleSearchHelper.toCacheUri(this@MpvPlayerActivity, hit, result.body)
+                    externalSubtitleUri = uri
+                    externalSubtitleName = hit.fileName
+                    surface?.addExternalSubtitle(uri.toString())
+                    showToast("Subtitle loaded: ${hit.fileName}", 4_000L)
+                    refreshSettings()
+                }
             }
-            val uri = SubtitleSearchHelper.toCacheUri(this@MpvPlayerActivity, hit, body)
-            externalSubtitleUri = uri
-            externalSubtitleName = hit.fileName
-            surface?.addExternalSubtitle(uri.toString())
-            showToast("Subtitle loaded: ${hit.fileName}", 4_000L)
-            refreshSettings()
         }
     }
 

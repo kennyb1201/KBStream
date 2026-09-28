@@ -23,6 +23,20 @@ internal data class SubtitleSearchResult(
 )
 
 /**
+ * What a download attempt produced: the subtitle text, or a sentence saying why
+ * there is none.
+ *
+ * The reason is carried out of here rather than logged because the failures are
+ * not equivalent to the viewer: an exhausted daily quota and a rejected API key
+ * both used to arrive as the same "Subtitle download failed" toast, and neither
+ * is fixed by trying another row in the list.
+ */
+internal sealed interface SubtitleDownload {
+    data class Ready(val body: String) : SubtitleDownload
+    data class Failed(val reason: String) : SubtitleDownload
+}
+
+/**
  * OpenSubtitles REST API helper for the player's "SEARCH SUBTITLES ONLINE…"
  * picker entry. The API key comes from Settings → Integrations (free key from
  * opensubtitles.com) and syncs across devices like the OMDb key. Search is
@@ -32,7 +46,9 @@ internal data class SubtitleSearchResult(
  */
 internal object SubtitleSearchHelper {
     private const val TAG = "SubtitleSearch"
-    private const val BASE = "https://api.opensubtitles.com/api/v1"
+    internal const val BASE = "https://api.opensubtitles.com/api/v1"
+    private const val USER_AGENT = "KBStream v1.0"
+    private const val MAX_RESULTS = 12
 
     internal suspend fun search(
         context: Context,
@@ -51,49 +67,115 @@ internal object SubtitleSearchHelper {
             if (episode != null) q.append("&episode=").append(episode)
             val lang = languageHint.trim().substringBefore('-')
             if (lang.isNotBlank()) q.append("&languages=").append(URLEncoder.encode(lang, "UTF-8"))
-            val body = httpGet(q.toString(), key) ?: return@withContext emptyList()
-            val data = JSONObject(body).optJSONArray("data") ?: return@withContext emptyList()
-            val out = mutableListOf<SubtitleSearchResult>()
-            for (i in 0 until data.length()) {
-                val entry = data.optJSONObject(i)?.optJSONObject("attributes") ?: continue
-                val file = entry.optJSONArray("files")?.optJSONObject(0) ?: continue
-                val fileId = file.optLong("file_id")
-                if (fileId <= 0) continue
-                out.add(
-                    SubtitleSearchResult(
-                        fileId = fileId,
-                        fileName = file.optString("file_name").ifBlank {
-                            entry.optString("release").ifBlank { "Subtitle ${i + 1}" }
-                        },
-                        language = entry.optString("language").ifBlank { "?" },
-                        downloads = entry.optInt("download_count")
-                    )
-                )
-                if (out.size >= 12) break
-            }
-            out
+            val reply = request("GET", q.toString(), key)
+            parseSearchResults(reply.body)
         } catch (t: Throwable) {
             Log.w(TAG, "OpenSubtitles search failed", t)
             emptyList()
         }
     }
 
+    /** Turns a `/subtitles` response into picker rows. */
+    internal fun parseSearchResults(body: String): List<SubtitleSearchResult> {
+        val data = runCatching { JSONObject(body).optJSONArray("data") }.getOrNull() ?: return emptyList()
+        val out = mutableListOf<SubtitleSearchResult>()
+        for (i in 0 until data.length()) {
+            val entry = data.optJSONObject(i)?.optJSONObject("attributes") ?: continue
+            val file = entry.optJSONArray("files")?.optJSONObject(0) ?: continue
+            val fileId = file.optLong("file_id")
+            if (fileId <= 0) continue
+            out.add(
+                SubtitleSearchResult(
+                    fileId = fileId,
+                    fileName = file.optString("file_name").ifBlank {
+                        entry.optString("release").ifBlank { "Subtitle ${i + 1}" }
+                    },
+                    language = entry.optString("language").ifBlank { "?" },
+                    downloads = entry.optInt("download_count")
+                )
+            )
+            if (out.size >= MAX_RESULTS) break
+        }
+        return out
+    }
+
     /** Resolves the one-time download link and returns the subtitle text. */
-    internal suspend fun download(context: Context, result: SubtitleSearchResult): String? =
+    internal suspend fun download(context: Context, result: SubtitleSearchResult): SubtitleDownload =
         withContext(Dispatchers.IO) {
             val key = AppPreferences.getOpensubtitlesApiKey(context)
-            if (key.isBlank()) return@withContext null
-            try {
-                val meta = JSONObject(httpGet("$BASE/download?file_id=${result.fileId}", key)
-                    ?: return@withContext null)
-                val link = meta.optString("link").takeIf { it.isNotBlank() }
-                    ?: return@withContext null
-                httpGet(link, key)
-            } catch (t: Throwable) {
-                Log.w(TAG, "OpenSubtitles download failed", t)
-                null
+            if (key.isBlank()) {
+                return@withContext SubtitleDownload.Failed(
+                    "Subtitle download failed: add an OpenSubtitles API key in Settings"
+                )
             }
+            download(result.fileId, key)
         }
+
+    /**
+     * The two-step download: ask `/download` for a one-time link, then fetch it.
+     *
+     * The first step is a POST with a JSON body — that is the endpoint's
+     * contract, and it is not negotiable: the API answers a GET with
+     * "405 Method Not Allowed", so every row in the picker failed while the
+     * search above it worked, because search is the endpoint that takes a GET.
+     * [base] and the separate [apiKey] exist so the whole exchange can be driven
+     * against a local server in tests.
+     */
+    internal fun download(
+        fileId: Long,
+        apiKey: String,
+        base: String = BASE
+    ): SubtitleDownload {
+        val meta = request("POST", "$base/download", apiKey, """{"file_id":$fileId}""")
+        if (meta.code !in 200..299) {
+            Log.w(TAG, "OpenSubtitles /download HTTP ${meta.code}: ${meta.body.take(200)}")
+            return SubtitleDownload.Failed("Subtitle download failed: " + failureReason(meta))
+        }
+        val link = runCatching { JSONObject(meta.body).optString("link") }
+            .getOrNull()
+            ?.takeIf { it.isNotBlank() }
+        if (link == null) {
+            Log.w(TAG, "OpenSubtitles /download had no link: ${meta.body.take(200)}")
+            return SubtitleDownload.Failed("Subtitle download failed: no download link in the response")
+        }
+        val file = request("GET", link, apiKey)
+        if (file.code !in 200..299) {
+            Log.w(TAG, "OpenSubtitles subtitle file HTTP ${file.code}")
+            return SubtitleDownload.Failed("Subtitle download failed: " + failureReason(file))
+        }
+        if (!looksLikeSubtitle(file.body)) {
+            Log.w(TAG, "OpenSubtitles subtitle file was not a subtitle: ${file.body.take(200)}")
+            return SubtitleDownload.Failed("Subtitle download failed: the server did not return a subtitle")
+        }
+        return SubtitleDownload.Ready(file.body)
+    }
+
+    /**
+     * A subtitle payload has to at least look like one. An HTML body is an error
+     * page the CDN served with a 200, and handing that to the player is a silent
+     * no-cues failure instead of a message.
+     */
+    internal fun looksLikeSubtitle(body: String): Boolean {
+        val head = body.trimStart()
+        if (head.isEmpty()) return false
+        val lower = head.take(64).lowercase()
+        return !lower.startsWith("<!doctype html") && !lower.startsWith("<html")
+    }
+
+    /** The API's own explanation when it sent one, else what the status means. */
+    internal fun failureReason(reply: HttpReply): String {
+        val message = runCatching { JSONObject(reply.body).optString("message") }
+            .getOrNull()
+            ?.trim()
+            .orEmpty()
+        return when {
+            message.isNotBlank() -> message
+            reply.code == 0 -> "could not reach OpenSubtitles"
+            reply.code == 401 || reply.code == 403 -> "OpenSubtitles rejected the API key"
+            reply.code == 429 -> "OpenSubtitles rate limit reached - try again later"
+            else -> "OpenSubtitles returned HTTP ${reply.code}"
+        }
+    }
 
     /** Writes subtitle text into the app cache and returns a file:// Uri. */
     internal fun toCacheUri(context: Context, result: SubtitleSearchResult, body: String): Uri {
@@ -111,26 +193,38 @@ internal object SubtitleSearchHelper {
         return Uri.fromFile(f)
     }
 
-    private fun httpGet(url: String, apiKey: String): String? {
+    /** A response's status and body - including the body of an error, which is
+     *  where the API puts the reason ("you have downloaded your allowed
+     *  subtitles"). */
+    internal data class HttpReply(val code: Int, val body: String)
+
+    private fun request(
+        method: String,
+        url: String,
+        apiKey: String,
+        body: String? = null
+    ): HttpReply {
         var conn: HttpURLConnection? = null
         return try {
             conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                requestMethod = method
                 connectTimeout = 10_000
                 readTimeout = 15_000
                 setRequestProperty("Api-Key", apiKey)
-                setRequestProperty("User-Agent", "KBStream v1.0")
+                setRequestProperty("User-Agent", USER_AGENT)
                 setRequestProperty("Accept", "application/json,text/plain")
+                if (body != null) setRequestProperty("Content-Type", "application/json")
+            }
+            if (body != null) {
+                conn.doOutput = true
+                conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             }
             val code = conn.responseCode
-            if (code !in 200..299) {
-                Log.w(TAG, "OpenSubtitles HTTP $code")
-                null
-            } else {
-                conn.inputStream.bufferedReader().use { it.readText() }
-            }
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            HttpReply(code, stream?.bufferedReader()?.use { it.readText() }.orEmpty())
         } catch (t: Throwable) {
-            Log.w(TAG, "OpenSubtitles request failed: $url", t)
-            null
+            Log.w(TAG, "OpenSubtitles request failed: $method $url", t)
+            HttpReply(0, "")
         } finally {
             conn?.disconnect()
         }

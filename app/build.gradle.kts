@@ -341,6 +341,11 @@ dependencies {
 
     // JVM unit tests (KidsMode rating matrix, catalog invariants).
     testImplementation("junit:junit:4.13.2")
+    // The real org.json, not android.jar's stub. isReturnDefaultValues makes the
+    // stub return nulls, so the OpenSubtitles tests would assert the failure
+    // path of every response instead of the parse they are there for. Test
+    // scope only: the app itself still uses the platform's org.json.
+    testImplementation("org.json:json:20250107")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
