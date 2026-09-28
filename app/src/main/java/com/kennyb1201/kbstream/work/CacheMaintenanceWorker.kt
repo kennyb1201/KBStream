@@ -80,6 +80,7 @@ class CacheMaintenanceWorker(
                 TAG,
                 "guides: deleted=${guides.deleted} " +
                     "(${guides.deletedBytes / 1_048_576} MB) " +
+                    "migrated=${guides.migrated} " +
                     "pruned=${guides.prunedRows} row(s) " +
                     "clipped=${guides.trimmedDescriptions} description(s) " +
                     "vacuumed=${guides.vacuumed} " +

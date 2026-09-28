@@ -6673,36 +6673,20 @@ private suspend fun calculateEpisodesRemaining(
                 // back empty while Wi-Fi was still coming up has to be retried.
                 landscapeLookupMemo.clear()
 
-                val pinned =
-                    mutableListOf<Rail>()
+                // The pinned "Top ... Today" rails are loaded inside the
+                // fan-out's own scope, BESIDE the catalog requests rather than
+                // before them. They used to be awaited here, which put their
+                // whole latency ahead of the first catalog request ever being
+                // made - on a cold start, seconds of a fast network doing
+                // nothing. Every catalog rail still waits for them before it
+                // publishes (see below), so what the viewer sees first is
+                // unchanged: only sooner.
+                var pinned: List<Rail> = emptyList()
 
-                if (tmdbRepository.kidsMaxAge() != null) {
-                    // Kids profile: the general-audience "Top ... Today"
-                    // rails don't belong here - after ceiling filtering they
-                    // are usually near-empty (today's top titles are mostly
-                    // adult fare). Hardcoded kids rails replace them.
-                    loadPinnedKidsRails(
-                        pinned,
-                        landscapeCards
-                    )
-                } else {
-                    loadPinnedTopTodayRails(
-                        pinned,
-                        hideUpcoming,
-                        landscapeCards
-                    )
-                }
-
-                // What the pinned rails cost before the catalog fan-out could
-                // start: they are awaited, so it is pure serial prefix on the
-                // critical path (see home.pinned in the diagnostics report).
-                val pinnedDoneAtMs =
+                // The fan-out is timed from HERE, before the pinned rails are
+                // launched, so home.catalogRails covers the overlap.
+                val fanOutStartedAtMs =
                     android.os.SystemClock.elapsedRealtime()
-
-                PerfTrace.record(
-                    "home.pinned",
-                    pinnedDoneAtMs - buildStartedAtMs
-                )
 
                 val addonsById =
                     addonManager
@@ -6766,6 +6750,42 @@ private suspend fun calculateEpisodesRemaining(
 
                 coroutineScope {
 
+                    val pinnedDeferred =
+                        async {
+
+                            val rails =
+                                mutableListOf<Rail>()
+
+                            if (tmdbRepository.kidsMaxAge() != null) {
+                                // Kids profile: the general-audience "Top
+                                // ... Today" rails don't belong here - after
+                                // ceiling filtering they are usually
+                                // near-empty (today's top titles are mostly
+                                // adult fare). Hardcoded kids rails replace
+                                // them.
+                                loadPinnedKidsRails(
+                                    rails,
+                                    landscapeCards
+                                )
+                            } else {
+                                loadPinnedTopTodayRails(
+                                    rails,
+                                    hideUpcoming,
+                                    landscapeCards
+                                )
+                            }
+
+                            // What the pinned rails cost, however much of it
+                            // now runs beside the catalog fan-out.
+                            PerfTrace.record(
+                                "home.pinned",
+                                android.os.SystemClock.elapsedRealtime() -
+                                    buildStartedAtMs
+                            )
+
+                            rails
+                        }
+
                     pendingCatalogs
                         .map { pending ->
                             async {
@@ -6774,6 +6794,16 @@ private suspend fun calculateEpisodesRemaining(
                                     hideUpcoming,
                                     landscapeCards
                                 )?.let { rail ->
+
+                                    // The rail's fetch above needed no such
+                                    // wait - it started with the pinned rails
+                                    // - but the ORDER it publishes in does:
+                                    // pinned rows come first, so a catalog rail
+                                    // that resolved first must not take the top
+                                    // of Home (the append below places it after
+                                    // the last catalog rail already on screen).
+                                    pinnedDeferred.await()
+
                                     // Stale-profile guard (see the final
                                     // publish below): never stream a
                                     // previous profile's rows back in.
@@ -6834,15 +6864,29 @@ private suspend fun calculateEpisodesRemaining(
                             }
                         }
                         .awaitAll()
+
+                    pinned = pinnedDeferred.await()
                 }
 
-                // The catalog fan-out, from after the pinned rails to the last
-                // rail resolved. home.refreshAll times the whole build, which
-                // publication no longer gates, so this is the half of it that
-                // the viewer actually waits on.
+                // The catalog fan-out, timed from before the pinned rails were
+                // launched to the last rail resolved. It OVERLAPS home.pinned
+                // now, so the two no longer add up to the build - which is the
+                // point: this is the half the viewer waits on, and it starts at
+                // once instead of after the pinned rows.
                 PerfTrace.record(
                     "home.catalogRails",
-                    android.os.SystemClock.elapsedRealtime() - pinnedDoneAtMs
+                    android.os.SystemClock.elapsedRealtime() - fanOutStartedAtMs
+                )
+
+                // Everything this build publishes, on screen. It sits between
+                // home.firstRail (the first row) and home.refreshAll (which ends
+                // with bookkeeping the viewer never sees), and it is the figure
+                // that says whether the overlap above bought anything: pitting it
+                // against home.pinned plus home.catalogRails is exactly the serial
+                // prefix that used to be spent before the first catalog request.
+                PerfTrace.record(
+                    "home.railsReady",
+                    android.os.SystemClock.elapsedRealtime() - buildStartedAtMs
                 )
 
                 val finalRails =

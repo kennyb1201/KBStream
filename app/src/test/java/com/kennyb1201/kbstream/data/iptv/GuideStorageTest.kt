@@ -96,4 +96,77 @@ class GuideStorageTest {
         // named here, and only once a scoped guide exists — which it does not.
         assertEquals(emptyList<String>(), deletable(files, "abc.iptv_epg.db").toList())
     }
+
+    // ---- the leftover of a profile that moved to a shared name ------------
+
+    private fun migratable(names: Map<String, String>, present: List<String>): List<String> =
+        guideFilesToMigrate(
+            files = present.map { name -> guide(name, 60_000L) },
+            expectedNameByProfile = names
+        ).toList()
+
+    @Test
+    fun theOldFileGoesOnceItsReplacementIsOnDisk() {
+        val shared = "abc123abc123.iptv_epg.db"
+
+        assertEquals(
+            listOf("profile-1.iptv_epg.db"),
+            migratable(
+                names = mapOf("profile-1" to shared),
+                present = listOf("profile-1.iptv_epg.db", shared)
+            )
+        )
+    }
+
+    @Test
+    fun theOldFileStaysWhileItsReplacementIsMissing() {
+        // The import has not run since the naming changed, so the only copy of
+        // that profile's guide is the old file. Deleting it now would cost a
+        // re-import the viewer never asked for, on data the app cannot rebuild
+        // without the provider.
+        assertEquals(
+            emptyList<String>(),
+            migratable(
+                names = mapOf("profile-1" to "abc123abc123.iptv_epg.db"),
+                present = listOf("profile-1.iptv_epg.db")
+            )
+        )
+    }
+
+    @Test
+    fun aProfileThatIsNotSharingIsLeftAlone() {
+        assertEquals(
+            emptyList<String>(),
+            migratable(
+                names = mapOf("profile-1" to "profile-1.iptv_epg.db"),
+                present = listOf("profile-1.iptv_epg.db")
+            )
+        )
+    }
+
+    @Test
+    fun twoProfilesMovingToOneGuideFileBothDropTheirOldOne() {
+        val shared = "abc123abc123.iptv_epg.db"
+
+        assertEquals(
+            listOf("profile-1.iptv_epg.db", "profile-2.iptv_epg.db"),
+            migratable(
+                names = mapOf("profile-1" to shared, "profile-2" to shared),
+                present = listOf("profile-1.iptv_epg.db", "profile-2.iptv_epg.db", shared)
+            )
+        )
+    }
+
+    @Test
+    fun aProfileWhoseNameMerelyLooksSharedIsNotTouched() {
+        // The old name is the profile id exactly, so a profile whose id
+        // happens to be another profile's shared key is still its own file.
+        assertEquals(
+            emptyList<String>(),
+            migratable(
+                names = mapOf("abc123abc123" to "abc123abc123.iptv_epg.db"),
+                present = listOf("abc123abc123.iptv_epg.db")
+            )
+        )
+    }
 }

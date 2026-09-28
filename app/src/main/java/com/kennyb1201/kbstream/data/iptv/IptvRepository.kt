@@ -103,19 +103,13 @@ class IptvRepository(
             Context.MODE_PRIVATE
         )
 
-        val playlistUrls = buildList {
-            prefs.getString("playlist_url", "")
-                .orEmpty()
-                .trim()
-                .takeIf(String::isNotEmpty)
-                ?.let(::add)
-            addAll(
-                prefs.getString("extra_playlist_urls", "")
-                    .orEmpty()
-                    .split('\n', ';')
-                    .mapNotNull { it.trim().takeIf(String::isNotEmpty) }
-            )
-        }.distinct()
+        // Parsed by the one rule that also names the guide file (see
+        // GuideFiles): channel matching and a guide's identity have to agree on
+        // what this profile's playlists are.
+        val playlistUrls = playlistUrlsOf(
+            playlistUrl = prefs.getString("playlist_url", ""),
+            extraPlaylistUrls = prefs.getString("extra_playlist_urls", "")
+        )
 
         if (playlistUrls.isEmpty()) return emptySet()
 

@@ -33,6 +33,8 @@ internal data class GuideSweep(
     val deletedBytes: Long = 0L,
     /** Guide files whose `VACUUM` handed free pages back, by name. */
     val reclaimed: List<String> = emptyList(),
+    /** Guide files dropped because their rows now live in a shared file. */
+    val migrated: List<String> = emptyList(),
     /** Programme rows dropped for being outside [EpgWindow], on either edge. */
     val prunedRows: Int = 0,
     /** Descriptions clipped to [EpgWindow.MAX_DESCRIPTION_CHARS]. */
@@ -83,6 +85,33 @@ internal fun guideFilesToDelete(
 }
 
 /**
+ * Guide files left behind by the OLD naming, for a profile that now shares one.
+ *
+ * A profile whose playlist is shared with another profile files its guide under
+ * the playlist's name rather than its own (see [GuideFiles]), so the file named
+ * after the profile is a duplicate from the moment that shared file exists.
+ * Both being on disk is the condition, deliberately: naming the old file before
+ * its replacement has been written would throw away a guide a re-import has not
+ * yet covered, which is the one failure this sweep must never cause.
+ *
+ * Nothing here needs to know which file is the active one. The old name is
+ * never the active profile's name — the active profile's file is the EXPECTED
+ * one, and this only ever names the profile-named file that was left behind.
+ */
+internal fun guideFilesToMigrate(
+    files: List<GuideFile>,
+    expectedNameByProfile: Map<String, String>
+): List<String> {
+    val present = files.map { file -> file.name }.toSet()
+    return expectedNameByProfile
+        .mapNotNull { (profileId, expected) ->
+            val oldName = "$profileId${GuideStorage.DB_SUFFIX}"
+            oldName.takeIf { expected != oldName && oldName in present && expected in present }
+        }
+        .distinct()
+}
+
+/**
  * Keeps the IPTV guides from being the app's largest unbounded store.
  *
  * Diagnostics on the field TV reports 1.34 GB of app data with ~980 MB of it in
@@ -121,6 +150,13 @@ internal fun guideFilesToDelete(
  *     [trimDescriptions]);
  *  3. checkpoint the write-ahead log, and `VACUUM` when most of the file is
  *     free pages, which is what actually hands the space back.
+ *
+ * A fourth rule is the naming itself: profiles on one playlist hold ONE guide
+ * file rather than one each (see
+ * [com.kennyb1201.kbstream.data.iptv.GuideFiles]), and the duplicate a profile
+ * leaves behind when it moves to that shared name is dropped by
+ * [guideFilesToMigrate] — but only once the shared file is on disk, so no guide
+ * is ever lost waiting for its replacement.
  */
 internal object GuideStorage {
 
@@ -197,6 +233,17 @@ internal object GuideStorage {
             doomed.remove(LEGACY_DB_NAME)
         }
 
+        // Guides named after the profile that owns them, for a profile whose
+        // playlist is now shared with another: the shared file holds the same
+        // rows, so the old one is exactly the duplicate the shared naming exists
+        // to stop keeping.
+        val migrated = guideFilesToMigrate(
+            files = guides,
+            expectedNameByProfile = GuideFiles.expectedNameByProfile(appContext)
+        ).filterNot { name -> name in doomed }
+
+        doomed += migrated
+
         var deletedBytes = 0L
         doomed.forEach { name ->
             val bytes = guides.first { it.name == name }.bytes
@@ -269,6 +316,7 @@ internal object GuideStorage {
             deleted = doomed,
             deletedBytes = deletedBytes,
             reclaimed = reclaimed,
+            migrated = migrated,
             prunedRows = prunedRows,
             trimmedDescriptions = trimmedDescriptions,
             beforeBytes = before,

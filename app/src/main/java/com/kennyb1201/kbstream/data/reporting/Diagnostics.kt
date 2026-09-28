@@ -403,7 +403,7 @@ object Diagnostics {
                 appendLine()
                 append("storage caches: ").append(cacheBreakdown(context))
                 appendLine()
-                append("storage dbs: ").append(databaseLine(dataDir))
+                append("storage dbs: ").append(databaseLine(context, dataDir))
             }
         }.getOrElse { "storage: unavailable (${it.message})" }
     }
@@ -451,15 +451,24 @@ object Diagnostics {
      * Read from the directory rather than from a list of known names: the app
      * keeps one scoped history database and one guide per profile, so the set
      * of files on disk is a function of how many profiles exist — something a
-     * hardcoded pair of names could not follow.
+     * hardcoded pair of names could not follow — and a guide is named after its
+     * profile's PLAYLIST when another profile is on it, so it is a function of
+     * how many playlists exist too (see
+     * [com.kennyb1201.kbstream.data.iptv.GuideFiles]).
      */
-    private fun databaseLine(dataDir: java.io.File): String {
+    private fun databaseLine(context: Context, dataDir: java.io.File): String {
         // A guide also carries its AGE, and that is what makes this line
         // actionable: a 456MB guide last written three weeks ago is a profile
         // nobody has used (GuideStorage drops it), while 173MB written two
         // hours ago is one in active use, where the only lever left is the
         // import window. Every other database here is written as the app runs,
         // so an age would mean nothing.
+        //
+        // A guide more than one profile is on says so (`(2h,3p)`): profiles
+        // sharing a playlist share one guide file, so how many copies appear
+        // here is a function of how many PLAYLISTS the device is on - and the
+        // count is what tells the two apart.
+        val owners = guideOwners(context)
         val dbs = java.io.File(dataDir, "databases").listFiles().orEmpty()
             .filter { it.isFile && it.name.endsWith(".db") }
             .map { Triple(it.name, dbBytes(it), it.lastModified()) }
@@ -468,12 +477,30 @@ object Diagnostics {
         if (dbs.isEmpty()) return "none over 1MB"
         val named = dbs.take(MAX_DB_ENTRIES)
             .joinToString(" ") { (name, bytes, modified) ->
-                val suffix = if (isGuideDb(name)) "(${fileAge(modified)})" else ""
+                val profiles = owners[name].orEmpty().size
+                val suffix = when {
+                    !isGuideDb(name) -> ""
+                    profiles > 1 -> "(${fileAge(modified)},${profiles}p)"
+                    else -> "(${fileAge(modified)})"
+                }
                 "$name=${mb(bytes)}$suffix"
             }
         val more = dbs.size - MAX_DB_ENTRIES
         return if (more > 0) "$named +$more more" else named
     }
+
+    /**
+     * How many profiles each guide file belongs to, by file name — empty when the
+     * naming cannot be read (a device with no profiles yet), which leaves the
+     * report exactly as it was before.
+     */
+    private fun guideOwners(context: Context): Map<String, List<String>> =
+        runCatching {
+            com.kennyb1201.kbstream.data.iptv.GuideFiles
+                .expectedNameByProfile(context)
+                .entries
+                .groupBy({ entry -> entry.value }, { entry -> entry.key })
+        }.getOrDefault(emptyMap())
 
     private fun isGuideDb(name: String): Boolean =
         name == com.kennyb1201.kbstream.data.iptv.GuideStorage.LEGACY_DB_NAME ||

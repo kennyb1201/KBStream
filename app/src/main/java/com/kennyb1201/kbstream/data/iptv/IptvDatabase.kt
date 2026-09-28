@@ -174,11 +174,17 @@ abstract class IptvDatabase : RoomDatabase() {
          * A caller that holds a DAO across a long operation (the XMLTV import)
          * uses this to notice that the active profile changed and abort, rather
          * than promoting one profile's guide into another profile's file.
+         *
+         * Named after the profile's PLAYLIST when another profile is on the same
+         * playlist, and after the profile otherwise - see
+         * [com.kennyb1201.kbstream.data.iptv.GuideFiles], which is also where
+         * the one-time cost of that naming is written down. It is why the switch
+         * above is detected by the NAME: switching between two profiles that
+         * share a guide must NOT abort an import, because the file those rows
+         * belong to is the one already being written.
          */
         fun activeFileName(context: Context): String =
-            com.kennyb1201.kbstream.data.sync.ProfileStorage.dbNameForActive(
-                context, "iptv_epg.db"
-            )
+            com.kennyb1201.kbstream.data.iptv.GuideFiles.activeName(context)
 
         /**
          * Whether the PRE-PROFILE guide file is still open in this process.

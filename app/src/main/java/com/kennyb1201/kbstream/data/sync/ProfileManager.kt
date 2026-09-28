@@ -75,6 +75,25 @@ object ProfileManager {
     fun hasProfiles(context: Context): Boolean = loadProfiles(context).isNotEmpty()
 
     /**
+     * The ids of every profile this device holds.
+     *
+     * From the in-memory list when it is loaded, and from the stored blob
+     * otherwise: a background worker runs without [init] having populated it,
+     * and there the parse is once per pass. Callers in the running app get the
+     * loaded list, which is what makes this cheap enough to ask per database
+     * open — a guide's file name depends on which profiles exist (see
+     * [com.kennyb1201.kbstream.data.iptv.GuideFiles]).
+     */
+    fun profileIds(context: Context): List<String> {
+        val loaded = _profiles.value
+        return if (loaded.isNotEmpty()) {
+            loaded.map { profile -> profile.id }
+        } else {
+            loadProfiles(context).map { profile -> profile.id }
+        }
+    }
+
+    /**
      * The active profile id: the bound one when there is one, otherwise the
      * one the profiles store says is active. Resolves the SAME pair [init]
      * activates (stored id, falling back to the first profile), so a caller
