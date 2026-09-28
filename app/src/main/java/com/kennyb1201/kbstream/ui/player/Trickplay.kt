@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.player
 
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
 import kotlin.math.abs
 
 /**
@@ -46,25 +47,36 @@ internal const val TRICKPLAY_TIMEOUT_MS = 6_000L
  * How far the player may be from the bucket it was asked for and still have the
  * frame it is showing counted as that bucket's.
  *
- * The player is asked for the nearest keyframe rather than the exact
- * millisecond, so it can legitimately settle a GOP away from the bucket. Wide
- * enough for that, narrow enough that a position the player has not actually
- * reached yet is not mistaken for the one being dragged to — a wrong frame
+ * The preview player is asked for the nearest keyframe, so it does not land on
+ * the bucket at all: it lands on the sync frame nearest to it, which on a
+ * long-GOP release is half a GOP away — five seconds on a ten-second GOP, and
+ * the previous four-second window refused every one of those as "not the
+ * position that was asked for". Two presses of such a stream were therefore
+ * enough to turn previews off for the rest of the film.
+ *
+ * Six seconds covers a 12s GOP and stays under the shortest scrub the UI has
+ * (one [TRICKPLAY_BUCKET_MS] per press): any wider and the position the viewer
+ * has just left could be mistaken for the one they are on, and a wrong frame
  * cached as a right one is worse than no preview, because it looks
  * authoritative.
  */
-internal const val TRICKPLAY_ACCEPT_WINDOW_MS = 4_000L
+internal const val TRICKPLAY_ACCEPT_WINDOW_MS = 6_000L
 
 /**
- * Consecutive failures before the session stops asking.
+ * Consecutive failures *from the source* before the session stops asking.
  *
- * Usually the second decoder: a box that has no decoder left to hand out fails
- * the preview player outright, and the answer to that is to leave the first
- * decoder alone (the one playing the video) rather than to retry every time the
- * viewer presses RIGHT. Two windows rather than one because the first failure
- * is often a transient startup one.
+ * A decoder the device cannot spare does not wait for this count: it ends the
+ * session's previews on its first refusal, because it will not have changed by
+ * the next press (see [trickplayPermanentError]). What is left for this many
+ * tries is the source that would not serve a second connection, the seek that
+ * never settled, the very first frame that had to build a player and open a
+ * stream at the same time — failures a longer film simply stops having.
+ *
+ * It used to be two, which on a device whose first preview frame took longer
+ * than the decode budget meant previews were off for the whole session before
+ * the second press had even landed.
  */
-internal const val TRICKPLAY_MAX_FAILURES = 2
+internal const val TRICKPLAY_MAX_TRANSIENT_FAILURES = 6
 
 /**
  * How long the preview player is kept after the last request.
@@ -92,8 +104,26 @@ internal const val TRICKPLAY_IDLE_RELEASE_MS = 5_000L
  * to (dragging back over the same ground stays free) but is no longer put on
  * screen, because a thumbnail that appears five seconds after the press reads
  * as a glitch rather than as an answer.
+ *
+ * Measured from the moment the frame is *on screen*, not from the press: this is
+ * the viewer's time to look at it. Charging it from the press instead took the
+ * card away before a slow decode could draw, which from the outside is exactly
+ * what "I never see a thumbnail" looks like.
  */
 internal const val TRICKPLAY_SHOW_GRACE_MS = 3_000L
+
+/**
+ * How long the card stays armed from the press that asked for a frame.
+ *
+ * A whole decode budget plus the show window, because a frame that is still
+ * inside its own timeout is still the frame the viewer asked for. This is the
+ * other half of the fix above: the press arms the card for as long as a decode
+ * is allowed to take, and the frame that arrives re-arms it for
+ * [TRICKPLAY_SHOW_GRACE_MS] from the draw. The first frame of a session — which
+ * has to build a second player, open a connection and fill a buffer — is the
+ * slowest one there is, and it is the one a press-length window always lost.
+ */
+internal const val TRICKPLAY_WAIT_MS = TRICKPLAY_TIMEOUT_MS + TRICKPLAY_SHOW_GRACE_MS
 
 /**
  * The bucket [positionMs] belongs to.
@@ -120,8 +150,32 @@ internal fun trickplayFrameFits(
     windowMs: Long = TRICKPLAY_ACCEPT_WINDOW_MS
 ): Boolean = abs(positionMs - bucketMs) <= windowMs
 
-/** Whether [failures] consecutive failures have used up the session's tries. */
-internal fun trickplayGivesUp(failures: Int): Boolean = failures >= TRICKPLAY_MAX_FAILURES
+/**
+ * Whether [failures] consecutive failures have used up the session's tries.
+ *
+ * Only failures that are the source's fault reach this: a decoder the device
+ * cannot spare ends the previews at once, through [trickplayPermanentError].
+ */
+internal fun trickplayGivesUp(failures: Int): Boolean =
+    failures >= TRICKPLAY_MAX_TRANSIENT_FAILURES
+
+/**
+ * Whether a playback error means the preview can never work in this session.
+ *
+ * A decoder the box cannot spare fails *configuration*, and that is not going to
+ * change while the video holding the decoder keeps playing: retrying costs a
+ * connection per press and reaches the same answer, so the pipeline stops
+ * asking at once and says why. Everything else — a source that refused a second
+ * connection, a format the extractors could not read — is worth another press.
+ */
+internal fun trickplayPermanentError(errorCode: Int): Boolean = when (errorCode) {
+    PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+    PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED,
+    PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+    PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES -> true
+
+    else -> false
+}
 
 /**
  * The container hint the preview player's media item carries.

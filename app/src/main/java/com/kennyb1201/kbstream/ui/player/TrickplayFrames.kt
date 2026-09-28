@@ -38,10 +38,11 @@ import java.util.concurrent.TimeUnit
  *
  * Several boxes — Fire TV most of all, which is most of this app's installs —
  * have barely enough decoders to play one stream. So the pipeline is built to
- * lose quietly: it never retries past [TRICKPLAY_MAX_FAILURES] windows, it
- * disables itself for the session when it does, and it always leaves the
- * screen looking exactly as it did before (the time bubble), because the frame
- * is a nicety and playback is not.
+ * lose quietly: a device that cannot spare the decoder is given up on at its
+ * first refusal, a source that merely stumbled gets
+ * [TRICKPLAY_MAX_TRANSIENT_FAILURES] presses before the session stops asking,
+ * and either way it leaves the screen looking exactly as it did before (the
+ * time bubble), because the frame is a nicety and playback is not.
  *
  * ## What it deliberately does not do
  *
@@ -58,7 +59,9 @@ import java.util.concurrent.TimeUnit
  *    than a full-size frame at LAN-bitrate cost.
  *
  * Call [request] while the viewer scrubs and [idle] when they stop; [release]
- * on the way out of the activity.
+ * on the way out of the activity. [onUnavailable] is called once if the pipeline
+ * gives up for good, so the screen can say why rather than leaving the viewer
+ * pressing RIGHT at nothing.
  */
 @UnstableApi
 internal class TrickplayFrames(
@@ -66,6 +69,7 @@ internal class TrickplayFrames(
     private val url: String,
     private val headers: Map<String, String>,
     private val resolvedMimeType: String? = null,
+    private val onUnavailable: (reason: String) -> Unit = {},
     private val onFrame: (bucketMs: Long, frame: Bitmap) -> Unit
 ) {
 
@@ -232,7 +236,11 @@ internal class TrickplayFrames(
 
     private val listener = object : Player.Listener {
         override fun onPlayerError(error: PlaybackException) {
-            fail(inFlightBucket, "player error ${error.errorCodeName}")
+            fail(
+                inFlightBucket,
+                "player error ${error.errorCodeName}",
+                permanent = trickplayPermanentError(error.errorCode)
+            )
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -296,8 +304,13 @@ internal class TrickplayFrames(
     /**
      * Records a failed extraction for [bucket]. Nothing is in flight afterwards,
      * which is what lets the next request (or the retry below) start one.
+     *
+     * [permanent] is the difference between "this device will never hand the
+     * preview a decoder" and "this attempt did not work": the first ends the
+     * session's previews there and then, the second is left to the viewer's next
+     * press.
      */
-    private fun fail(bucket: Long?, reason: String) {
+    private fun fail(bucket: Long?, reason: String, permanent: Boolean = false) {
         // Only a failure for something that was actually asked for counts. An
         // error surfacing while the pipeline is idle — a source that gave up on
         // its own during the idle window — is not the viewer's scrub failing.
@@ -311,12 +324,18 @@ internal class TrickplayFrames(
             SystemClock.uptimeMillis() - askedAtMs,
             ok = false
         )
-        Log.w(TAG, "no preview frame: $reason (failure $failures of $TRICKPLAY_MAX_FAILURES)")
-        if (trickplayGivesUp(failures)) {
-            Log.i(TAG, "scrub previews off for this session: no decoder to spare")
+        // The reason goes into the report as well as the log: "no thumbnails"
+        // is answered differently by a decoder the box would not hand out, a
+        // source that refused the second connection, and a seek that never
+        // settled, and none of those three is visible from outside the app.
+        PerfTrace.record("trickplay.reason:$reason", 0L, ok = false)
+        Log.w(TAG, "no preview frame: $reason (failure $failures)")
+        if (permanent || trickplayGivesUp(failures)) {
+            Log.i(TAG, "scrub previews off for this session: $reason")
             PerfTrace.record("trickplay.off", 0L, ok = false)
             disabled = true
             teardown()
+            onUnavailable(if (permanent) NO_DECODER_NOTICE else NO_FRAMES_NOTICE)
             return
         }
         // Retried only when the viewer has already dragged somewhere else. A
@@ -386,6 +405,19 @@ internal class TrickplayFrames(
 
     private companion object {
         const val TAG = "PLAYER_TRICKPLAY"
+
+        /**
+         * Said in the app, once, when the previews cannot happen at all.
+         *
+         * A silent feature and a broken one look identical on a TV, and the two
+         * reasons a frame cannot be produced here — no decoder to spare, or a
+         * source that will not serve one — want opposite fixes. So the screen is
+         * told, and not only the log.
+         */
+        const val NO_DECODER_NOTICE =
+            "Scrub previews need a second video decoder and this device has none spare"
+        const val NO_FRAMES_NOTICE =
+            "No scrub preview thumbnails were available for this video"
 
         /** Capture size: 16:9, a sixth of a 1080p screen, ~0.5 MB a frame. */
         const val TRICKPLAY_CAPTURE_WIDTH = 480

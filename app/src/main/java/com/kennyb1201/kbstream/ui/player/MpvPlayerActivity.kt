@@ -1278,16 +1278,34 @@ class MpvPlayerActivity : ComponentActivity() {
         if (durationMs <= 0L || currentUrl.isBlank()) return
         trickplayWanted = true
         // Re-armed by every press, so a held scrub keeps the card up and a
-        // released one keeps it for the grace window only.
+        // released one keeps it for the grace window only - and armed for a
+        // whole decode, because a frame that arrives at four seconds is still
+        // the frame the viewer asked for (see TRICKPLAY_WAIT_MS).
         handler.removeCallbacks(trickplayCardHider)
-        handler.postDelayed(trickplayCardHider, TRICKPLAY_SHOW_GRACE_MS)
+        handler.postDelayed(trickplayCardHider, TRICKPLAY_WAIT_MS)
         trickplayAnchorView = anchorView
         val frames = trickplay ?: TrickplayFrames(
             activity = this,
             url = currentUrl,
-            headers = streamHeaders
+            headers = streamHeaders,
+            onUnavailable = { reason -> noticeNoScrubPreviews(reason) }
         ) { _, frame ->
-            if (trickplayWanted) previewCard().show(frame, trickplayAnchorView)
+            if (trickplayWanted) {
+                previewCard().show(frame, trickplayAnchorView)
+                // The window runs from the draw, not from the press: this is
+                // the viewer's time to look at it.
+                handler.removeCallbacks(trickplayCardHider)
+                handler.postDelayed(trickplayCardHider, TRICKPLAY_SHOW_GRACE_MS)
+            } else {
+                // Decoded after the card closed: cached, so dragging back over
+                // this position is free, but counted - "decoded and never
+                // shown" is a different fault from "never decoded".
+                com.kennyb1201.kbstream.data.reporting.PerfTrace.record(
+                    "trickplay.late",
+                    0L,
+                    ok = false
+                )
+            }
         }.also { trickplay = it }
         if (!frames.isUsable) return
         frames.request(posMs, durationMs)
@@ -1296,6 +1314,24 @@ class MpvPlayerActivity : ComponentActivity() {
     /** The card previews appear in, built the first time a frame arrives. */
     private fun previewCard(): TrickplayOverlay =
         trickplayOverlay ?: TrickplayOverlay(this).also { trickplayOverlay = it }
+
+    /** Whether the "no scrub previews" notice has been shown in this session. */
+    private var scrubPreviewNoticeShown = false
+
+    /**
+     * Says why no thumbnail will appear - in the app, not only in the log.
+     *
+     * The pipeline is built to fail quietly (the card simply never shows), which
+     * left "I never see thumbnails" with no way to tell a device that cannot
+     * spare a decoder from a source that will not serve a second connection.
+     * Those two want opposite fixes, so the reason is worth one toast. Once per
+     * session: it explains a feature rather than reporting a fault.
+     */
+    private fun noticeNoScrubPreviews(reason: String) {
+        if (scrubPreviewNoticeShown) return
+        scrubPreviewNoticeShown = true
+        showToast(reason, 4_000L)
+    }
 
     /**
      * The scrub is over: the decoder behind the card is given back a few seconds

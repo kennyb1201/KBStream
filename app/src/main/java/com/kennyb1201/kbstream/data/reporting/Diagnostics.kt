@@ -210,14 +210,17 @@ object Diagnostics {
     /**
      * What the scrub previews did, on a session that ever asked for one.
      *
-     * "I never see a thumbnail when I scrub" has two very different owners: no
+     * "I never see a thumbnail when I scrub" has three very different owners: no
      * preview was ever asked for - in which case this line is absent from the
-     * report entirely, which is itself the answer - or one was asked for and
-     * never came back. The second decoder a preview needs is the thing TV boxes
-     * run out of first, and the pipeline stops asking after two failures rather
-     * than competing with the video for a codec, so `off` says the session gave
-     * up and `failed` says how often. `slowest` separates a frame that was worth
-     * the wait from one that arrived too late to be shown.
+     * report entirely, which is itself the answer - one was asked for and never
+     * came back, or one came back too late to be shown. The last is `late`, and
+     * it is the one that is invisible from the outside: the frame was decoded,
+     * cached, and taken off screen before the press-length window ran out. The
+     * second decoder a preview needs is the thing TV boxes run out of first, so
+     * `off` says the session gave up, and the reason recorded beside it says
+     * which of the two answers applies: no decoder to spare, or a source that
+     * refused one. `slowest` separates a frame that was worth the wait from one
+     * that arrived after the viewer had moved on.
      */
     private fun trickplayLine(): String? {
         val decoded = PerfTrace.count("trickplay.decode")
@@ -226,14 +229,31 @@ object Diagnostics {
         return buildString {
             append("trickplay: frames=").append(decoded)
             append(" failed=").append(missed)
+            val late = PerfTrace.count("trickplay.late")
+            if (late > 0) append(" late=").append(late)
             if (decoded > 0) {
                 append(" slowest=").append(PerfTrace.maxMs("trickplay.decode")).append("ms")
             }
             if (PerfTrace.count("trickplay.off") > 0) {
-                append(" · off for this session (no decoder to spare)")
+                append(" · off for this session, last: ").append(trickplayReasons())
+            } else if (late > 0) {
+                append(" · frames arrived after the card closed")
             }
         }
     }
+
+    /**
+     * Every reason a preview was not produced this session, oldest first.
+     *
+     * Kept as the labels of the trace samples themselves so the answer costs no
+     * extra state: a preview that never came back recorded why (a decoder the
+     * box would not hand out, a seek that never settled, a source that refused)
+     * and this is that reason, read back.
+     */
+    private fun trickplayReasons(): String =
+        PerfTrace.latestByPrefix("trickplay.reason")
+            .joinToString(" / ") { it.first.removePrefix("trickplay.reason:") }
+            .ifEmpty { "no reason recorded" }
 
     private fun accountLine(): String {
         val state = SupabaseSync.authState.value

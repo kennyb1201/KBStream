@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.player
 
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -84,11 +85,58 @@ class TrickplayTest {
     // ── when the session gives up ────────────────────────────────────────────
 
     @Test
-    fun `one failure is a transient, two in a row are not`() {
+    fun `only a streak of failures from the source ends the session`() {
+        // Two was the old limit, and one slow first frame reached it: previews
+        // were then off for the rest of the film.
         assertFalse(trickplayGivesUp(0))
-        assertFalse(trickplayGivesUp(TRICKPLAY_MAX_FAILURES - 1))
-        assertTrue(trickplayGivesUp(TRICKPLAY_MAX_FAILURES))
-        assertTrue(trickplayGivesUp(TRICKPLAY_MAX_FAILURES + 5))
+        assertFalse(trickplayGivesUp(2))
+        assertFalse(trickplayGivesUp(TRICKPLAY_MAX_TRANSIENT_FAILURES - 1))
+        assertTrue(trickplayGivesUp(TRICKPLAY_MAX_TRANSIENT_FAILURES))
+        assertTrue(trickplayGivesUp(TRICKPLAY_MAX_TRANSIENT_FAILURES + 5))
+    }
+
+    @Test
+    fun `a decoder the device cannot spare is permanent, not a retry`() {
+        // The second decoder is what a TV box runs out of, and the answer is not
+        // to ask again on the next press: it ends the previews there.
+        assertTrue(trickplayPermanentError(PlaybackException.ERROR_CODE_DECODER_INIT_FAILED))
+        assertTrue(trickplayPermanentError(PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED))
+        assertTrue(
+            trickplayPermanentError(
+                PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES
+            )
+        )
+    }
+
+    @Test
+    fun `a source that refused is worth another press`() {
+        // A 403 from the host, a connection that timed out, a seek past the end
+        // of the stream: none of those is the device's fault, so the pipeline
+        // stays and the viewer's next press tries again.
+        assertFalse(trickplayPermanentError(PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS))
+        assertFalse(
+            trickplayPermanentError(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT)
+        )
+        assertFalse(trickplayPermanentError(PlaybackException.ERROR_CODE_UNSPECIFIED))
+    }
+
+    @Test
+    fun `the card is armed for a whole decode, then for the time it is on screen`() {
+        // The press arms it for the decode budget; the frame that arrives
+        // re-arms it for the show window from the draw.
+        assertEquals(TRICKPLAY_TIMEOUT_MS + TRICKPLAY_SHOW_GRACE_MS, TRICKPLAY_WAIT_MS)
+        assertTrue(TRICKPLAY_WAIT_MS > TRICKPLAY_TIMEOUT_MS)
+    }
+
+    @Test
+    fun `the accept window stays narrower than one scrub step`() {
+        // A press moves exactly one bucket. If the window reached that far, the
+        // position the viewer has just left would count as the one they are on,
+        // and a frame from before the seek could be cached as the frame at it.
+        assertTrue(TRICKPLAY_ACCEPT_WINDOW_MS < TRICKPLAY_BUCKET_MS)
+        // A long-GOP release settles half a GOP from the bucket, so six seconds
+        // covers a 12s GOP - which the previous four-second window did not.
+        assertTrue(TRICKPLAY_ACCEPT_WINDOW_MS >= 6_000L)
     }
 
     // ── the frame store ──────────────────────────────────────────────────────
