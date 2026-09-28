@@ -165,12 +165,28 @@ private val RailSectionGap = 20.dp
 // rail up off the landing inset when it is too tall to leave this band
 // visible, so every rail peeks the one below it instead of only the short
 // Continue Watching / Upcoming rows.
-private val RailNextSectionReveal = RailSectionGap + 60.dp
+//
+// Kept to the next title plus a sliver of its posters rather than a generous
+// slice of them: what this band buys is charged against the focused rail's OWN
+// header (see [RailHeaderRoom]), and a smaller band is what keeps the reveal
+// winning — instead of falling back to that floor — on a rail that only just
+// has the room, which is the difference between the next rail's title showing
+// and not.
+private val RailNextSectionReveal = RailSectionGap + 46.dp
 
 // KB parity: MODERN_ROW_HEADER_FOCUS_INSET. When a row takes focus, its
 // header lands this far below the rails viewport top — deterministic landing
 // kills both the CW/Upcoming sliver and the per-focus-step bounce.
 private val RailHeaderFocusInset = 40.dp
+
+// Floor under that landing line. A rail's OWN header sits above its posters, so
+// a landing pulled any closer to the viewport top than this reads as a cut-off
+// title instead of a section heading: a poster rail is ~250dp tall in a ~280dp
+// viewport, so the reveal band asks for a landing of 0 and the heading ends up
+// flush against the seam at the top of the rails viewport, half-eaten by it.
+// When a rail cannot have both, the title of the rail you are ON wins and the
+// next rail's title waits below the fold.
+private val RailHeaderRoom = 34.dp
 
 private val HeroToFirstRailGap = 2.dp
 
@@ -2457,6 +2473,7 @@ fun HomeScreen(
     val density = LocalDensity.current
     val railRowsBringIntoViewSpec = remember(density) {
         val topInsetPx = with(density) { RailHeaderFocusInset.toPx() }
+        val headerRoomPx = with(density) { RailHeaderRoom.toPx() }
         val revealBandPx = with(density) { RailNextSectionReveal.toPx() }
         object : BringIntoViewSpec {
             override fun calculateScrollDistance(
@@ -2472,9 +2489,14 @@ fun HomeScreen(
                 // Upcoming rows ever peeked the rail below them. Depends only
                 // on the row's size, so every child of a row still returns the
                 // same distance (no bounce mid-flight).
-                val revealTarget =
-                    (containerSize - abs(size) - revealBandPx).coerceAtLeast(0f)
-                val targetLeadingEdge = minOf(topInsetPx, revealTarget)
+                //
+                // Floored at the focused rail's own header: the pull-up must
+                // never cost the heading of the rail being read, so a rail too
+                // tall to spare the band keeps its title in full and lets the
+                // next rail's title fall below the fold instead.
+                val revealTarget = containerSize - abs(size) - revealBandPx
+                val targetLeadingEdge =
+                    minOf(topInsetPx, revealTarget).coerceAtLeast(headerRoomPx)
                 // Already resting on the landing line: done. This also keeps
                 // the spring quiet during horizontal focus moves (no bounce).
                 if (abs(currentLeadingEdge - targetLeadingEdge) < 1f) return 0f
