@@ -179,5 +179,18 @@ abstract class IptvDatabase : RoomDatabase() {
             com.kennyb1201.kbstream.data.sync.ProfileStorage.dbNameForActive(
                 context, "iptv_epg.db"
             )
+
+        /**
+         * Whether the PRE-PROFILE guide file is still open in this process.
+         *
+         * [com.kennyb1201.kbstream.data.iptv.GuideStorage] deletes that file
+         * once a profile-scoped guide exists, and it has to know first: an open
+         * connection keeps the inode — and with it every byte of a
+         * multi-hundred-megabyte guide — alive for the rest of the session, so
+         * the delete would free nothing at all. Reporting it lets the sweep
+         * skip the file and take it on a later pass, when a profile was known
+         * before the guide was ever touched (the ordinary case).
+         */
+        fun legacyInstanceOpen(): Boolean = INSTANCE != null
     }
 }

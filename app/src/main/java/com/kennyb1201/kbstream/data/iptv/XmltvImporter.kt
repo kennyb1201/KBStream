@@ -478,19 +478,17 @@ private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
         const val GZIP_MAGIC_1 = 0x1f
         const val GZIP_MAGIC_2 = 0x8b
 
-        const val DEFAULT_PAST_WINDOW_MS = 2 * 60 * 60 * 1000L
-
         /**
-         * How far ahead a guide is stored. An import only keeps a window, so
-         * this is what stands between the viewer and a guide that runs out of
-         * programmes before its next refresh: with the old 18 hours and a
-         * refresh that can be delayed (Doze, or the write gate deferring the
-         * whole import past a film), the tail of the window was reachable and
-         * the guide went empty rather than merely old. Two days of headroom
-         * costs one extra row per 30-minute slot per matched channel - and the
-         * channel filter removes orders of magnitude more than that.
+         * How much of the schedule a default import keeps, on both sides of
+         * the clock. Both are [EpgWindow]'s numbers rather than this file's:
+         * what an import STORES and what the guide can SHOW are two halves of
+         * one contract, and they had drifted to a factor of six (48 hours
+         * stored for an 8-hour grid) across every channel of every profile's
+         * own guide database — the app's largest store by an order of
+         * magnitude. See [EpgWindow] for the relationship and why it holds.
          */
-        const val DEFAULT_FUTURE_WINDOW_MS = 48 * 60 * 60 * 1000L
+        const val DEFAULT_PAST_WINDOW_MS = EpgWindow.PAST_MS
+        const val DEFAULT_FUTURE_WINDOW_MS = EpgWindow.FUTURE_MS
 
         val IMPORT_MUTEX = Mutex()
 

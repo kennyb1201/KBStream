@@ -15,6 +15,7 @@ import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.iptv.IptvPlaylist
+import com.kennyb1201.kbstream.data.iptv.EpgWindow
 import com.kennyb1201.kbstream.data.iptv.IptvRepository
 import com.kennyb1201.kbstream.data.iptv.guideWindowFingerprint
 import com.kennyb1201.kbstream.data.reporting.Redaction
@@ -1174,16 +1175,19 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         // with headroom.
         const val VISIBLE_GUIDE_PROGRAM_LIMIT = 960
 
-        const val GUIDE_PAST_WINDOW_MS = 30 * 60 * 1000L
+        // Both of these are the READ half of [EpgWindow]'s contract: what the
+        // grid, the detail panel and the guide search ask for. They live
+        // there now so the import window cannot drift away from them again —
+        // it was storing six times this window, in every profile's own guide.
+        const val GUIDE_PAST_WINDOW_MS = EpgWindow.READ_PAST_MS
 
-        // Was 2 hours -- too narrow for channels with longer programme
-        // blocks (movies, sports coverage) to ever have 4 *future* entries
-        // fall inside the window, even though their schedule is just as
-        // full further out. 8 hours comfortably covers 4 back-to-back
-        // ~2-hour blocks so the "coming up" row (which only shows 4) has
-        // something to fill it regardless of how long each channel's
-        // programme blocks run.
-        const val GUIDE_FUTURE_WINDOW_MS = 8 * 60 * 60 * 1000L
+        // The future half. 8 hours comfortably covers 4 back-to-back ~2-hour
+        // blocks so the "coming up" row (which only shows 4) has something to
+        // fill it regardless of how long each channel's programme blocks run.
+        // This was once 2 hours, which was too narrow for exactly that; going
+        // the other way (storing far beyond it) is what the guide database
+        // paid for.
+        const val GUIDE_FUTURE_WINDOW_MS = EpgWindow.READ_FUTURE_MS
         const val PLAYLIST_REFRESH_MS = 6 * 60 * 60 * 1000L
         const val EPG_REFRESH_MS = 12 * 60 * 60 * 1000L
 

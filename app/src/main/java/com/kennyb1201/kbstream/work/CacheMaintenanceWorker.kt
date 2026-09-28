@@ -13,14 +13,20 @@ import androidx.work.WorkerParameters
 import com.kennyb1201.kbstream.data.cache.DiskSweep
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheMaintenance
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.iptv.GuideStorage
 import com.kennyb1201.kbstream.data.update.AppUpdater
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 
 /**
  * Every periodic disk cleanup in one place: bounds the TMDB JSON cache, hands
- * the database file its space back, and sweeps the caches that grow by file
- * COUNT rather than by bytes.
+ * the database files their space back, sweeps the caches that grow by file
+ * COUNT rather than by bytes, and bounds the IPTV guides.
+ *
+ * The guides are the largest store the app owns — four of them (one per
+ * profile, plus the legacy global file) accounted for ~980 MB of the 1.34 GB
+ * measured on the field TV — and until now nothing maintained them at all. See
+ * [com.kennyb1201.kbstream.data.iptv.GuideStorage].
  *
  * The JSON trim is also enforced by
  * [com.kennyb1201.kbstream.data.tmdb.TmdbRepository] on the write path, so this
@@ -48,6 +54,12 @@ class CacheMaintenanceWorker(
             // imports that were picked and then abandoned.
             val subtitles = DiskSweep.sweepSubtitleCache(applicationContext)
             val avatars = DiskSweep.sweepPendingAvatars(applicationContext)
+            // The guides: whole files nothing can read again (the legacy global
+            // one, and a profile's guide left idle past the sweep window),
+            // then a prune plus the VACUUM that hands a shrunken guide's free
+            // pages back. Same reason as the JSON cache above — a delete never
+            // shrinks a SQLite file — but an order of magnitude larger.
+            val guides = GuideStorage.sweep(applicationContext)
             // A staged update APK for a build that is already installed.
             val stagedApk = AppUpdater.clearStaleStagedApk(applicationContext)
             Log.i(
@@ -56,6 +68,14 @@ class CacheMaintenanceWorker(
                     "left=${trim.rows} row(s) / ${trim.bytes / 1_048_576} MB, " +
                     "reclaimed=$reclaimed subtitles=$subtitles avatars=$avatars " +
                     "stagedApk=$stagedApk"
+            )
+            Log.i(
+                TAG,
+                "guides: deleted=${guides.deleted} " +
+                    "(${guides.deletedBytes / 1_048_576} MB) " +
+                    "pruned=${guides.prunedRows} row(s) vacuumed=${guides.vacuumed} " +
+                    "skipped=${guides.busy} left=${guides.beforeBytes / 1_048_576} -> " +
+                    "${guides.afterBytes / 1_048_576} MB"
             )
             Result.success()
         } catch (e: CancellationException) {
@@ -75,8 +95,17 @@ class CacheMaintenanceWorker(
         /** Unique name of the recurring pass. */
         const val WORK_NAME = "cache_maintenance"
 
-        /** Unique name of the one-off pass enqueued on launch. */
-        private const val WORK_NAME_ONCE = "cache_maintenance_once"
+        /**
+         * Unique name of the one-off pass enqueued on launch.
+         *
+         * The generation suffix is deliberate. `KEEP` on a unique name means a
+         * name is enqueued exactly once per install, so a pass that GAINS work
+         * (this one now reclaims the guides, which the earlier generation never
+         * touched) would otherwise not run until the next daily tick — up to a
+         * day after the update that added it, on a device whose whole point was
+         * that it had already grown too large.
+         */
+        private const val WORK_NAME_ONCE = "cache_maintenance_once_2"
 
         /**
          * How often the reclaim is retried.

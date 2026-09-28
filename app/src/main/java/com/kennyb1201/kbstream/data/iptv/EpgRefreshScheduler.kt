@@ -34,12 +34,15 @@ object EpgRefreshScheduler {
      * How often the guide is re-imported in the background. WorkManager's
      * minimum for periodic work is 15 minutes and a large XMLTV import is a
      * multi-minute download plus parse, so this is a freshness/cost trade
-     * rather than a fine-grained poll. Six hours keeps the stored window
-     * (see [XmltvImporter]'s future window) comfortably ahead of the clock
-     * even when a run is delayed by Doze or by the write gate deferring it
-     * past playback.
+     * rather than a fine-grained poll.
+     *
+     * The value is [EpgWindow]'s: the stored window is sized from it (they are
+     * the two halves of one contract — a guide refreshed this often has to
+     * reach the end of what the UI renders, with slack for a run that Doze or
+     * the write gate defers), so changing one without the other is the drift
+     * that made the guide databases the app's largest store.
      */
-    private const val REFRESH_INTERVAL_HOURS = 6L
+    private const val REFRESH_INTERVAL_HOURS = EpgWindow.REFRESH_INTERVAL_HOURS
 
     fun schedule(context: Context) {
         val constraints = Constraints.Builder()

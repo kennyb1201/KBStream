@@ -392,16 +392,36 @@ object Diagnostics {
      * hardcoded pair of names could not follow.
      */
     private fun databaseLine(dataDir: java.io.File): String {
+        // A guide also carries its AGE, and that is what makes this line
+        // actionable: a 456MB guide last written three weeks ago is a profile
+        // nobody has used (GuideStorage drops it), while 173MB written two
+        // hours ago is one in active use, where the only lever left is the
+        // import window. Every other database here is written as the app runs,
+        // so an age would mean nothing.
         val dbs = java.io.File(dataDir, "databases").listFiles().orEmpty()
             .filter { it.isFile && it.name.endsWith(".db") }
-            .map { it.name to dbBytes(it) }
+            .map { Triple(it.name, dbBytes(it), it.lastModified()) }
             .filter { it.second >= STORAGE_MIN_BYTES }
             .sortedByDescending { it.second }
         if (dbs.isEmpty()) return "none over 1MB"
         val named = dbs.take(MAX_DB_ENTRIES)
-            .joinToString(" ") { (name, bytes) -> "$name=${mb(bytes)}" }
+            .joinToString(" ") { (name, bytes, modified) ->
+                val suffix = if (isGuideDb(name)) "(${fileAge(modified)})" else ""
+                "$name=${mb(bytes)}$suffix"
+            }
         val more = dbs.size - MAX_DB_ENTRIES
         return if (more > 0) "$named +$more more" else named
+    }
+
+    private fun isGuideDb(name: String): Boolean =
+        name == com.kennyb1201.kbstream.data.iptv.GuideStorage.LEGACY_DB_NAME ||
+            name.endsWith(com.kennyb1201.kbstream.data.iptv.GuideStorage.DB_SUFFIX)
+
+    /** Coarse age of a file: hours under two days, whole days beyond that. */
+    private fun fileAge(modifiedMs: Long): String {
+        if (modifiedMs <= 0L) return "unknown"
+        val hours = (System.currentTimeMillis() - modifiedMs) / 3_600_000L
+        return if (hours < 48L) "${hours}h" else "${hours / 24L}d"
     }
 
     private fun mb(bytes: Long): String = "${bytes / 1_048_576}MB"
