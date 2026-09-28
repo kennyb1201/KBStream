@@ -3428,10 +3428,25 @@ class MpvPlayerActivity : ComponentActivity() {
         // mpv is paused just below, so guide writes may proceed again.
         EpgWriteGate.setPlayerActive(false)
         handler.removeCallbacks(hideControlsRunnable)
-        // Pause rather than tear down: the native instance is released in
-        // onDestroy, and a backgrounded player that kept playing would be a bug
-        // report of its own.
-        surface?.setPaused(true)
+        if (playerSwitchStarted) {
+            // Another engine has been launched and this Activity stays in the
+            // chain for its result, so it is not destroyed until that session
+            // ENDS - and until then libmpv would still be holding its own
+            // hardware decoder. On a box that hands out one 4K decode per
+            // process, that is the decoder the session now playing is refused
+            // when it rebuilds: a source switch there comes back "out of video
+            // decoder resources" while starting the same source fresh, with no
+            // engine switch behind it, plays immediately. Hand the native
+            // instance back here instead - onDestroy then has nothing to
+            // release.
+            surface?.release()
+            surface = null
+        } else {
+            // Pause rather than tear down: the native instance is released in
+            // onDestroy, and a backgrounded player that kept playing would be a
+            // bug report of its own.
+            surface?.setPaused(true)
+        }
         // The preview decoder goes with the pause: a second decoder held behind a
         // backgrounded player helps nobody.
         stopTrickplay()

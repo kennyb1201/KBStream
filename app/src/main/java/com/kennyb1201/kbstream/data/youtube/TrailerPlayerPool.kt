@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.data.youtube
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
+import com.kennyb1201.kbstream.data.memory.MemoryPressure
 
 /**
  * Reuses one lightly buffered player for short inline hero trailers.
@@ -15,9 +16,25 @@ import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
  * User-Agent hint differs per resolved source, and callers route every
  * media item through that factory.
  */
-object TrailerPlayerPool {
+object TrailerPlayerPool : MemoryPressure.CacheOwner {
     @Volatile
     private var player: ExoPlayer? = null
+
+    /**
+     * Playback state of the pooled instance, mirrored so [cacheStats] can answer
+     * "is a hero decoder open?" on the diagnostics thread without touching the
+     * player (a Player method called off its own thread throws, which would drop
+     * the whole report line).
+     */
+    @Volatile
+    private var pooledState = Player.STATE_IDLE
+
+    /** True while the pooled instance is playing rather than merely open. */
+    @Volatile
+    private var pooledPlaying = false
+
+    /** Registered with [MemoryPressure] once, on the build that creates it. */
+    private var observed = false
 
     /**
      * Acquires the pooled player, building it on first use. The builder is
@@ -38,11 +55,20 @@ object TrailerPlayerPool {
                 built.addListener(
                     object : Player.Listener {
                         override fun onIsPlayingChanged(isPlaying: Boolean) {
+                            pooledPlaying = isPlaying
                             EpgWriteGate.setInlinePlaybackActive(isPlaying)
+                        }
+
+                        override fun onPlaybackStateChanged(playbackState: Int) {
+                            pooledState = playbackState
                         }
                     }
                 )
                 player = built
+                if (!observed) {
+                    observed = true
+                    MemoryPressure.register(this)
+                }
             }
     }
 
@@ -71,6 +97,29 @@ object TrailerPlayerPool {
     @Synchronized
     fun pauseCurrent() {
         player?.pause()
+    }
+
+    /**
+     * Reported, never released — the same trade the trailer source cache makes
+     * (see [MemoryPressure]): dropping this instance would cost the renderer
+     * initialization the pool exists to pay once, and the scarce thing it holds,
+     * the video decoder, is already handed back by [releaseForReuse], which is
+     * what the fullscreen players call on the way in. What is left worth
+     * reporting is whether an instance is alive and whether it is holding a
+     * decoder — the first question a "this TV has run out of video decoder
+     * resources" report needs answered.
+     */
+    override fun cacheStats(): String {
+        if (player == null) return "hero trailer player: none"
+        val state = when (pooledState) {
+            Player.STATE_IDLE -> "idle, no decoder"
+            Player.STATE_BUFFERING -> "buffering, decoder open"
+            Player.STATE_READY ->
+                if (pooledPlaying) "playing, decoder open" else "paused, decoder open"
+            Player.STATE_ENDED -> "ended, decoder open"
+            else -> "state=$pooledState"
+        }
+        return "hero trailer player: 1 pooled instance ($state)"
     }
 
     @Synchronized
