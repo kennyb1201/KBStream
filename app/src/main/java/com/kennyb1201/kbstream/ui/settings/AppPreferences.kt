@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.settings
 import android.content.Context
 import android.content.SharedPreferences
 import com.kennyb1201.kbstream.ui.player.PlayerAudioTuning
+import kotlin.math.abs
 
 /**
  * Persistent player defaults stored in SharedPreferences.
@@ -67,6 +68,7 @@ object AppPreferences {
     private const val KEY_PREFERRED_SUBTITLE_LANG = "preferred_subtitle_language" // BCP-47 tag or "" for auto
     private const val KEY_HERO_TRAILER_AUTOPLAY = "hero_trailer_autoplay"
     private const val KEY_HERO_TRAILER_MUTED = "hero_trailer_muted"
+    private const val KEY_HERO_TRAILER_DELAY_MS = "hero_trailer_delay_ms"
     private const val KEY_USE_24H_CLOCK = "use_24h_clock"
     private const val KEY_NOTIFY_NEW_EPISODES = "new_episode_notifications"
     private const val KEY_LIVE_REMINDER_NOTIFICATIONS = "live_reminder_notifications"
@@ -955,6 +957,55 @@ object AppPreferences {
         prefs(context).edit().putBoolean(KEY_HERO_TRAILER_MUTED, enabled).apply()
         syncDisplayPrefsBlob(context)
     }
+
+    // ── Hero trailer dwell (how long focus must rest before it plays) ─────
+    /**
+     * The waits the settings screen offers, in milliseconds.
+     *
+     * The dwell is not a nicety: it is what separates "the viewer stopped on
+     * this title" from "the focus passed through it", so the trailer is only
+     * ever armed for a stop. How long a stop takes is the viewer's own, which
+     * is why this is a choice at all — someone who finds trailers starting
+     * while they browse wants a longer wait, not the toggle off.
+     *
+     * "Now" is a real option rather than a hidden one: it arms the trailer for
+     * every title the focus touches, which the settings row says out loud.
+     */
+    val HERO_TRAILER_DELAY_OPTIONS_MS = listOf(0L, 2_000L, 4_000L, 6_000L, 8_000L)
+
+    /** The dwell both heroes have always used, and what an install starts on. */
+    const val DEFAULT_HERO_TRAILER_DELAY_MS = 4_000L
+
+    fun getHeroTrailerDelayMs(context: Context): Long =
+        heroTrailerDelayFromStored(
+            prefs(context).getLong(KEY_HERO_TRAILER_DELAY_MS, DEFAULT_HERO_TRAILER_DELAY_MS)
+        )
+
+    fun setHeroTrailerDelayMs(context: Context, ms: Long) {
+        prefs(context).edit()
+            .putLong(KEY_HERO_TRAILER_DELAY_MS, heroTrailerDelayFromStored(ms))
+            .apply()
+        syncDisplayPrefsBlob(context)
+    }
+
+    /** How a dwell reads on its chip: "Now", "2s", … */
+    fun heroTrailerDelayLabel(ms: Long): String {
+        val seconds = heroTrailerDelayFromStored(ms) / 1_000L
+        return if (seconds <= 0L) "Now" else "${seconds}s"
+    }
+
+    /**
+     * A stored dwell as one of [HERO_TRAILER_DELAY_OPTIONS_MS].
+     *
+     * Snapped to the NEAREST option rather than falling back to the default:
+     * the pref syncs, so it can arrive from a build that offered a different
+     * list, and the user picked a wait — the closest one on offer is far more
+     * likely to be the wait they meant than this build's own default. Pure, so
+     * the snapping is unit-tested rather than only exercised on a real merge.
+     */
+    internal fun heroTrailerDelayFromStored(raw: Long): Long =
+        HERO_TRAILER_DELAY_OPTIONS_MS.minByOrNull { option -> abs(option - raw) }
+            ?: DEFAULT_HERO_TRAILER_DELAY_MS
 
     // ── 24-hour clock (player overlay clock) ──────────────────────────
     fun getUse24HourClock(context: Context): Boolean =

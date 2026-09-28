@@ -179,6 +179,7 @@ fun SettingsScreen(
     var audioOutput by remember { mutableIntStateOf(AppPreferences.getAudioOutput(context)) }
     var heroTrailerAutoplay by remember { mutableStateOf(AppPreferences.getHeroTrailerAutoplay(context)) }
     var heroTrailerMuted by remember { mutableStateOf(AppPreferences.getHeroTrailerMuted(context)) }
+    var heroTrailerDelay by remember { mutableStateOf(AppPreferences.getHeroTrailerDelayMs(context)) }
     var use24hClock by remember { mutableStateOf(AppPreferences.getUse24HourClock(context)) }
     var badgePackInput by remember { mutableStateOf(StreamBadgeEngine.getPackUrl(context)) }
     var railShowType by remember { mutableStateOf(AppPreferences.getHomeRailShowCatalogType(context)) }
@@ -1471,6 +1472,18 @@ fun SettingsScreen(
                     onToggle = {
                         heroTrailerAutoplay = it
                         AppPreferences.setHeroTrailerAutoplay(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                HeroTrailerDelayRow(
+                    selectedMs = heroTrailerDelay,
+                    enabled = heroTrailerAutoplay,
+                    chip = { text, isSelected -> PillChip(text, isSelected) },
+                    onPick = { ms ->
+                        heroTrailerDelay = ms
+                        AppPreferences.setHeroTrailerDelayMs(context, ms)
                     }
                 )
 

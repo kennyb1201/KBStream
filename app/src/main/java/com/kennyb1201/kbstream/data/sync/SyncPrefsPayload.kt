@@ -108,6 +108,7 @@ object PrefsPayloadBuilder {
         "use_stream_ranker",
         "hero_trailer_autoplay",
         "hero_trailer_muted",
+        "hero_trailer_delay_ms",            // hero trailer dwell: a viewing preference
         "use_24h_clock",
         "home_rail_show_catalog_type",
         "home_rail_show_addon_name",

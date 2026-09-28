@@ -145,7 +145,6 @@ private val HomePosterHeight = 180.dp
 private val HomeLandscapeWidth = 210.dp
 private val HomeLandscapeHeight = 118.dp
 private val HomeRailGap = 12.dp
-private const val HeroTrailerDwellMs = 4_000L
 
 private val HomeHeroHeight = 300.dp
 
@@ -1793,7 +1792,8 @@ private fun HomeHeroHost(
     }
 
     // Dwell before any network work: focus that survives the dwell is a
-    // deliberate stop, and it is also what arms the trailer.
+    // deliberate stop, and it is also what arms the trailer. How long that is
+    // belongs to the viewer — Settings → Hero Trailer Delay.
     LaunchedEffect(
         focusedItem.value?.id,
         focusedItem.value?.type,
@@ -1803,7 +1803,7 @@ private fun HomeHeroHost(
 
         focusedItem.value?.let {
             onResolveHeroMeta(it)
-            delay(HeroTrailerDwellMs)
+            delay(AppPreferences.getHeroTrailerDelayMs(context))
             heroTrailerReady = true
         }
     }

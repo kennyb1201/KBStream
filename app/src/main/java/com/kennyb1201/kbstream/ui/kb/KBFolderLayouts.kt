@@ -70,9 +70,6 @@ private val FolderHeroHeight = 300.dp
 private val FolderSafeHorizontal = 12.dp
 private val FolderRailSectionGap = 20.dp
 
-// Same 4s dwell as Home before the hero trailer starts playing.
-private const val FolderHeroTrailerDwellMs = 4_000L
-
 /** The three folder layout modes a KB profile can request. */
 object KBLayoutModes {
     enum class Mode { FOLLOW_LAYOUT, ROWS, GRID }
@@ -554,12 +551,14 @@ private fun FollowHomeLayout(
         }
     }
 
-    // Home's exact focus pipeline: resolve on stop, 4s dwell, then trailer.
+    // Home's exact focus pipeline: resolve on stop, the viewer's dwell, then
+    // the trailer. Same setting for both heroes (Settings → Hero Trailer
+    // Delay), so the two cannot drift apart.
     LaunchedEffect(heroItem?.id, heroItem?.type) {
         val target = heroItem ?: return@LaunchedEffect
         heroTrailerReady = false
         viewModel.resolveHero(target)
-        delay(FolderHeroTrailerDwellMs)
+        delay(AppPreferences.getHeroTrailerDelayMs(context))
         heroTrailerReady = true
     }
 
