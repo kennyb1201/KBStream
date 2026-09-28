@@ -41,6 +41,7 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
@@ -104,8 +105,13 @@ fun StreamsScreen(
         if (!isLoading && streams.isNotEmpty() && !suppressAutoSelect && !manualPick && AppPreferences.getAutoSelectStream(context)) {
             // Skip dead placeholder streams (blank URLs) at the top of the
             // list — picking one would silently do nothing and look like
-            // auto-select is broken.
-            val top = streams.firstOrNull { !it.url.isNullOrBlank() }
+            // auto-select is broken — and skip a source that declares another
+            // episode of this season, which is the same mistake in a form the
+            // viewer cannot see: the file is a different episode, and starting
+            // it by itself is the "playing the wrong episodes" report. Every
+            // source in that state means no auto-select at all, with the cards
+            // below naming what each file says it is.
+            val top = EpisodeMatch.autoplayPick(streams, season, episode)
             if (top != null) {
                 selectSource(top, streams)
             }
@@ -157,6 +163,21 @@ fun StreamsScreen(
         else -> "No sources found"
     }
 
+    // The one case where auto-play deliberately starts nothing: every playable
+    // source declares another episode of this season. Said in words, because a
+    // picker that opens for no visible reason reads as a bug of its own.
+    val mismatchNotice = remember(streams, season, episode) {
+        if (
+            season != null && episode != null &&
+            EpisodeMatch.onlyOtherEpisodes(streams, season, episode)
+        ) {
+            "None of these sources is S%02dE%02d - each says it holds a different "
+                .format(season, episode) + "episode of this season."
+        } else {
+            null
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -204,7 +225,8 @@ fun StreamsScreen(
                 episodeLabel = episodeLabel,
                 episodeTitle = episodeTitle,
                 runtimeMinutes = runtimeMinutes,
-                sourceLabel = sourceLabel
+                sourceLabel = sourceLabel,
+                mismatchNotice = mismatchNotice
             )
 
             LazyColumn(
@@ -258,6 +280,7 @@ fun StreamsScreen(
                                 // "Badges above the file name" setting (and the
                                 // player's source picker) shares this pref.
                                 badgesAbove = AppPreferences.getBadgesAboveFile(context),
+                                declaredLabel = declaredLabelFor(stream, season, episode),
                                 onClick = {
                                     selectSource(stream, streams)
                                 }
@@ -270,6 +293,19 @@ fun StreamsScreen(
     }
 }
 
+/**
+ * What a source's own text says about the episode, when it says another one.
+ *
+ * Only the contradiction is labelled: a source that names the requested
+ * episode needs no note, and one that names nothing at all is the ordinary
+ * unlabelled release — marking those would put a line on every card in the
+ * picker and say nothing.
+ */
+private fun declaredLabelFor(stream: Stream, season: Int?, episode: Int?): String? =
+    EpisodeMatch.declaredLabel(stream).takeIf {
+        EpisodeMatch.isOtherEpisode(stream, season, episode)
+    }
+
 @Composable
 private fun StreamsHeader(
     displayName: String,
@@ -277,7 +313,8 @@ private fun StreamsHeader(
     episodeLabel: String?,
     episodeTitle: String?,
     runtimeMinutes: Int?,
-    sourceLabel: String
+    sourceLabel: String,
+    mismatchNotice: String?
 ) {
     val context = LocalContext.current
 
@@ -335,6 +372,26 @@ private fun StreamsHeader(
             )
         }
 
+        mismatchNotice?.let { notice ->
+            Text(
+                text = notice,
+                color = KBAccent,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    shadow = Shadow(
+                        color = Color.Black.copy(alpha = 0.55f),
+                        blurRadius = 12f
+                    )
+                ),
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .padding(top = 8.dp)
+                    .background(KBSurface.copy(alpha = 0.82f), KBShapePanel)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            )
+        }
+
         Text(
             // Episodes already carry the runtime on the title line; movies
             // (no episode label) keep it on this meta line instead.
@@ -362,6 +419,7 @@ private fun StreamsHeader(
 private fun StreamCard(
     stream: Stream,
     badgesAbove: Boolean,
+    declaredLabel: String?,
     onClick: () -> Unit
 ) {
     var isFocused by remember { mutableStateOf(false) }
@@ -432,6 +490,23 @@ private fun StreamCard(
                     )
                 }
 
+            declaredLabel?.let { label ->
+                // The file names its own episode and it is not the one asked
+                // for. On the card, above the release name, so a source can be
+                // told apart from the others before it is played.
+                Text(
+                    text = "The file says $label",
+                    color = KBAccent,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(
+                        top = if (stream.name.isNullOrBlank()) 0.dp else 5.dp
+                    )
+                )
+            }
+
             Text(
                 text = stream.displayText(),
                 color = if (isFocused) KBAccent else KBTextHi,
@@ -440,7 +515,7 @@ private fun StreamCard(
                 maxLines = 5,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(
-                    top = if (stream.name.isNullOrBlank()) 0.dp else 5.dp
+                    top = if (stream.name.isNullOrBlank() && declaredLabel == null) 0.dp else 5.dp
                 )
             )
 

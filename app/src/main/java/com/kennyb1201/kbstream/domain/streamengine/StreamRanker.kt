@@ -21,7 +21,13 @@ import com.kennyb1201.kbstream.data.addon.Stream
  *     rather than a score penalty for a reason: as points a CAM penalty had to
  *     out-shout the bonuses below, and the cache bonus that arrived with the
  *     debrid addons could hand a *cached* CAM right back over an honest 480p.
- *  3. **Debrid-served links.** A link served by the viewer's own debrid service
+ *  3. **The episode itself.** When the request names a series episode, a
+ *     source whose own text declares another episode of that season sits under
+ *     every source that declares the episode asked for or declares nothing at
+ *     all. A file the app *knows* holds something else is not a worse copy of
+ *     the right thing - it is the wrong thing, and the picker's head is what
+ *     auto-play starts. See [EpisodeMatch].
+ *  4. **Debrid-served links.** A link served by the viewer's own debrid service
  *     comes before a plain hoster link, whatever that one is labelled: the
  *     URL's host is the service itself, or the entry carries that service's own
  *     completion tag. It sits above availability because it is a fact about the
@@ -33,13 +39,13 @@ import com.kennyb1201.kbstream.data.addon.Stream
  *     the one this ranker kept missing: a scraper addon's 4K direct link kept
  *     taking the head of the list from the TorBox copy the viewer's own addon
  *     had sent, because only the quality labels were ever compared.
- *  4. **Availability.** A copy the debrid service already holds starts now; an
+ *  5. **Availability.** A copy the debrid service already holds starts now; an
  *     uncached one of the same title waits for peers, whatever its resolution
  *     label says. AIOStreams sorts on exactly this first, and it is the one
  *     criterion a re-sort by quality labels alone got backwards - which is how
  *     a 4K that had to find its swarm ended up heading a list whose addon had
  *     deliberately put a cached 1080p there.
- *  5. Resolution, HDR/DV, release type, size, seeders and a resolution label
+ *  6. Resolution, HDR/DV, release type, size, seeders and a resolution label
  *     its own file size contradicts, in that order of weight.
  *
  * Every rule but the debrid one above reads the stream's *text*, and that text
@@ -53,6 +59,11 @@ import com.kennyb1201.kbstream.data.addon.Stream
  * 4K entry could sit above a real 1080p link.
  */
 object StreamRanker {
+
+    /** Episode tiers of [episodeRank], best first. */
+    private const val EPISODE_MATCH = 0
+    private const val EPISODE_NONE = 1
+    private const val EPISODE_OTHER = 2
 
     /**
      * Releases that are not the film, or not a copy of it worth watching: a
@@ -195,18 +206,32 @@ object StreamRanker {
     private class Candidate(
         val stream: Stream,
         val text: String,
-        val debridServed: Boolean
+        val debridServed: Boolean,
+        val episodeRank: Int
     )
 
-    fun rank(streams: List<Stream>): List<Stream> =
+    /**
+     * Orders a fetched list best-first, for the picker and for auto-play.
+     *
+     * [episode] is the (season, episode) the request was for, when it names
+     * one: the comparator then keeps a source that declares another episode of
+     * that season under every other source. Null (a movie, a live channel, an
+     * id that carries no episode) leaves the order exactly as it was.
+     */
+    fun rank(streams: List<Stream>, episode: Pair<Int, Int>? = null): List<Stream> =
         streams
             .filter { stream -> isPlayable(stream) || !stream.infoHash.isNullOrBlank() }
-            // The text every rule reads, and whether the debrid service the
-            // viewer pays for is the one serving the link, both worked out once
-            // per stream.
+            // The text every rule reads, whether the debrid service the viewer
+            // pays for is the one serving the link, and what the source itself
+            // says about the episode, all worked out once per stream.
             .map { stream ->
                 val text = searchableText(stream)
-                Candidate(stream, text, isDebridServed(stream, text))
+                Candidate(
+                    stream = stream,
+                    text = text,
+                    debridServed = isDebridServed(stream, text),
+                    episodeRank = episodeRank(stream, episode)
+                )
             }
             // Playability is its own tier, not a score bonus: no combination of
             // quality labels may lift an entry this app cannot open over one it
@@ -221,6 +246,12 @@ object StreamRanker {
                     // quality or availability - the only way a cached CAM stays
                     // under an honest 480p, which no score bonus can promise.
                     .thenBy { if (isKnownBad(it.text)) 1 else 0 }
+                    // The episode the request is for, then a source that says
+                    // nothing about the episode, then one that names another.
+                    // Where the known-bad tier keeps a bad copy of the right
+                    // thing out of the head, this keeps the wrong thing out of
+                    // it - content before labels, the same argument.
+                    .thenBy { it.episodeRank }
                     // Served by the debrid service the viewer pays for. Its own
                     // tier, and above availability, because it is a fact about
                     // the link rather than a claim in a title: a scraper addon
@@ -246,11 +277,12 @@ object StreamRanker {
      * invisible in the picker. Read-only: it walks exactly the paths [rank]
      * does.
      */
-    internal fun explain(stream: Stream): String {
+    internal fun explain(stream: Stream, episode: Pair<Int, Int>? = null): String {
         val text = searchableText(stream)
         return buildString {
             append(if (isPlayable(stream)) "playable" else "hash-only")
             if (isKnownBad(text)) append(" known-bad")
+            if (episodeRank(stream, episode) == EPISODE_OTHER) append(" other-episode")
             if (isDebridServed(stream, text)) append(" debrid-served")
             if (INSTANT_HINT.containsMatchIn(text)) append(" instant")
             append(" score=").append(score(stream, text))
@@ -260,9 +292,56 @@ object StreamRanker {
                     .append("GB")
             }
             seeders(text)?.let { peers -> append(" peers=").append(peers) }
-            append(" · ").append(stream.title?.take(60) ?: "(no title)")
+            append(" · ").append(labelOf(stream))
+            // What the file says it is, and what that means for the request:
+            // "[S03E15 != S03E30]" is a whole report in one line, and it is the
+            // line that was missing when the complaint was "it plays the wrong
+            // episodes" and every session line agreed with itself.
+            EpisodeMatch.declaredLabel(stream)?.let { declared ->
+                append(" [").append(declared)
+                if (episode != null) {
+                    val requested = "S%02dE%02d".format(episode.first, episode.second)
+                    if (declared != requested) append(" != ").append(requested)
+                }
+                append(']')
+            }
         }
     }
+
+    /**
+     * Where a source belongs relative to the episode the request named:
+     * [EPISODE_MATCH] for the episode itself, [EPISODE_NONE] for a source that
+     * says nothing about it, [EPISODE_OTHER] for one that names another
+     * episode of the same season. All three collapse to [EPISODE_MATCH] when
+     * the request named no episode, so a movie's order is untouched.
+     */
+    private fun episodeRank(stream: Stream, episode: Pair<Int, Int>?): Int {
+        if (episode == null) return EPISODE_MATCH
+        return when (EpisodeMatch.verdict(stream, episode.first, episode.second)) {
+            EpisodeMatch.Verdict.MATCHES -> EPISODE_MATCH
+            EpisodeMatch.Verdict.UNKNOWN -> EPISODE_NONE
+            EpisodeMatch.Verdict.DIFFERENT -> EPISODE_OTHER
+        }
+    }
+
+    /**
+     * The stream's own label for a log or report line.
+     *
+     * `title` alone was read here, and the add-ons this app is configured with
+     * (AIOStreams above all) leave it empty while the release name sits in
+     * `description` - so every reported source line read "(no title)", which
+     * is exactly the field that would have answered "which file did it play?".
+     */
+    private fun labelOf(stream: Stream): String =
+        listOfNotNull(
+            stream.title,
+            stream.description,
+            stream.name,
+            stream.behaviorHints?.filename
+        )
+            .firstOrNull { it.isNotBlank() }
+            ?.take(60)
+            ?: "(no title)"
 
     /** True when this app can open the stream directly. */
     private fun isPlayable(stream: Stream): Boolean {

@@ -752,9 +752,15 @@ class MpvPlayerActivity : ComponentActivity() {
         // direct launch (Settings -> Player engine = MPV) can carry an unruly
         // list, and both engines must offer the same order. StreamRanker.rank is
         // a stable sort, so re-ranking an already-ranked list changes nothing.
+        // The session's own episode goes with it, so the in-player SOURCES
+        // picker keeps a file that declares another episode of this season out
+        // of its head exactly as the resolver's picker does (see EpisodeMatch).
+        val requestedEpisode = season?.let { requestedSeason ->
+            episode?.let { requestedEpisode -> requestedSeason to requestedEpisode }
+        }
         val parsedSources = parseSourcesJson(intent.getStringExtra("sources_json"))
         val orderedSources = if (AppPreferences.getUseStreamRanker(this)) {
-            StreamRanker.rank(parsedSources)
+            StreamRanker.rank(parsedSources, requestedEpisode)
         } else {
             parsedSources
         }

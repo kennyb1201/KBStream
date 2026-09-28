@@ -11,6 +11,7 @@ import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.reporting.StreamRankReport
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -186,7 +187,13 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         }
 
         val useRanker = AppPreferences.getUseStreamRanker(getApplication())
-        val preppedStreams = if (useRanker) StreamRanker.rank(allStreams) else allStreams
+        // The episode this request is for, when its id names one: the ranker
+        // keeps a source that declares another episode of the same season out
+        // of the head of the list, which is the position the picker and
+        // auto-play both take from.
+        val requestedEpisode = EpisodeMatch.requestedFrom(streamId)
+        val preppedStreams =
+            if (useRanker) StreamRanker.rank(allStreams, requestedEpisode) else allStreams
         // KB-compatible badge packs: attach matched badge chips before
         // the list reaches the UI.
         val withBadges = StreamBadgeEngine.apply(preppedStreams, getApplication())
@@ -205,7 +212,8 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             rankReportLines(
                 streams = withBadges,
                 results = results,
-                ranked = useRanker
+                ranked = useRanker,
+                requestedEpisode = requestedEpisode
             )
         )
 
@@ -224,7 +232,8 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
     private fun rankReportLines(
         streams: List<Stream>,
         results: List<AddonLoadResult>,
-        ranked: Boolean
+        ranked: Boolean,
+        requestedEpisode: Pair<Int, Int>?
     ): List<String> {
         if (streams.isEmpty()) return listOf("streams: none returned")
 
@@ -242,7 +251,17 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             streams.take(RANK_REPORT_TOP).forEach { stream ->
                 add(
                     "  ${addonByStream[streamKey(stream)] ?: "?"} · " +
-                        StreamRanker.explain(stream)
+                        StreamRanker.explain(stream, requestedEpisode)
+                )
+            }
+            // Why auto-play did or did not start a source, in the report's own
+            // words: with a series episode in the request the head of this
+            // list is not always the one it plays, and "it went to the picker"
+            // has to be readable from the report rather than from the TV.
+            if (requestedEpisode != null && EpisodeMatch.onlyOtherEpisodes(streams, requestedEpisode.first, requestedEpisode.second)) {
+                add(
+                    "  every source declares another episode of S%02d - auto-play stops"
+                        .format(requestedEpisode.first)
                 )
             }
         }

@@ -41,6 +41,7 @@ import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.domain.streamengine.BingeGroupResolver
+import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.update.AppUpdater
@@ -722,7 +723,18 @@ fun AppRoot() {
                     previousAddonName = pending.addonName
                 )
             }
-        val top = ordered.firstOrNull { !it.url.isNullOrBlank() }
+        // Auto-play takes the episode this request is for, then a source that
+        // says nothing about the episode - and never one whose own name
+        // declares another episode (see EpisodeMatch). Where that leaves no
+        // source at all, the picker below opens with each file's own
+        // declaration on its card, instead of the wrong episode starting by
+        // itself: "Paw Patrol is playing the wrong episodes" was a head of the
+        // list the app could see was not the episode and started anyway.
+        val top = EpisodeMatch.autoplayPick(
+            ordered,
+            pending.target.season,
+            pending.target.episode
+        )
         pendingAutoPlay = null
         screen = if (top != null) {
             pending.toPlayerScreen(top, ordered)

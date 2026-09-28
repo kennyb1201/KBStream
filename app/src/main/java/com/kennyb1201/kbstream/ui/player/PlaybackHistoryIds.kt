@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -103,14 +104,13 @@ object PlaybackHistoryIds {
      * read the fields. When the two disagree, a session plays one episode and
      * files it as another, which looks like "the binge kept offering an episode
      * I had already watched, and the ones it played were never marked".
+     *
+     * The parse itself is [EpisodeMatch.requestedFrom], which is also what the
+     * source picker and the ranker read: whether a file is the episode asked
+     * for is answered from this same pair, so there is one reading of "what
+     * does this id name" rather than two that could drift apart.
      */
-    fun episodeFromId(id: String?): Pair<Int, Int>? {
-        val parts = id?.trim()?.split(':') ?: return null
-        if (parts.size < 3) return null
-        val episode = parts[parts.size - 1].toIntOrNull() ?: return null
-        val season = parts[parts.size - 2].toIntOrNull() ?: return null
-        return season to episode
-    }
+    fun episodeFromId(id: String?): Pair<Int, Int>? = EpisodeMatch.requestedFrom(id)
 
     /**
      * One diagnostics line naming a session's identity, and whether the id its

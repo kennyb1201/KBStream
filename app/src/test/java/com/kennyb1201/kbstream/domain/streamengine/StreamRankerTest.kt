@@ -34,6 +34,95 @@ class StreamRankerTest {
     /** Order of the whole list, so a tie is caught as well as a head. */
     private fun order(vararg streams: Stream): List<Stream> = StreamRanker.rank(streams.toList())
 
+    /** Order for a series request that named this episode. */
+    private fun orderFor(
+        season: Int,
+        episode: Int,
+        vararg streams: Stream
+    ): List<Stream> = StreamRanker.rank(streams.toList(), season to episode)
+
+    // ── The episode asked for ──
+    //
+    // Reported bug: "Paw Patrol is still playing the wrong episodes", with a
+    // diagnostics report whose session lines all agreed with the id the stream
+    // was resolved for. TMDB splits that show's seasons into single 12-minute
+    // segments while its releases are named for broadcast half-hours, so the
+    // add-on can match no release for the episode asked for and returns
+    // something else - which auto-play then started, because the head of this
+    // list is what it takes.
+
+    @Test
+    fun `the episode asked for heads the list over another episode`() {
+        val stranger = stream(
+            "Paw Patrol S03E15 2160p REMUX DV HDR 18 GB",
+            url = "https://store-9.torbox.app/download/a.mkv"
+        )
+        val asked = stream("Paw Patrol S03E30 480p WEB-DL", url = "https://host/a.mkv")
+
+        // A debrid-served 4K of the wrong episode still sits under an honest
+        // 480p of the right one: content before labels, the same argument the
+        // known-bad tier makes.
+        assertEquals(listOf(asked, stranger), orderFor(3, 30, stranger, asked))
+    }
+
+    @Test
+    fun `a source that names no episode outranks one that names another`() {
+        val other = stream("Paw Patrol S03E15 1080p WEB-DL 8 GB", url = "https://host/a.mkv")
+        val unlabelled = stream("Paw Patrol 1080p WEB-DL", url = "https://host/b.mkv")
+
+        assertEquals(listOf(unlabelled, other), orderFor(3, 30, other, unlabelled))
+    }
+
+    @Test
+    fun `a movie request is ordered exactly as before`() {
+        // No episode in the request, so every source is in the same episode
+        // tier and the labels decide - which is the whole ranker as it was.
+        val small = stream("Some Film 2024 480p", url = "https://host/a.mkv")
+        val big = stream("Some Film 2024 2160p REMUX", url = "https://host/b.mkv")
+
+        assertEquals(listOf(big, small), order(small, big))
+        assertEquals(listOf(big, small), StreamRanker.rank(listOf(small, big), null))
+    }
+
+    @Test
+    fun `explain names the episode the file declares`() {
+        val line = StreamRanker.explain(
+            stream("Paw Patrol S03E15 1080p WEB-DL", url = "https://host/a.mkv"),
+            3 to 30
+        )
+
+        assertTrue(line, line.contains("other-episode"))
+        assertTrue(line, line.contains("[S03E15 != S03E30]"))
+    }
+
+    @Test
+    fun `explain reports a source that declares the episode asked for`() {
+        val line = StreamRanker.explain(
+            stream("Paw Patrol S03E30 1080p WEB-DL", url = "https://host/a.mkv"),
+            3 to 30
+        )
+
+        assertTrue(line, line.contains("[S03E30]"))
+        assertTrue(line, !line.contains("other-episode"))
+    }
+
+    @Test
+    fun `explain falls back to the description when the add-on sends no title`() {
+        // AIOStreams and friends put the release name in `description` and
+        // leave `title` empty, so every reported source line read "(no title)"
+        // - the one field that answers "which file did it play?".
+        val line = StreamRanker.explain(
+            Stream(
+                name = "AIOStreams",
+                description = "Paw.Patrol.S03E15.1080p.WEB-DL.mkv",
+                url = "https://host/a.mkv"
+            )
+        )
+
+        assertTrue(line, line.contains("Paw.Patrol.S03E15"))
+        assertTrue(line, !line.contains("(no title)"))
+    }
+
     @Test
     fun `a high-resolution CAM never heads the list`() {
         val cam = stream("Some Film 2024 2160p CAM x264", url = "https://host/cam.mkv")
