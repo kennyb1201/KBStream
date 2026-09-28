@@ -220,12 +220,15 @@ object Diagnostics {
      * `off` says the session gave up, and the reason recorded beside it says
      * which of the two answers applies: no decoder to spare, or a source that
      * refused one. `slowest` separates a frame that was worth the wait from one
-     * that arrived after the viewer had moved on.
+     * that arrived after the viewer had moved on. `declined` is the other end of
+     * the same question: it names the scrub that asked for nothing at all, which
+     * this report could not otherwise tell from a session nobody scrubbed.
      */
     private fun trickplayLine(): String? {
         val decoded = PerfTrace.count("trickplay.decode")
         val missed = PerfTrace.count("trickplay.miss")
-        if (decoded == 0 && missed == 0) return null
+        val declined = trickplayDeclines()
+        if (decoded == 0 && missed == 0 && declined == null) return null
         return buildString {
             append("trickplay: frames=").append(decoded)
             append(" failed=").append(missed)
@@ -234,6 +237,7 @@ object Diagnostics {
             if (decoded > 0) {
                 append(" slowest=").append(PerfTrace.maxMs("trickplay.decode")).append("ms")
             }
+            if (declined != null) append(" · declined: ").append(declined)
             if (PerfTrace.count("trickplay.off") > 0) {
                 append(" · off for this session, last: ").append(trickplayReasons())
             } else if (late > 0) {
@@ -254,6 +258,19 @@ object Diagnostics {
         PerfTrace.latestByPrefix("trickplay.reason")
             .joinToString(" / ") { it.first.removePrefix("trickplay.reason:") }
             .ifEmpty { "no reason recorded" }
+
+    /**
+     * Every reason a scrub was turned away before it asked for a frame, oldest
+     * first, or null when no press was ever declined.
+     *
+     * Kept as the labels of the trace samples themselves, like the reasons
+     * above: a press that never reached the pipeline recorded why, and this is
+     * that reason read back.
+     */
+    private fun trickplayDeclines(): String? =
+        PerfTrace.latestByPrefix("trickplay.decline")
+            .joinToString(" / ") { it.first.removePrefix("trickplay.decline:") }
+            .ifEmpty { null }
 
     private fun accountLine(): String {
         val state = SupabaseSync.authState.value

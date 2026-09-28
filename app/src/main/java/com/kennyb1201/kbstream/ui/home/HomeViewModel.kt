@@ -795,6 +795,24 @@ class HomeViewModel(
         Mutex()
 
     /**
+     * True while a rail build holds [railsRefreshMutex].
+     *
+     * [onHomeResumed] rebuilds whenever Home looks empty, and on a cold start it
+     * always does: init's own build has not published a rail yet when the screen
+     * first composes, so the resume guard started a SECOND full build. That one
+     * queued behind the first and then refetched, refiltered and republished
+     * every catalog, competing for the same TMDB lookups and the same add-on host
+     * as the build it was waiting on - so it made the first build slower for no
+     * gain. An empty rail list with a build already running is not an empty Home;
+     * the publish this call is waiting for belongs to that build.
+     *
+     * Same class of duplicate the add-on observer already skips its first
+     * emission to avoid (see observeAddonChanges).
+     */
+    @Volatile
+    private var railBuildInFlight = false
+
+    /**
      * Bumped on every profile switch. A rail build (or a pagination page)
      * captures it at the start and refuses to publish once it changed, so a
      * load started for the profile the user just left cannot repaint that
@@ -2460,7 +2478,11 @@ Log.d(
         // of the empty state, process was restored) must always retry the
         // build - otherwise the user is stuck staring at "No catalogs
         // available" until they find some setting to poke.
-        val railsEmpty = _rails.value.isEmpty()
+        // A build already running is not an empty Home: its own publish is
+        // exactly what this call would be waiting for, and a second build would
+        // queue behind it and repeat every fetch (see railBuildInFlight).
+        val railsEmpty =
+            _rails.value.isEmpty() && !railBuildInFlight
 
         // Stale-rails guard: after the device sat on the launcher / another
         // screen for a long while, the addon catalogs (dynamic ones like
@@ -6415,6 +6437,13 @@ private suspend fun calculateEpisodesRemaining(
         _isLoading.value =
             _rails.value.isEmpty()
 
+        // Claim the build slot before the first suspension. With the immediate
+        // main dispatcher this runs as the coroutine starts, so a resume later in
+        // the same frame already sees it (see railBuildInFlight).
+        railBuildInFlight = true
+        val buildStartedAtMs =
+            android.os.SystemClock.elapsedRealtime()
+
         // Profile guard for this build: a profile switch bumps
         // [railBuildEpoch] and empties the rail list, so a build that
         // started for the profile the user just left must not publish — it
@@ -6432,6 +6461,11 @@ private suspend fun calculateEpisodesRemaining(
         if (clearCatalogCache) {
             repository.clearCatalogCache()
         }
+
+        // Set by the all-catalogs-failed retry below when it decides to try
+        // again. That retry deliberately runs AFTER the rail mutex is released
+        // rather than from inside it - see there for why that is not a detail.
+        var retryAfterMs = -1L
 
         try {
 
@@ -6464,6 +6498,17 @@ private suspend fun calculateEpisodesRemaining(
                         landscapeCards
                     )
                 }
+
+                // What the pinned rails cost before the catalog fan-out could
+                // start: they are awaited, so it is pure serial prefix on the
+                // critical path (see home.pinned in the diagnostics report).
+                val pinnedDoneAtMs =
+                    android.os.SystemClock.elapsedRealtime()
+
+                PerfTrace.record(
+                    "home.pinned",
+                    pinnedDoneAtMs - buildStartedAtMs
+                )
 
                 val addonsById =
                     addonManager
@@ -6521,6 +6566,10 @@ private suspend fun calculateEpisodesRemaining(
                         mutableListOf<Rail>()
                     )
 
+                /** Guards the one-shot home.firstRail sample below. */
+                val firstRailRecorded =
+                    java.util.concurrent.atomic.AtomicBoolean(false)
+
                 coroutineScope {
 
                     pendingCatalogs
@@ -6538,6 +6587,23 @@ private suspend fun calculateEpisodesRemaining(
                                         return@let
                                     }
                                     collected.add(rail)
+                                    // The first row on screen: the number a
+                                    // "Home is slow" report is really about,
+                                    // since rails publish as they resolve.
+                                    // Atomic because the fan-out resolves
+                                    // several rails on different threads.
+                                    if (
+                                        firstRailRecorded.compareAndSet(
+                                            false,
+                                            true
+                                        )
+                                    ) {
+                                        PerfTrace.record(
+                                            "home.firstRail",
+                                            android.os.SystemClock.elapsedRealtime() -
+                                                buildStartedAtMs
+                                        )
+                                    }
                                     // Append just this rail right after the
                                     // last catalog rail currently shown, so
                                     // rails appear progressively in catalog
@@ -6575,6 +6641,15 @@ private suspend fun calculateEpisodesRemaining(
                         }
                         .awaitAll()
                 }
+
+                // The catalog fan-out, from after the pinned rails to the last
+                // rail resolved. home.refreshAll times the whole build, which
+                // publication no longer gates, so this is the half of it that
+                // the viewer actually waits on.
+                PerfTrace.record(
+                    "home.catalogRails",
+                    android.os.SystemClock.elapsedRealtime() - pinnedDoneAtMs
+                )
 
                 val finalRails =
                     pinned + collected
@@ -6639,12 +6714,19 @@ private suspend fun calculateEpisodesRemaining(
                     )
 
                     _isLoading.value = true
-                    delay(backoffMs)
-                    loadRailsInternal(
-                        forceRefresh = false,
-                        clearCatalogCache = true
-                    )
-                    return
+                    // Handed to the caller instead of run from here. This block
+                    // is INSIDE railsRefreshMutex, and the retry is a whole
+                    // loadRailsInternal - which takes that same mutex. A kotlinx
+                    // Mutex is not reentrant, so recursing from here waited on a
+                    // lock this very coroutine was holding: the retry never ran,
+                    // the lock was never handed back, and Home stayed empty for
+                    // the life of the process. It hit on exactly the cold start
+                    // the retry was written for - the launcher restoring the app
+                    // before Wi-Fi is up, so every catalog fails once - which is
+                    // how a "No catalogs available" Home could survive every
+                    // later rebuild, refresh and resume.
+                    retryAfterMs = backoffMs
+                    return@withLock
                 }
 
                 if (finalRails.isNotEmpty()) {
@@ -6674,6 +6756,16 @@ private suspend fun calculateEpisodesRemaining(
                         "pinned=${pinned.size}, " +
                         "catalogs=${pendingCatalogs.size}, " +
                         "rails=${finalRails.size}"
+                )
+            }
+
+            // Out here the mutex is free, so the retry can take it. The backoff
+            // is still paid before the second attempt, exactly as before.
+            if (retryAfterMs >= 0L) {
+                delay(retryAfterMs)
+                loadRailsInternal(
+                    forceRefresh = false,
+                    clearCatalogCache = true
                 )
             }
 
@@ -6709,6 +6801,12 @@ private suspend fun calculateEpisodesRemaining(
             }
 
         } finally {
+
+            // Unconditional, unlike the spinner below: the build slot belongs to
+            // THIS call, and a build that lost its profile still has to hand it
+            // back. Leaving it claimed would retire the empty-Home rebuild (see
+            // railBuildInFlight) for the rest of the session.
+            railBuildInFlight = false
 
             // Only the build that still owns the active profile may lower the
             // spinner; a build that lost the profile must leave the flag to

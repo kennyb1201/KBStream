@@ -151,6 +151,25 @@ internal fun trickplayFrameFits(
 ): Boolean = abs(positionMs - bucketMs) <= windowMs
 
 /**
+ * Whether the idle release may give the preview decoder back now.
+ *
+ * It may not while an extraction is in flight, and that is not a detail. The
+ * release is armed the moment the viewer lets go of the scrub - usually a beat
+ * before the frame they asked for has finished decoding - and a release that
+ * lands on one cancels the request and its timeout together: the frame is
+ * neither delivered nor counted as a failure, so the press leaves no card, no
+ * notice and no line in the report, which from the outside is indistinguishable
+ * from a feature that was never asked for. The first frame of a session is the
+ * slowest there is (a player to build, a stream to open, a buffer to fill), so
+ * that is the press it always cost.
+ *
+ * Waiting is bounded, not open-ended: a request in flight has its own
+ * [TRICKPLAY_TIMEOUT_MS], so the deferral always ends and the decoder still goes
+ * back when the viewer stops.
+ */
+internal fun trickplayMayRelease(awaitingFrame: Boolean): Boolean = !awaitingFrame
+
+/**
  * Whether [failures] consecutive failures have used up the session's tries.
  *
  * Only failures that are the source's fault reach this: a decoder the device

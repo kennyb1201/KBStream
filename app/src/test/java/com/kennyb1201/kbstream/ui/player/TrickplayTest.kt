@@ -266,4 +266,31 @@ class TrickplayTest {
         assertEquals(0f, trickplayAnchorTranslation(500f, 0, 480, 16f), 0.01f)
         assertEquals(0f, trickplayAnchorTranslation(500f, 1920, 0, 16f), 0.01f)
     }
+
+    // ── when the preview decoder may be given back ───────────────────────────
+
+    @Test
+    fun `an extraction in flight holds the preview decoder`() {
+        // The release is armed when the scrub key comes up, which is before the
+        // frame that press asked for has been decoded. Releasing there cancels
+        // the request and its timeout together, so the frame is neither shown
+        // nor counted: a press that leaves no card, no notice and no line in
+        // the report.
+        assertFalse(trickplayMayRelease(awaitingFrame = true))
+    }
+
+    @Test
+    fun `an idle pipeline gives the preview decoder back`() {
+        assertTrue(trickplayMayRelease(awaitingFrame = false))
+    }
+
+    @Test
+    fun `the card outlives the decode that press is allowed`() {
+        // A frame may take TRICKPLAY_TIMEOUT_MS to arrive and then shows for
+        // TRICKPLAY_SHOW_GRACE_MS from the draw, so the press has to arm the
+        // card for the two together. Arm it for less and a frame the pipeline
+        // was still entitled to deliver draws onto a card that has already
+        // closed - the fault the report counts as `late=`.
+        assertTrue(TRICKPLAY_WAIT_MS >= TRICKPLAY_TIMEOUT_MS + TRICKPLAY_SHOW_GRACE_MS)
+    }
 }

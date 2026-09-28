@@ -4105,8 +4105,19 @@ class NativePlayerActivity : ComponentActivity() {
      *    needs. That is the right way round: the frame is a nicety.
      */
     private fun requestTrickplayFrame(posMs: Long, anchorView: View?) {
-        if (isLiveChannel || currentUrl.isBlank()) return
-        val duration = exoPlayer?.duration?.takeIf { it > 0 } ?: return
+        if (isLiveChannel) {
+            declineTrickplay("a live channel has no scrub position")
+            return
+        }
+        if (currentUrl.isBlank()) {
+            declineTrickplay("no stream url to preview")
+            return
+        }
+        val duration = exoPlayer?.duration?.takeIf { it > 0 }
+        if (duration == null) {
+            declineTrickplay("the stream reports no duration")
+            return
+        }
         trickplayWanted = true
         // Re-armed by every press, so a held scrub keeps the card up and a
         // released one keeps it for the grace window only - and armed for a
@@ -4142,7 +4153,12 @@ class NativePlayerActivity : ComponentActivity() {
                 )
             }
         }.also { trickplay = it }
-        if (!frames.isUsable) return
+        if (!frames.isUsable) {
+            // The pipeline turned itself off earlier in this session (see
+            // TrickplayFrames), so the reason it gave up is already on record.
+            declineTrickplay("previews already gave up this session")
+            return
+        }
         frames.request(posMs, duration)
     }
 
@@ -4152,6 +4168,29 @@ class NativePlayerActivity : ComponentActivity() {
 
     /** Whether the "no scrub previews" notice has been shown in this session. */
     private var scrubPreviewNoticeShown = false
+
+    /** Which declines of a preview request have already been recorded. */
+    private val trickplayDeclines = mutableSetOf<String>()
+
+    /**
+     * Records why a press asked for no preview at all.
+     *
+     * The pipeline is built to fail quietly, and the quietest failure of all is
+     * this one: a scrub that never reaches it leaves no card, no notice and no
+     * reason, so a report could not tell "the feature was never asked" from "it
+     * was asked and produced nothing" - and a session where both frame counts
+     * are zero printed no scrub-preview line at all. Recorded once per reason
+     * per session: a held scrub asks on every step, and one line per step would
+     * push every other sample out of the trace ring.
+     */
+    private fun declineTrickplay(reason: String) {
+        if (!trickplayDeclines.add(reason)) return
+        com.kennyb1201.kbstream.data.reporting.PerfTrace.record(
+            "trickplay.decline:$reason",
+            0L,
+            ok = false
+        )
+    }
 
     /**
      * Says why no thumbnail will appear - in the app, not only in the log.

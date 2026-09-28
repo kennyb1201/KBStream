@@ -348,7 +348,32 @@ internal class TrickplayFrames(
         if (awaitingFrame) fail(inFlightBucket, "timed out after $TRICKPLAY_TIMEOUT_MS ms")
     }
 
-    private val idleRelease = Runnable { teardown() }
+    /**
+     * Gives the decoder back once the viewer has stopped scrubbing.
+     *
+     * Only when the pipeline is genuinely idle: the rule itself lives in
+     * [releaseIfIdle], which is the one place that can be read for it.
+     */
+    private val idleRelease = Runnable { releaseIfIdle() }
+
+    /**
+     * Gives the decoder back - but never while a frame is still being decoded for
+     * the viewer.
+     *
+     * Re-armed rather than dropped when an extraction is in flight: a release
+     * that lands on one cancels the request and its timeout together, so the
+     * frame is neither delivered nor counted, and the press leaves no card, no
+     * notice and no line in the report anywhere (see [trickplayMayRelease]). The
+     * extraction's own timeout bounds the wait, so this can hold the decoder for
+     * no longer than one decode plus one idle window.
+     */
+    private fun releaseIfIdle() {
+        if (!trickplayMayRelease(awaitingFrame)) {
+            handler.postDelayed(idleRelease, TRICKPLAY_IDLE_RELEASE_MS)
+            return
+        }
+        teardown()
+    }
 
     private fun cancelIdleRelease() = handler.removeCallbacks(idleRelease)
 
